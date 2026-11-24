@@ -9,9 +9,11 @@
 
 **huhucapture** 是面向 Windows 的原生截图、标记与录屏工具，由 [NAMEWTA](https://github.com/NAMEWTA) 维护。它将矩形范围、彩色编号和右侧说明整理到同一张截图中，也提供钉图、长截图、GIF / MP4 录屏与二维码识别。
 
+本项目基于 [xland / ScreenCapture](https://github.com/xland/ScreenCapture) 衍生开发。感谢原作者与上游贡献者，以及 [Ling](https://github.com/xland/Ling) 等开源组件的维护者，为原生截图、编辑和录屏能力提供基础。继承起点、独立维护范围与版权归属见 [上游致谢](docs/upstream.md)。
+
 项目属于 [huhu](https://github.com/NAMEWTA/huhu) 品牌家族，采用虎虎形象与截图范围角标。产品名称、程序文件、配置目录和发布资产统一使用 `huhucapture`。品牌资产及使用约定见 [品牌说明](docs/brand.md)。
 
-[下载 v0.0.3](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.3) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
+[下载 v0.0.4](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.4) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
 
 ## 截图与说明，一起保存
 
@@ -54,6 +56,8 @@
 
 截图工具条的 **二维码识别右侧** 新增“剪切复制板”图标。打开后以列表查看历史截图与视频封面，可以逐项复制、打开所在文件夹，也可以一键清除。图片复制为图像，视频复制为可粘贴的媒体文件。文件跨程序重启保留；已完成录屏即使取消另存为，也可在这里重新找到。
 
+历史窗口采用紧凑列表：预览、文件信息和操作分别对齐，复制、目录与翻页按钮保持统一的桌面尺寸，只有多页内容才显示分页按钮。缩略图保留媒体比例，长文件名按可用空间省略，窗口受当前工作区约束；列表滚动与操作命中使用同一套位置规则。
+
 也可以从托盘右键菜单直接打开“剪切复制板”。一键清除会先确认，默认把列表中的归档媒体送入系统回收站；如果 Windows 无法回收，会再次提示确认。它只管理归档目录顶层符合命名规则的 PNG / GIF / MP4，不递归处理其他文件，也不删除另存到其他位置的副本。失败或取消后保留剩余项并刷新列表。完整边界见 [媒体历史设计](docs/media-history.md)。
 
 ### 更协调的桌面设置
@@ -71,8 +75,8 @@
 | 发布文件 | 包含什么 | 什么时候需要 |
 | --- | --- | --- |
 | `huhucapture.exe` | 可直接运行的 Windows x64 单文件，内置简体中文和英语；也是更新器使用的固定文件名 | 日常使用，下载后运行 |
-| `huhucapture-v0.0.3-windows-x64.zip` | 同一份 EXE、`Lang` 额外语言、依赖许可/声明和 `build-info.json` | 想完整保留分发内容，解压后运行其中的 EXE |
-| `huhucapture-v0.0.3-windows-x64-symbols.zip` | 与本次 Release 构建配套的 PDB 调试符号 | 开发者分析崩溃、调用栈或断点时使用；普通运行无需下载 |
+| `huhucapture-v0.0.4-windows-x64.zip` | 同一份 EXE、`Lang` 额外语言、依赖许可/声明和 `build-info.json` | 想完整保留分发内容，解压后运行其中的 EXE |
+| `huhucapture-v0.0.4-windows-x64-symbols.zip` | 与本次 Release 构建配套的 PDB 调试符号 | 开发者分析崩溃、调用栈或断点时使用；普通运行无需下载 |
 | `build-info.json` | 仓库与源提交 SHA、标签、Windows 版本、架构、工具链、固定依赖和 EXE 的 SHA256 | 提交问题或核对一个文件究竟来自哪次构建 |
 | `SHA256SUMS.txt` | 上述 EXE、两种 ZIP 和构建信息的 SHA256 校验值 | 核对下载是否完整、文件是否与该 Release 一致 |
 | GitHub 自动提供的 `Source code (zip / tar.gz)` | 对应标签的源码快照 | 自行编译或阅读源码；其中不包含已构建的可运行 EXE |
@@ -154,6 +158,7 @@ pwsh ./scripts/package.ps1
 | 文档 | 内容 |
 | --- | --- |
 | [文档地图](docs/readme.md) | 按问题查找设计、工程和验证约定 |
+| [上游致谢](docs/upstream.md) | ScreenCapture 与 Ling 来源、继承起点和维护归属 |
 | [工程约定](docs/conventions.md) | 目录、编码、资源、错误处理与文档规范 |
 | [媒体历史](docs/media-history.md) | 归档目录、命名、保存失败和清理边界 |
 | [界面设计](docs/design.md) | 设置与媒体历史的字体、颜色、布局及交互 |

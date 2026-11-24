@@ -9,9 +9,11 @@
 
 **huhucapture** — нативное приложение Windows для снимков экрана, аннотаций и записи видео, которое поддерживает [NAMEWTA](https://github.com/NAMEWTA). Оно сохраняет выделенные области и пояснения к ним в одном изображении, а также поддерживает закрепление изображений, длинные снимки с прокруткой, GIF / MP4 и распознавание QR-кодов.
 
+Проект основан на [xland / ScreenCapture](https://github.com/xland/ScreenCapture). Благодарим автора и участников исходного проекта, а также разработчиков [Ling](https://github.com/xland/Ling) и других открытых компонентов за основу захвата, редактирования и записи экрана. Источники, исходный снимок кода и границы самостоятельной поддержки описаны в [благодарностях upstream](upstream.md).
+
 Проект входит в семейство [huhu](https://github.com/NAMEWTA/huhu). Фирменный персонаж и угловые метки захвата образуют его знак; файлы и правила использования описаны в [руководстве по бренду](brand.md).
 
-[Скачать v0.0.3](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.3) · [Все выпуски](https://github.com/NAMEWTA/huhucapture/releases) · [Сообщить о проблеме](https://github.com/NAMEWTA/huhucapture/issues)
+[Скачать v0.0.4](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.4) · [Все выпуски](https://github.com/NAMEWTA/huhucapture/releases) · [Сообщить о проблеме](https://github.com/NAMEWTA/huhucapture/issues)
 
 ## Область и пояснение в одном изображении
 
@@ -59,8 +61,8 @@
 | Файл | Назначение |
 | --- | --- |
 | `huhucapture.exe` | Готовая программа x64 с китайским и английским языками |
-| `huhucapture-v0.0.3-windows-x64.zip` | Та же программа, дополнительные языки, лицензии и сведения о сборке |
-| `huhucapture-v0.0.3-windows-x64-symbols.zip` | PDB для отладки и анализа сбоев; для запуска не нужен |
+| `huhucapture-v0.0.4-windows-x64.zip` | Та же программа, дополнительные языки, лицензии и сведения о сборке |
+| `huhucapture-v0.0.4-windows-x64-symbols.zip` | PDB для отладки и анализа сбоев; для запуска не нужен |
 | `build-info.json` | Коммит, версия, архитектура, инструменты, зависимости и SHA256 EXE |
 | `SHA256SUMS.txt` | Контрольные суммы остальных четырёх файлов выпуска |
 | `Source code (zip / tar.gz)` от GitHub | Исходный код тега без готового EXE |

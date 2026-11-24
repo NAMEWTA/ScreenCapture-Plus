@@ -1,6 +1,6 @@
 # 构建与发布
 
-本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.3**，Windows 文件版本为 **0.0.3.0**。版本号来自 [Version.props](../build/windows/Version.props)，发布意图来自 [publish.json](../releases/publish.json)。
+本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.4**，Windows 文件版本为 **0.0.4.0**。版本号来自 [Version.props](../build/windows/Version.props)，发布意图来自 [publish.json](../releases/publish.json)。
 
 ## 环境与依赖决策
 
@@ -74,8 +74,8 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 ```json
 {
   "schemaVersion": 1,
-  "tag": "v0.0.3",
-  "notes": "releases/v0.0.3.md"
+  "tag": "v0.0.4",
+  "notes": "releases/v0.0.4.md"
 }
 ```
 

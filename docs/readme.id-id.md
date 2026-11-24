@@ -9,9 +9,11 @@
 
 **huhucapture** adalah aplikasi Windows native untuk tangkapan layar, anotasi, dan perekaman layar yang dipelihara oleh [NAMEWTA](https://github.com/NAMEWTA). Aplikasi ini menyatukan area bernomor dan penjelasannya dalam satu gambar, serta mendukung gambar mengambang, tangkapan panjang, rekaman GIF / MP4, dan pembacaan kode QR.
 
+Proyek ini dikembangkan dari [xland / ScreenCapture](https://github.com/xland/ScreenCapture). Terima kasih kepada penulis dan kontributor upstream, serta pengelola [Ling](https://github.com/xland/Ling) dan komponen sumber terbuka lainnya, atas dasar tangkapan, penyuntingan, dan perekaman layar native. Snapshot sumber, lingkup pemeliharaan, dan atribusi dijelaskan dalam [penghargaan untuk upstream](upstream.md).
+
 Proyek ini merupakan bagian dari keluarga merek [huhu](https://github.com/NAMEWTA/huhu). Identitasnya memakai karakter Huhu dan sudut bingkai tangkapan. Aset serta aturan penggunaannya tersedia di [panduan merek](brand.md).
 
-[Unduh v0.0.3](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.3) · [Semua rilis](https://github.com/NAMEWTA/huhucapture/releases) · [Laporkan masalah](https://github.com/NAMEWTA/huhucapture/issues)
+[Unduh v0.0.4](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.4) · [Semua rilis](https://github.com/NAMEWTA/huhucapture/releases) · [Laporkan masalah](https://github.com/NAMEWTA/huhucapture/issues)
 
 ## Area dan penjelasan dalam satu gambar
 
@@ -59,8 +61,8 @@ Untuk pemakaian biasa, pilih EXE atau ZIP portabel.
 | Berkas | Kegunaan |
 | --- | --- |
 | `huhucapture.exe` | Program x64 siap jalan dengan bahasa Mandarin Sederhana dan Inggris |
-| `huhucapture-v0.0.3-windows-x64.zip` | EXE yang sama, bahasa tambahan, lisensi, dan informasi build |
-| `huhucapture-v0.0.3-windows-x64-symbols.zip` | Simbol PDB untuk debugging dan analisis crash; tidak diperlukan untuk menjalankan aplikasi |
+| `huhucapture-v0.0.4-windows-x64.zip` | EXE yang sama, bahasa tambahan, lisensi, dan informasi build |
+| `huhucapture-v0.0.4-windows-x64-symbols.zip` | Simbol PDB untuk debugging dan analisis crash; tidak diperlukan untuk menjalankan aplikasi |
 | `build-info.json` | Commit sumber, versi, arsitektur, toolchain, dependensi, dan SHA256 EXE |
 | `SHA256SUMS.txt` | Nilai SHA256 untuk empat aset rilis lainnya |
 | `Source code (zip / tar.gz)` dari GitHub | Snapshot sumber pada tag, tanpa EXE hasil build |

@@ -9,9 +9,11 @@
 
 **huhucapture** is a native Windows tool for screenshots, annotation, and screen recording, maintained by [NAMEWTA](https://github.com/NAMEWTA). It combines numbered regions and written explanations into one image, alongside pinned images, scrolling capture, GIF / MP4 recording, and QR decoding.
 
+This project is derived from [xland / ScreenCapture](https://github.com/xland/ScreenCapture). We thank the original author and upstream contributors, as well as the maintainers of [Ling](https://github.com/xland/Ling) and the other open-source components, for the native capture, editing, and recording foundation. The inherited snapshot, maintenance scope, and attribution are documented in [upstream acknowledgements](upstream.md).
+
 It is part of the [huhu](https://github.com/NAMEWTA/huhu) brand family. The Huhu mascot and capture-corner identity, asset variants, and usage rules are documented in the [brand guide](brand.md).
 
-[Download v0.0.3](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.3) · [All releases](https://github.com/NAMEWTA/huhucapture/releases) · [Report an issue](https://github.com/NAMEWTA/huhucapture/issues)
+[Download v0.0.4](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.4) · [All releases](https://github.com/NAMEWTA/huhucapture/releases) · [Report an issue](https://github.com/NAMEWTA/huhucapture/issues)
 
 ## Explain a region, save one image
 
@@ -59,8 +61,8 @@ For normal use, choose the EXE or the portable ZIP. Other assets support debuggi
 | Asset | Purpose |
 | --- | --- |
 | `huhucapture.exe` | Standalone x64 app with embedded Simplified Chinese and English; the updater uses this name |
-| `huhucapture-v0.0.3-windows-x64.zip` | The same EXE, additional `Lang` files, licenses/notices, and build metadata |
-| `huhucapture-v0.0.3-windows-x64-symbols.zip` | Matching PDB debugging symbols for crash stacks, functions, and source locations; not needed to run the app |
+| `huhucapture-v0.0.4-windows-x64.zip` | The same EXE, additional `Lang` files, licenses/notices, and build metadata |
+| `huhucapture-v0.0.4-windows-x64-symbols.zip` | Matching PDB debugging symbols for crash stacks, functions, and source locations; not needed to run the app |
 | `build-info.json` | Source SHA, version, architecture, toolchain, pinned dependencies, and EXE SHA256 |
 | `SHA256SUMS.txt` | SHA256 checksums for the other four release assets |
 | GitHub `Source code (zip / tar.gz)` | Tagged source snapshot for developers; no built EXE |

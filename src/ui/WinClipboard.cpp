@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "ui/WinClipboard.h"
+#include "ui/settings/SettingsTheme.h"
 #include "services/Lang.h"
 #include "services/MediaHistory.h"
 #include "capture/WinCap.h"
@@ -7,6 +8,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -24,13 +26,17 @@
 
 using Microsoft::WRL::ComPtr;
 namespace MediaHistory = HuhuCapture::MediaHistory;
+namespace Theme = HuhuCapture::UI::SettingsTheme;
 
 namespace {
     std::unique_ptr<WinClipboard> clipboardWindow;
     constexpr std::size_t pageSize = 20;
     constexpr UINT workerTimer = 0x4843;
-    constexpr float rowHeight = 112.f;
-    constexpr float rowGap = 12.f;
+    constexpr float windowWidth = 760.f;
+    constexpr float windowHeight = 560.f;
+    constexpr float inset = 20.f;
+    constexpr float rowHeight = 84.f;
+    constexpr float rowGap = 8.f;
     constexpr std::size_t noEntry = static_cast<std::size_t>(-1);
 
     enum Action { None, Close, OpenFolder, Refresh, Clear, Select, Preview, Copy, Reveal, Previous, Next };
@@ -93,6 +99,9 @@ struct WinClipboard::State {
         ComPtr<ID2D1Bitmap> bitmap;
         bool loaded{};
     };
+    struct RowGeometry {
+        D2D1_RECT_F card, thumbnail, title, metadata, copy, reveal;
+    };
 
     std::shared_ptr<Work> work{std::make_shared<Work>()};
     std::shared_ptr<int> lifetime{std::make_shared<int>(0)};
@@ -111,12 +120,55 @@ struct WinClipboard::State {
     std::size_t page{}, selected{noEntry};
     float scrollY{}, cachedW{-1.f}, cachedH{-1.f}, cachedDpi{-1.f};
     float dragY{}, dragScroll{};
+    float copyWidth{64.f}, revealWidth{100.f}, openWidth{112.f}, refreshWidth{80.f}, clearWidth{96.f}, pageWidth{80.f};
     bool loading{}, failed{}, statusError{}, closed{}, reopen{}, dragging{};
     Target focused{}, hovered{}, pressed{};
 
     D2D1_RECT_F listRect(const WinClipboard& window) const {
         const auto d = window.dpi;
-        return D2D1::RectF(24.f * d, 184.f * d, window.w - 24.f * d, window.h - 100.f * d);
+        return D2D1::RectF(inset * d, 128.f * d, window.w - inset * d, window.h - 72.f * d);
+    }
+    RowGeometry rowGeometry(const WinClipboard& window, std::size_t position) const {
+        const auto d = window.dpi;
+        const auto list = listRect(window);
+        const float top = list.top + position * (rowHeight + rowGap) * d - scrollY;
+        RowGeometry result{};
+        result.card = D2D1::RectF(list.left, top, list.right, top + rowHeight * d);
+        result.thumbnail = D2D1::RectF(list.left + 12.f * d, top + 12.f * d, list.left + 108.f * d, top + 72.f * d);
+        const float controlsTop = top + (rowHeight - Theme::controlHeight) * .5f * d;
+        result.reveal = D2D1::RectF(list.right - (12.f + revealWidth) * d, controlsTop,
+            list.right - 12.f * d, controlsTop + Theme::controlHeight * d);
+        result.copy = D2D1::RectF(result.reveal.left - (8.f + copyWidth) * d, controlsTop,
+            result.reveal.left - 8.f * d, controlsTop + Theme::controlHeight * d);
+        const float textLeft = result.thumbnail.right + 12.f * d;
+        const float textRight = (std::max)(textLeft, result.copy.left - 12.f * d);
+        result.title = D2D1::RectF(textLeft, top + 21.f * d, textRight, top + 41.f * d);
+        result.metadata = D2D1::RectF(textLeft, top + 45.f * d, textRight, top + 63.f * d);
+        return result;
+    }
+    void measureActions() {
+        // Keep short labels compact while allowing the bundled translations to
+        // retain their natural width. Measurements stay in DIP and scale once.
+        auto* factory = Ling::D2D::get()->dwriteFactory.Get();
+        ComPtr<IDWriteTextFormat> format;
+        if (FAILED(factory->CreateTextFormat(Theme::fontFamily, nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, Theme::bodySize, L"zh-CN", &format))) return;
+        format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        const auto measure = [&](const wchar_t* key, float minimum, float maximum) {
+            const auto value = Lang::get(key);
+            ComPtr<IDWriteTextLayout> layout;
+            if (FAILED(factory->CreateTextLayout(value.c_str(), static_cast<UINT32>(value.size()),
+                format.Get(), 10000.f, 64.f, &layout))) return minimum;
+            DWRITE_TEXT_METRICS metrics{};
+            if (FAILED(layout->GetMetrics(&metrics))) return minimum;
+            return std::clamp(std::ceil(metrics.widthIncludingTrailingWhitespace) + 24.f, minimum, maximum);
+        };
+        copyWidth = measure(L"clipboard.copy", 64.f, 104.f);
+        revealWidth = measure(L"clipboard.reveal", 100.f, 144.f);
+        openWidth = measure(L"clipboard.openFolder", 112.f, 164.f);
+        refreshWidth = measure(L"clipboard.refresh", 80.f, 124.f);
+        clearWidth = measure(L"clipboard.clear", 96.f, 140.f);
+        pageWidth = (std::max)(measure(L"clipboard.previous", 80.f, 112.f), measure(L"clipboard.next", 80.f, 112.f));
     }
     float maxScroll(const WinClipboard& window) const {
         const auto list = listRect(window);
@@ -128,31 +180,34 @@ struct WinClipboard::State {
         const auto maximum = maxScroll(window);
         if (maximum <= 0.f) return {};
         const float viewport = list.bottom - list.top;
-        const float height = (std::max)(32.f * window.dpi, viewport * viewport / (viewport + maximum));
+        const float height = (std::min)(viewport, (std::max)(24.f * window.dpi, viewport * viewport / (viewport + maximum)));
         const float top = list.top + (viewport - height) * scrollY / maximum;
         return D2D1::RectF(window.w - 13.f * window.dpi, top, window.w - 7.f * window.dpi, top + height);
     }
     void buildTargets(const WinClipboard& window) {
         const float d = window.dpi;
-        const auto list = listRect(window);
         targets.clear();
         const auto add = [&](int action, D2D1_RECT_F rect, bool enabled = true, std::size_t index = noEntry) {
             targets.push_back({action, index, rect, enabled});
         };
-        add(Close, D2D1::RectF(window.w - 60.f * d, 16.f * d, window.w - 16.f * d, 60.f * d));
-        add(OpenFolder, D2D1::RectF(24.f * d, 108.f * d, 164.f * d, 152.f * d), !folder.empty());
-        add(Refresh, D2D1::RectF(176.f * d, 108.f * d, 276.f * d, 152.f * d), !loading);
-        add(Clear, D2D1::RectF(window.w - 164.f * d, 108.f * d, window.w - 24.f * d, 152.f * d), !loading && !entries.empty());
+        add(Close, D2D1::RectF(window.w - 42.f * d, 4.f * d, window.w - 6.f * d, 36.f * d));
+        add(OpenFolder, D2D1::RectF(inset * d, 80.f * d, (inset + openWidth) * d, 112.f * d), !folder.empty());
+        add(Refresh, D2D1::RectF((inset + openWidth + 8.f) * d, 80.f * d,
+            (inset + openWidth + 8.f + refreshWidth) * d, 112.f * d), !loading);
+        add(Clear, D2D1::RectF(window.w - (inset + clearWidth) * d, 80.f * d, window.w - inset * d, 112.f * d), !loading && !entries.empty());
         for (std::size_t i = 0; i < rows.size(); ++i) {
-            const float top = list.top + i * (rowHeight + rowGap) * d - scrollY;
-            const auto right = list.right;
-            add(Select, D2D1::RectF(list.left, top, right, top + rowHeight * d), true, rows[i].index);
-            add(Preview, D2D1::RectF(list.left + 16.f * d, top + 16.f * d, list.left + 144.f * d, top + 96.f * d), true, rows[i].index);
-            add(Copy, D2D1::RectF(right - 224.f * d, top + 34.f * d, right - 136.f * d, top + 78.f * d), true, rows[i].index);
-            add(Reveal, D2D1::RectF(right - 124.f * d, top + 34.f * d, right - 12.f * d, top + 78.f * d), true, rows[i].index);
+            const auto geometry = rowGeometry(window, i);
+            add(Select, geometry.card, true, rows[i].index);
+            add(Preview, geometry.thumbnail, true, rows[i].index);
+            add(Copy, geometry.copy, true, rows[i].index);
+            add(Reveal, geometry.reveal, true, rows[i].index);
         }
-        add(Previous, D2D1::RectF(window.w - 248.f * d, window.h - 60.f * d, window.w - 140.f * d, window.h - 16.f * d), !loading && page > 0);
-        add(Next, D2D1::RectF(window.w - 128.f * d, window.h - 60.f * d, window.w - 24.f * d, window.h - 16.f * d), !loading && (page + 1) * pageSize < entries.size());
+        if (entries.size() > pageSize) {
+            add(Previous, D2D1::RectF(window.w - (inset + pageWidth * 2.f + 8.f) * d, window.h - 44.f * d,
+                window.w - (inset + pageWidth + 8.f) * d, window.h - 12.f * d), !loading && page > 0);
+            add(Next, D2D1::RectF(window.w - (inset + pageWidth) * d, window.h - 44.f * d,
+                window.w - inset * d, window.h - 12.f * d), !loading && (page + 1) * pageSize < entries.size());
+        }
     }
     Target hit(const WinClipboard& window, POINT point) const {
         for (auto it = targets.rbegin(); it != targets.rend(); ++it) {
@@ -167,11 +222,11 @@ WinClipboard::WinClipboard() : state(std::make_unique<State>()) {
     setTitle(Lang::get(L"clipboard.title"));
     RECT workArea{};
     const bool hasWorkArea = SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0) != FALSE;
-    const float availableWidth = hasWorkArea ? static_cast<float>(workArea.right - workArea.left) / dpi - 32.f : 920.f;
-    const float availableHeight = hasWorkArea ? static_cast<float>(workArea.bottom - workArea.top) / dpi - 32.f : 700.f;
-    const float minimumWidth = (std::min)(760.f, (std::max)(640.f, availableWidth));
-    const float minimumHeight = (std::min)(560.f, (std::max)(440.f, availableHeight));
-    setSize((std::max)(minimumWidth, (std::min)(920.f, availableWidth)), (std::max)(minimumHeight, (std::min)(700.f, availableHeight)));
+    const float availableWidth = hasWorkArea ? (std::max)(320.f, (workArea.right - workArea.left - 32.f) / dpi) : windowWidth;
+    const float availableHeight = hasWorkArea ? (std::max)(320.f, (workArea.bottom - workArea.top - 32.f) / dpi) : windowHeight;
+    const float minimumWidth = (std::min)(640.f, availableWidth);
+    const float minimumHeight = (std::min)(400.f, availableHeight);
+    setSize((std::min)(windowWidth, availableWidth), (std::min)(windowHeight, availableHeight));
     setMinSize(minimumWidth, minimumHeight);
     setCenter();
     onDestroy.add([this] {
@@ -179,6 +234,18 @@ WinClipboard::WinClipboard() : state(std::make_unique<State>()) {
         stopWorker();
         // The worker queues destruction after its current native decode returns.
         // Closing the native window never waits for a slow thumbnail provider.
+    });
+    onDpiChanged.add([this] {
+        state->pressed = {};
+        state->hovered = {};
+        state->dragging = false;
+        if (GetCapture() == hwnd) ReleaseCapture();
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) {
+            const auto& area = monitor.rcWork;
+            setMinSize((std::min)(640.f, (std::max)(1.f, (area.right - area.left - 32.f) / dpi)),
+                (std::min)(400.f, (std::max)(1.f, (area.bottom - area.top - 32.f) / dpi)));
+        }
     });
     createNativeWindow();
 }
@@ -220,6 +287,7 @@ bool WinClipboard::hasThumbnail(const std::filesystem::path& path) const {
 
 void WinClipboard::onCreated() {
     enableShadow();
+    state->measureActions();
     body->setBg(0xF5F5F7FF);
     state->canvas = body->makeChild<Ling::Canvas>();
     state->canvas->setSizePercent(100.f, 100.f);
@@ -435,20 +503,20 @@ void WinClipboard::paint() {
         auto [it, inserted] = state->textCache.try_emplace(std::move(key));
         if (inserted) {
             auto* factory = Ling::D2D::get()->dwriteFactory.Get();
-            const auto format = Ling::D2D::get()->baseTextFormat.Get();
-            factory->CreateTextLayout(value.c_str(), static_cast<UINT32>(value.size()), format,
-                box.right - box.left, box.bottom - box.top, &it->second);
+            ComPtr<IDWriteTextFormat> format;
+            if (SUCCEEDED(factory->CreateTextFormat(Theme::fontFamily, nullptr,
+                strong ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size * d, L"zh-CN", &format))) {
+                format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                format->SetTextAlignment(center ? DWRITE_TEXT_ALIGNMENT_CENTER : DWRITE_TEXT_ALIGNMENT_LEADING);
+                factory->CreateTextLayout(value.c_str(), static_cast<UINT32>(value.size()), format.Get(),
+                    box.right - box.left, box.bottom - box.top, &it->second);
+            }
             if (it->second) {
                 auto* layout = it->second.Get();
-                const DWRITE_TEXT_RANGE range{0, static_cast<UINT32>(value.size())};
-                layout->SetFontFamilyName(L"Segoe UI", range);
-                layout->SetFontSize(size * d, range);
-                layout->SetFontWeight(strong ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_NORMAL, range);
-                layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-                layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                layout->SetTextAlignment(center ? DWRITE_TEXT_ALIGNMENT_CENTER : DWRITE_TEXT_ALIGNMENT_LEADING);
                 ComPtr<IDWriteInlineObject> ellipsis;
-                if (SUCCEEDED(factory->CreateEllipsisTrimmingSign(format, &ellipsis))) {
+                if (SUCCEEDED(factory->CreateEllipsisTrimmingSign(format.Get(), &ellipsis))) {
                     const DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
                     layout->SetTrimming(&trimming, ellipsis.Get());
                 }
@@ -457,39 +525,43 @@ void WinClipboard::paint() {
         color(rgb);
         if (it->second) ctx->DrawTextLayout({box.left, box.top}, it->second.Get(), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
     };
-    const auto button = [&](const Target& target, const std::wstring& label, bool primary = false) {
+    const auto button = [&](const Target& target, const std::wstring& label, bool destructive = false) {
         const bool hover = target == state->hovered;
         const bool pressed = target == state->pressed;
-        const auto shape = D2D1::RoundedRect(target.rect, 11.f * d, 11.f * d);
-        color(!target.enabled ? 0xEBEBEF : primary ? (pressed ? 0x0052A5 : 0x0066CC) : (hover || pressed ? 0xE8E8ED : 0xFFFFFF));
+        const bool highlighted = target.enabled && (hover || pressed);
+        const auto shape = D2D1::RoundedRect(target.rect, Theme::controlRadius * d, Theme::controlRadius * d);
+        color(!target.enabled ? 0xF5F5F7 : highlighted ? (destructive ? 0xFFF0ED : Theme::blueTint >> 8) : 0xFFFFFF);
         ctx->FillRoundedRectangle(shape, brush);
-        if (!primary) {
-            color(0xE0E0E0);
-            ctx->DrawRoundedRectangle(shape, brush, d);
-        }
+        color(highlighted ? (destructive ? 0xE4AAA3 : 0x80B6ED) : Theme::hairline >> 8);
+        ctx->DrawRoundedRectangle(shape, brush, d);
         if (target.enabled && target == state->focused) {
-            color(0x0071E3);
+            color(Theme::focusBlue >> 8);
             auto focus = target.rect;
-            focus.left -= 3.f * d; focus.top -= 3.f * d;
-            focus.right += 3.f * d; focus.bottom += 3.f * d;
-            ctx->DrawRoundedRectangle(D2D1::RoundedRect(focus, 14.f * d, 14.f * d), brush, 2.f * d);
+            focus.left -= 2.f * d; focus.top -= 2.f * d;
+            focus.right += 2.f * d; focus.bottom += 2.f * d;
+            ctx->DrawRoundedRectangle(D2D1::RoundedRect(focus, (Theme::controlRadius + 2.f) * d,
+                (Theme::controlRadius + 2.f) * d), brush, d);
         }
-        text(label, target.rect, 16.f, !target.enabled ? 0x8B8B91 : primary ? 0xFFFFFF : 0x0066CC, false, true);
+        text(label, target.rect, Theme::bodySize,
+            !target.enabled ? 0x8B8B91 : highlighted ? (destructive ? Theme::warning >> 8 : Theme::blue >> 8) : Theme::ink >> 8,
+            false, true);
     };
 
-    ctx->Clear(D2D1::ColorF(0xF5F5F7));
-    text(Lang::get(L"clipboard.title"), D2D1::RectF(24.f * d, 21.f * d, w - 88.f * d, 63.f * d), 28.f, 0x1D1D1F, true);
-    text(state->folder.wstring(), D2D1::RectF(24.f * d, 67.f * d, w - 24.f * d, 93.f * d), 14.f, 0x6E6E73);
+    ctx->Clear(D2D1::ColorF(Theme::canvas >> 8));
+    text(Lang::get(L"clipboard.title"), D2D1::RectF(inset * d, 18.f * d, w - 64.f * d, 48.f * d),
+        Theme::headingSize, Theme::ink >> 8, true);
+    text(state->folder.wstring(), D2D1::RectF(inset * d, 50.f * d, w - inset * d, 68.f * d),
+        Theme::captionSize, Theme::secondary >> 8);
     for (const auto& target : state->targets) {
         switch (target.action) {
         case Close: {
             if (target == state->hovered || target == state->focused) {
                 color(0xE8E8ED);
-                ctx->FillRoundedRectangle(D2D1::RoundedRect(target.rect, 11.f * d, 11.f * d), brush);
+                ctx->FillRoundedRectangle(D2D1::RoundedRect(target.rect, Theme::controlRadius * d, Theme::controlRadius * d), brush);
             }
             if (target == state->focused) {
                 color(0x0071E3);
-                ctx->DrawRoundedRectangle(D2D1::RoundedRect(target.rect, 11.f * d, 11.f * d), brush, 2.f * d);
+                ctx->DrawRoundedRectangle(D2D1::RoundedRect(target.rect, Theme::controlRadius * d, Theme::controlRadius * d), brush, d);
             }
             color(0x6E6E73);
             const auto cx = (target.rect.left + target.rect.right) / 2.f;
@@ -500,7 +572,7 @@ void WinClipboard::paint() {
         }
         case OpenFolder: button(target, Lang::get(L"clipboard.openFolder")); break;
         case Refresh: button(target, Lang::get(L"clipboard.refresh")); break;
-        case Clear: button(target, Lang::get(L"clipboard.clear")); break;
+        case Clear: button(target, Lang::get(L"clipboard.clear"), true); break;
         case Previous: button(target, Lang::get(L"clipboard.previous")); break;
         case Next: button(target, Lang::get(L"clipboard.next")); break;
         default: break;
@@ -509,28 +581,31 @@ void WinClipboard::paint() {
 
     const auto count = std::to_wstring(state->entries.size()) + L" " + Lang::get(L"clipboard.items");
     const auto pages = state->entries.empty() ? 1 : (state->entries.size() + pageSize - 1) / pageSize;
-    text(count + L"  ·  " + std::to_wstring(state->page + 1) + L" / " + std::to_wstring(pages),
-        D2D1::RectF(28.f * d, 157.f * d, w - 28.f * d, 181.f * d), 14.f, 0x6E6E73);
+    const auto countLabel = pages > 1 ? count + L"  ·  " + std::to_wstring(state->page + 1) + L" / " + std::to_wstring(pages) : count;
+    text(countLabel, D2D1::RectF((inset + state->openWidth + state->refreshWidth + 24.f) * d, 80.f * d,
+        w - (inset + state->clearWidth + 16.f) * d, 112.f * d), Theme::captionSize, Theme::secondary >> 8);
     const auto list = state->listRect(*this);
     ctx->PushAxisAlignedClip(list, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     if (state->rows.empty()) {
         const auto center = (list.top + list.bottom) / 2.f;
         const auto heading = state->loading ? L"clipboard.loading" : state->failed ? L"clipboard.loadFailed" : L"clipboard.empty";
-        text(Lang::get(heading), D2D1::RectF(list.left + 24.f * d, center - 42.f * d, list.right - 24.f * d, center), 21.f, 0x1D1D1F, true, true);
+        text(Lang::get(heading), D2D1::RectF(list.left + 24.f * d, center - 30.f * d, list.right - 24.f * d, center),
+            18.f, Theme::ink >> 8, true, true);
         if (!state->loading && !state->failed)
-            text(Lang::get(L"clipboard.emptyHint"), D2D1::RectF(list.left + 24.f * d, center + 4.f * d, list.right - 24.f * d, center + 36.f * d), 16.f, 0x6E6E73, false, true);
+            text(Lang::get(L"clipboard.emptyHint"), D2D1::RectF(list.left + 24.f * d, center + 2.f * d, list.right - 24.f * d, center + 22.f * d),
+                Theme::bodySize, Theme::secondary >> 8, false, true);
     }
     for (std::size_t i = 0; i < state->rows.size(); ++i) {
         auto& row = state->rows[i];
         const auto& entry = state->entries[row.index];
-        const float top = list.top + i * (rowHeight + rowGap) * d - state->scrollY;
-        if (top + rowHeight * d <= list.top || top >= list.bottom) continue;
-        const auto card = D2D1::RoundedRect(D2D1::RectF(list.left, top, list.right, top + rowHeight * d), 18.f * d, 18.f * d);
+        const auto geometry = state->rowGeometry(*this, i);
+        if (geometry.card.bottom <= list.top || geometry.card.top >= list.bottom) continue;
+        const auto card = D2D1::RoundedRect(geometry.card, Theme::cardRadius * d, Theme::cardRadius * d);
         color(0xFFFFFF);
         ctx->FillRoundedRectangle(card, brush);
         color(row.index == state->selected ? 0x80B6ED : 0xE0E0E0);
         ctx->DrawRoundedRectangle(card, brush, d);
-        const auto thumbnail = D2D1::RectF(list.left + 16.f * d, top + 16.f * d, list.left + 144.f * d, top + 96.f * d);
+        const auto thumbnail = geometry.thumbnail;
         color(0xF5F5F7);
         ctx->FillRoundedRectangle(D2D1::RoundedRect(thumbnail, 8.f * d, 8.f * d), brush);
         if (row.nativeBitmap) {
@@ -549,22 +624,20 @@ void WinClipboard::paint() {
                 ctx->DrawBitmap(row.bitmap.Get(), D2D1::RectF(left, imageTop, left + size.width * scale, imageTop + size.height * scale), 1.f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
             }
         } else {
-            text(entry.video ? L"MP4 / GIF" : L"PNG", thumbnail, 14.f, 0x6E6E73, true, true);
+            text(entry.video ? L"MP4 / GIF" : L"PNG", thumbnail, Theme::captionSize, Theme::secondary >> 8, true, true);
         }
         if (entry.video) {
-            const auto badge = D2D1::RectF(thumbnail.right - 48.f * d, thumbnail.bottom - 25.f * d, thumbnail.right - 4.f * d, thumbnail.bottom - 4.f * d);
+            const auto badge = D2D1::RectF(thumbnail.right - 40.f * d, thumbnail.bottom - 22.f * d, thumbnail.right - 4.f * d, thumbnail.bottom - 4.f * d);
             color(0x0066CC);
             ctx->FillRoundedRectangle(D2D1::RoundedRect(badge, 5.f * d, 5.f * d), brush);
             const auto extension = entry.path.extension().wstring();
             text(extension == L".gif" ? L"GIF" : L"MP4", badge, 12.f, 0xFFFFFF, true, true);
         }
-        const float textLeft = list.left + 160.f * d;
-        const float textRight = list.right - 240.f * d;
-        text(entry.name, D2D1::RectF(textLeft, top + 25.f * d, textRight, top + 56.f * d), 17.f, 0x1D1D1F, true);
-        text(row.metadata, D2D1::RectF(textLeft, top + 60.f * d, textRight, top + 90.f * d), 14.f, 0x6E6E73);
+        text(entry.name, geometry.title, Theme::bodySize, Theme::ink >> 8);
+        text(row.metadata, geometry.metadata, Theme::captionSize, Theme::secondary >> 8);
         for (const auto& target : state->targets) {
             if (target.index != row.index) continue;
-            if (target.action == Copy) button(target, Lang::get(L"clipboard.copy"), true);
+            if (target.action == Copy) button(target, Lang::get(L"clipboard.copy"));
             else if (target.action == Reveal) button(target, Lang::get(L"clipboard.reveal"));
             else if (target.action == Preview && target == state->focused) {
                 color(0x0071E3);
@@ -577,8 +650,11 @@ void WinClipboard::paint() {
         color(state->dragging ? 0x6E6E73 : 0xB6B6BC);
         ctx->FillRoundedRectangle(D2D1::RoundedRect(state->scrollbar(*this), 3.f * d, 3.f * d), brush);
     }
-    text(state->status, D2D1::RectF(24.f * d, h - 94.f * d, w - 24.f * d, h - 65.f * d), 14.f, state->statusError ? 0xB42318 : 0x0066CC);
-    text(Lang::get(L"clipboard.shortcuts"), D2D1::RectF(24.f * d, h - 58.f * d, w - 270.f * d, h - 18.f * d), 14.f, 0x6E6E73);
+    text(state->status, D2D1::RectF(inset * d, h - 64.f * d, w - inset * d, h - 46.f * d),
+        Theme::captionSize, state->statusError ? Theme::warning >> 8 : Theme::blue >> 8);
+    const auto footerRight = pages > 1 ? w - (inset + state->pageWidth * 2.f + 24.f) * d : w - inset * d;
+    text(Lang::get(L"clipboard.shortcuts"), D2D1::RectF(inset * d, h - 44.f * d, footerRight, h - 12.f * d),
+        Theme::captionSize, Theme::secondary >> 8);
     state->canvas->finishPaint();
 }
 
@@ -753,7 +829,7 @@ LRESULT WinClipboard::onHitTest(POINT position) {
         const auto border = borderHitTest(position);
         if (border != HTCLIENT) return border;
     }
-    if (position.y > 0 && position.y < 64.f * dpi && position.x < w - 76.f * dpi) return HTCAPTION;
+    if (position.y > 0 && position.y < 72.f * dpi && position.x < w - 48.f * dpi) return HTCAPTION;
     return HTCLIENT;
 }
 

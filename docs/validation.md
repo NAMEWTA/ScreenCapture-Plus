@@ -2,7 +2,7 @@
 
 ## 如何读取验证结果
 
-本文定义验证范围、执行方式与证据位置。某项检查列在本文中，不代表某次构建已经执行或通过。huhucapture v0.0.3 的构建结果以对应提交的 [Windows Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 为准，发行文件以 [Release](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.3) 的 `build-info.json` 和 SHA256 为准。
+本文定义验证范围、执行方式与证据位置。某项检查列在本文中，不代表某次构建已经执行或通过。huhucapture v0.0.4 的构建结果以对应提交的 [Windows Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 为准，发行文件以 [Release](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.4) 的 `build-info.json` 和 SHA256 为准。
 
 核心测试、离屏渲染、启动检查、脚本 GUI 和人工桌面验收分别记录。报告至少包含提交 SHA、命令、环境、结果与证据；未执行的场景明确写为未执行。更换产品身份或资源后，应重新验证对应提交，不能把先前生成的截图当作本次品牌、版本和程序启动的通过记录。
 
@@ -95,8 +95,13 @@ g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/annotation_region
 | `screens/12-settings-150.png`、`13-language-menu-150.png` | 注入 144 DPI 后受实际工作区约束的设置与弹层渲染 |
 | `screens/14-settings-english.png` | 提交英语选择并重建后的设置页面 |
 | `screens/15-language-menu-scroll.png` | 受限高度中的长语言列表与滚动后的可见选项；点击命中以报告断言为准 |
+| `screens/16-clipboard-100.png`、`17-clipboard-125.png` | 紧凑媒体历史在 96 / 120 DPI 参数下的预览、文字与操作布局 |
+| `screens/18-clipboard-150.png` | 144 DPI 下受工作区约束的媒体历史窗口；用于检查缩略图、按钮和点击区域的协调 |
+| `screens/19-clipboard-english.png` | 英文媒体历史的按钮宽度、文件信息与反馈文字 |
 
 设置比例场景使用实际桌面为 1024 × 768、96 DPI 的 Runner。100% 和 125% 按默认 720 × 500 逻辑像素渲染；120 / 144 DPI 场景向真实窗口发送 `WM_DPICHANGED`，重新布局、绘字和截图。150% 场景遵循正式窗口的工作区约束：可用宽高以实际工作区各减去 32 物理像素为上限，截图中的窗口因此不会强制达到 1080 × 750 物理像素。它验证受控 DPI 参数下的原生渲染与命中，未修改系统显示缩放，也不代表物理混合 DPI 显示器已完成验收。语言选择的箭头、Esc、外部点击、Enter 提交和滚动命中，以本次测试报告实际执行的断言为准；截图本身不能证明这些交互断言已经通过。
+
+媒体历史的 16–19 号证据沿用真实窗口和受控 `WM_DPICHANGED` 方法。默认窗口采用 760 × 560 逻辑像素；125% 与 150% 场景均以实际工作区为上限，不能把未经约束的理论尺寸当作固定通过条件。除检查预览、文字和按钮的渲染外，还应以报告中的断言确认复制、选择、滚动及尺寸改变后的命中。07 号历史截图也必须随本次代码重新生成，不能沿用旧布局。
 
 GUI 进程有脚本限定的硬超时，只终止测试启动的进程。硬件 D3D11 或输入桌面不可用时返回独立错误码 77，CI 视为失败，不将环境不足标记为成功。早于 GUI 生成的构建、原生渲染和打包证据仍可用于诊断，发布继续被阻止。
 
@@ -112,7 +117,7 @@ GUI 进程有脚本限定的硬超时，只终止测试启动的进程。硬件 
 
 ## 媒体历史与设置的专项验收
 
-这些项目定义 v0.0.3 的可观察契约。自动测试实际覆盖的断言以测试源码与本次运行报告为准，其余项目在真实桌面记录，不能因为功能已经写入代码就标记为通过。
+这些项目定义 v0.0.4 的可观察契约。自动测试实际覆盖的断言以测试源码与本次运行报告为准，其余项目在真实桌面记录，不能因为功能已经写入代码就标记为通过。
 
 | 场景 | 需要观察的结果 |
 | --- | --- |

@@ -1,5 +1,13 @@
 # Licenses and third-party components
 
+huhucapture is derived from [xland/ScreenCapture](https://github.com/xland/ScreenCapture).
+The recorded inherited application snapshot is
+[`5e4713e2fbe333873abff911424a212923489ccd`](https://github.com/xland/ScreenCapture/commit/5e4713e2fbe333873abff911424a212923489ccd)
+(`2.5.15`). We thank xland and the upstream contributors for the native capture,
+editing, recording, and desktop application foundation. See
+[upstream acknowledgements](https://github.com/NAMEWTA/huhucapture/blob/main/docs/upstream.md)
+for provenance and maintenance boundaries.
+
 huhucapture is maintained by NAMEWTA. Product branding does not replace the
 copyright notices of inherited code. The inherited application resource declared
 `Copyright (C) LiuXiaoLun 2023-2026`; that attribution is retained here. The inherited

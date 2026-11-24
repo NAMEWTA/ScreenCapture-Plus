@@ -1,0 +1,31 @@
+# 上游致谢与来源
+
+huhucapture 基于 [xland / ScreenCapture](https://github.com/xland/ScreenCapture) 衍生开发。感谢 [xland](https://github.com/xland) 与上游贡献者提供原生 Windows 截图工具的基础实现，也感谢 [Ling](https://github.com/xland/Ling) 及相关开源组件的维护者。截图、钉图与绘图编辑、滚动截图、GIF / MP4 录屏、二维码识别、托盘、命令行入口和多语言能力，都建立在这些已有工作之上。
+
+## 可以追溯的起点
+
+本项目记录的继承快照为 ScreenCapture 提交 [`5e4713e2fbe333873abff911424a212923489ccd`](https://github.com/xland/ScreenCapture/commit/5e4713e2fbe333873abff911424a212923489ccd)，其提交说明为 `2.5.15`。可从该快照的 [ReadMe.md](https://github.com/xland/ScreenCapture/blob/5e4713e2fbe333873abff911424a212923489ccd/ReadMe.md) 了解原项目的功能与使用方式。固定链接用于追溯继承内容；后续维护应同时查阅上游当前代码，并记录真正引入的修复与版本。
+
+Ling 是当前 Windows 窗口与界面的基础。实际构建采用的版本由 [依赖锁文件](../build/dependencies.lock.json) 统一管理，其他依赖及继承的 C 源码来源由 [第三方声明](../third_party/NOTICE.md) 记录。没有可靠记录的第三方原始版本，不通过猜测补写。
+
+## 本项目的维护范围
+
+huhucapture 由 [NAMEWTA](https://github.com/NAMEWTA) 独立维护，使用自己的产品名称、品牌资源、问题入口和发行版本。本项目增加或调整的范围包括矩形批注与说明合成、媒体历史归档、桌面设置与列表交互、工程模块边界，以及固定依赖和发布验证。产品当前行为以本仓库的 [README](../README.md) 为准；来源说明不意味着上游维护者参与或为本项目的后续修改背书。
+
+维护时优先理解并复用已有实现。引入上游修复或其他项目代码，应记录源仓库、具体提交、适配理由和适用许可；只参考产品行为或设计规则时，也应说明参考范围，避免把设计借鉴写成源码移植。媒体历史的行为参考与设置页的视觉参考分别记录在 [媒体历史](media-history.md) 和 [界面设计](design.md) 中。
+
+## 归属与分发
+
+上游致谢是源码与分发说明的一部分，不随本项目名称、分支或贡献统计的展示方式改变。
+
+- ScreenCapture 继承快照的 [应用资源](https://github.com/xland/ScreenCapture/blob/5e4713e2fbe333873abff911424a212923489ccd/Src/Res/Resource.rc) 声明 `Copyright (C) LiuXiaoLun 2023-2026`，本项目在第三方声明中保留该归属。
+- 上游 [MIT 许可文本](https://github.com/xland/ScreenCapture/blob/5e4713e2fbe333873abff911424a212923489ccd/LICENSE) 中已有的 ThorVG 版权行保留在本项目根 [LICENSE](../LICENSE)；本项目新增工作的 NAMEWTA 声明与其并列。
+- 各依赖保留各自的许可与版权。仓库根许可不替代第三方条款，便携发行包包含对应文本，具体来源与用途以 [NOTICE](../third_party/NOTICE.md) 为准。
+
+对上游的感谢、当前项目的维护责任和实际代码归属应同时保持清楚。整理品牌、文档或仓库展示时，不删除继承代码的来源和许可说明，也不把上游工作表述为完全从零开发。
+
+## GitHub Contributors 的展示边界
+
+GitHub Contributors 按默认分支中的提交生成贡献统计；它与本项目实际继承的源码来源、版权及许可声明分别维护。统计页面出现或不出现某位作者，都不改变本页记录的上游归属。
+
+GitHub 官方说明，强制推送、重写历史或删除提交后，贡献者展示和统计可能需要约 24 小时刷新；默认分支的正常推送会重置按提交 SHA 缓存的仓库统计。维护时应核对实际提交作者，并留出平台重新计算的时间，不为改变页面展示而伪造作者或使用错误的身份映射。刷新机制及排查入口见 [Contributors 文档](https://docs.github.com/en/repositories/viewing-activity-and-data-for-your-repository/viewing-a-projects-contributors) 和 [仓库统计 API 文档](https://docs.github.com/en/rest/metrics/statistics)。

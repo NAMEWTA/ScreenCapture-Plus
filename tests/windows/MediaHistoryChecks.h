@@ -128,7 +128,7 @@ inline WinSettingCommon* settingsCommon(Ling::Node* node)
 
 // Drive the actual HWND handlers, including activation before the click. The
 // separate trigger-toggle check uses SendInput to exercise OS activation order.
-inline void settingsClick(HWND window, POINT point, const std::function<void(DWORD)>& pump)
+inline void nativeClick(HWND window, POINT point, const std::function<void(DWORD)>& pump)
 {
     historyRequire(IsWindow(window) != FALSE, "Settings click target no longer exists");
     SetForegroundWindow(window);
@@ -165,7 +165,7 @@ inline SettingsSelectPopup* openSettingsLanguage(WinSetting* settings, const std
     auto* common = settingsCommon(settings->body.get());
     auto* trigger = historyButton(settings->body.get(), L"settings-language");
     historyRequire(common && trigger, "General settings language controls are missing");
-    settingsClick(settings->hwnd, {static_cast<LONG>(trigger->x + trigger->w / 2.f),
+    nativeClick(settings->hwnd, {static_cast<LONG>(trigger->x + trigger->w / 2.f),
         static_cast<LONG>(trigger->y + trigger->h / 2.f)}, pump);
     auto* popup = common->languagePopup();
     historyRequire(popup && popup->isOpen(), "Mouse click did not open the language popup");
@@ -180,12 +180,13 @@ inline RECT settingsWorkArea(HWND window)
     return monitor.rcWork;
 }
 
-inline RECT setSettingsTestDpi(WinSetting* settings, UINT dpi, const std::function<void(DWORD)>& pump)
+inline RECT setNativeTestDpi(Ling::WinBase* settings, UINT dpi, float logicalWidth, float logicalHeight,
+    const std::function<void(DWORD)>& pump)
 {
     const auto work = settingsWorkArea(settings->hwnd);
     const float scale = dpi / 96.f;
-    const LONG width = (std::min)(static_cast<LONG>(std::lround(720.f * scale)), work.right - work.left - 32);
-    const LONG height = (std::min)(static_cast<LONG>(std::lround(500.f * scale)), work.bottom - work.top - 32);
+    const LONG width = (std::min)(static_cast<LONG>(std::lround(logicalWidth * scale)), work.right - work.left - 32);
+    const LONG height = (std::min)(static_cast<LONG>(std::lround(logicalHeight * scale)), work.bottom - work.top - 32);
     RECT suggested{work.left + (work.right - work.left - width) / 2,
         work.top + (work.bottom - work.top - height) / 2, 0, 0};
     suggested.right = suggested.left + width;
@@ -202,12 +203,17 @@ inline RECT setSettingsTestDpi(WinSetting* settings, UINT dpi, const std::functi
     return actual;
 }
 
+inline RECT setSettingsTestDpi(WinSetting* settings, UINT dpi, const std::function<void(DWORD)>& pump)
+{
+    return setNativeTestDpi(settings, dpi, 720.f, 500.f, pump);
+}
+
 inline void runSettingsDesignChecks(WinSetting* settings, const fs::path& evidence,
     const std::function<void(DWORD)>& pump)
 {
     auto* menu = historyButton(settings->body.get(), L"settings-menu-common");
     historyRequire(menu != nullptr, "General settings menu missing");
-    settingsClick(settings->hwnd, {static_cast<LONG>(menu->x + menu->w / 2.f),
+    nativeClick(settings->hwnd, {static_cast<LONG>(menu->x + menu->w / 2.f),
         static_cast<LONG>(menu->y + menu->h / 2.f)}, pump);
     const auto originalLanguage = Setting::get()->getLang();
     historyRequire(originalLanguage == L"zh-CN", "Fresh GUI configuration must start in Simplified Chinese");
@@ -322,7 +328,7 @@ inline void runSettingsDesignChecks(WinSetting* settings, const fs::path& eviden
     historyRequire(chinese.right > chinese.left && chinese.bottom > chinese.top, "Chinese language row is not visible");
     POINT chinesePoint{(chinese.left + chinese.right) / 2, (chinese.top + chinese.bottom) / 2};
     historyRequire(ScreenToClient(popup->hwnd, &chinesePoint) != FALSE, "Convert language row click coordinates");
-    settingsClick(popup->hwnd, chinesePoint, pump);
+    nativeClick(popup->hwnd, chinesePoint, pump);
     pump(100);
     settings = WinSetting::get();
     historyRequire(settings && IsWindow(settings->hwnd) && Setting::get()->getLang() == originalLanguage,
@@ -351,11 +357,74 @@ inline void runSettingsDesignChecks(WinSetting* settings, const fs::path& eviden
     captureHistoryWindow(scrolling.get(), evidence / L"15-language-menu-scroll.png", pump, false);
     POINT lastPoint{(last.left + last.right) / 2, (last.top + last.bottom) / 2};
     historyRequire(ScreenToClient(scrolling->hwnd, &lastPoint) != FALSE, "Convert scrolled menu item coordinates");
-    settingsClick(scrolling->hwnd, lastPoint, pump);
+    nativeClick(scrolling->hwnd, lastPoint, pump);
     historyRequire(completed && chosen && *chosen == L"item-19" && !scrolling->isOpen(),
         "Scrolled menu hit-testing committed the wrong item");
     scrolling.reset();
     std::cout << "PASS 20-item language menu: bounded height, above-anchor placement, work-area clamp, End scrolling and row hit-testing.\n";
+}
+
+inline void requireHistoryClipboard(HWND owner, const Media::Entry& expected)
+{
+    if (!expected.video) {
+        historyRequire(IsClipboardFormatAvailable(CF_DIB) && IsClipboardFormatAvailable(CF_DIBV5) &&
+            IsClipboardFormatAvailable(RegisterClipboardFormatW(L"PNG")), "History row button did not copy the image");
+        return;
+    }
+    historyRequire(OpenClipboard(owner) != FALSE, "Read history row file clipboard");
+    const auto drop = static_cast<HDROP>(GetClipboardData(CF_HDROP));
+    std::vector<wchar_t> file(drop ? DragQueryFileW(drop, 0, nullptr, 0) + 1 : 1);
+    if (drop) DragQueryFileW(drop, 0, file.data(), static_cast<UINT>(file.size()));
+    CloseClipboard();
+    historyRequire(drop && fs::path(file.data()) == expected.path, "History UI copied the wrong or temporary video path");
+}
+
+inline void runClipboardDesignChecks(WinClipboard* history, const fs::path& video,
+    const fs::path& evidence, const std::function<void(DWORD)>& pump)
+{
+    const auto entries = Media::list();
+    historyRequire(!entries.empty(), "No archived entries for clipboard UI verification");
+    struct ScaleEvidence { UINT dpi; const wchar_t* file; };
+    const ScaleEvidence scales[]{
+        {96, L"16-clipboard-100.png"}, {120, L"17-clipboard-125.png"}, {144, L"18-clipboard-150.png"}
+    };
+    for (const auto& scale : scales) {
+        const auto bounds = setNativeTestDpi(history, scale.dpi, 760.f, 560.f, pump);
+        captureHistoryWindow(history, evidence / scale.file, pump);
+        historyRequire(OpenClipboard(history->hwnd) != FALSE, "Clear clipboard before the row hit-test");
+        const bool emptied = EmptyClipboard() != FALSE;
+        CloseClipboard();
+        historyRequire(emptied, "Empty clipboard before testing a real history button");
+        const auto sequence = GetClipboardSequenceNumber();
+        // The visible first-row Copy button is centered at (width - 172, 170)
+        // DIP in the Chinese desktop layout. Exercise HWND hit-testing rather
+        // than calling the archive service or a private action handler.
+        const float factor = scale.dpi / 96.f;
+        nativeClick(history->hwnd, {static_cast<LONG>(std::lround(history->w - 172.f * factor)),
+            static_cast<LONG>(std::lround(170.f * factor))}, pump);
+        historyRequire(GetClipboardSequenceNumber() != sequence, "Compact Copy button did not receive the click");
+        requireHistoryClipboard(history->hwnd, entries.front());
+        std::cout << "PASS clipboard controlled WM_DPICHANGED " << scale.dpi << " DPI: requested 760x560 DIP, actual "
+            << bounds.right - bounds.left << 'x' << bounds.bottom - bounds.top
+            << " px, native compact row Copy hit-testing and clipboard formats.\n";
+    }
+
+    const auto found = std::find_if(entries.begin(), entries.end(), [&video](const auto& entry) { return entry.path == video; });
+    historyRequire(found != entries.end(), "Video fixture is missing from the visible history");
+    settingsKey(history->hwnd, VK_HOME, pump);
+    for (auto index = entries.begin(); index != found; ++index) settingsKey(history->hwnd, VK_DOWN, pump);
+    std::array<BYTE, 256> original{};
+    historyRequire(GetKeyboardState(original.data()) != FALSE, "Read history shortcut keyboard state");
+    auto control = original;
+    control[VK_CONTROL] |= 0x80;
+    historyRequire(SetKeyboardState(control.data()) != FALSE, "Set Ctrl for the history copy shortcut");
+    SendMessageW(history->hwnd, WM_KEYDOWN, 'C', 0);
+    SendMessageW(history->hwnd, WM_KEYUP, 'C', 0);
+    SetKeyboardState(original.data());
+    pump(40);
+    requireHistoryClipboard(history->hwnd, *found);
+    setNativeTestDpi(history, 96, 760.f, 560.f, pump);
+    std::cout << "PASS compact history keyboard selection and Ctrl+C retain the archived video path.\n";
 }
 
 inline void runMediaHistoryChecks(const fs::path& evidence, const std::function<void(DWORD)>& pump)
@@ -446,6 +515,7 @@ inline void runMediaHistoryChecks(const fs::path& evidence, const std::function<
     historyRequire(history->hasThumbnail(first) && history->hasThumbnail(second) && history->hasThumbnail(video),
         "History list did not render the specific PNG and MP4 previews");
     captureHistoryWindow(history, evidence / L"07-clipboard-history.png", pump);
+    runClipboardDesignChecks(history, video, evidence, pump);
     SendMessageW(history->hwnd, WM_KEYDOWN, VK_DOWN, 0);
     SendMessageW(history->hwnd, WM_KEYUP, VK_DOWN, 0);
     SendMessageW(history->hwnd, WM_KEYDOWN, VK_F5, 0);
@@ -454,6 +524,22 @@ inline void runMediaHistoryChecks(const fs::path& evidence, const std::function<
     history->close();
     for (unsigned attempt = 0; WinClipboard::get() && attempt < 100; ++attempt) pump(50);
     historyRequire(!WinClipboard::get(), "History worker/window was not released after close");
+
+    const auto originalLanguage = Setting::get()->getLang();
+    Setting::get()->setLang(L"en-US");
+    WinClipboard::init();
+    for (unsigned attempt = 0; WinClipboard::get() && attempt < 100 &&
+        (WinClipboard::get()->isLoading() || !WinClipboard::get()->hasThumbnail(first) ||
+            !WinClipboard::get()->hasThumbnail(second) || !WinClipboard::get()->hasThumbnail(video)); ++attempt) pump(50);
+    history = WinClipboard::get();
+    historyRequire(history && !history->isLoading() && history->hasThumbnail(first) &&
+        history->hasThumbnail(second) && history->hasThumbnail(video), "English history thumbnails did not finish loading");
+    captureHistoryWindow(history, evidence / L"19-clipboard-english.png", pump);
+    history->close();
+    for (unsigned attempt = 0; WinClipboard::get() && attempt < 100; ++attempt) pump(50);
+    historyRequire(!WinClipboard::get(), "English history did not release its worker and window");
+    Setting::get()->setLang(originalLanguage);
+    std::cout << "PASS English compact history rendering and close/reopen lifecycle.\n";
     std::cout << "PASS F1 defaults, collision-safe Documents archives, real PNG/MP4 covers, image/file clipboard, settings pages and history lifecycle.\n";
 }
 } // namespace HuhuCapture::Tests
