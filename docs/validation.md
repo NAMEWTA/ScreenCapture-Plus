@@ -74,6 +74,10 @@ g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/annotation_region
 - 丢失捕获时丢弃未完成新框、保留已有框最后有效位置，返回图片后不继续拖动。
 - 收起面板、移动到显示器边缘后拖动已有范围；面板重开不会造成手势坐标跳变。
 - 调用正式复制命令，从系统剪贴板取得并解码 PNG，检查原图与说明同时存在，边框、图内编号和右侧编号同色，区域内部透明。
+- 验证新配置 F1、Documents 归档和重复保存，编码一个短 MP4 样本；逐项确认 PNG 与该 MP4 的真实封面、图像剪贴板格式和稳定文件路径。
+- 打开设置的三个页面及媒体历史窗口，验证快捷键录入取消、后台加载、刷新和关闭后的线程/窗口释放，并保留实际界面截图。
+
+媒体场景使用真实系统文档目录以验证已知文件夹行为。测试只移除本次明确拥有的样本；批注归档须与导出的剪贴板 PNG 唯一且逐字节匹配才清理，无法确认时保留，绝不清空归档目录。合成 MP4 验证编码、封面和文件操作，不能代替屏幕/音频设备的完整录制验收。
 
 证据位于 `artifacts/tests/windows/gui`：
 
@@ -83,6 +87,8 @@ g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/annotation_region
 | `screens/01-editor-two-notes.png` | 实际编辑窗口与两条说明 |
 | `screens/02-editor-after-drag.png` | 拖动后的窗口状态 |
 | `screens/03-real-editor-clipboard.png` | 正式复制产生的合图 PNG |
+| `screens/04-settings-general.png`、`05-settings-shortcut.png`、`06-settings-about.png` | 通用、快捷键和关于页面的实际渲染 |
+| `screens/07-clipboard-history.png` | 真实 PNG / MP4 封面和历史列表 |
 
 GUI 进程有 45 秒硬超时，只终止测试启动的进程。硬件 D3D11 或输入桌面不可用时返回独立错误码 77，CI 视为失败，不将环境不足标记为成功。早于 GUI 生成的构建、原生渲染和打包证据仍可用于诊断，发布继续被阻止。
 

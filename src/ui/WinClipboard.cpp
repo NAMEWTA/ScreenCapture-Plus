@@ -211,6 +211,12 @@ std::size_t WinClipboard::thumbnailCount() const {
         return row.nativeBitmap || row.bitmap;
     }));
 }
+bool WinClipboard::hasThumbnail(const std::filesystem::path& path) const {
+    return std::any_of(state->rows.begin(), state->rows.end(), [this, &path](const State::Row& row) {
+        return (row.nativeBitmap || row.bitmap) && row.index < state->entries.size() &&
+            state->entries[row.index].path == path;
+    });
+}
 
 void WinClipboard::onCreated() {
     enableShadow();

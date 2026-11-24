@@ -5,6 +5,7 @@
 #include "editor/shapes/ShapeAnnotation.h"
 #include "platform/windows/GdiCapture.h"
 #include "services/ImageExport.h"
+#include "services/MediaHistory.h"
 #include "services/Update.h"
 #include "ui/AnnotationPanel.h"
 #include "ui/AnnotationPanelLayout.h"
@@ -462,7 +463,55 @@ std::size_t colorPixels(const std::vector<BYTE>& pixels, UINT width, UINT height
     return matches;
 }
 
-void clipboardPng(const fs::path& path, UINT sourceWidth, UINT sourceHeight,
+struct AnnotationArchiveFixture {
+    std::vector<HuhuCapture::MediaHistory::Entry> before;
+    fs::path ownedPath;
+    bool snapshotValid{};
+
+    AnnotationArchiveFixture()
+    {
+        std::error_code error;
+        before = HuhuCapture::MediaHistory::list(&error);
+        snapshotValid = !error;
+    }
+
+    void identify(const fs::path& clipboardPath)
+    {
+        if (!snapshotValid) return;
+        std::ifstream expected(clipboardPath, std::ios::binary | std::ios::ate);
+        const auto size = expected.tellg();
+        if (size <= 0) return;
+        std::vector<char> bytes(static_cast<std::size_t>(size));
+        expected.seekg(0);
+        if (!expected.read(bytes.data(), static_cast<std::streamsize>(bytes.size()))) return;
+        std::error_code error;
+        const auto after = HuhuCapture::MediaHistory::list(&error);
+        if (error) return;
+        fs::path match;
+        for (const auto& entry : after) {
+            if (entry.video || entry.bytes != bytes.size() || std::any_of(before.begin(), before.end(),
+                [&](const auto& previous) { return previous.path == entry.path; })) continue;
+            std::ifstream actual(entry.path, std::ios::binary);
+            std::vector<char> candidate(bytes.size());
+            if (!actual.read(candidate.data(), static_cast<std::streamsize>(candidate.size())) ||
+                actual.peek() != std::char_traits<char>::eof() || candidate != bytes) continue;
+            // Ambiguous matches and clipboard allocation padding are left alone.
+            if (!match.empty()) return;
+            match = entry.path;
+        }
+        ownedPath = std::move(match);
+    }
+
+    ~AnnotationArchiveFixture()
+    {
+        if (!ownedPath.empty()) {
+            std::error_code error;
+            fs::remove(ownedPath, error);
+        }
+    }
+};
+
+void clipboardPng(const fs::path& path, AnnotationArchiveFixture& fixture, UINT sourceWidth, UINT sourceHeight,
     const std::vector<BYTE>& sourcePixels, const std::vector<ExportRegion>& regions)
 {
     const auto format = RegisterClipboardFormatW(L"PNG");
@@ -478,6 +527,7 @@ void clipboardPng(const fs::path& path, UINT sourceWidth, UINT sourceHeight,
     CloseClipboard();
     output.close();
     require(output.good(), "Cannot retain the clipboard PNG");
+    fixture.identify(path);
     ComPtr<IWICImagingFactory> factory;
     require(SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
         IID_PPV_ARGS(factory.GetAddressOf()))), "Cannot decode the clipboard PNG");
@@ -649,8 +699,9 @@ int wmain(int argc, wchar_t** argv)
         std::cout << "PASS creation after focused editing and edge-position drag after rail collapse.\n";
         // Copy closes the real editor; retain only value snapshots beforehand.
         const auto regions = exportRegions(window);
+        AnnotationArchiveFixture annotationArchive;
         toolbar(window, L"clipboard");
-        clipboardPng(directory / "03-real-editor-clipboard.png", width, height, pixels, regions);
+        clipboardPng(directory / "03-real-editor-clipboard.png", annotationArchive, width, height, pixels, regions);
         HuhuCapture::Tests::runMediaHistoryChecks(directory, [](DWORD milliseconds) { pump(milliseconds); });
         std::cout << "Real native annotation, media history and settings GUI integration checks passed.\n";
         return 0;

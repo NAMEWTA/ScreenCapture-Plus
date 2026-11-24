@@ -2,6 +2,7 @@
 
 #include <include/Ling.h>
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 
 // A bounded, keyboard-operable view over the files owned by MediaHistory.
@@ -17,6 +18,7 @@ public:
     bool isLoading() const;
     std::size_t entryCount() const;
     std::size_t thumbnailCount() const;
+    bool hasThumbnail(const std::filesystem::path& path) const;
 
     void layout() override;
 

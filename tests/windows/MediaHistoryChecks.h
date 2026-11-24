@@ -180,10 +180,13 @@ inline void runMediaHistoryChecks(const fs::path& evidence, const std::function<
     WinClipboard::init();
     const auto deadline = GetTickCount64() + 5000;
     while (WinClipboard::get() &&
-        (WinClipboard::get()->isLoading() || WinClipboard::get()->thumbnailCount() < 3) && GetTickCount64() < deadline) pump(50);
+        (WinClipboard::get()->isLoading() || !WinClipboard::get()->hasThumbnail(first) ||
+            !WinClipboard::get()->hasThumbnail(second) || !WinClipboard::get()->hasThumbnail(video)) &&
+        GetTickCount64() < deadline) pump(50);
     auto* history = WinClipboard::get();
     historyRequire(history && !history->isLoading() && history->entryCount() >= 3, "History list did not finish loading");
-    historyRequire(history->thumbnailCount() >= 3, "History list did not render PNG and MP4 previews");
+    historyRequire(history->hasThumbnail(first) && history->hasThumbnail(second) && history->hasThumbnail(video),
+        "History list did not render the specific PNG and MP4 previews");
     captureHistoryWindow(history, evidence / L"07-clipboard-history.png", pump);
     SendMessageW(history->hwnd, WM_KEYDOWN, VK_DOWN, 0);
     SendMessageW(history->hwnd, WM_KEYUP, VK_DOWN, 0);
