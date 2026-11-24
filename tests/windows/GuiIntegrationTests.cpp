@@ -96,6 +96,8 @@ void state(WinPin* window, const char* label)
         if (auto* editor = findNode<Ling::TextBox>(panel)) std::cout << " editorFocused=" << editor->isFocused();
     for (auto* note : markers(window))
         std::cout << " [#" << note->number() << " center=" << note->center().x << ',' << note->center().y
+            << " bounds=" << note->bounds().left << ',' << note->bounds().top << ','
+            << note->bounds().right << ',' << note->bounds().bottom
             << " textLength=" << note->note().size() << ']';
     std::cout << '\n';
 }
@@ -156,6 +158,201 @@ void imageClick(WinPin* window, float x, float y)
     state(window, "after image click");
 }
 
+void imageDrag(WinPin* window, D2D1_POINT_2F start, D2D1_POINT_2F end)
+{
+    std::cout << "STEP image drag at original pixels " << start.x << ',' << start.y
+        << " -> " << end.x << ',' << end.y << '\n';
+    activate(window->hwnd);
+    const float scale = window->scale;
+    POINT press{static_cast<LONG>(std::lround(start.x * scale)), static_cast<LONG>(std::lround(start.y * scale))};
+    POINT screen = press;
+    ClientToScreen(window->hwnd, &screen);
+    require(SetCursorPos(screen.x, screen.y) != FALSE, "Cannot position the pointer for an image drag");
+    pump(20);
+    SendMessageW(window->hwnd, WM_MOUSEMOVE, 0, coordinates(press));
+    std::array<BYTE, 256> saved{}, pressed{};
+    require(GetKeyboardState(saved.data()) != FALSE, "Cannot read keyboard state before image drag");
+    pressed = saved;
+    pressed[VK_LBUTTON] |= 0x80;
+    SetKeyboardState(pressed.data());
+    SendMessageW(window->hwnd, WM_LBUTTONDOWN, MK_LBUTTON, coordinates(press));
+    const bool captured = GetCapture() == window->hwnd;
+    POINT move{static_cast<LONG>(std::lround(end.x * scale)), static_cast<LONG>(std::lround(end.y * scale))};
+    screen = move;
+    ClientToScreen(window->hwnd, &screen);
+    SetCursorPos(screen.x, screen.y);
+    SendMessageW(window->hwnd, WM_MOUSEMOVE, MK_LBUTTON, coordinates(move));
+    // A real WM_MOUSELEAVE is emitted when crossing the image/window boundary.
+    // Its Ling sentinel must not replace the last meaningful drag coordinate.
+    SendMessageW(window->hwnd, WM_MOUSELEAVE, 0, 0);
+    SetKeyboardState(saved.data());
+    SendMessageW(window->hwnd, WM_LBUTTONUP, 0, coordinates(move));
+    pump();
+    require(captured, "The image drag did not own mouse capture");
+    require(GetCapture() != window->hwnd, "The annotation kept mouse capture after release");
+    state(window, "after image drag");
+}
+
+struct PartialDrag {
+    std::size_t activeCount;
+    std::uint64_t number;
+    D2D1_RECT_F bounds;
+};
+
+PartialDrag interruptImageDrag(WinPin* window, D2D1_POINT_2F start,
+    D2D1_POINT_2F dragged, D2D1_POINT_2F afterCaptureLoss)
+{
+    std::cout << "STEP interrupt captured image drag at original pixels " << start.x << ',' << start.y
+        << " -> " << dragged.x << ',' << dragged.y << '\n';
+    activate(window->hwnd);
+    const float scale = window->scale;
+    const auto clientPoint = [scale](D2D1_POINT_2F point) {
+        return POINT{static_cast<LONG>(std::lround(point.x * scale)),
+            static_cast<LONG>(std::lround(point.y * scale))};
+    };
+    const auto positionPointer = [window](POINT point) {
+        ClientToScreen(window->hwnd, &point);
+        require(SetCursorPos(point.x, point.y) != FALSE, "Cannot position the pointer for an interrupted drag");
+    };
+    const POINT press = clientPoint(start);
+    positionPointer(press);
+    pump(20);
+    SendMessageW(window->hwnd, WM_MOUSEMOVE, 0, coordinates(press));
+    std::array<BYTE, 256> saved{}, pressed{};
+    require(GetKeyboardState(saved.data()) != FALSE, "Cannot read keyboard state before interrupted drag");
+    pressed = saved;
+    pressed[VK_LBUTTON] |= 0x80;
+    SetKeyboardState(pressed.data());
+    SendMessageW(window->hwnd, WM_LBUTTONDOWN, MK_LBUTTON, coordinates(press));
+    const bool captured = GetCapture() == window->hwnd;
+    const POINT move = clientPoint(dragged);
+    positionPointer(move);
+    SendMessageW(window->hwnd, WM_MOUSEMOVE, MK_LBUTTON, coordinates(move));
+    auto* active = dynamic_cast<ShapeAnnotation*>(window->shapeHover);
+    const bool valid = active && active->hasValidRegion();
+    const PartialDrag partial{markers(window).size(), active ? active->number() : 0,
+        active ? active->bounds() : D2D1::RectF(0, 0, 0, 0)};
+    // Simulate a lost capture followed by releasing outside the window: there
+    // is deliberately no WM_LBUTTONUP for WinPin to receive.
+    ReleaseCapture();
+    saved[VK_LBUTTON] &= 0x7F;
+    SetKeyboardState(saved.data());
+    const POINT resume = clientPoint(afterCaptureLoss);
+    positionPointer(resume);
+    SendMessageW(window->hwnd, WM_MOUSEMOVE, 0, coordinates(resume));
+    pump();
+    require(captured && valid, "The interruption fixture never reached a valid captured region drag");
+    require(GetCapture() != window->hwnd, "The interrupted annotation reclaimed mouse capture");
+    state(window, "after interrupted image drag");
+    return partial;
+}
+
+bool near(float left, float right, float tolerance = 2.0f)
+{
+    return std::abs(left - right) <= tolerance;
+}
+
+bool sameBounds(D2D1_RECT_F actual, D2D1_RECT_F expected)
+{
+    return near(actual.left, expected.left) && near(actual.top, expected.top) &&
+        near(actual.right, expected.right) && near(actual.bottom, expected.bottom);
+}
+
+void regionGeometry(ShapeAnnotation* note, D2D1_RECT_F expected, float creationScale, float dpi)
+{
+    require(note->hasValidRegion(), "The dragged annotation has no valid region");
+    require(sameBounds(note->bounds(), expected), "The annotation region does not match the normalized drag bounds");
+    const auto bounds = note->bounds();
+    const auto center = note->center();
+    const float radius = note->badgeRadius();
+    const float diameterDip = radius * 2.0f * creationScale / dpi;
+    require(diameterDip >= 20.0f && diameterDip <= 30.0f,
+        "The single-digit annotation badge is not the smaller readable size");
+    require(center.x >= bounds.left + radius - 1.0f && center.y >= bounds.top + radius - 1.0f &&
+        center.x <= bounds.left + radius + 4.0f * dpi / creationScale &&
+        center.y <= bounds.top + radius + 4.0f * dpi / creationScale,
+        "The annotation badge is not anchored inside the rectangle's top-left corner");
+}
+
+void resizeAndClamp(WinPin* window)
+{
+    auto* second = marker(window, 2);
+    const auto beforeResize = second->bounds();
+    imageDrag(window, {beforeResize.right, beforeResize.bottom},
+        {beforeResize.right + 20.0f, beforeResize.bottom + 12.0f});
+    require(sameBounds(second->bounds(), {beforeResize.left, beforeResize.top,
+        beforeResize.right + 20.0f, beforeResize.bottom + 12.0f}),
+        "Dragging the bottom-right handle failed to resize the annotation");
+    imageDrag(window, {second->bounds().right, second->bounds().bottom},
+        {beforeResize.right, beforeResize.bottom});
+    require(sameBounds(second->bounds(), beforeResize), "The annotation resize could not be restored");
+
+    auto* third = marker(window, 3);
+    const auto initial = third->bounds();
+    const auto center = third->center();
+    const float width = initial.right - initial.left, height = initial.bottom - initial.top;
+    imageDrag(window, center, {-30.0f, -30.0f});
+    require(sameBounds(third->bounds(), {0.0f, 0.0f, width, height}),
+        "Moving a region beyond the top-left image edge changed its size or lost the region");
+    const auto upperLeftCenter = third->center();
+    imageDrag(window, upperLeftCenter,
+        {upperLeftCenter.x + 520.0f, upperLeftCenter.y + 400.0f});
+    const auto imageSize = window->screenImg->GetPixelSize();
+    require(sameBounds(third->bounds(), {static_cast<float>(imageSize.width) - width,
+        static_cast<float>(imageSize.height) - height, static_cast<float>(imageSize.width),
+        static_cast<float>(imageSize.height)}),
+        "Moving a region beyond the bottom-right image edge changed its size or lost the region");
+    const auto bottomRightCenter = third->center();
+    imageDrag(window, bottomRightCenter, {bottomRightCenter.x + initial.left - third->bounds().left,
+        bottomRightCenter.y + initial.top - third->bounds().top});
+    require(sameBounds(third->bounds(), initial), "Moving a clamped region back changed its original geometry");
+    std::cout << "PASS region resizing and size-preserving moves clamped at all image edges.\n";
+}
+
+void interruptedGestures(WinPin* window)
+{
+    const auto count = markers(window).size();
+    const auto secondBefore = marker(window, 2)->bounds();
+    auto* third = marker(window, 3);
+    const auto thirdBefore = third->bounds();
+    const auto noteBefore = third->note();
+    const auto cancelled = interruptImageDrag(window, {245.0f, 35.0f}, {330.0f, 80.0f}, {340.0f, 90.0f});
+    require(cancelled.activeCount == count + 1 && cancelled.number > 3,
+        "The interrupted new-region gesture did not create its own temporary object");
+    require(markers(window).size() == count && sameBounds(marker(window, 2)->bounds(), secondBefore) &&
+        sameBounds(third->bounds(), thirdBefore),
+        "Capture loss kept an unfinished region or changed an existing annotation");
+
+    const auto center = third->center();
+    const auto stopped = interruptImageDrag(window, center,
+        {center.x + 12.0f, center.y + 8.0f}, {center.x + 42.0f, center.y + 28.0f});
+    require(stopped.activeCount == count && stopped.number == 3 &&
+        sameBounds(stopped.bounds, {thirdBefore.left + 12.0f, thirdBefore.top + 8.0f,
+            thirdBefore.right + 12.0f, thirdBefore.bottom + 8.0f}),
+        "The interrupted move did not target the existing annotation geometry");
+    require(sameBounds(third->bounds(), stopped.bounds) && third->note() == noteBefore,
+        "The existing region continued following the unpressed pointer after capture loss");
+    const auto stoppedCenter = third->center();
+    imageDrag(window, stoppedCenter, {stoppedCenter.x - 12.0f, stoppedCenter.y - 8.0f});
+    require(sameBounds(third->bounds(), thirdBefore) && third->note() == noteBefore,
+        "Normal dragging did not recover after the interrupted gesture");
+    std::cout << "PASS capture loss discards unfinished regions, stops existing moves and permits the next drag.\n";
+}
+
+void emptyGestures(WinPin* window)
+{
+    const auto before = markers(window).size();
+    imageClick(window, 245.0f, 35.0f);
+    require(markers(window).size() == before, "A click without dragging left an empty annotation");
+    imageDrag(window, {245.0f, 35.0f}, {245.0f, 80.0f});
+    require(markers(window).size() == before, "A zero-width drag left an empty annotation");
+    imageDrag(window, {245.0f, 35.0f}, {310.0f, 35.0f});
+    require(markers(window).size() == before, "A zero-height drag left an empty annotation");
+    imageDrag(window, {245.0f, 35.0f}, {246.0f, 36.0f});
+    require(markers(window).size() == before, "A one-pixel pointer jitter left an annotation");
+    std::cout << "PASS clicks, zero-area drags and one-pixel jitter leave no annotation in active history.\n";
+}
+
 void replaceNote(WinPin* window, Ling::TextBox* editor, const std::wstring& value)
 {
     if (!editor->isFocused()) {
@@ -197,33 +394,17 @@ void dragAfterCollapse(WinPin* window, AnnotationPanel* panel)
     window->setPosition(monitor.rcWork.right - static_cast<int>(window->w) - 4, window->y);
     pump();
     const auto before = marker(window, 2)->center();
+    const auto bounds = marker(window, 2)->bounds();
     const auto scale = window->scale;
-    POINT press{static_cast<LONG>(std::lround(before.x * scale)), static_cast<LONG>(std::lround(before.y * scale))};
-    activate(window->hwnd);
-    POINT screen = press;
-    ClientToScreen(window->hwnd, &screen);
-    SetCursorPos(screen.x, screen.y);
-    pump(20);
-    SendMessageW(window->hwnd, WM_MOUSEMOVE, 0, coordinates(press));
-    std::array<BYTE, 256> saved{}, pressed{};
-    GetKeyboardState(saved.data());
-    pressed = saved;
-    pressed[VK_LBUTTON] |= 0x80;
-    SetKeyboardState(pressed.data());
-    SendMessageW(window->hwnd, WM_LBUTTONDOWN, MK_LBUTTON, coordinates(press));
-    screen.x += 24;
-    screen.y += 16;
-    SetCursorPos(screen.x, screen.y);
-    POINT move = screen;
-    ScreenToClient(window->hwnd, &move);
-    SendMessageW(window->hwnd, WM_MOUSEMOVE, MK_LBUTTON, coordinates(move));
-    SetKeyboardState(saved.data());
-    SendMessageW(window->hwnd, WM_LBUTTONUP, 0, coordinates(move));
-    pump();
+    imageDrag(window, before, {before.x + 24.0f / scale, before.y + 16.0f / scale});
     const auto after = marker(window, 2)->center();
-    require(std::abs(after.x - before.x - 24.0f / scale) <= 2.0f &&
-        std::abs(after.y - before.y - 16.0f / scale) <= 2.0f,
+    require(near(after.x - before.x, 24.0f / scale) && near(after.y - before.y, 16.0f / scale),
         "Reopening the notes rail made the annotation jump while dragging");
+    const auto moved = marker(window, 2)->bounds();
+    require(near(moved.right - moved.left, bounds.right - bounds.left) &&
+        near(moved.bottom - moved.top, bounds.bottom - bounds.top) &&
+        near(moved.left - bounds.left, after.x - before.x) && near(moved.top - bounds.top, after.y - before.y),
+        "Dragging the annotation badge did not move its complete rectangle");
 }
 
 void screenshot(WinPin* window, const fs::path& path, bool activateWindow)
@@ -245,7 +426,43 @@ void screenshot(WinPin* window, const fs::path& path, bool activateWindow)
         "The GUI screenshot could not be written");
 }
 
-void clipboardPng(const fs::path& path, UINT sourceWidth, UINT sourceHeight)
+struct ExportRegion {
+    std::uint64_t number;
+    D2D1_RECT_F bounds;
+    D2D1_POINT_2F badgeCenter;
+    float badgeRadius;
+    std::uint32_t rgb;
+};
+
+std::vector<ExportRegion> exportRegions(WinPin* window)
+{
+    std::vector<ExportRegion> result;
+    for (auto* note : markers(window))
+        result.push_back({note->number(), note->bounds(), note->center(), note->badgeRadius(),
+            ScreenCapture::Core::annotationColor(note->number()).backgroundRgb});
+    return result;
+}
+
+std::size_t colorPixels(const std::vector<BYTE>& pixels, UINT width, UINT height,
+    D2D1_RECT_F area, std::uint32_t rgb)
+{
+    const auto left = (std::max)(0, static_cast<int>(std::floor(area.left)));
+    const auto top = (std::max)(0, static_cast<int>(std::floor(area.top)));
+    const auto right = (std::min)(static_cast<int>(width), static_cast<int>(std::ceil(area.right)));
+    const auto bottom = (std::min)(static_cast<int>(height), static_cast<int>(std::ceil(area.bottom)));
+    const int red = (rgb >> 16) & 0xFF, green = (rgb >> 8) & 0xFF, blue = rgb & 0xFF;
+    std::size_t matches{};
+    for (int y = top; y < bottom; ++y) for (int x = left; x < right; ++x) {
+        const auto offset = (static_cast<std::size_t>(y) * width + x) * 4;
+        if (std::abs(static_cast<int>(pixels[offset]) - blue) <= 3 &&
+            std::abs(static_cast<int>(pixels[offset + 1]) - green) <= 3 &&
+            std::abs(static_cast<int>(pixels[offset + 2]) - red) <= 3 && pixels[offset + 3] == 255) ++matches;
+    }
+    return matches;
+}
+
+void clipboardPng(const fs::path& path, UINT sourceWidth, UINT sourceHeight,
+    const std::vector<BYTE>& sourcePixels, const std::vector<ExportRegion>& regions)
 {
     const auto format = RegisterClipboardFormatW(L"PNG");
     require(OpenClipboard(nullptr) != FALSE, "Cannot inspect the exported clipboard");
@@ -271,6 +488,39 @@ void clipboardPng(const fs::path& path, UINT sourceWidth, UINT sourceHeight)
     UINT width{}, height{};
     require(SUCCEEDED(frame->GetSize(&width, &height)) && width > sourceWidth && height >= sourceHeight,
         "The real copy command omitted the notes rail or clipped the captured image");
+    require(width <= 4096 && height <= 4096, "The small GUI fixture exported an unexpectedly large bitmap");
+    ComPtr<IWICFormatConverter> converter;
+    require(SUCCEEDED(factory->CreateFormatConverter(converter.GetAddressOf())) &&
+        SUCCEEDED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA,
+            WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)),
+        "Cannot read back the production clipboard's BGRA pixels");
+    std::vector<BYTE> pixels(static_cast<std::size_t>(width) * height * 4);
+    require(pixels.size() <= UINT_MAX && SUCCEEDED(converter->CopyPixels(nullptr, width * 4,
+        static_cast<UINT>(pixels.size()), pixels.data())), "The production PNG pixels could not be read");
+    for (const auto& region : regions) {
+        const auto bounds = region.bounds;
+        const float middle = bounds.left + (bounds.right - bounds.left) * 0.65f;
+        require(colorPixels(pixels, width, height,
+            {middle - 12.0f, bounds.top - 3.0f, middle + 12.0f, bounds.top + 3.0f}, region.rgb) >= 12,
+            "The exported annotation rectangle is missing or uses the wrong automatic color");
+        require(colorPixels(pixels, width, height,
+            {region.badgeCenter.x - region.badgeRadius, region.badgeCenter.y - region.badgeRadius,
+             region.badgeCenter.x + region.badgeRadius, region.badgeCenter.y + region.badgeRadius}, region.rgb) >= 30,
+            "The exported top-left number badge does not match its rectangle color");
+        require(colorPixels(pixels, width, height,
+            {static_cast<float>(sourceWidth), 0.0f, static_cast<float>(width), static_cast<float>(height)}, region.rgb) >= 30,
+            "The exported note rail lost the matching numbered color badge");
+        // The fixture regions do not overlap at their centers. A transparent
+        // region must preserve the source there; a filled rectangle would fail.
+        const UINT x = static_cast<UINT>((bounds.left + bounds.right) * 0.5f);
+        const UINT y = static_cast<UINT>((bounds.top + bounds.bottom) * 0.5f);
+        const auto sourceOffset = (static_cast<std::size_t>(y) * sourceWidth + x) * 4;
+        const auto outputOffset = (static_cast<std::size_t>(y) * width + x) * 4;
+        require(std::equal(sourcePixels.begin() + sourceOffset, sourcePixels.begin() + sourceOffset + 4,
+            pixels.begin() + outputOffset), "The annotation region unexpectedly painted over its interior");
+        std::cout << "PASS exported region #" << region.number << ": colored outline, small top-left badge, "
+            "matching note badge and unmodified interior.\n";
+    }
     std::cout << "PASS production clipboard PNG: " << width << 'x' << height << '\n';
 }
 } // namespace
@@ -339,51 +589,67 @@ int wmain(int argc, wchar_t** argv)
                 << " foreground=" << GetForegroundWindow() << '\n';
         });
 
-        imageClick(window, 110, 90);
-        require(markers(window).size() == 1, "The first click did not create one annotation");
+        const float creationScale = window->scale;
+        imageDrag(window, {46.0f, 42.0f}, {210.0f, 145.0f});
+        require(markers(window).size() == 1, "The first drag did not create one annotation region");
+        regionGeometry(marker(window, 1), {46.0f, 42.0f, 210.0f, 145.0f}, creationScale, window->dpi);
         replaceNote(window, editor, L"First 中文 note");
         require(marker(window, 1)->note() == L"First 中文 note", "First note was not stored in its shape");
-        imageClick(window, 300, 170);
-        require(markers(window).size() == 2, "Clicking the image after note editing failed to create a second pin");
-        replaceNote(window, editor, L"Second independent note");
-        require(marker(window, 1)->note() == L"First 中文 note" && marker(window, 2)->note() == L"Second independent note",
+        const std::wstring secondNote = L"检查按钮状态，矩形边框与编号颜色一致。";
+        imageDrag(window, {424.0f, 232.0f}, {258.0f, 110.0f});
+        require(markers(window).size() == 2, "Dragging after note editing failed to create a second region");
+        regionGeometry(marker(window, 2), {258.0f, 110.0f, 424.0f, 232.0f}, creationScale, window->dpi);
+        replaceNote(window, editor, secondNote);
+        require(marker(window, 1)->note() == L"First 中文 note" && marker(window, 2)->note() == secondNote,
             "Editing the second note overwrote the first annotation");
         const auto firstColor = marker(window, 1)->color(), secondColor = marker(window, 2)->color();
         require(firstColor.r != secondColor.r || firstColor.g != secondColor.g || firstColor.b != secondColor.b,
             "Consecutive annotations do not have distinct colors");
-        std::cout << "PASS two real marker placements and independent WM_CHAR note editing.\n";
+        std::cout << "PASS forward/reverse region drags, small top-left badges and independent WM_CHAR notes.\n";
 
         selectFirstRow(window, panel);
         require(editor->getText() == L"First 中文 note", "Clicking the first list row selected the wrong note");
         replaceNote(window, editor, L"First edited from list");
-        require(marker(window, 1)->note() == L"First edited from list" && marker(window, 2)->note() == L"Second independent note",
+        require(marker(window, 1)->note() == L"First edited from list" && marker(window, 2)->note() == secondNote,
             "List selection and shared editor wrote to different annotations");
         screenshot(window, directory / "01-editor-two-notes.png");
         const auto geometry = ScreenCapture::UI::annotationPanelGeometry(panel->h, window->dpi);
         click(window->hwnd, {static_cast<LONG>(panel->x + panel->w - 30 * window->dpi),
             static_cast<LONG>(panel->y + geometry.editorHeadingTop + 16 * window->dpi)});
-        require(markers(window).size() == 1 && marker(window, 2)->note() == L"Second independent note",
+        require(markers(window).size() == 1 && marker(window, 2)->note() == secondNote,
             "Deleting the selected list entry affected the wrong annotation");
         toolbar(window, L"undo");
         require(markers(window).empty(), "Undo left a stale annotation active");
         toolbar(window, L"redo");
-        require(markers(window).size() == 1 && marker(window, 2)->note() == L"Second independent note",
+        require(markers(window).size() == 1 && marker(window, 2)->note() == secondNote,
             "Redo failed to restore the matching annotation and note");
-        std::cout << "PASS real list selection, selected deletion, toolbar undo and redo.\n";
+        regionGeometry(marker(window, 2), {258.0f, 110.0f, 424.0f, 232.0f}, creationScale, window->dpi);
+        require(near(marker(window, 2)->color().r, secondColor.r, 0.001f) &&
+            near(marker(window, 2)->color().g, secondColor.g, 0.001f) &&
+            near(marker(window, 2)->color().b, secondColor.b, 0.001f),
+            "History restoration changed the annotation's automatic color");
+        std::cout << "PASS real list selection, selected deletion, toolbar undo and redo preserve region, color and note.\n";
 
         window->selectAnnotation(2, true);
         pump();
-        imageClick(window, 130, 270);
+        imageDrag(window, {46.0f, 252.0f}, {225.0f, 330.0f});
         require(markers(window).size() == 2 && marker(window, 3)->number() == 3,
             "New annotation reused a deleted identity or failed after focused editing");
-        replaceNote(window, editor, L"Third note after history changes");
+        const std::wstring thirdNote = L"调整这块内容，拖动后仍然对应同一条批注。";
+        replaceNote(window, editor, thirdNote);
+        resizeAndClamp(window);
+        interruptedGestures(window);
+        emptyGestures(window);
         dragAfterCollapse(window, panel);
-        require(marker(window, 2)->note() == L"Second independent note" &&
-            marker(window, 3)->note() == L"Third note after history changes", "Dragging or collapsing changed note ownership");
+        require(marker(window, 2)->note() == secondNote && marker(window, 3)->note() == thirdNote,
+            "Resizing, dragging or collapsing changed note ownership");
+        require(markers(window).size() == 2, "Invalid gestures left an orphan annotation in active history");
         screenshot(window, directory / "02-editor-after-drag.png");
         std::cout << "PASS creation after focused editing and edge-position drag after rail collapse.\n";
+        // Copy closes the real editor; retain only value snapshots beforehand.
+        const auto regions = exportRegions(window);
         toolbar(window, L"clipboard");
-        clipboardPng(directory / "03-real-editor-clipboard.png", width, height);
+        clipboardPng(directory / "03-real-editor-clipboard.png", width, height, pixels, regions);
         std::cout << "Real native annotation GUI integration checks passed.\n";
         return 0;
     } catch (const winrt::hresult_error& error) {

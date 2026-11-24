@@ -14,11 +14,11 @@ ScreenCapture-Plus 是基于 Ling、Win32、Direct2D/DirectWrite 和 Windows 媒
 | `src/capture` | 框选状态、选区遮罩、取色器、长截图与预览 | `WinCap`、`CutMask`、`CapLong` |
 | `src/recording` | 录屏会话、GIF/MP4 编码、音视频工作线程 | `CapVideo`、`VideoGif`、`VideoMp4` |
 | `src/editor` | 钉图窗口、图形工厂、历史与文本编辑生命周期 | `WinPin`、`History`、`ShapeFactory` |
-| `src/editor/shapes` | 普通图形与批注 pin 的绘制、命中测试及拖动 | `ShapeBase`、`ShapeAnnotation` |
+| `src/editor/shapes` | 普通图形与批注范围/编号的绘制、指针状态及备注所有权 | `ShapeBase`、`ShapeAnnotation` |
 | `src/ui` | 托盘、提示、工具条、设置窗口、批注列表与共享编辑框 | `toolbars`、`settings`、`AnnotationPanel` |
 | `src/services` | 配置、语言、图像导出、批注测量合成、QR、应用更新 | `ImageExport`、`AnnotationRenderer`、`ImageRecognition` 等 |
 | `src/platform/windows` | Win32/COM 资源所有权与屏幕采集适配 | `GdiCapture`、`ComApartment` |
-| `src/core` | 无 Windows/Ling 依赖的历史、批注身份/配色/布局、像素、滚动匹配和版本解析 | 独立 C++20 头文件 |
+| `src/core` | 无 Windows/Ling 依赖的历史、批注身份/配色/区域几何/布局、像素、滚动匹配和版本解析 | 独立 C++20 头文件 |
 | `third_party` | quirc、cgif 的原有源码及依赖许可说明 | `NOTICE.md` |
 | `resources` | EXE 图标、字体、内置语言资源索引、版本资源 | `Resource.rc`、`Version.h` |
 | `Lang` | 原有 UTF-16 语言文件，目录和格式不变 | 按已有 key 扩展 |
@@ -75,11 +75,13 @@ flowchart TD
 
 ### 3.5 批注数据、编辑与导出
 
-`ShapeAnnotation` 把稳定编号、完整备注和 pin 位置保存在同一个历史对象中。编号由窗口持有的 `AnnotationSequence` 单调分配，删除、撤销及清除 redo 分支都不会降低高水位；幸存对象不会重新编号或换色。颜色由编号确定，前十个使用主题色，其后生成确定性颜色变化。普通 `ShapeNumber` 的编号、颜色与半径设置保持独立。
+`ShapeAnnotation` 把稳定编号、完整备注和矩形范围保存在同一个历史对象中。编号由窗口持有的 `AnnotationSequence` 单调分配，删除、撤销、取消退化新框及清除 redo 分支都不会降低高水位；幸存对象不会重新编号或换色。颜色由编号确定，矩形边框和左上角小编号共用该颜色；前十个使用主题色，其后生成确定性颜色变化。普通 `ShapeNumber` 的编号、颜色与半径设置保持独立。
 
-`AnnotationPanel` 位于同一个钉图窗口的右侧。它绘制可滚动的列表并缓存文字布局，全部备注共用一个 `TextBox` 编辑当前选中项，不为每个 pin 创建输入控件。数据仍由历史中的 shape 拥有；面板只保存用于显示的快照。备注文字原位写回 shape，当前没有为每次输入建立独立的图形历史项。长备注在列表显示摘要，在共享编辑框查看和编辑完整内容。
+区域归一化、有效性、移动/调整及边界规则放在纯 C++ `AnnotationRegion.h`，不引入 `ShapeRect` 与 `ShapeAnnotation` 间的 UI 继承耦合。批注范围由四向拖动创建，边框或编号移动整个矩形，八个边角控制点调整大小；矩形内部不拦截后续图形绘制。新建无效框在鼠标释放后删除，已有框调整时保持最小有效范围。编号位置从左上角派生，不保存容易失步的第二套独立坐标。
 
-窗口缩放仅影响预览。选中工具、列表或 pin 的操作由 `WinPin` 协调，右侧面板和短截图下方的留白不参与图像命中。批注 pin 的中心始终限制在原图范围内。收起面板不删除备注，也不影响它们随图导出。
+`AnnotationPanel` 位于同一个钉图窗口的右侧。它绘制可滚动的列表并缓存文字布局，全部备注共用一个 `TextBox` 编辑当前选中项，不为每个区域创建输入控件。数据仍由历史中的 shape 拥有；面板只保存用于显示的快照。备注文字原位写回 shape，当前没有为每次输入建立独立的图形历史项。长备注在列表显示摘要，在共享编辑框查看和编辑完整内容。
+
+窗口缩放仅影响预览。选中工具、列表、编号或边框的操作由 `WinPin` 协调，右侧面板和短截图下方的留白不参与图像命中。区域几何限制在原图范围内；边框向内绘制，默认 24 逻辑像素徽章和 13 逻辑像素数字按创建时的 `dpi / scale` 转为原图坐标。新框释放后才进入备注输入，既有区域的移动/调整不抢输入焦点。收起面板不删除备注，也不影响它们随图导出。
 
 工具栏的被动重排通过 `ToolbarLayout` 使用 `SWP_NOACTIVATE`，不抢走备注输入焦点或鼠标捕获。Ling 的鼠标离开哨兵先过滤，再进入图形命中/拖动逻辑，防止把一次点击误判为移动到图像边界。
 

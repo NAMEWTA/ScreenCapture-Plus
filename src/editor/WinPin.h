@@ -68,6 +68,7 @@ private:
 	void onDown(POINT pos, BOOL isRight);
 	void onMove(POINT pos);
 	void onUp(POINT pos, BOOL isRight);
+	void cancelAnnotationGesture();
 	void onKey(UINT key);
 	void onTimerCB(UINT id);
 	void onClosed();

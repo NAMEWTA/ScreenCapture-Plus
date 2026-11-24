@@ -76,6 +76,7 @@ WinPin::WinPin(int x, int y, int w, int h, const std::vector<BYTE>* data) : Ling
 	onMouseDown.add([this](POINT pos, BOOL isRight) {this->onDown(pos, isRight);});
 	onMouseMove.add([this](POINT pos) {this->onMove(pos);});
 	onMouseUp.add([this](POINT pos, BOOL isRight) {this->onUp(pos, isRight);});
+	onBlur.add([this]() { cancelAnnotationGesture(); });
 	// Ling 传进来的是已经换算成滚动距离的 space（一格 = 60 逻辑像素 × dpi），
 	// shape 只关心方向，这里按符号还原成 ±WHEEL_DELTA
 	onMouseWheel.add([this](POINT pos, float space) {
@@ -287,8 +288,16 @@ void WinPin::fitAnnotationWorkspace()
 	const float fitScale = std::min(imageW / size.width, std::max(60.f, availableH) / size.height);
 	scale = std::min(scale, std::max(.01f, fitScale));
 	applyWinSize();
-	setPosition(clampPos(static_cast<float>(x), w, area.left + 8, area.right - 8),
-		clampPos(static_cast<float>(y), h + 60.f * dpi, area.top + 8, area.bottom - 8));
+	const auto fittedX = clampPos(static_cast<float>(x), w, area.left + 8, area.right - 8);
+	const auto fittedY = clampPos(static_cast<float>(y), h + 60.f * dpi, area.top + 8, area.bottom - 8);
+	if (x != fittedX || y != fittedY) {
+		x = fittedX;
+		y = fittedY;
+		// A lost-focus cancellation can finish a deferred rail fit. Passive
+		// layout must not reactivate this window from inside its blur handler.
+		SetWindowPos(hwnd, nullptr, fittedX, fittedY, 0, 0,
+			SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOREDRAW);
+	}
 }
 
 void WinPin::layoutAnnotationPanel()
@@ -523,6 +532,15 @@ void WinPin::onMinMaxInfo(MINMAXINFO* mmi)
 
 void WinPin::onDown(POINT pos, BOOL isRight)
 {
+	// A previous gesture may have lost capture and never received mouse-up.
+	// Finish it before a new press can replace its history-owned object.
+	if (isMouseDown && dynamic_cast<ShapeAnnotation*>(shapeHover)) {
+		// Deferred fitting can move the window; retain this press's screen
+		// position before continuing with its new client coordinates.
+		ClientToScreen(hwnd, &pos);
+		cancelAnnotationGesture();
+		ScreenToClient(hwnd, &pos);
+	}
 	if (annotationPanelVisible && annotationPanel && annotationPanel->contains(pos)) {
 		if (editingText) editingText->finishEdit();
 		shapeHover = nullptr;
@@ -600,7 +618,7 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 	auto imgPos = toImgPos(pos);
 	if (!editingText) {
 		// Input in the docked editor can retain an old hover. Resolve the actual
-		// click position so the next image click creates/selects the right pin.
+		// click position so the next image gesture creates/selects the right region.
 		shapeHover = nullptr;
 		const auto shapes = history->shapes();
 		for (auto it = shapes.rbegin(); it != shapes.rend(); ++it) {
@@ -620,8 +638,13 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 void WinPin::onMove(POINT pos)
 {
 	if (annotationPanel) annotationPanel->pointerMove(pos);
+	if (isMouseDown && dynamic_cast<ShapeAnnotation*>(shapeHover)
+		&& (GetCapture() != hwnd || !(GetKeyState(VK_LBUTTON) & 0x8000))) {
+		cancelAnnotationGesture();
+		return;
+	}
 	// Ling uses a sentinel for WM_MOUSELEAVE. It is not an image coordinate:
-	// treating it as a captured move would drag a pin to the corner and suppress
+	// treating it as a captured move would drag a region to the corner and suppress
 	// the click-to-edit focus handoff on mouse-up.
 	if (pos.x == INT_MAX && pos.y == INT_MAX) {
 		if (!isMouseDown && shapeHover) { shapeHover = nullptr; refresh(); }
@@ -674,6 +697,29 @@ void WinPin::onMove(POINT pos)
 	}
 }
 
+void WinPin::cancelAnnotationGesture()
+{
+	if (!isMouseDown) return;
+	auto* annotation = dynamic_cast<ShapeAnnotation*>(shapeHover);
+	if (!annotation) return;
+	const bool incompleteCreation = newShape == annotation;
+	isMouseDown = false;
+	newShape = nullptr;
+	shapeHover = nullptr;
+	hasDragged = false;
+	prevPressCreatedShape = false;
+	lastDownTime = 0;
+	if (GetCapture() == hwnd) ReleaseCapture();
+	if (incompleteCreation) history->removeShape(annotation);
+	else annotation->mouseUp(0, 0); // retain the last valid move/resize, without focusing text
+	if (fitAnnotationsAfterPointer) {
+		fitAnnotationsAfterPointer = false;
+		fitAnnotationWorkspace();
+		layoutTools();
+	}
+	refresh();
+}
+
 void WinPin::onUp(POINT pos, BOOL isRight)
 {
 	// 右键按下时什么都没抓（既没置 isMouseDown 也没 SetCapture，见 onDown），抬手也就没什么要收的。
@@ -701,8 +747,20 @@ void WinPin::onUp(POINT pos, BOOL isRight)
 	else if (shapeHover) {
 		// 新建的这一笔按下马上弹起，什么也没画出来：直接丢掉，
 		// 也省了 mouseUp 里的收尾开销（马赛克那边要把 GPU 像素读回内存，不该为一个要删的元素白做）
-		if (shapeHover == justCreated && !hasDragged && !shapeHover->isValidWithoutDrag()) {
+		auto* annotation = dynamic_cast<ShapeAnnotation*>(shapeHover);
+		const bool discardNewShape = shapeHover == justCreated
+			&& ((!hasDragged && !shapeHover->isValidWithoutDrag())
+				|| (annotation && !annotation->hasValidRegion()));
+		if (discardNewShape) {
 			history->removeShape(shapeHover); //它会顺手清掉 shapeHover 并刷新
+			// A cancelled region can still have opened the rail on mouse-down.
+			// Finish its deferred fit now, just as after a successful gesture.
+			if (fitAnnotationsAfterPointer) {
+				fitAnnotationsAfterPointer = false;
+				fitAnnotationWorkspace();
+				layoutTools();
+				refresh();
+			}
 			return;
 		}
 		prevPressCreatedShape = (shapeHover == justCreated);
@@ -716,7 +774,10 @@ void WinPin::onUp(POINT pos, BOOL isRight)
 		if (auto* note = dynamic_cast<ShapeAnnotation*>(shapeHover)) {
 			// Focus after the mouse-up broadcast begins; focusing on mouse-down
 			// would immediately be undone by TextBox's outside-click handler.
-			selectAnnotation(note->number(), !hasDragged);
+			// A new region is drawn by dragging: its completed gesture should
+			// enter note editing too. Moving/resizing an existing region should
+			// leave the pointer available for another geometry adjustment.
+			selectAnnotation(note->number(), shapeHover == justCreated || !hasDragged);
 		}
 		refresh();
 		setTimer(800, 100);

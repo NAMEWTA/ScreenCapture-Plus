@@ -6,13 +6,13 @@ PNG copied from the real annotation editor during GUI validation. Deleting #1 pr
 
 # ScreenCapture-Plus
 
-**ScreenCapture-Plus v0.0.1** is a maintained fork of [xland/ScreenCapture](https://github.com/xland/ScreenCapture), a native Windows screenshot application. It supports drawing, scrolling captures, GIF / MP4 recording, QR decoding, and numbered notes exported alongside the image.
+**ScreenCapture-Plus v0.0.2** is a maintained fork of [xland/ScreenCapture](https://github.com/xland/ScreenCapture), a native Windows screenshot application. It supports drawing, scrolling captures, GIF / MP4 recording, QR decoding, and numbered notes exported alongside the image.
 
 ## Toolbars and annotations
 
 - Capture, drawing, recording, scrolling-capture, and style toolbars use **44 × 44 logical-pixel hit targets and 24 logical-pixel icons**. They scale with monitor DPI and wrap on narrow displays without shrinking the buttons.
 - The existing **Number** drawing tool remains available. The new **Annotation** tool next to it has a numbered speech-bubble icon.
-- Each annotation receives an automatic number and color. Its marker and note retain their identity when moved, undone, or redone; deleting another note does not renumber the remaining notes.
+- Drag a rectangle to annotate a region. Its border and smaller upper-left number badge share the automatically assigned color. Its marker and note retain their identity when moved, undone, or redone; deleting another note does not renumber the remaining notes.
 - Saving or copying produces one image containing the screenshot, markers, and a right-side notes area. Text wraps, font size adapts to the available space, and the output can grow taller or use additional right-side columns to preserve complete notes.
 - Preview zoom does not reduce the original image resolution in exported files. If the complete image exceeds output resource limits, export reports a failure and keeps the editing session open.
 
@@ -20,8 +20,8 @@ PNG copied from the real annotation editor during GUI validation. Deleting #1 pr
 
 1. Select a screenshot region, then choose the drawing / pin button. Holding `Ctrl` while selecting the region opens the editor directly.
 2. Choose **Annotation**, beside **Number**.
-3. Click the image to place a marker, then enter a multiline note in the right panel.
-4. Click an existing marker or list entry to edit its note; drag the marker to reposition it.
+3. Hold the left mouse button and drag a rectangle around the relevant area in any direction. Releasing a valid region focuses the multiline note editor on the right; clicks and tiny or zero-area drags leave no empty annotation.
+4. Click a badge, border, or list entry to edit its note. Drag the badge or border to move the region; use its eight edge/corner handles to resize it. Regions stay within the source image, and empty interiors remain available for nested marks.
 5. Use the toolbar's Save or Copy button to export the whole annotated image. `Ctrl+S` also saves while writing a note. Inside the text field, `Ctrl+C` copies text; press `Esc` before using it to copy the complete image.
 
 The notes list scrolls. Hiding the panel keeps the notes and still includes them in exports. See [the annotation guide](ANNOTATIONS.md) for numbering and layout details.
@@ -39,7 +39,7 @@ The notes list scrolls. Hiding the panel keeps the notes and still includes them
 
 ## Download and requirements
 
-[Download v0.0.1](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/tag/v0.0.1) · [All releases](https://github.com/NAMEWTA/ScreenCapture-Plus/releases)
+[Download v0.0.2](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/tag/v0.0.2) · [All releases](https://github.com/NAMEWTA/ScreenCapture-Plus/releases)
 
 Release assets include the EXE, portable Windows x64 ZIP, symbols ZIP, `build-info.json`, and `SHA256SUMS.txt`. The portable ZIP includes languages and third-party licenses. Refer to the actual release assets for file sizes.
 

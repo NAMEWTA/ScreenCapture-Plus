@@ -6,13 +6,13 @@ PNG yang disalin dari editor asli saat uji GUI. Setelah #1 dihapus, nomor dan wa
 
 # ScreenCapture-Plus
 
-**ScreenCapture-Plus v0.0.1** adalah cabang pemeliharaan [xland/ScreenCapture](https://github.com/xland/ScreenCapture), aplikasi tangkapan layar native Windows. Fitur mencakup gambar anotasi, tangkapan panjang, rekaman GIF / MP4, pembacaan kode QR, serta catatan bernomor yang diekspor bersama gambar.
+**ScreenCapture-Plus v0.0.2** adalah cabang pemeliharaan [xland/ScreenCapture](https://github.com/xland/ScreenCapture), aplikasi tangkapan layar native Windows. Fitur mencakup gambar anotasi, tangkapan panjang, rekaman GIF / MP4, pembacaan kode QR, serta catatan bernomor yang diekspor bersama gambar.
 
 ## Bilah alat dan catatan
 
 - Bilah alat tangkapan, gambar, rekaman, tangkapan panjang, dan gaya memakai **area klik 44 × 44 piksel logis dan ikon 24 piksel logis**. Ukuran mengikuti DPI monitor; tombol berpindah baris pada layar sempit tanpa mengecilkan area klik.
 - Alat **Nomor** yang sudah ada tetap tersedia. Alat **Anotasi** baru di sebelahnya memakai ikon gelembung percakapan bernomor.
-- Nomor dan warna ditetapkan otomatis. Memindahkan, mengurungkan, atau mengulangi anotasi mempertahankan nomor, warna, dan catatannya; menghapus catatan lain tidak mengubah nomor yang tersisa.
+- Seret persegi panjang untuk menentukan area catatan. Garis batas dan lencana nomor yang lebih kecil di kiri atas memakai warna otomatis yang sama. Memindahkan, mengurungkan, atau mengulangi anotasi mempertahankan nomor, warna, dan catatannya; menghapus catatan lain tidak mengubah nomor yang tersisa.
 - Menyimpan atau menyalin menghasilkan satu gambar berisi tangkapan, penanda, dan catatan di sisi kanan. Teks dibungkus, ukuran huruf menyesuaikan ruang, dan hasil dapat bertambah tinggi atau memakai kolom kanan tambahan agar seluruh catatan tetap termuat.
 - Zoom pratinjau tidak menurunkan resolusi gambar asli saat diekspor. Jika hasil lengkap melebihi batas sumber daya, aplikasi menampilkan kegagalan dan mempertahankan sesi penyuntingan.
 
@@ -20,8 +20,8 @@ PNG yang disalin dari editor asli saat uji GUI. Setelah #1 dihapus, nomor dan wa
 
 1. Pilih area tangkapan, lalu buka editor lewat tombol gambar / pin. Tahan `Ctrl` saat memilih area untuk langsung membuka editor.
 2. Pilih **Anotasi** di sebelah **Nomor**.
-3. Klik gambar untuk menambahkan penanda, lalu ketik catatan di panel kanan. Teks dapat terdiri dari beberapa baris.
-4. Klik penanda atau entri daftar untuk menyunting catatannya; seret penanda untuk memindahkannya.
+3. Tahan tombol kiri mouse dan seret persegi panjang ke arah mana pun untuk memilih area. Saat dilepas, fokus berpindah ke editor catatan di kanan yang mendukung beberapa baris. Klik tunggal serta area terlalu kecil atau tanpa luas tidak meninggalkan catatan kosong.
+4. Klik nomor, garis batas, atau entri daftar untuk menyunting catatan. Seret nomor atau garis batas untuk memindahkan area; gunakan delapan pegangan tepi/sudut untuk mengubah ukurannya. Area tetap di dalam gambar asli; bagian dalam yang kosong dapat diberi penanda bersarang.
 5. Gunakan tombol Simpan atau Salin untuk mengekspor seluruh gambar. `Ctrl+S` juga menyimpan saat menulis catatan. Di kolom teks, `Ctrl+C` menyalin teks; tekan `Esc` sebelum memakainya untuk menyalin seluruh gambar.
 
 Daftar catatan dapat digulir. Menyembunyikan panel tidak menghapus catatan dan tidak menghilangkannya dari hasil ekspor. Lihat [panduan anotasi](ANNOTATIONS.md).
@@ -39,7 +39,7 @@ Daftar catatan dapat digulir. Menyembunyikan panel tidak menghapus catatan dan t
 
 ## Unduh dan persyaratan
 
-[Unduh v0.0.1](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/tag/v0.0.1) · [Semua rilis](https://github.com/NAMEWTA/ScreenCapture-Plus/releases)
+[Unduh v0.0.2](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/tag/v0.0.2) · [Semua rilis](https://github.com/NAMEWTA/ScreenCapture-Plus/releases)
 
 Aset rilis meliputi EXE, ZIP portabel Windows x64, ZIP simbol debug, `build-info.json`, dan `SHA256SUMS.txt`. ZIP portabel menyertakan bahasa dan lisensi pihak ketiga. Ukuran file mengikuti aset rilis yang tersedia.
 

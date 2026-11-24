@@ -6,7 +6,7 @@
 - Visual Studio 2026，安装 **Desktop development with C++**、MSVC v145、ATL 和 Windows SDK。
 - PowerShell 7、Git、Rustup。
 
-ScreenCapture-Plus 使用自己的版本序列，首个版本为 **v0.0.1**，Windows 文件版本为 **0.0.1.0**。开发构建默认值集中在 `build/windows/Version.props`；它不再沿用上游的 2.5.x 版本。构建标签覆盖这组资源值，不需要编辑生成的 EXE。
+ScreenCapture-Plus 使用自己的版本序列，从 v0.0.1 开始；当前开发默认版本为 **v0.0.2**，Windows 文件版本为 **0.0.2.0**。开发构建默认值集中在 `build/windows/Version.props`；它不再沿用上游的 2.5.x 版本。构建标签覆盖这组资源值，不需要编辑生成的 EXE。
 
 依赖固定在 `build/dependencies.lock.json`：Ling `2ae45005b2863b004b4432bfe85d6e63d7ee44ca`、gifski 1.34.0 的 `1060eab4500a20f27e2fa3ab7e85473d0e921cbd`、Rust 1.88.0。首次构建需要下载固定源码、工具链及 Cargo.lock 中的依赖。还原脚本验证远端与提交，遇到被修改的依赖工作区会停止。
 
@@ -42,8 +42,8 @@ pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore
 按标签验证版本一致性：
 
 ```powershell
-pwsh ./scripts/build.ps1 -Version v0.0.1
-pwsh ./scripts/package.ps1 -Version v0.0.1
+pwsh ./scripts/build.ps1 -Version v0.0.2
+pwsh ./scripts/package.ps1 -Version v0.0.2
 ```
 
 标签接受 `vMAJOR.MINOR.PATCH` 或不带 v 的形式，预发布可以使用 `-rc.1` 等后缀。Windows 第四段固定为 0，每个数字分量不得超过 65535。预发布应在 GitHub Release 中标记为 Pre-release；内置自动更新只处理稳定的三段版本。
@@ -55,7 +55,7 @@ pwsh ./scripts/package.ps1 -Version v0.0.1
 | 触发 | 构建与发布行为 |
 | --- | --- |
 | Pull request | Release、核心回归、Windows 原生备注渲染、独立 EXE 启动、Debug、打包及真实 GUI/剪贴板集成；不发布版本 |
-| main push | 执行同样验证；只有满足下述首次发布声明时才创建 v0.0.1 |
+| main push | 执行同样验证；根据 `releases/publish.json` 显式声明发布稳定版本，已发布版本保持不变 |
 | Release `published` | 按该 Release 标签构建、测试、打包，向这个已有 Release 上传资产 |
 | 手工运行，不填标签 | 构建选择的提交，仅保存 artifact |
 | 手工运行，填写已有 Release 标签 | 按该标签重建并上传，支持临时构建或上传失败后的恢复 |
@@ -70,29 +70,42 @@ Windows job 使用 `windows-2025` 的 VS2026 环境，仅有 `contents: read`。
 | `windows-render-checks` | 原生渲染与 GUI 测试 EXE/PDB、报告、备注导出 PNG、真实窗口截图和剪贴板 PNG；失败时也尽量保留 | 14 天 |
 | `windows-build-logs` | 失败时的 MSBuild binlog 与 gifski 构建日志 | 7 天 |
 
-真实 GUI 检查位于可下载 EXE artifact 上传之后。因此即使 Runner 缺少桌面/图形能力，之前的编译、离屏渲染和打包证据也已保留；整个构建 job 仍会失败，阻止自动首发。
+真实 GUI 检查位于可下载 EXE artifact 上传之后。因此即使 Runner 缺少桌面/图形能力，之前的编译、离屏渲染和打包证据也已保留；整个构建 job 仍会失败，阻止声明版本的自动发布。
 
-## 首次发布 v0.0.1
+## 声明版本后自动发布
 
-本仓库为明确授权的首次发布设置了一个固定入口，不会从普通提交推导新版本号。功能验证完成后，将 `releases/v0.0.1.md` 发布说明加入 main，便声明这次发布。工作分支与 PR 不执行首次发布 job。
+`releases/publish.json` 是发布意图的明确声明，不从普通提交推导新版本号。当前声明为：
 
-对应 main 提交通过全部构建、测试和打包后，`first-release` job 下载同一次运行的 `windows-x64`，然后：
+```json
+{
+  "schemaVersion": 1,
+  "tag": "v0.0.2",
+  "notes": "releases/v0.0.2.md"
+}
+```
 
-1. 确认固定仓库、main push 与非空声明文件；已有正式 v0.0.1 则直接结束，保留原版本。
-2. 确认 main 尚指向本次测试的 SHA，检出与构建元数据也匹配该 SHA，EXE 版本为 0.0.1.0，并验证完整资产集合及每个 SHA256。
-3. 确认不存在同名标签或草稿，再通过创建引用接口原子建立 `v0.0.1`，指向本次验证的提交；已存在的引用不会被移动或复用。
-4. 复核标签 SHA，使用 `gh release create --verify-tag` 创建 Release、上传已验证资产并发布。
+准备新版本时，同一个 PR 更新开发默认版本、声明中的 tag 与对应发布说明。tag 必须是规范的稳定版本 `vMAJOR.MINOR.PATCH`；notes 必须是 `releases/<tag>.md`，内容不能为空。这条自动入口只处理稳定版本；预发布继续使用下面的常规 Release 入口。
 
-GitHub CLI 在带资产创建 Release 时先创建草稿、上传资产，再发布。由于 `GITHUB_TOKEN` 产生的 Release 事件不会再触发此工作流，首次 job 直接上传本轮产物，不依赖第二轮构建。
+功能与文档合入 main 后，整个 Windows build job 成功才执行 `publish-declared-release`。工作分支、PR、普通手工构建和其他仓库不会执行此 job。它下载**同一次运行**的 `windows-x64`，运行 `scripts/publish-release.ps1`：
+
+1. 确认固定仓库、main push 与合法声明；若声明对应的正式 Release 已存在，直接结束，不修改旧版本。没有声明时仅保留构建 artifact。
+2. 确认 main、检出与构建元数据都对应本次通过验证的 SHA，EXE 版本与声明一致；验证完整的五个资产、每个 SHA256 及元数据中的 EXE 哈希。
+3. 若有同名草稿或未发布标签则停止；在创建标签前重新确认 main，避免旧运行抢先发布已被新提交替换的版本。
+4. 通过创建引用接口原子建立新 tag，指向本次验证的提交，复核 tag SHA；已存在的引用不会被移动或复用。
+5. 使用 `gh release create --verify-tag` 创建 Release、上传已验证资产并发布。
+
+该 job 的并发组按仓库串行化，当前发布不会被新的运行取消。若有更新的 main 提交，旧运行保留 artifact，由新提交通过验证后的运行处理声明。已经发布的声明留在 main 不会触发新版本；下一版必须显式更新声明和版本。
+
+GitHub CLI 在带资产创建 Release 时先创建草稿、上传资产，再发布。由于 `GITHUB_TOKEN` 产生的 Release 事件不会再触发此工作流，声明发布 job 直接上传本轮产物，不依赖第二轮构建。
 
 已有草稿或仅有标签时，该入口停止并要求维护者检查，不自动覆盖。若是前次上传中断，应先确认标签 SHA 和成功构建一致，再在 Releases 页面完成对应草稿或为现有标签发布 Release。源码修复应进入新的版本，避免修改已发布标签。
 
-## 后续常规发布
+## 常规 Release 与恢复入口
 
-后续版本继续使用 Release `published` 流程：
+仍可使用 Release `published` 流程，适用于预发布或手工发布管理：
 
-1. 合并需要发布的代码，确认对应 Windows CI 成功，并更新开发默认版本。
-2. 在 Releases 页面创建标签，例如 `v0.0.2`，指向确认过的提交。
+1. 合并需要发布的代码，确认对应 Windows CI 成功；保持开发默认版本与预期正式版本一致。
+2. 在 Releases 页面创建目标标签，指向确认过的提交；预发布标签如 `v0.0.3-rc.1` 应标记 **Pre-release**。
 3. 填写说明并点击 **Publish release**；仅保存 Draft 不会启动常规工作流。
 4. 等待 **Windows build and release** 完成。Release 页面先出现，EXE 等资产在构建通过后上传。
 

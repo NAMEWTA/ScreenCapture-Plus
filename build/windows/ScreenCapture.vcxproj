@@ -151,6 +151,7 @@
     <ClInclude Include="..\..\src\capture\CutMask.h" />
     <ClInclude Include="..\..\src\capture\WinCap.h" />
     <ClInclude Include="..\..\src\core\Annotation.h" />
+    <ClInclude Include="..\..\src\core\AnnotationRegion.h" />
     <ClInclude Include="..\..\src\core\HistoryStack.h" />
     <ClInclude Include="..\..\src\core\ImagePreview.h" />
     <ClInclude Include="..\..\src\core\PixelBuffer.h" />

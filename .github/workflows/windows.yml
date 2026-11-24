@@ -109,16 +109,16 @@ jobs:
           gh release view "$RELEASE_TAG" --repo "$GH_REPO"
           gh release upload "$RELEASE_TAG" package/* --repo "$GH_REPO" --clobber
 
-  first-release:
-    # Explicit one-time bootstrap requested for this fork. The declaration is
-    # releases/v0.0.1.md; ordinary commits never create arbitrary new versions.
-    # The regular release: published route remains the route for later releases.
+  publish-declared-release:
+    # Only a reviewed releases/publish.json declaration chooses a new version.
+    # Ordinary commits keep already-published versions intact. This job uploads
+    # the same tested artifact; GITHUB_TOKEN events do not start a second build.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'NAMEWTA/ScreenCapture-Plus'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
-      group: first-release-v0.0.1
+      group: declared-release-${{ github.repository }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -135,8 +135,8 @@ jobs:
           name: windows-x64
           path: package
 
-      - name: Publish the declared first release exactly once
+      - name: Publish the declared stable release exactly once
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/publish-first-release.ps1 -PackageDirectory package
+        run: ./scripts/publish-release.ps1 -PackageDirectory package

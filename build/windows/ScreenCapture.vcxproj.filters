@@ -218,6 +218,9 @@
     <ClInclude Include="..\..\src\core\Annotation.h">
       <Filter>src\core</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\core\AnnotationRegion.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\core\HistoryStack.h">
       <Filter>src\core</Filter>
     </ClInclude>

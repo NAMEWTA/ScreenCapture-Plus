@@ -19,6 +19,12 @@ changing editor or export behavior; build details are in `docs/BUILDING.md`.
 - Ordinary number markers and annotations are independent tools. Annotation IDs
   and colors remain stable through undo/redo and deletion. The right rail uses
   one shared note editor; do not add one input control per marker.
+- An annotation is one history-owned rectangle, upper-left badge and note. Keep
+  the border and badge color identical, clamp geometry to the source image, and
+  discard newly drawn degenerate regions. Pure geometry belongs in `src/core`.
+  Rectangle interiors stay available for nested marks; only badges, borders and
+  resize handles participate in region hit-testing. Focus the note editor after
+  completing a new region, not during pointer capture or an existing resize.
 - Passive toolbar layout must use `SWP_NOACTIVATE`; it must not steal input
   focus or mouse capture. Filter Ling's mouse-leave sentinel before image
   hit-testing or dragging.
