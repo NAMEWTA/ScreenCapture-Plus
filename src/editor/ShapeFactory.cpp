@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "editor/ShapeFactory.h"
+#include "editor/shapes/ShapeAnnotation.h"
 #include "editor/shapes/ShapeArrow.h"
 #include "editor/shapes/ShapeEllipse.h"
 #include "editor/shapes/ShapeEraser.h"
@@ -15,6 +16,11 @@ std::unique_ptr<ShapeBase> ShapeFactory::create(std::wstring_view toolId, WinPin
     if (toolId == L"ellipse") return std::make_unique<ShapeEllipse>(window);
     if (toolId == L"arrow") return std::make_unique<ShapeArrow>(window);
     if (toolId == L"number") return std::make_unique<ShapeNumber>(window);
+    if (toolId == L"annotation") {
+        auto annotation = std::make_unique<ShapeAnnotation>(window);
+        if (annotation->number() == 0) return nullptr;
+        return annotation;
+    }
     if (toolId == L"line") return std::make_unique<ShapeLine>(window);
     if (toolId == L"text") return std::make_unique<ShapeText>(window);
     if (toolId == L"mosaic") return std::make_unique<ShapeMosaic>(window);

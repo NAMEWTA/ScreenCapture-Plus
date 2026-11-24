@@ -310,19 +310,29 @@ void CapLong::makeTool()
 void CapLong::layoutTool()
 {
     if (!tool) return;
-    // 宽高一律现问 tool 要，不再按 dpi 自己算：DPI 变化后工具条会重算尺寸再回头调这里
-    auto toolW{ tool->w };
-    POINT pos{ 0,0 };
-    auto& cutMask = win->cutMask;
-    if (win->w - cutMask->maskRect.right - 2 * win->dpi < toolW) {
-        pos.x = (LONG)(cutMask->maskRect.left - toolW - cutMask->strokeWidth - 2 * win->dpi);
+    const auto& mask = win->cutMask->maskRect;
+    const RECT maskOnScreen{
+        win->x + static_cast<LONG>(mask.left), win->y + static_cast<LONG>(mask.top),
+        win->x + static_cast<LONG>(mask.right), win->y + static_cast<LONG>(mask.bottom)
+    };
+    MONITORINFO monitor{ sizeof(MONITORINFO) };
+    if (!GetMonitorInfo(MonitorFromRect(&maskOnScreen, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        monitor.rcWork = RECT{ win->x, win->y,
+            win->x + static_cast<LONG>(win->w), win->y + static_cast<LONG>(win->h) };
     }
-    else {
-        pos.x = (LONG)(cutMask->maskRect.right + cutMask->strokeWidth + 2 * win->dpi);
-    }
-    pos.y = (LONG)(cutMask->maskRect.bottom - tool->h);
-    ClientToScreen(win->hwnd, &pos);
-    tool->setPosition(pos.x, pos.y);
+    tool->fitToWorkArea(monitor.rcWork);
+    const auto width = static_cast<LONG>(tool->w + .5f);
+    const auto height = static_cast<LONG>(tool->h + .5f);
+    const auto gap = static_cast<LONG>(win->cutMask->strokeWidth + 2.f * tool->dpi + .5f);
+    // Prefer the right side of the selection, then the left; keep all controls
+    // inside this physical monitor when neither side has enough space.
+    LONG left = maskOnScreen.right + gap;
+    if (left + width > monitor.rcWork.right) left = maskOnScreen.left - gap - width;
+    if (left < monitor.rcWork.left) left = maskOnScreen.right - width - gap;
+    const auto top = maskOnScreen.bottom - height;
+    tool->setPosition(
+        std::clamp(left, monitor.rcWork.left, std::max(monitor.rcWork.left, monitor.rcWork.right - width)),
+        std::clamp(top, monitor.rcWork.top, std::max(monitor.rcWork.top, monitor.rcWork.bottom - height)));
 }
 
 void CapLong::paintImgPreview(ID2D1DeviceContext* ctx)

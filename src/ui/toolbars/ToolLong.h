@@ -1,5 +1,6 @@
 #pragma once
 #include <include/Ling.h>
+#include "ui/toolbars/ToolbarMetrics.h"
 
 class WinCap;
 class Tip;
@@ -8,6 +9,8 @@ class ToolLong : public Ling::WinBase
 public:
 	ToolLong(WinCap* win);
 	~ToolLong();
+	// Reflow fixed-size controls within the current monitor work area.
+	void fitToWorkArea(const RECT& workArea);
 private:
 	void onCreated() override;
 	void onClick(Ling::Button* btn);
@@ -18,8 +21,9 @@ private:
 	WinCap* win;
 	// onDpiChanged 与 onSizeChanged 之间的接力标记，见构造函数里的注释
 	bool dpiChanged{ false };
+	float maximumWidth{ ScreenCapture::UI::toolbarUnlimitedWidth };
 	// 逻辑像素，交给 Ling 的 setter 时由其内部乘 dpi
-	static constexpr float btnSize{ 32.f };
+	static constexpr float btnSize{ ScreenCapture::UI::toolbarButtonSize };
 	std::vector<std::wstring> btnIds = { L"pin",L"close",L"save",L"clipboard" };
 	std::vector<std::wstring> btnCodes = { L"\ue6a2",L"\ue62d",L"\ue608",L"\ue6ad" };
 	// 悬停提示。要 hwnd，所以在 onCreated 里才建得起来

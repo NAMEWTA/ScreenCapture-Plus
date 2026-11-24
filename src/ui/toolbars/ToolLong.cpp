@@ -3,6 +3,7 @@
 #include "services/Lang.h"
 #include "ui/Tip.h"
 #include "ui/toolbars/ToolLong.h"
+#include "ui/toolbars/ToolbarLayout.h"
 
 ToolLong::ToolLong(WinCap* win) : Ling::WinBase(), win(win)
 {
@@ -27,7 +28,16 @@ ToolLong::ToolLong(WinCap* win) : Ling::WinBase(), win(win)
 
 void ToolLong::refreshSize()
 {
-	setSize(btnSize * static_cast<float>(btnIds.size()), btnSize);
+	const std::vector<float> widths(btnIds.size(), btnSize);
+	ScreenCapture::UI::applyToolbarExtent(this, ScreenCapture::UI::measureToolbar(widths, maximumWidth));
+}
+
+void ToolLong::fitToWorkArea(const RECT& workArea)
+{
+	const auto availableWidth = ScreenCapture::UI::toolbarWorkWidth(workArea, dpi);
+	if (availableWidth == maximumWidth) return;
+	maximumWidth = availableWidth;
+	refreshSize();
 }
 
 ToolLong::~ToolLong()
@@ -38,19 +48,17 @@ void ToolLong::onCreated()
 {
 	tip = std::make_unique<Tip>(this);
 	body->setBg(0xFFFFFFFF);
-	body->setBorder(1.f, 0xA8A8A8ff);
-	body->setAlignItems(Ling::Align::Center);
-	body->setFlexDirection(Ling::FlexDirection::Row);
+	body->setBorder(ScreenCapture::UI::toolbarBorder, 0xA8A8A8ff);
+	ScreenCapture::UI::configureToolbarRow(body.get());
 	for (size_t i = 0; i < btnIds.size(); i++)
 	{
 		auto btn = body->makeChild<Ling::Button>();
 		btn->setId(btnIds[i]);
 		btn->setText(btnCodes[i]);
-		btn->setHeightPercent(100.f);
-		btn->setFlexGrow(1.f);
+		ScreenCapture::UI::sizeToolbarControl(btn);
 		btn->setHoverBg(0xF2F2F2ff);
 		btn->setFontFamily(L"icon");
-		btn->setFontSize(13.f);
+		btn->setFontSize(ScreenCapture::UI::toolbarIconSize);
 		btn->onClick.add([this](Ling::Button* btn) {onClick(btn);});
 		tip->bind(btn, Lang::get(std::format(L"tool.{}", btnIds[i])));
 	}

@@ -4,6 +4,7 @@
 #include "services/Lang.h"
 #include "ui/Tip.h"
 #include "ui/toolbars/ToolVideo.h"
+#include "ui/toolbars/ToolbarLayout.h"
 
 ToolVideo::ToolVideo(WinCap* win) : Ling::WinBase(), win(win)
 {
@@ -29,7 +30,18 @@ ToolVideo::ToolVideo(WinCap* win) : Ling::WinBase(), win(win)
 
 void ToolVideo::refreshSize()
 {
-	setSize(isRecording ? recordingWidth() : settingWidth(), btnSize);
+	const std::vector<float> widths = isRecording
+		? std::vector<float>{ timerW, spliterW, btnSize, btnSize, btnSize }
+		: std::vector<float>{ formatW, formatW, spliterW, btnSize, btnSize, spliterW, btnSize, btnSize };
+	ScreenCapture::UI::applyToolbarExtent(this, ScreenCapture::UI::measureToolbar(widths, maximumWidth));
+}
+
+void ToolVideo::fitToWorkArea(const RECT& workArea)
+{
+	const auto availableWidth = ScreenCapture::UI::toolbarWorkWidth(workArea, dpi);
+	if (availableWidth == maximumWidth) return;
+	maximumWidth = availableWidth;
+	refreshSize();
 }
 
 ToolVideo::~ToolVideo()
@@ -42,9 +54,8 @@ void ToolVideo::onCreated()
 	// 提示气泡是独立顶层窗口，本窗口被摘出屏幕捕获它不跟着走，得单独说一声
 	tip->excludeFromCapture();
 	body->setBg(0xFFFFFFFF);
-	body->setBorder(1.f, 0xA8A8A8ff);
-	body->setAlignItems(Ling::Align::Center);
-	body->setFlexDirection(Ling::FlexDirection::Row);
+	body->setBorder(ScreenCapture::UI::toolbarBorder, 0xA8A8A8ff);
+	ScreenCapture::UI::configureToolbarRow(body.get());
 	showSetting();
 	show();
 }
@@ -55,35 +66,19 @@ void ToolVideo::onMinMaxInfo(MINMAXINFO* mmi)
 	mmi->ptMinTrackSize.y = 1;
 }
 
-float ToolVideo::settingWidth() const
-{
-	// 左右内边距 + MP4/GIF + 分隔符 + 系统声/麦克风 + 分隔符 + 开始/退出
-	return formatW * 2 + spliterW * 2 + btnSize * 4;
-}
-
-float ToolVideo::recordingWidth() const
-{
-	// 左右内边距 + 计时 + 分隔符 + 丢弃/存文件/存剪切板
-	return timerW + spliterW + btnSize * 3;
-}
-
 Ling::Node* ToolVideo::makeSpliter()
 {
-	auto spliter = body->makeChild<Ling::Node>();
-	spliter->setSize(spliterW, 18.f);
-	spliter->setBg(0xDDDDDDff);
-	return spliter;
+	return ScreenCapture::UI::makeToolbarDivider(body.get());
 }
 
 Ling::Button* ToolVideo::makeIconBtn(const std::wstring& code)
 {
 	auto btn = body->makeChild<Ling::Button>();
 	btn->setText(code);
-	btn->setWidth(btnSize);
-	btn->setHeightPercent(100.f);
+	ScreenCapture::UI::sizeToolbarControl(btn);
 	btn->setHoverBg(0xF2F2F2ff);
 	btn->setFontFamily(L"icon");
-	btn->setFontSize(13.f);
+	btn->setFontSize(ScreenCapture::UI::toolbarIconSize);
 	return btn;
 }
 
@@ -114,20 +109,20 @@ void ToolVideo::showSetting()
 	// 按钮被销毁时 onLeave 不会触发，提示得手动收掉，否则它会一直挂在屏幕上
 	tip->hide();
 	body->removeAllChildren();
-	setSize(settingWidth(), btnSize);
+	refreshSize();
 
-	// MP4 / GIF 二选一。高度比按钮条矮一截 + 圆角，选中时是一颗胶囊
+	// MP4 / GIF 二选一。与图标按钮使用同样高度，文字保留充足空间。
 	btnMp4 = body->makeChild<Ling::Button>();
 	btnMp4->setText(L"MP4");
-	btnMp4->setSize(formatW, btnSize);
-	btnMp4->setFontSize(13.f);
+	ScreenCapture::UI::sizeToolbarControl(btnMp4, formatW);
+	btnMp4->setFontSize(16.f);
 	btnMp4->onClick.add([this](Ling::Button*) { onFormatClick(0); });
 	tip->bind(btnMp4, Lang::get(L"video.outputMp4"));
 
 	btnGif = body->makeChild<Ling::Button>();
 	btnGif->setText(L"GIF");
-	btnGif->setSize(formatW, btnSize);
-	btnGif->setFontSize(13.f);
+	ScreenCapture::UI::sizeToolbarControl(btnGif, formatW);
+	btnGif->setFontSize(16.f);
 	btnGif->onClick.add([this](Ling::Button*) { onFormatClick(1); });
 	tip->bind(btnGif, Lang::get(L"video.outputGif"));
 
@@ -170,11 +165,11 @@ void ToolVideo::showRecording()
 	timerLabel = nullptr;
 	tip->hide();
 	body->removeAllChildren();
-	setSize(recordingWidth(), btnSize);
+	refreshSize();
 
 	timerLabel = body->makeChild<Ling::Label>();
-	timerLabel->setWidth(timerW);
-	timerLabel->setHeightPercent(100.f);
+	ScreenCapture::UI::sizeToolbarControl(timerLabel, timerW);
+	timerLabel->setFontSize(14.f);
 	timerLabel->setAlignItems(Ling::Align::Center);
 	timerLabel->setJustifyContent(Ling::Justify::Center);
 	updateTimerText();
@@ -223,6 +218,7 @@ void ToolVideo::startRecord()
 	isRecording = true;
 	totalSeconds = 0;
 	showRecording();
+	win->layoutTool(this);
 	setTimer(1000, tickTimerId);
 	if (selectIndex == 0) {
 		win->startMp4(selectSpeaker, selectMic);

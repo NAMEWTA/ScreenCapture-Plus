@@ -3,6 +3,7 @@
 #include "services/Lang.h"
 #include "ui/Tip.h"
 #include "ui/toolbars/ToolCap.h"
+#include "ui/toolbars/ToolbarLayout.h"
 
 ToolCap::ToolCap(WinCap* win) : Ling::WinBase(), win(win)
 {
@@ -27,11 +28,18 @@ ToolCap::ToolCap(WinCap* win) : Ling::WinBase(), win(win)
 
 void ToolCap::refreshSize()
 {
-	float logicW{ 0.f };
-	for (auto& id : btnIds) {
-		logicW += (id == L"spliter") ? spliterW : btnSize;
-	}
-	setSize(logicW, btnSize);
+	std::vector<float> widths;
+	widths.reserve(btnIds.size());
+	for (const auto& id : btnIds) widths.push_back(id == L"spliter" ? spliterW : btnSize);
+	ScreenCapture::UI::applyToolbarExtent(this, ScreenCapture::UI::measureToolbar(widths, maximumWidth));
+}
+
+void ToolCap::fitToWorkArea(const RECT& workArea)
+{
+	const auto availableWidth = ScreenCapture::UI::toolbarWorkWidth(workArea, dpi);
+	if (availableWidth == maximumWidth) return;
+	maximumWidth = availableWidth;
+	refreshSize();
 }
 
 ToolCap::~ToolCap()
@@ -42,25 +50,21 @@ void ToolCap::onCreated()
 {
 	tip = std::make_unique<Tip>(this);
 	body->setBg(0xFFFFFFFF);
-	body->setBorder(1.f, 0xA8A8A8ff);
-	body->setAlignItems(Ling::Align::Center);
-	body->setFlexDirection(Ling::FlexDirection::Row);
+	body->setBorder(ScreenCapture::UI::toolbarBorder, 0xA8A8A8ff);
+	ScreenCapture::UI::configureToolbarRow(body.get());
 	for (size_t i = 0; i < btnIds.size(); i++)
 	{
 		if (btnIds[i] == L"spliter") {
-			auto spliter = body->makeChild<Ling::Node>();
-			spliter->setSize(spliterW, 18.f);
-			spliter->setBg(0xDDDDDDff);
+			ScreenCapture::UI::makeToolbarDivider(body.get());
 			continue;
 		}
 		auto btn = body->makeChild<Ling::Button>();
 		btn->setId(btnIds[i]);
 		btn->setText(btnCodes[i]);
-		btn->setWidth(btnSize);
-		btn->setHeightPercent(100.f);
+		ScreenCapture::UI::sizeToolbarControl(btn);
 		btn->setHoverBg(0xF2F2F2ff);
 		btn->setFontFamily(L"icon");
-		btn->setFontSize(13.f);
+		btn->setFontSize(ScreenCapture::UI::toolbarIconSize);
 		btn->onClick.add([this](Ling::Button* btn) { onClick(btn); });
 		if (!btnTips[i].empty()) {
 			tip->bind(btn, Lang::get(btnTips[i]));
@@ -81,9 +85,6 @@ void ToolCap::onClick(Ling::Button* btn)
 	}
 	else if (btn->id == L"video") {
 		win->startVideo();
-	}
-	else if (btn->id == L"ocr") {
-		win->startOcr();
 	}
 	else if (btn->id == L"qrcode") {
 		win->startQrcode();

@@ -14,6 +14,7 @@ ShapeBase* History::createShape(std::wstring_view toolId, int x, int y)
     auto* result = stack.append(std::move(shape),
         [this](ShapeBase* discarded) { releaseBorrows(discarded); });
     if (result) result->mouseDown(static_cast<float>(x), static_cast<float>(y));
+    if (result) win->onAnnotationsChanged();
     return result;
 }
 
@@ -21,13 +22,17 @@ void History::undo()
 {
     if (auto* shape = stack.undo()) {
         releaseBorrows(shape);
+        win->onAnnotationsChanged();
         win->refresh();
     }
 }
 
 void History::redo()
 {
-    if (stack.redo()) win->refresh();
+    if (stack.redo()) {
+        win->onAnnotationsChanged();
+        win->refresh();
+    }
 }
 
 void History::removeHoverShape()
@@ -38,6 +43,7 @@ void History::removeHoverShape()
 void History::removeShape(ShapeBase* target)
 {
     if (stack.erase(target, [this](ShapeBase* removed) { releaseBorrows(removed); })) {
+        win->onAnnotationsChanged();
         win->refresh();
     }
 }

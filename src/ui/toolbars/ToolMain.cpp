@@ -4,6 +4,7 @@
 #include "services/Lang.h"
 #include "ui/Tip.h"
 #include "ui/toolbars/ToolMain.h"
+#include "ui/toolbars/ToolbarLayout.h"
 #include "ui/toolbars/ToolSub.h"
 
 ToolMain::ToolMain(WinPin* win) : Ling::WinBase(), win(win)
@@ -31,14 +32,20 @@ ToolMain::ToolMain(WinPin* win) : Ling::WinBase(), win(win)
 	createNativeWindow(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, WS_POPUP);
 }
 
-// 宽度 = 各按钮宽度之和（btnIds 里的 "|" 是分隔符，只占 spliterW），高度 = 按钮高
 void ToolMain::refreshSize()
 {
-	float logicW{ 0.f };
-	for (auto& id : btnIds) {
-		logicW += (id == L"|") ? spliterW : btnSize;
-	}
-	setSize(logicW, btnSize);
+	std::vector<float> widths;
+	widths.reserve(btnIds.size());
+	for (const auto& id : btnIds) widths.push_back(id == L"|" ? spliterW : btnSize);
+	ScreenCapture::UI::applyToolbarExtent(this, ScreenCapture::UI::measureToolbar(widths, maximumWidth));
+}
+
+void ToolMain::fitToWorkArea(const RECT& workArea)
+{
+	const auto availableWidth = ScreenCapture::UI::toolbarWorkWidth(workArea, dpi);
+	if (availableWidth == maximumWidth) return;
+	maximumWidth = availableWidth;
+	refreshSize();
 }
 
 ToolMain::~ToolMain()
@@ -49,59 +56,101 @@ void ToolMain::init()
 {
 }
 
-// 返回 curId 对应按钮的中心相对 ToolMain 左边的偏移（物理像素）。
-// btnIds 含分隔符而 btns 不含，所以要单独维护 btns 的下标，不能拿 i 去索引 btns。
+// Buttons can wrap onto another row; their laid-out positions are authoritative.
 float ToolMain::getBtnCenterX()
 {
-	float result{ 0.f };
-	size_t btnIndex{ 0 };
-	for (size_t i = 0; i < btnIds.size(); i++)
-	{
-		if (btnIds[i] == L"|") {
-			// 分隔符不在 btns 里，宽度与 onCreated 里 spliter 的 setSize(dpi, ...) 一致
-			result += dpi;
-			continue;
-		}
-		if (curId == btnIds[i]) {
-			result += btns[btnIndex]->w / 2.f;
-			return result;
-		}
-		result += btns[btnIndex]->w;
-		btnIndex++;
+	Ling::WinBase::layout();
+	for (const auto btn : btns) {
+		if (btn->id == curId) return btn->x + btn->w / 2.f;
 	}
-	return result;
+	return w / 2.f;
 }
 
 void ToolMain::onCreated()
 {
 	tip = std::make_unique<Tip>(this);
 	body->setBg(0xFFFFFFFF);
-	body->setBorder(1.f, 0xA8A8A8ff);
-	body->setAlignItems(Ling::Align::Center);
-	body->setFlexDirection(Ling::FlexDirection::Row);
+	body->setBorder(ScreenCapture::UI::toolbarBorder, 0xA8A8A8ff);
+	ScreenCapture::UI::configureToolbarRow(body.get());
 	for (size_t i = 0; i < btnIds.size(); i++)
 	{
 		auto& id = btnIds[i];
 		if (id == L"|") {
-			auto spliter = body->makeChild<Ling::Node>();
-			spliter->setSize(dpi, 18.f);
-			spliter->setBg(0xDDDDDDff);
+			ScreenCapture::UI::makeToolbarDivider(body.get());
 		}
 		else {
 			auto btn = body->makeChild<Ling::Button>();
 			btn->setId(id);
 			btn->setText(btnCodes[i]);
-			btn->setHeightPercent(100.f);
-			btn->setFlexGrow(1.f);
+			ScreenCapture::UI::sizeToolbarControl(btn);
 			btn->setHoverBg(0xF2F2F2ff);
 			btn->setFontFamily(L"icon");
-			btn->setFontSize(13.f);
+			btn->setFontSize(ScreenCapture::UI::toolbarIconSize);
+			if (id == L"annotation") {
+				annotationIcon = btn->makeChild<Ling::Canvas>();
+				annotationIcon->setPositionType(Ling::Position::Absolute);
+				annotationIcon->setPosition(Ling::Edge::Left, (btnSize - ScreenCapture::UI::toolbarIconSize) / 2.f);
+				annotationIcon->setPosition(Ling::Edge::Top, (btnSize - ScreenCapture::UI::toolbarIconSize) / 2.f);
+				annotationIcon->setSize(ScreenCapture::UI::toolbarIconSize, ScreenCapture::UI::toolbarIconSize);
+			}
 			btn->onClick.add([this](Ling::Button* btn) {onClick(btn);});
 			tip->bind(btn, Lang::get(std::format(L"tool.{}", id)));
 			btns.push_back(btn);
 		}
 	}
 	show();
+}
+
+void ToolMain::layout()
+{
+	Ling::WinBase::layout();
+	paintAnnotationIcon();
+}
+
+void ToolMain::paintAnnotationIcon()
+{
+	if (!annotationIcon) return;
+	auto d2d = Ling::D2D::get();
+	if (!annotationIconBrush && FAILED(d2d->deviceContext->CreateSolidColorBrush(
+		D2D1::ColorF(0x333333), annotationIconBrush.GetAddressOf()))) return;
+	// A numbered speech bubble, separate from the existing plain number circle.
+	// Rebuild its vector path only on DPI changes.
+	if (!annotationIconPath || annotationIconDpi != dpi) {
+		Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
+		Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+		if (FAILED(d2d->d2dFactory->CreatePathGeometry(path.GetAddressOf())) ||
+			FAILED(path->Open(sink.GetAddressOf()))) return;
+		const auto point = [this](float x, float y) { return D2D1::Point2F(x * dpi, y * dpi); };
+		sink->BeginFigure(point(5.f, 3.f), D2D1_FIGURE_BEGIN_HOLLOW);
+		sink->AddLine(point(19.f, 3.f));
+		sink->AddBezier({ point(22.f, 3.f), point(22.f, 5.f), point(22.f, 6.f) });
+		sink->AddLine(point(22.f, 14.f));
+		sink->AddBezier({ point(22.f, 17.f), point(20.f, 17.f), point(19.f, 17.f) });
+		sink->AddLine(point(11.f, 17.f));
+		sink->AddLine(point(7.f, 21.f));
+		sink->AddLine(point(7.f, 17.f));
+		sink->AddLine(point(5.f, 17.f));
+		sink->AddBezier({ point(2.f, 17.f), point(2.f, 15.f), point(2.f, 14.f) });
+		sink->AddLine(point(2.f, 6.f));
+		sink->AddBezier({ point(2.f, 3.f), point(4.f, 3.f), point(5.f, 3.f) });
+		sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+		if (FAILED(sink->Close())) return;
+		annotationIconPath = std::move(path);
+		annotationIconDpi = dpi;
+	}
+	auto ctx = annotationIcon->startPaint();
+	if (!ctx) return;
+	ctx->Clear(D2D1::ColorF(0.f, 0.f, 0.f, 0.f));
+	const auto brush = annotationIconBrush.Get();
+	const auto stroke = 1.6f * dpi;
+	const auto point = [this](float x, float y) { return D2D1::Point2F(x * dpi, y * dpi); };
+	ctx->DrawGeometry(annotationIconPath.Get(), brush, stroke);
+	ctx->DrawLine(point(7.f, 8.f), point(9.f, 6.f), brush, stroke);
+	ctx->DrawLine(point(9.f, 6.f), point(9.f, 13.f), brush, stroke);
+	ctx->DrawLine(point(7.f, 13.f), point(11.f, 13.f), brush, stroke);
+	ctx->DrawLine(point(14.f, 7.f), point(18.f, 7.f), brush, stroke);
+	ctx->DrawLine(point(14.f, 11.f), point(18.f, 11.f), brush, stroke);
+	annotationIcon->finishPaint();
 }
 
 void ToolMain::applyNormalStyle(Ling::Button* btn)
@@ -123,12 +172,14 @@ void ToolMain::cancelSelect()
 	}
 	curId.clear();
 	win->toolSub->hideTools();
+	win->onToolSelectionChanged();
 	// curId 空了 ToolMain 要下移收回 ToolSub 让出的空间，交给 WinPin 重排整组
 	win->layoutTools();
 }
 
 void ToolMain::onClick(Ling::Button* btn)
 {
+	tip->hide();
 	// 关闭整个贴图窗口。WinPin 的 onDestroy 里会连带关掉 ToolMain / ToolSub，
 	// 但 C++ 对象的释放被推迟到下一轮消息循环，所以这里 return 之后栈上访问 this 仍是安全的。
 	if (btn->id == L"close") {
@@ -199,6 +250,7 @@ void ToolMain::onClick(Ling::Button* btn)
 	else {
 		win->toolSub->hideTools();
 	}
+	win->onToolSelectionChanged();
 	// curId 变化后 ToolMain 可能要上移给 ToolSub 腾位置，交给 WinPin 重新排布整组
 	win->layoutTools();
 }

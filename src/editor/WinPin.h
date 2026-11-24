@@ -1,10 +1,13 @@
 #pragma once
 #include <include/Ling.h>
+#include "core/Annotation.h"
 
 class ToolMain;
 class ToolSub;
 class ShapeBase;
 class ShapeText;
+class ShapeAnnotation;
+class AnnotationPanel;
 class History;
 class WinPin : public Ling::WinBase
 {
@@ -20,7 +23,7 @@ public:
 	// 退出流程里调：窗口对象是文件级静态变量，交给静态析构就在 CoUninitialize 之后了
 	static void dispose();
 	void layoutTools();
-	// 把底图与所有未撤销的 shape 合成后写入剪切板，成功即关窗
+	// 底图、所有有效 shape 与完整批注表合成一张图后写入剪贴板。
 	void copyToClipboard();
 	// 弹另存为对话框，把合成结果存成 PNG，成功即关窗；用户取消或失败则保持窗口
 	void saveToFile();
@@ -32,6 +35,14 @@ public:
 	void setEditingText(ShapeText* shape);
 	// ToolSub 上的颜色 / 字号 / 粗体 / 斜体变了，转给正在编辑的文本立即生效
 	void onToolStyleChanged();
+	// Annotation identity belongs to the screenshot session, independently of undo.
+	std::uint64_t allocateAnnotationId();
+	void selectAnnotation(std::uint64_t number, bool focusEditor = false);
+	void updateAnnotationNote(std::uint64_t number, const std::wstring& text);
+	void removeAnnotation(std::uint64_t number);
+	void onAnnotationsChanged();
+	void onToolSelectionChanged();
+	void hideAnnotationPanel();
 public:
 	// Ctrl+滚轮的缩放倍数，1 = 原始大小。底图与所有 shape 的坐标一律按底图的原始像素存，
 	// 缩放只体现在两处：画的时候给 D2D 上一个缩放变换、收到鼠标坐标时先除回原始像素。
@@ -63,8 +74,8 @@ private:
 	BOOL setCursor() override;
 	// 离屏合成出最终图像的像素（BGRA、top-down、行步长紧凑为 size.width*4）。
 	// 只画底图和未撤销的 shape，不含蓝色边框和夹点。
-	// size 是出参，给的是底图的原始尺寸 —— 必须拿它去解释 pixels，不能用窗口的 w/h：
-	// Ctrl+滚轮缩放改的只有窗口大小，两者对不上就是按错误的宽高读缓冲区（越界崩溃、图也是花的）
+	// size 是实际合成尺寸：无批注时等于原图，有批注时包含右侧表格。
+	// 必须用该尺寸解释 pixels；窗口缩放及编辑侧栏尺寸不影响导出像素。
 	bool getImagePixels(std::vector<BYTE>& pixels, D2D1_SIZE_U& size);
 	// 另存为对话框会抢走前台并把 WinPin 激活，取消保存后用它把窗口层级和前台窗口恢复原样
 	void restoreWindowState(HWND foregroundBeforeDialog);
@@ -79,14 +90,29 @@ private:
 	// 缩放后窗口跟着改大小，并反向挪一下窗口位置，让 anchor 底下的那块图还停在原处
 	void applyScale(float newScale, POINT anchor);
 	void paintScaleTip(ID2D1DeviceContext* ctx);
+	ShapeAnnotation* findAnnotation(std::uint64_t number) const;
+	std::vector<ScreenCapture::Core::AnnotationNote> annotationNotes() const;
+	void showAnnotationPanel(bool fitWorkspace);
+	void fitAnnotationWorkspace();
+	void layoutAnnotationPanel();
+	bool isImagePosition(POINT pos) const;
+	RECT workArea() const;
 private:
 	// 整个窗口内容都画在这块画布上，走 swap chain 后端：贴图窗口拖动 shape 时每帧重绘，
 	// 单缓冲的合成表面会被采样到"擦干净→逐个重画"的中间态，表现为 shape 和边框整帧闪掉。
 	Ling::Canvas* canvas{ nullptr };
+	Ling::Node* imageOverlay{ nullptr }; // clips the editable ShapeText to the source viewport
+	winrt::Windows::UI::Composition::InsetClip imageClip{ nullptr };
 	// 文本输入框与当前正在编辑的 ShapeText。非空表示"编辑中"：此时落在文本框里的
 	// 鼠标事件、以及所有键盘事件都归 TextBox，WinPin 自己的那套要让路。
 	Ling::TextBox* textBox{ nullptr };
 	ShapeText* editingText{ nullptr };
+	AnnotationPanel* annotationPanel{ nullptr }; // owned by body, detached before history destruction
+	ScreenCapture::Core::AnnotationSequence annotationSequence;
+	std::uint64_t selectedAnnotation{ 0 };
+	bool annotationPanelVisible{ false };
+	bool fitAnnotationsAfterPointer{ false };
+	float annotationPanelWidth{ 340.f }; // logical pixels; may narrow on a small monitor
 	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> borderBrush;
 	// 右上角的倍数提示。非空即显示，缩放停手一会儿由定时器清掉
 	Microsoft::WRL::ComPtr<IDWriteTextLayout> scaleTip;

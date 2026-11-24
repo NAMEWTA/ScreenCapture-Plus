@@ -31,7 +31,6 @@ public:
 	void startPin();
 	void startLong();
 	void startVideo();
-	void startOcr();
 	void startQrcode();
 	void saveToFile();
 	void copyToClipboard();
@@ -68,7 +67,7 @@ private:
 	void onUp(POINT pos, bool isRight);
 	void onClosed();
 	void makeToolCap();
-	// 命令行给了 --enter=xxx（long / video / ocr / qr / pin）时，框完选区不出 ToolCap，
+	// 命令行给了 --enter=xxx（long / video / qr / pin）时，框完选区不出 ToolCap，
 	// 直接走对应的那条路 —— 等于替用户点了工具条上的那个按钮。
 	// 返回是否已经接手；值不认识（拼错了）就返回 false，照常出工具条
 	bool enterByArg();
