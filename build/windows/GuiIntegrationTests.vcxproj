@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="Paths.props" />
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{c01b22d4-e705-4404-9b65-1b3f6ee4dcab}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>GuiIntegrationTests</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="Common.props" />
+  <Import Project="$(ArtifactsRoot)dependencies\gifski-native.props" Condition="Exists('$(ArtifactsRoot)dependencies\gifski-native.props')" />
+  <Import Project="ApplicationDependencies.props" />
+  <PropertyGroup>
+    <OutDir>$(ArtifactsRoot)tests\windows\gui\</OutDir>
+    <TargetName>GuiIntegrationTests</TargetName>
+    <ApplicationObjectRoot>$(ArtifactsRoot)obj\x64\Release\ScreenCapture\</ApplicationObjectRoot>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>$(ArtifactsRoot)lib\x64\Release\Ling.lib;$(ArtifactsRoot)lib\x64\Release\Yoga.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Manifest>
+      <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>
+    </Manifest>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\tests\windows\GuiIntegrationTests.cpp" />
+    <!-- Exercise the already-built production code, not a second source list. -->
+    <Object Include="$(ApplicationObjectRoot)*.obj" Exclude="$(ApplicationObjectRoot)main.obj" />
+    <Object Include="$(ApplicationObjectRoot)Resource.res" />
+  </ItemGroup>
+  <Target Name="CheckApplicationBuild" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(ApplicationObjectRoot)WinPin.obj') Or !Exists('$(ApplicationObjectRoot)Resource.res')" Text="Build the Release application before running the real GUI integration checks." />
+  </Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

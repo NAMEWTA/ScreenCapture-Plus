@@ -4,6 +4,7 @@
 #include "services/Setting.h"
 #include "ui/Tip.h"
 #include "ui/toolbars/ToolSub.h"
+#include "ui/toolbars/ToolbarLayout.h"
 #include "ui/toolbars/ToolMain.h"
 
 using namespace Microsoft::WRL;
@@ -58,6 +59,14 @@ ToolSub::ToolSub(WinPin* win) :Ling::WinBase(), win(win)
 	createNativeWindow(WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, WS_POPUP);
 }
 
+void ToolSub::fitToWorkArea(const RECT& workArea)
+{
+	const auto availableWidth = ScreenCapture::UI::toolbarWorkWidth(workArea, dpi);
+	if (availableWidth == maximumWidth) return;
+	maximumWidth = availableWidth;
+	refreshSize();
+}
+
 ToolSub::~ToolSub()
 {
 }
@@ -80,7 +89,7 @@ void ToolSub::onCreated()
 	contentNode->setPosition(Ling::Edge::Top, marginTop + borderW);
 	contentNode->setPosition(Ling::Edge::Right, borderW);
 	contentNode->setPosition(Ling::Edge::Bottom, borderW);
-	contentNode->setFlexDirection(Ling::FlexDirection::Row);
+	ScreenCapture::UI::configureToolbarRow(contentNode, false);
 	// 滑块的数值提示：Slider 没有 hover 事件，就在窗口级 mousemove 里自己判位置。
 	// 显示出来后横向跟着鼠标走（同 2.4.25）；离开滑块只收自己这一个提示，
 	// 不能无条件 hide()：颜色按钮的 onLeave 排在这个回调后面，会把它刚显示出来的提示误关掉。
@@ -104,6 +113,8 @@ void ToolSub::beginTool(const std::wstring& id)
 	// 按钮和滑块马上要被销毁，onLeave 不会触发，提示得手动收掉
 	tip->hide();
 	contentNode->removeAllChildren();
+	slider = nullptr;
+	colorBtns.clear();
 	curToolId = id;
 	auto cfg = findSliderCfg(id);
 	if (!cfg) return;
@@ -290,8 +301,7 @@ void ToolSub::initColorBtns()
 	for (size_t i = 0; i < colors.size(); i++)
 	{
 		auto btn = contentNode->makeChild<Ling::Button>();
-		btn->setHeight(btnSize-2.5);
-		btn->setFlexGrow(1.f);
+		ScreenCapture::UI::sizeToolbarControl(btn);
 		btn->setAlignItems(Ling::Align::Center);
 		btn->setJustifyContent(Ling::Justify::Center);
 		btn->setHoverBg(0XF2F2F2ff);
@@ -302,13 +312,16 @@ void ToolSub::initColorBtns()
 		auto label = btn->makeChild<Ling::Label>();
 		label->setAlignItems(Ling::Align::Center);
 		label->setJustifyContent(Ling::Justify::Center);
-		label->setSize(13.f, 13.f);
+		label->setSize(24.f, 24.f);
+		label->setPositionType(Ling::Position::Absolute);
+		label->setPosition(Ling::Edge::Left, (btnSize - 24.f) / 2.f);
+		label->setPosition(Ling::Edge::Top, (btnSize - 24.f) / 2.f);
 		// 重建后要把对勾画在当前选中的那一项上，而不是固定第一项
 		if (i == selectColorIndex) {
 			label->setText(L"\ue6ad");
 		}
 		label->setFontFamily(L"icon");
-		label->setFontSize(8.f);
+		label->setFontSize(14.f);
 		label->setBg(colors[i]);
 		label->setBorderRadius(2.f);
 		if (i == colors.size() - 1) {
@@ -340,10 +353,9 @@ Ling::Button* ToolSub::makeToggleBtn(const std::wstring& text, bool* flag, const
 	*flag = Setting::get()->getToolFlag(curToolId, cfgKey, *flag);
 	auto btn = contentNode->makeChild<Ling::Button>();
 	btn->setText(text);
-	btn->setHeight(btnSize - 2.5);
-	btn->setFlexGrow(1.f);
+	ScreenCapture::UI::sizeToolbarControl(btn);
 	btn->setFontFamily(L"icon");
-	btn->setFontSize(13.f);
+	btn->setFontSize(ScreenCapture::UI::toolbarIconSize);
 	applyToggleStyle(btn, *flag);
 	tip->bind(btn, Lang::get(tipKey));
 	// flag 指向 ToolSub 的成员，生命周期与 this 相同，btn 也挂在 this 的节点树上，捕获裸指针安全。
@@ -362,10 +374,9 @@ void ToolSub::initSlider()
 	slider = contentNode->makeChild<Ling::Slider>();
 	// 尺寸从字段来，别写字面量：initSize 按同样的字段算窗口宽度，
 	// 两边各写一份的话改了一处就会宽度不匹配（flex 会把误差压在按钮和滑块上）。
-	slider->setWidth(sliderSize);
+	ScreenCapture::UI::sizeToolbarControl(slider, sliderSize);
 	slider->setMarginLeft(sliderMargin);
 	slider->setMarginRight(sliderMargin);
-	slider->setHeightPercent(100.f);
 	// 值域与当前值都从字段来：切换工具时滑块会被销毁重建，靠 beginTool 把配置里那份带过来。
 	// setValue 排在 onValueChanged 之前，加载配置这一下不会反过来又写一次盘
 	slider->setRange(sliderMin, sliderMax);
@@ -390,27 +401,24 @@ float ToolSub::toPx(float logical) const
 
 float ToolSub::getDesiredHeight()
 {
-	// 返回物理像素：调用方（WinPin::layoutTools）拿它和屏幕坐标、ToolMain->h 一起算，那些都是物理值。
-	// 视觉高度（btnSize）与 ToolMain 的 h 保持一致 —— ToolMain 也是 h = btnSize，
-	// 边框画在这个高度之内、不额外占空间；上面再加箭头区域。
-	// 两段各自吸附到整数像素后再相加，避免和界内取整的差异。
-	return toPx(btnSize) + toPx(marginTop);
+	// Physical pixels, including wrapped rows, border, and the pointer above them.
+	// Reserve a normal row before the first tool selection so the main toolbar
+	// does not switch from below to above the image as soon as a tool is clicked.
+	return sizeBtnCount > 0 ? h :
+		ScreenCapture::UI::toolbarPixelAligned(btnSize + 2.f * borderW + marginTop, dpi) * dpi;
 }
 
-// 宽度 = 工具按钮 + 颜色按钮 + 滑块（含左右 margin）。
-// 之前这里漏算了滑块的真实宽度，宽工具栏靠 10 个 flexGrow 按钮把误差摊薄了看不出来，
-// 而 mosaic/eraser 只有 1 个按钮，误差全压在这个按钮和滑块上，看起来就像被压缩了。
 void ToolSub::initSize(int btnCount, bool withColors, bool centerOnBtn)
 {
 	hasTools = true;
 	this->centerOnBtn = centerOnBtn;
 	sizeBtnCount = btnCount;
 	sizeWithColors = withColors;
-	auto count = btnCount + (withColors ? static_cast<int>(colors.size()) : 0);
-	// 宽度只按内容算，边框画在内容之内（与 ToolMain 一致，那边宽度也只累加按钮）。
-	auto pxW = toPx(btnSize) * count + toPx(sliderSize) + toPx(sliderMargin) * 2;
-	// setSize 收逻辑像素、内部再乘 dpi，所以这里把算好的物理宽高除回去
-	setSize(pxW / dpi, getDesiredHeight() / dpi);
+	std::vector<float> widths(static_cast<std::size_t>(btnCount), btnSize);
+	widths.push_back(sliderSize + sliderMargin * 2.f);
+	if (withColors) widths.insert(widths.end(), colors.size(), btnSize);
+	ScreenCapture::UI::applyToolbarExtent(this,
+		ScreenCapture::UI::measureToolbar(widths, maximumWidth, marginTop));
 }
 
 void ToolSub::refreshSize()
@@ -465,7 +473,7 @@ void ToolSub::updatePosition(const RECT& workArea)
 	if (finalX < workArea.left) finalX = workArea.left;
 	if (finalX > upperX) finalX = upperX;
 	// 箭头始终指向按钮中心的屏幕位置，换算成窗口内坐标
-	arrowX = mainX + btnCenterX - finalX;
+	arrowX = std::clamp(mainX + btnCenterX - finalX, 5.f * dpi, w - 5.f * dpi);
 	setPosition(finalX, static_cast<int>(py));
 	if (isVisible) {
 		refresh();

@@ -11,6 +11,7 @@
 #include "capture/CapLong.h"
 #include "recording/CapVideo.h"
 #include "ui/toolbars/ToolCap.h"
+#include "ui/toolbars/ToolVideo.h"
 using namespace Microsoft::WRL;
 
 namespace
@@ -515,7 +516,6 @@ bool WinCap::enterByArg()
     refresh();      //收掉放大镜：这几条路都是马上要换阶段或者弹窗，屏幕上不能留着它
     if (val == L"long") startLong();
     else if (val == L"video") startVideo();
-    else if (val == L"ocr") startOcr();
     else if (val == L"qr" || val == L"qrcode") startQrcode();
     else if (val == L"pin") startPin();   //等于替用户按住了 Ctrl 框选
     // 值不认识（用户拼错了）：当没给这个参数，照常出工具条。上面那两句白做了，
@@ -534,8 +534,6 @@ void WinCap::relayoutTool()
 void WinCap::layoutTool(Ling::WinBase* tool)
 {
     if (!tool) return;
-    const int toolW = (int)(tool->w + 0.5f);
-    const int toolH = (int)(tool->h + 0.5f);
     // maskRect 是本窗口的客户区坐标，换算到屏幕坐标
     const int maskLeftScr = x + (int)cutMask->maskRect.left;
     const int maskTopScr = y + (int)cutMask->maskRect.top;
@@ -546,7 +544,14 @@ void WinCap::layoutTool(Ling::WinBase* tool)
     RECT maskScrRect{ maskLeftScr, maskTopScr, maskRightScr, maskBottomScr };
     HMONITOR hMon = MonitorFromRect(&maskScrRect, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi{ sizeof(MONITORINFO) };
-    GetMonitorInfo(hMon, &mi);
+    if (!GetMonitorInfo(hMon, &mi)) {
+        mi.rcWork = RECT{ x, y, x + static_cast<LONG>(w), y + static_cast<LONG>(h) };
+    }
+    // Reflow before placement: larger controls stay reachable on narrow displays.
+    if (auto captureTool = dynamic_cast<ToolCap*>(tool)) captureTool->fitToWorkArea(mi.rcWork);
+    if (auto videoTool = dynamic_cast<ToolVideo*>(tool)) videoTool->fitToWorkArea(mi.rcWork);
+    const int toolW = static_cast<int>(tool->w + .5f);
+    const int toolH = static_cast<int>(tool->h + .5f);
 
     // 间距按工具条自己所在显示器的缩放算：本窗口铺满整个虚拟桌面，dpi 是系统缩放，
     // 混合缩放的多屏下和选区所在的那块屏不一定是一回事
@@ -573,8 +578,10 @@ void WinCap::layoutTool(Ling::WinBase* tool)
     }
 
     // 兜底：不越出所在显示器工作区
-    if (toolX < mi.rcWork.left) toolX = mi.rcWork.left;
-    if (toolX + toolW > mi.rcWork.right) toolX = mi.rcWork.right - toolW;
+    toolX = std::clamp(toolX, static_cast<int>(mi.rcWork.left),
+        std::max(static_cast<int>(mi.rcWork.left), static_cast<int>(mi.rcWork.right) - toolW));
+    toolY = std::clamp(toolY, static_cast<int>(mi.rcWork.top),
+        std::max(static_cast<int>(mi.rcWork.top), static_cast<int>(mi.rcWork.bottom) - toolH));
     tool->setPosition(toolX, toolY);
 }
 
@@ -694,17 +701,6 @@ void WinCap::setMouseTransparent(bool transparent)
     }
     SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-}
-
-// 文字识别由外部插件进程来做，这边只负责把选区里的像素递过去
-void WinCap::startOcr()
-{
-    std::vector<BYTE> pixels;
-    int cw{ 0 }, ch{ 0 };
-    if (!getCutPixels(pixels, cw, ch)) return;
-    // 插件缺失时 openWithImageReader 会打开下载页，同样得让位，所以不看返回值
-    ImageRecognition::openWithImageReader(cw, ch, pixels.data());
-    close();
 }
 
 void WinCap::startQrcode()

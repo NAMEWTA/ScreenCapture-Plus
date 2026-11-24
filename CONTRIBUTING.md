@@ -1,6 +1,6 @@
 # 开发约定
 
-先阅读 [架构与扩展](docs/ARCHITECTURE.md)、[构建与发布](docs/BUILDING.md)、[验证清单](docs/VALIDATION.md)。
+先阅读 [架构与扩展](docs/ARCHITECTURE.md)、[批注设计](docs/ANNOTATIONS.md)、[构建与发布](docs/BUILDING.md)、[验证清单](docs/VALIDATION.md)。
 
 ## 修改范围
 
@@ -8,6 +8,7 @@
 - `src/core` 只依赖 C++ 标准库。窗口和工具条属于表现层；平台句柄生命周期放 `src/platform/windows`；编码细节放独立 `.cpp`。
 - 包含项目头时使用相对 `src` 根的路径，例如 `"services/ImageExport.h"`。第三方头使用其明确目录，不恢复多层 `../` 或开发者盘符。
 - 新增 `.cpp` / `.c` 必须同步 `build/windows/ScreenCapture.vcxproj` 与 filters；新增核心回归文件可直接放入 `tests`，测试脚本会逐个编译执行。
+- `AnnotationRenderer.cpp` 同时由主程序和独立 Windows 集成测试编译，不包含应用预编译头、Ling、App 或设置单例。保持服务能在不启动 GUI 的情况下运行。
 - 依赖升级修改锁文件，并执行完整原生构建。不要直接在 `.deps` 修改上游后把本地能编译当成可重复构建。
 
 ## 所有权与性能
@@ -18,8 +19,34 @@
 - 不在高频帧循环里重新创建同尺寸 GDI 资源或复制累计长图。任何改变编码格式、采样规则、帧率和匹配阈值的改动都属于行为变更，需要单独说明。
 - 性能结论区分代码结构推算与实际测量；保留基线、硬件、场景及测量方法。
 
+## 批注与产品行为
+
+- 普通“序号”和“批注”独立。普通序号保留颜色、大小及现有交互；批注使用稳定 ID、自动颜色、右侧备注列表与一个共享编辑框。
+- 批注 ID 从窗口高水位分配，不因删除、撤销或清除 redo 分支重新使用。保存/复制只收集活动历史，但不能据此重新编号或重配色。
+- 备注正文保存在 `ShapeAnnotation`。面板可以显示摘要；导出必须测量完整文本，保留空备注的本地化占位，不能通过字符串截断或省略条目解决溢出。
+- 导出在原始图像坐标完成。正文、徽章与行距先适配，再增长画布高度/右侧列；原图位于左上角、尺寸和源像素保持不变。必须用合成结果的实际宽高解释像素缓冲。
+- 保持 QR 识别。OCR 与 ImageReader 集成已移除，不重新加入失效按钮、安装提示或后台查找。
+- 添加语言 key 时同步内置及外部语言资源，保持 `Lang/*.json` 的 UTF-16 编码和英文回退行为。
+
 ## 提交前
 
-运行 Release 构建、核心回归、托盘启动与打包脚本。涉及窗口、输入法、音视频或 GPU 时，按验证矩阵补充 Windows 桌面实测记录。PR 说明问题、改动后的行为、验证结果和未覆盖边界。
+Windows 使用仓库脚本执行与 CI 相同的验证：
+
+```powershell
+pwsh ./scripts/build.ps1 -Configuration Release
+pwsh ./scripts/test.ps1
+pwsh ./scripts/test-windows.ps1
+pwsh ./scripts/smoke.ps1
+pwsh ./scripts/test-windows.ps1 -Gui
+pwsh ./scripts/package.ps1
+```
+
+依赖或构建设置变更还应执行 Debug 构建。批注算法回归在 `tests/annotation_tests.cpp`，真实文字测量、换行和合成在 `tests/windows/AnnotationRenderTests.cpp`。后者使用 WARP 软件设备调用正式 renderer，保存 PNG 和测试报告；它不模拟用户点击、IME 或窗口焦点。
+
+`-Gui` 单独链接已构建的正式 Release 对象，通过实际窗口消息验证批注放置、共享输入框、列表选择、删除、撤销重做、收起后的拖动与整图复制。保持测试入口独立，不向正式 EXE 添加测试命令。测试有硬超时，缺少图形或输入桌面能力必须明确报告，不当作通过。
+
+涉及窗口、输入法、音视频或 GPU 时，按验证矩阵补充 Windows 桌面实测记录。修改批注需检查高 DPI/大图缩放后新增 pin 的可读性、拖动边界、列表滚动、共享编辑框焦点、撤销/重做、长中文/无空格英文以及合并保存/复制。只在 Linux 跑过纯核心测试时应明确说明，不能写成 Windows GUI 验收通过。
+
+PR 说明具体问题、改动后的行为、验证命令与结果，以及未覆盖边界。不要把未运行的测试或未观察到的画面写成完成项。
 
 `.deps`、`artifacts`、`.vs`、`.vcxproj.user`、`.aps` 和个人配置不提交。保留原作者声明和第三方许可，新增依赖更新 `third_party/NOTICE.md` 及发布包中的许可文件。

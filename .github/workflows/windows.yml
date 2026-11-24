@@ -33,7 +33,7 @@ jobs:
       - name: Check out the exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
         with:
-          ref: ${{ github.event.release.tag_name || inputs.release_tag || github.ref }}
+          ref: ${{ github.event.release.tag_name || inputs.release_tag || github.sha }}
           persist-credentials: false
 
       - name: Build the release executable and pinned dependencies
@@ -41,6 +41,9 @@ jobs:
 
       - name: Run core regression tests
         run: ./scripts/test.ps1
+
+      - name: Verify native annotation rendering and PNG export
+        run: ./scripts/test-windows.ps1
 
       - name: Check single-executable tray startup
         run: ./scripts/smoke.ps1
@@ -60,6 +63,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Verify real annotation editor interactions and clipboard export
+        run: ./scripts/test-windows.ps1 -Gui
+
       - name: Retain diagnostic build logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (Node 24)
@@ -70,6 +76,15 @@ jobs:
             artifacts/dependencies/gifski-build.log
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Retain native render test images and diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (Node 24)
+        with:
+          name: windows-render-checks
+          path: artifacts/tests/windows/
+          if-no-files-found: ignore
+          retention-days: 14
 
   publish:
     if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
@@ -93,3 +108,35 @@ jobs:
         run: |
           gh release view "$RELEASE_TAG" --repo "$GH_REPO"
           gh release upload "$RELEASE_TAG" package/* --repo "$GH_REPO" --clobber
+
+  first-release:
+    # Explicit one-time bootstrap requested for this fork. The declaration is
+    # releases/v0.0.1.md; ordinary commits never create arbitrary new versions.
+    # The regular release: published route remains the route for later releases.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'NAMEWTA/ScreenCapture-Plus'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: first-release-v0.0.1
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tested release declaration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download the verified build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2 (Node 24)
+        with:
+          name: windows-x64
+          path: package
+
+      - name: Publish the declared first release exactly once
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish-first-release.ps1 -PackageDirectory package

@@ -3,6 +3,15 @@
 param()
 . (Join-Path $PSScriptRoot 'BuildCommon.ps1')
 Initialize-WindowsToolchain
+# Validate the guarded publication entry point during PR checks as well. Parsing
+# never executes release operations, which remain restricted to the main job.
+foreach ($script in Get-ChildItem $PSScriptRoot -Filter '*.ps1' -File) {
+    $tokens = $null
+    $parseErrors = $null
+    [Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+    if ($parseErrors.Count -ne 0) { throw "Invalid PowerShell syntax in $($script.Name): $($parseErrors -join '; ')" }
+}
+Write-Host 'PowerShell build, test, and release scripts parsed successfully.'
 $testDirectory = Join-Path $ArtifactsRoot 'tests'
 New-Item $testDirectory -ItemType Directory -Force | Out-Null
 $tests = @(Get-ChildItem (Join-Path $RepoRoot 'tests') -Filter '*.cpp' -File | Sort-Object Name)

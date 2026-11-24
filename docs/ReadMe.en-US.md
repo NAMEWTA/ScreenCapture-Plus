@@ -1,64 +1,91 @@
-> ScreenCapture-Plus build and release instructions: [BUILDING.md](BUILDING.md). Architecture and maintenance: [ARCHITECTURE.md](ARCHITECTURE.md).
+[简体中文](../README.md) | English | [Русский](ReadMe.ru-RU.md) | [Bahasa Indonesia](ReadMe.id-ID.md)
 
-[简体中文](https://github.com/xland/ScreenCapture/) | English | [Русский](./ReadMe.ru-RU.md) | [Bahasa Indonesia](./ReadMe.id-ID.md)
+![ScreenCapture-Plus](banner.png)
 
-![banner](./banner.png)
+# ScreenCapture-Plus
 
-**ScreenCapture** A powerful and lightweight Windows screenshot tool.
+**ScreenCapture-Plus v0.0.1** is a maintained fork of [xland/ScreenCapture](https://github.com/xland/ScreenCapture), a native Windows screenshot application. It supports drawing, scrolling captures, GIF / MP4 recording, QR decoding, and numbered notes exported alongside the image.
 
-## Features
+## Toolbars and annotations
 
-- Screenshot, drawing annotations, scrolling screenshot (long screenshot), screen recording (GIF/MP4), text recognition (OCR), QR code recognition.
-- Color picker, supports shortcut keys to copy RGB color (`Ctrl+R`), HEX color (`Ctrl+H`) and CMYK color (`Ctrl+K`).
-- Draw ellipses, perfect circles (hold `Shift`), rectangles, squares (hold `Shift`), arrows, numbered labels, etc.
-- Draw curves, straight lines (hold `Shift`), mosaic, eraser, text.
-- Modify or delete drawn elements at any time (hover the mouse over an element).
-- Undo (`Ctrl+Z`), redo (`Ctrl+Y`), save to file (`Ctrl+S`), save to clipboard (`Ctrl+C` or double-click).
-- Fast performance with low memory usage.
-- Small size, a single executable file, no installation required, does not depend on any dynamic link libraries (except for text recognition).
-- Supports a variety of command-line arguments for launching a specified function directly.
-- Supports one-time execution mode (the process will not remain resident in the system).
-- Multi-language support.
+- Capture, drawing, recording, scrolling-capture, and style toolbars use **44 × 44 logical-pixel hit targets and 24 logical-pixel icons**. They scale with monitor DPI and wrap on narrow displays without shrinking the buttons.
+- The existing **Number** drawing tool remains available. The new **Annotation** tool next to it has a numbered speech-bubble icon.
+- Each annotation receives an automatic number and color. Its marker and note retain their identity when moved, undone, or redone; deleting another note does not renumber the remaining notes.
+- Saving or copying produces one image containing the screenshot, markers, and a right-side notes area. Text wraps, font size adapts to the available space, and the output can grow taller or use additional right-side columns to preserve complete notes.
+- Preview zoom does not reduce the original image resolution in exported files. If the complete image exceeds output resource limits, export reports a failure and keeps the editing session open.
 
-## Download
+### Add a note
 
-[Release](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/) (1MB)
+1. Select a screenshot region, then choose the drawing / pin button. Holding `Ctrl` while selecting the region opens the editor directly.
+2. Choose **Annotation**, beside **Number**.
+3. Click the image to place a marker, then enter a multiline note in the right panel.
+4. Click an existing marker or list entry to edit its note; drag the marker to reposition it.
+5. Use the toolbar's Save or Copy button to export the whole annotated image. `Ctrl+S` also saves while writing a note. Inside the text field, `Ctrl+C` copies text; press `Esc` before using it to copy the complete image.
 
-## Supported Operating Systems
+The notes list scrolls. Hiding the panel keeps the notes and still includes them in exports. See [the annotation guide](ANNOTATIONS.md) for numbering and layout details.
 
-- Windows 10 1607 or Later
+## Other features
 
-## Compilation
+- Screenshots, scrolling screenshots, GIF / MP4 recording; optional system audio and microphone capture for MP4.
+- QR decoding with an option to copy the decoded content.
+- Color picker: `Ctrl+R` for RGB, `Ctrl+H` for HEX, `Ctrl+K` for CMYK.
+- Rectangles, ellipses, arrows, numbered shapes, lines, text, mosaic, and eraser; hold `Shift` for constrained shapes or straight lines.
+- Hover a drawing element to adjust or remove it; `Ctrl+Z` undoes and `Ctrl+Y` redoes.
+- `Ctrl+S` saves, `Ctrl+C` or a double-click copies; text fields handle their own keyboard shortcuts.
+- `Ctrl` + mouse wheel zooms the pinned preview; tray, one-time execution, and multiple languages are supported.
+- Run a single `ScreenCapture.exe` without installation. Application dependencies use static linking, so no separate Visual C++ runtime installation is required.
 
-- The main branch depends on the [Ling](https://github.com/xland/Ling) GUI framework.
-- The project can be compiled with Visual Studio 2026 (installed with the C++ Desktop Development Kit).
-- [2.4.25 (based on D2D)](https://github.com/xland/ScreenCapture/tree/2.4.25) and [2.3.3 (based on Qt)](https://github.com/xland/ScreenCapture/tree/2.3.3_qt) are the previous stable branches.
+## Download and requirements
 
-## Command Line
+[Download v0.0.1](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/tag/v0.0.1) · [All releases](https://github.com/NAMEWTA/ScreenCapture-Plus/releases)
 
+Release assets include the EXE, portable Windows x64 ZIP, symbols ZIP, `build-info.json`, and `SHA256SUMS.txt`. The portable ZIP includes languages and third-party licenses. Refer to the actual release assets for file sizes.
+
+Requires **Windows 10 1803 or later, x64**. Exit the previous process before replacing the application manually.
+
+## Build and verification
+
+Use Windows x64, Visual Studio 2026 with Desktop development with C++ and ATL, PowerShell 7, Git, and Rustup. The scripts restore pinned Ling / Yoga / gifski dependencies.
+
+```powershell
+pwsh ./scripts/build.ps1 -Configuration Release
+pwsh ./scripts/test.ps1
+pwsh ./scripts/test-windows.ps1
+pwsh ./scripts/smoke.ps1
+pwsh ./scripts/test-windows.ps1 -Gui
+pwsh ./scripts/package.ps1
 ```
-// Terminate the process immediately after the capture is finished.
-> ScreenCapture.exe --auto-quit=true
 
-// Skip the toolbar once the region is selected and go straight into the specified feature:
-// long = scrolling capture (long screenshot)
-> ScreenCapture.exe --enter=long
-// video = screen recording
-> ScreenCapture.exe --enter=video
-// ocr = text recognition
-> ScreenCapture.exe --enter=ocr
-// qr = QR code recognition
-> ScreenCapture.exe --enter=qr
+The executable is `artifacts/bin/x64/Release/ScreenCapture.exe`. Open `ScreenCapture.slnx` after the first build for debugging. Core tests, native rendering / PNG checks, and startup checks cover different boundaries; desktop interactions, mixed DPI, IME, and audio/video still require the [Windows validation checklist](VALIDATION.md).
 
-// The two arguments can be combined, for example: no tray icon, and the process quits right after the long screenshot is taken.
-> ScreenCapture.exe --enter=long --auto-quit=true
+See [build and release](BUILDING.md), [architecture](ARCHITECTURE.md), [contributing](../CONTRIBUTING.md), and [third-party notices](../third_party/NOTICE.md).
+
+## Command line
+
+```powershell
+# Exit after the capture task
+ScreenCapture.exe --auto-quit=true
+# Open drawing / pin mode after region selection
+ScreenCapture.exe --enter=pin
+# Scrolling capture
+ScreenCapture.exe --enter=long
+# Screen recording
+ScreenCapture.exe --enter=video
+# QR decoding; --enter=qrcode is also accepted
+ScreenCapture.exe --enter=qr
+# Tray only
+ScreenCapture.exe --enter=tray
+# Combine options
+ScreenCapture.exe --enter=long --auto-quit=true
 ```
 
-## Text Recognition (OCR) Plugin
+## Portable settings and languages
 
-Download the latest version of the text recognition tool [ImageReader.exe](https://github.com/xland/ImageReader/releases) (about 25MB), place this file in the same directory as ScreenCapture.exe, or in the `%appdata%\ScreenCapture\plugin` directory, then restart the application to use it.
+Settings default to `%appdata%\ScreenCapture\config.json`. An existing `config.json` beside the EXE takes priority. Extra languages are loaded from a `Lang` folder beside the EXE when it exists; otherwise from `%appdata%\ScreenCapture\Lang`. Simplified Chinese and English are built in. See [language setup](../Lang/ReadMe.md).
 
-## Sponsor
+## Upstream author and sponsorship
+
+The upstream author's attribution, [MIT license](../LICENSE), and sponsorship information are preserved. The following contacts and QR codes belong to the upstream author.
 
 <table>
   <tr>

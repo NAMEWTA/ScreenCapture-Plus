@@ -1,5 +1,6 @@
 #pragma once
 #include <include/Ling.h>
+#include "ui/toolbars/ToolbarMetrics.h"
 
 class WinPin;
 class Tip;
@@ -8,6 +9,8 @@ class ToolSub:public Ling::WinBase
 public:
 	ToolSub(WinPin* win);
 	~ToolSub();
+	// Reflow fixed-size controls within the current monitor work area.
+	void fitToWorkArea(const RECT& workArea);
 	void showRectTools();
 	void showEllipseTools();
 	void showArrowTools();
@@ -72,12 +75,12 @@ private:
 	Ling::Slider* slider{ nullptr };
 	// 悬停提示。要 hwnd，所以在 onCreated 里才建得起来
 	std::unique_ptr<Tip> tip;
-	static constexpr float btnSize{ 32.f };
-	static constexpr float sliderSize{ 80.f };     // 滑块宽度，initSlider 和 initSize 都用它，改这里就够
+	static constexpr float btnSize{ ScreenCapture::UI::toolbarButtonSize };
+	static constexpr float sliderSize{ 100.f };     // 滑块宽度，initSlider 和 initSize 都用它，改这里就够
 	static constexpr float sliderMargin{ 3.f };    // 滑块左右各留的间距
 	static constexpr float marginTop{ 3.f };       // 顶部箭头区域高度
 	// 边框描边宽度。与 ToolMain 的 setBorder(1.f) 保持一致
-	static constexpr float borderW{ 1.f };
+	static constexpr float borderW{ ScreenCapture::UI::toolbarBorder };
 	// 箭头尖端相对窗口左边的偏移，由 updatePosition 按屏幕坐标算出，是物理像素
 	float arrowX{0.f};
 	WinPin* win;
@@ -90,6 +93,7 @@ private:
 	bool centerOnBtn{ false };
 	// onDpiChanged 与 onSizeChanged 之间的接力标记，见构造函数里的注释
 	bool dpiChanged{ false };
+	float maximumWidth{ ScreenCapture::UI::toolbarUnlimitedWidth };
 	// 上一次 initSize 的入参，DPI 变了要照原样再算一遍尺寸
 	int sizeBtnCount{ 0 };
 	bool sizeWithColors{ false };

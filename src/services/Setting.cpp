@@ -150,7 +150,7 @@ std::filesystem::path Setting::initDataPath()
 
 std::filesystem::path Setting::initConfigPath()
 {
-    // 与插件的查找顺序一致（见 Util.cpp 里的 findImageReader）：先看 exe 同目录。
+    // 便携配置优先：先看 exe 同目录。
     // 只有那份文件本来就存在时才认它 —— 不存在就不要在程序目录里新建，
     // 装在 Program Files 下时那儿通常没有写权限，况且默认位置该是 appdata
     wchar_t buffer[MAX_PATH]{};

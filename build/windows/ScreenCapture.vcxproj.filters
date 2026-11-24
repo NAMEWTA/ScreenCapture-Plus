@@ -78,6 +78,9 @@
     <ClCompile Include="..\..\src\editor\WinPin.cpp">
       <Filter>src\editor</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeAnnotation.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\editor\shapes\ShapeArrow.cpp">
       <Filter>src\editor\shapes</Filter>
     </ClCompile>
@@ -120,6 +123,9 @@
     <ClCompile Include="..\..\src\recording\VideoMp4.cpp">
       <Filter>src\recording</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\services\AnnotationRenderer.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\services\ImageExport.cpp">
       <Filter>src\services</Filter>
     </ClCompile>
@@ -134,6 +140,9 @@
     </ClCompile>
     <ClCompile Include="..\..\src\services\Update.cpp">
       <Filter>src\services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\AnnotationPanel.cpp">
+      <Filter>src\ui</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\ui\Tip.cpp">
       <Filter>src\ui</Filter>
@@ -191,6 +200,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\resources\Version.h">
+      <Filter>resources</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\app\App.h">
       <Filter>src\app</Filter>
     </ClInclude>
@@ -203,10 +215,13 @@
     <ClInclude Include="..\..\src\capture\WinCap.h">
       <Filter>src\capture</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\src\core\ImagePreview.h">
+    <ClInclude Include="..\..\src\core\Annotation.h">
       <Filter>src\core</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\core\HistoryStack.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\ImagePreview.h">
       <Filter>src\core</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\core\PixelBuffer.h">
@@ -226,6 +241,9 @@
     </ClInclude>
     <ClInclude Include="..\..\src\editor\WinPin.h">
       <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeAnnotation.h">
+      <Filter>src\editor\shapes</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\editor\shapes\ShapeArrow.h">
       <Filter>src\editor\shapes</Filter>
@@ -272,6 +290,9 @@
     <ClInclude Include="..\..\src\recording\VideoMp4.h">
       <Filter>src\recording</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\services\AnnotationRenderer.h">
+      <Filter>src\services</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\services\ImageExport.h">
       <Filter>src\services</Filter>
     </ClInclude>
@@ -286,6 +307,12 @@
     </ClInclude>
     <ClInclude Include="..\..\src\services\Update.h">
       <Filter>src\services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\AnnotationPanel.h">
+      <Filter>src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\AnnotationPanelLayout.h">
+      <Filter>src\ui</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\ui\Tip.h">
       <Filter>src\ui</Filter>
@@ -320,6 +347,12 @@
     <ClInclude Include="..\..\src\ui\toolbars\ToolVideo.h">
       <Filter>src\ui\toolbars</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\ui\toolbars\ToolbarLayout.h">
+      <Filter>src\ui\toolbars</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\toolbars\ToolbarMetrics.h">
+      <Filter>src\ui\toolbars</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\third_party\cgif\cgif.h">
       <Filter>third_party\cgif</Filter>
     </ClInclude>
@@ -331,9 +364,6 @@
     </ClInclude>
     <ClInclude Include="..\..\third_party\quirc\quirc_internal.h">
       <Filter>third_party\quirc</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\resources\Version.h">
-      <Filter>resources</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -3,12 +3,22 @@
 #include "ui/toolbars/ToolSub.h"
 #include "editor/shapes/ShapeBase.h"
 #include "editor/shapes/ShapeText.h"
+#include "editor/shapes/ShapeAnnotation.h"
+#include "ui/AnnotationPanel.h"
 #include "editor/WinPin.h"
 #include "capture/WinCap.h"
 #include "editor/History.h"
 #include "app/App.h"
 #include "services/ImageExport.h"
 #include "services/Update.h"
+#include "services/AnnotationRenderer.h"
+#include "services/Lang.h"
+#include "core/PixelBuffer.h"
+
+#include <algorithm>
+#include <limits>
+#include <new>
+#include <stdexcept>
 
 using namespace Microsoft::WRL;
 namespace {
@@ -67,12 +77,17 @@ WinPin::WinPin(int x, int y, int w, int h, const std::vector<BYTE>* data) : Ling
 	// Ling 传进来的是已经换算成滚动距离的 space（一格 = 60 逻辑像素 × dpi），
 	// shape 只关心方向，这里按符号还原成 ±WHEEL_DELTA
 	onMouseWheel.add([this](POINT pos, float space) {
+		if (annotationPanelVisible && annotationPanel && annotationPanel->contains(pos)) {
+			annotationPanel->wheel(pos, space);
+			return; // The shared note TextBox receives its own wheel event.
+		}
 		// Ling 的滚轮事件不带修饰键状态，自己查：按住 Ctrl 是缩放窗口，不是调 shape
 		if (GetKeyState(VK_CONTROL) & 0x8000) {
 			// 一格 10%，按当前倍数等比走，放大和缩小的手感才对称
 			applyScale(scale * (space > 0 ? 1.1f : 1.f / 1.1f), pos);
 			return;
 		}
+		if (!isImagePosition(pos)) return;
 		if (!shapeHover) return;
 		auto imgPos = toImgPos(pos);
 		shapeHover->mouseWheel((float)imgPos.x, (float)imgPos.y, space > 0 ? (short)WHEEL_DELTA : (short)-WHEEL_DELTA);
@@ -92,6 +107,7 @@ void WinPin::onClosed()
 	if (isClosed) return;
 	isClosed = true;
 	if (editingText) editingText->finishEdit();
+	if (annotationPanel) annotationPanel->detachOwner();
 	// 先收起附属窗口，再让出 hover 指针 —— shapeHover 指向 history 里的元素，
 	// history 随 WinPin 一起析构，留着悬空指针没意义
 	if (toolSub) toolSub->close();
@@ -132,16 +148,172 @@ D2D1_SIZE_U WinPin::getImgSize() const
 	return screenImg->GetPixelSize();
 }
 
+RECT WinPin::workArea() const
+{
+	auto image = getImgSize();
+	RECT bounds{x, y, x + std::max(1, static_cast<int>(image.width * scale)),
+		y + std::max(1, static_cast<int>(image.height * scale))};
+	MONITORINFO info{.cbSize = sizeof(MONITORINFO)};
+	if (GetMonitorInfo(MonitorFromRect(&bounds, MONITOR_DEFAULTTONEAREST), &info)) return info.rcWork;
+	auto [left, top, width, height] = App::get()->getScreenArea();
+	return RECT{left, top, left + width, top + height};
+}
+
+bool WinPin::isImagePosition(POINT point) const
+{
+	const auto image = getImgSize();
+	return point.x >= 0 && point.y >= 0 && point.x < image.width * scale && point.y < image.height * scale;
+}
+
+std::uint64_t WinPin::allocateAnnotationId()
+{
+	return annotationSequence.allocate().value_or(0);
+}
+
+ShapeAnnotation* WinPin::findAnnotation(std::uint64_t number) const
+{
+	if (!number) return nullptr;
+	for (const auto& shape : history->shapes()) {
+		auto* note = dynamic_cast<ShapeAnnotation*>(shape.get());
+		if (note && note->number() == number) return note;
+	}
+	return nullptr;
+}
+
+std::vector<ScreenCapture::Core::AnnotationNote> WinPin::annotationNotes() const
+{
+	std::vector<ScreenCapture::Core::AnnotationNote> result;
+	for (const auto& shape : history->shapes()) {
+		if (auto* note = dynamic_cast<ShapeAnnotation*>(shape.get())) result.push_back({note->number(), note->note()});
+	}
+	std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return a.number < b.number; });
+	return result;
+}
+
+void WinPin::onAnnotationsChanged()
+{
+	auto notes = annotationNotes();
+	if (!findAnnotation(selectedAnnotation)) selectedAnnotation = notes.empty() ? 0 : notes.back().number;
+	if (annotationPanel) annotationPanel->sync(std::move(notes), selectedAnnotation);
+	refresh();
+}
+
+void WinPin::selectAnnotation(std::uint64_t number, bool focusEditor)
+{
+	if (!findAnnotation(number)) return;
+	if (editingText) editingText->finishEdit();
+	selectedAnnotation = number;
+	showAnnotationPanel(!annotationPanelVisible);
+	if (annotationPanel) {
+		annotationPanel->sync(annotationNotes(), selectedAnnotation);
+		annotationPanel->select(number, focusEditor);
+	}
+	refresh();
+}
+
+void WinPin::updateAnnotationNote(std::uint64_t number, const std::wstring& text)
+{
+	if (auto* note = findAnnotation(number)) {
+		note->setNote(text);
+		if (annotationPanel) annotationPanel->updateNote(number, text);
+		refresh();
+	}
+}
+
+void WinPin::removeAnnotation(std::uint64_t number)
+{
+	if (auto* note = findAnnotation(number)) history->removeShape(note);
+}
+
+void WinPin::showAnnotationPanel(bool fitWorkspace)
+{
+	if (!annotationPanel || !hwnd) return;
+	const bool wasVisible = annotationPanelVisible;
+	annotationPanelVisible = true;
+	annotationPanel->setPanelVisible(true);
+	if ((fitWorkspace || !wasVisible) && isMouseDown) {
+		// Keep drag coordinates in one image transform. A previously collapsed
+		// rail can open now, but fitting/moving the image waits for mouse-up.
+		fitAnnotationsAfterPointer = true;
+		applyWinSize();
+	} else if (fitWorkspace || !wasVisible) {
+		fitAnnotationWorkspace();
+	} else applyWinSize();
+	layoutAnnotationPanel();
+	layoutTools();
+	refresh();
+}
+
+void WinPin::hideAnnotationPanel()
+{
+	if (!annotationPanelVisible) return;
+	annotationPanelVisible = false;
+	fitAnnotationsAfterPointer = false;
+	annotationPanel->setPanelVisible(false);
+	if (toolMain->curId == L"annotation") toolMain->cancelSelect();
+	applyWinSize();
+	layoutTools();
+	refresh();
+}
+
+void WinPin::onToolSelectionChanged()
+{
+	lastDownTime = 0;
+	prevPressCreatedShape = false;
+	if (editingText) editingText->finishEdit();
+	if (annotationPanel) annotationPanel->finishEditing();
+	shapeHover = nullptr;
+	newShape = nullptr;
+	if (toolMain->curId == L"annotation") {
+		showAnnotationPanel(!annotationPanelVisible);
+		onAnnotationsChanged();
+	}
+	refresh();
+}
+
+void WinPin::fitAnnotationWorkspace()
+{
+	const auto area = workArea();
+	const auto size = getImgSize();
+	if (!size.width || !size.height) return;
+	if (editingText) editingText->finishEdit();
+	const float availableW = static_cast<float>(area.right - area.left) - 16.f * dpi;
+	const float availableH = static_cast<float>(area.bottom - area.top) - 100.f * dpi;
+	annotationPanelWidth = std::clamp(availableW / dpi * .36f, 240.f, 340.f);
+	annotationPanelWidth = std::min(annotationPanelWidth, std::max(160.f, availableW / dpi - 80.f));
+	const float imageW = std::max(20.f, availableW - (annotationPanelWidth + 10.f) * dpi);
+	const float fitScale = std::min(imageW / size.width, std::max(60.f, availableH) / size.height);
+	scale = std::min(scale, std::max(.01f, fitScale));
+	applyWinSize();
+	setPosition(clampPos(static_cast<float>(x), w, area.left + 8, area.right - 8),
+		clampPos(static_cast<float>(y), h + 60.f * dpi, area.top + 8, area.bottom - 8));
+}
+
+void WinPin::layoutAnnotationPanel()
+{
+	if (!annotationPanel || !annotationPanelVisible) return;
+	const auto size = getImgSize();
+	annotationPanel->setBounds(size.width * scale + 10.f * dpi, annotationPanelWidth * dpi, h);
+}
+
 void WinPin::applyWinSize()
 {
 	auto sz = getImgSize();
 	if (!hwnd || sz.width == 0 || sz.height == 0) return;
 	auto newW = std::max(1, static_cast<int>(std::lround(sz.width * scale)));
 	auto newH = std::max(1, static_cast<int>(std::lround(sz.height * scale)));
+	if (annotationPanelVisible) {
+		const auto area = workArea();
+		const auto minimumHeight = std::min(420.f * dpi,
+			std::max(240.f * dpi, static_cast<float>(area.bottom - area.top) - 100.f * dpi));
+		newW += static_cast<int>(std::ceil((annotationPanelWidth + 10.f) * dpi));
+		newH = std::max(newH, static_cast<int>(std::ceil(minimumHeight)));
+	}
 	w = static_cast<float>(newW);
 	h = static_cast<float>(newH);
 	// 不走 setSize：它收的是逻辑像素、内部还要乘一遍 dpi，而这里的宽高本来就是物理像素
 	SetWindowPos(hwnd, nullptr, 0, 0, newW, newH, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW);
+	layoutAnnotationPanel();
 }
 
 POINT WinPin::toImgPos(const POINT& pos) const
@@ -157,11 +329,12 @@ void WinPin::applyScale(float newScale, POINT anchor)
 	// 上限跟着底图大小走：窗口边长再大，swap chain 那块显存也吃不消，人也看不过来；
 	// 但至少要能回到 1 倍，所以下面用 max 兜一下
 	auto maxScale = std::max(1.f, std::min(8.f, 16000.f / std::max(sz.width, sz.height)));
-	newScale = std::clamp(newScale, 0.1f, maxScale);
+	newScale = std::clamp(newScale, annotationPanelVisible ? .01f : .1f, maxScale);
 	if (std::abs(newScale - scale) < 0.0001f) return;
 	// 编辑中的文字是 TextBox（真控件）画的，缩放期间它的位置、字号都得跟着重算，
 	// 与其在缩放过程里一路同步，不如先收尾把文字交回 ShapeText 自己画 —— 之后它就跟着一起缩了
 	if (editingText) editingText->finishEdit();
+	if (annotationPanel) annotationPanel->finishEditing();
 	// anchor 底下那个底图上的点，缩放前后都要停在光标下：屏幕坐标 = 窗口原点 + 底图点 × 倍数
 	auto imgX = anchor.x / scale;
 	auto imgY = anchor.y / scale;
@@ -213,6 +386,8 @@ void WinPin::layoutTools()
 		mi.rcWork = RECT{ sx, sy, sx + sw, sy + sh };
 	}
 	auto& wa = mi.rcWork;
+	toolMain->fitToWorkArea(wa);
+	toolSub->fitToWorkArea(wa);
 
 	const auto gap = 5.f * dpi;              // 工具栏与 WinPin 之间的间距
 	const auto subGap = ToolSub::mainGap;    // ToolMain 与 ToolSub 之间的间距
@@ -249,6 +424,7 @@ WinPin::~WinPin()
 	// App shutdown can dispose windows without taking the normal close path.
 	// Disconnect the shared TextBox callbacks while every member is still alive.
 	if (editingText) editingText->finishEdit();
+	if (annotationPanel) annotationPanel->detachOwner();
 	shapeHover = nullptr;
 	newShape = nullptr;
 }
@@ -277,6 +453,10 @@ void WinPin::onCreated()
     canvas = body->makeChild<Ling::Canvas>();
     canvas->enableSwapChain();
     canvas->setSizePercent(100.f, 100.f);
+    imageOverlay = body->makeChild<Ling::Node>();
+    imageOverlay->setPositionType(Ling::Position::Absolute);
+    imageClip = compositor.CreateInsetClip();
+    annotationPanel = body->makeChild<AnnotationPanel>();
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0x1677ff), borderBrush.GetAddressOf());
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0x000000, 0.46f), brushTipBg.GetAddressOf());
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), brushTipText.GetAddressOf());
@@ -285,24 +465,36 @@ void WinPin::onCreated()
 
 void WinPin::layout()
 {
+    layoutAnnotationPanel();
+    if (imageOverlay) {
+        const auto sourceSize = getImgSize();
+        imageOverlay->setSize(sourceSize.width * scale / dpi, sourceSize.height * scale / dpi);
+    }
     Ling::WinBase::layout();
+    if (imageOverlay) imageOverlay->visual.Clip(imageClip);
     if (!screenImg || !canvas) return;
     auto ctx = canvas->startPaint();
     if (!ctx) return;
-    ctx->Clear(0);
+    ctx->Clear(annotationPanelVisible ? D2D1::ColorF(0xEEF2F6) : D2D1::ColorF(0, 0.f));
     auto sz = screenImg->GetSize();
     D2D1_RECT_F destRect = D2D1::RectF(0, 0, sz.width, sz.height);
     // 底图和 shape 都是按底图像素画的，放大缩小整个交给这个变换，
     // 笔宽、夹点跟着一起缩 —— 鼠标坐标进来时也除掉了倍数，所以命中判定天然对得上
     ctx->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale));
+    ctx->PushAxisAlignedClip(destRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     ctx->DrawBitmap(screenImg.Get(), destRect);
 	for (auto& shape : history->shapes())
 	{
 		shape->paint(ctx);
 	}
+	if (annotationPanelVisible) {
+		if (auto* selected = findAnnotation(selectedAnnotation); selected && selected != shapeHover)
+			selected->paintDragger(ctx);
+	}
 	if (!isMouseDown && shapeHover) {
 		shapeHover->paintDragger(ctx);
 	}
+	ctx->PopAxisAlignedClip();
 	// 蓝边框和倍数提示属于窗口装饰，不跟着图缩放：变换收回来，按窗口坐标画。
 	// 边框也因此从"底图矩形"改成"窗口矩形"，任何倍数下都是 2*dpi 粗
 	ctx->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -328,14 +520,26 @@ void WinPin::onMinMaxInfo(MINMAXINFO* mmi)
 
 void WinPin::onDown(POINT pos, BOOL isRight)
 {
+	if (annotationPanelVisible && annotationPanel && annotationPanel->contains(pos)) {
+		if (editingText) editingText->finishEdit();
+		shapeHover = nullptr;
+		newShape = nullptr;
+		lastDownTime = 0;
+		prevPressCreatedShape = false;
+		annotationPanel->pointerDown(pos, isRight != FALSE);
+		return;
+	}
 	// 编辑文本时，落在文本框里的点击整个交给 TextBox（它自己订阅了窗口的鼠标事件）。
 	// 这里不能抢先 SetCapture / 置 isMouseDown，否则拖选文本会被当成拖 shape。
-	if (editingText && textBox && textBox->isPosIn(pos)) return;
+	if (editingText && textBox && isImagePosition(pos) && textBox->isPosIn(pos)) return;
+	if (editingText && !isImagePosition(pos)) editingText->finishEdit();
+	if (annotationPanel) annotationPanel->finishEditing();
 	if (isRight) {
 		// 右键在"有工具条"和"只剩图"这两个状态之间来回切。
 		// 藏着的时候（上一次右键收起来的）就把它请回来。位置先重排一遍：
 		// 藏着的这段时间里窗口可能被 Ctrl+滚轮缩放过，工具条的落点跟着变了
 		if (!IsWindowVisible(toolMain->hwnd)) {
+			if (!annotationNotes().empty()) showAnnotationPanel(false);
 			layoutTools();
 			toolMain->show();
 			return;
@@ -347,8 +551,12 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 		toolMain->cancelSelect();
 		toolMain->hide();
 		toolSub->hideTools();
+		hideAnnotationPanel();
 		return;
 	}
+	// The expanded window contains editor chrome and possibly empty space below
+	// a short image. Those areas must never create or move image annotations.
+	if (!isImagePosition(pos) && !toolMain->curId.empty()) return;
 	// 双击判定得自己做，做法同 WinCap::onDown：Ling 的窗口类没带 CS_DBLCLKS，
 	// WM_LBUTTONDBLCLK 根本不会来，只能拿系统的双击间隔和双击判定框自己认。
 	// 与 WinCap 唯一的不同是这里比屏幕坐标而不是客户区坐标：拖动贴图窗口时窗口跟着光标走，
@@ -367,7 +575,8 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 	// 手里拿着什么工具都不该影响这个手势）。要在下面所有分支之前处理：
 	// 这一下既不是画画也不是拖窗，不该留下 capture、更不该新建 shape。
 	// 编辑文字时不算：双击归文本框（选中单词），点在框外才会走到这里
-	if (isDblClick && !editingText) {
+	if (isDblClick && !editingText && toolMain->curId != L"annotation"
+		&& dynamic_cast<ShapeAnnotation*>(shapeHover) == nullptr) {
 		// 前半段那一下点击是这个手势的一部分，它顺手放下的元素（只有序号是按一下就成形的，
 		// 别的都在抬手时按"没画出东西"清掉了）不该被带进剪切板
 		if (prevPressCreatedShape) history->undo();
@@ -386,6 +595,16 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 	}
 	// 以下都是交给 shape 的坐标，一律换算成底图像素（拖窗口那条路仍用窗口坐标）
 	auto imgPos = toImgPos(pos);
+	if (!editingText) {
+		// Input in the docked editor can retain an old hover. Resolve the actual
+		// click position so the next image click creates/selects the right pin.
+		shapeHover = nullptr;
+		const auto shapes = history->shapes();
+		for (auto it = shapes.rbegin(); it != shapes.rend(); ++it) {
+			(*it)->mouseMove(static_cast<float>(imgPos.x), static_cast<float>(imgPos.y));
+			if ((*it)->hoverDraggerIndex >= 0) { shapeHover = it->get(); break; }
+		}
+	}
 	if (shapeHover) {
 		newShape = nullptr; //改的是已有元素，不参与空元素判定
 		shapeHover->mouseDown((float)imgPos.x, (float)imgPos.y);
@@ -397,6 +616,11 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 
 void WinPin::onMove(POINT pos)
 {
+	if (annotationPanel) annotationPanel->pointerMove(pos);
+	if (!isMouseDown && annotationPanelVisible && annotationPanel && annotationPanel->contains(pos)) {
+		if (shapeHover) { shapeHover = nullptr; refresh(); }
+		return;
+	}
 	// 同 onDown：文本框里的移动归 TextBox（拖选、滚动条 hover），不参与 shape 的 hover 判定
 	if (editingText && textBox && textBox->isPosIn(pos)) return;
 	// 拖窗口用的是窗口坐标（pressPos 也是），只有交给 shape 的才换算成底图像素
@@ -416,6 +640,10 @@ void WinPin::onMove(POINT pos)
 	else
 	{
 		if (toolMain->curId == L"") return;
+		if (!isImagePosition(pos)) {
+			if (shapeHover) { shapeHover = nullptr; refresh(); }
+			return;
+		}
 		const auto activeShapes = history->shapes();
 		for (auto it = activeShapes.rbegin(); it != activeShapes.rend(); ++it)
 		{
@@ -442,6 +670,10 @@ void WinPin::onUp(POINT pos, BOOL isRight)
 	// 更要紧的是不能往下走：下面那条"拖窗结束"的路会把 ToolMain 显示出来，
 	// 而右键刚刚才把它收起来 —— 一按一放就等于什么都没做
 	if (isRight) return;
+	if (!isMouseDown) {
+		if (annotationPanel) annotationPanel->pointerUp(pos, false);
+		return; // TextBox owns selection/caret mouse capture in this path.
+	}
 	isMouseDown = false;
 	ReleaseCapture();
 	auto justCreated = newShape;
@@ -466,6 +698,16 @@ void WinPin::onUp(POINT pos, BOOL isRight)
 		prevPressCreatedShape = (shapeHover == justCreated);
 		auto imgPos = toImgPos(pos);
 		shapeHover->mouseUp((float)imgPos.x, (float)imgPos.y);
+		if (fitAnnotationsAfterPointer) {
+			fitAnnotationsAfterPointer = false;
+			fitAnnotationWorkspace();
+			layoutTools();
+		}
+		if (auto* note = dynamic_cast<ShapeAnnotation*>(shapeHover)) {
+			// Focus after the mouse-up broadcast begins; focusing on mouse-down
+			// would immediately be undone by TextBox's outside-click handler.
+			selectAnnotation(note->number(), !hasDragged);
+		}
 		refresh();
 		setTimer(800, 100);
 	}
@@ -492,7 +734,7 @@ Ling::TextBox* WinPin::getTextBox()
 	if (textBox) return textBox;
 	// 建在 canvas 之后：Composition 的子 visual 按插入顺序叠放，文本框要盖在截图上面。
 	// 绝对定位，位置由 ShapeText 按自己的矩形指定，不参与 body 的 flex 排布。
-	textBox = body->makeChild<Ling::TextBox>();
+	textBox = imageOverlay->makeChild<Ling::TextBox>();
 	textBox->setPositionType(Ling::Position::Absolute);
 	// 不折行、尺寸跟着文字长，与 2.4.25 的文本窗口一致
 	textBox->setAutoSize(true);
@@ -517,6 +759,12 @@ void WinPin::onKey(UINT key)
 	// Delete 删掉的是整个 shape、ESC 直接把窗口关了。ESC 结束编辑由 TextBox 自己处理。
 	if (editingText) return;
 	bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+	if (annotationPanel && annotationPanel->isEditing()) {
+		// Enter inserts a line break; copy/delete/selection belong to the input.
+		// Explicit Save is still available while writing a note.
+		if (ctrl && key == 'S') saveToFile();
+		return;
+	}
 	if (ctrl && key == 'Z') {
 		history->undo();
 	}
@@ -533,7 +781,8 @@ void WinPin::onKey(UINT key)
 		copyToClipboard();
 	}
 	else if (key == VK_DELETE) {
-		history->removeHoverShape();
+		if (shapeHover) history->removeHoverShape();
+		else if (annotationPanelVisible) removeAnnotation(selectedAnnotation);
 	}
 	else if (key == VK_ESCAPE) {
 		close();
@@ -590,75 +839,125 @@ void WinPin::restoreWindowState(HWND foregroundBeforeDialog)
 // 离屏把底图和 shape 合成到一张新位图上再读回像素。
 // 不直接画到 screenImg 上：它是 ShapeEraser 的"原样"来源，也是 ShapeMosaic 的取样来源，
 // 一旦被 shape 覆写，之后再擦除/打码就会拿到已经画过的画面。
-// 用 d2d->deviceContext 做离屏是安全的，SetTarget → BeginDraw → EndDraw → SetTarget(nullptr) 在本函数内闭环。
+// 批注服务再把完整表格附在右侧；所有状态、绘制会话和映射都在本函数内成对恢复。
 bool WinPin::getImagePixels(std::vector<BYTE>& pixels, D2D1_SIZE_U& size)
 {
-	// 尺寸一律取底图的像素尺寸，不用窗口的 w/h —— Ctrl+滚轮缩放改的是窗口，
-	// 导出的图该始终是原始大小。调用方也得按这个尺寸解释 pixels，所以用出参交出去
-	auto imgSize = getImgSize();
-	if (imgSize.width == 0 || imgSize.height == 0) return false;
-	// 编辑中的文字是 TextBox 自己那层画的，进不了下面这个离屏 target。
-	// 先收尾，把文字交回 ShapeText 自己画，保存/复制出去的图才有它。
-	if (editingText) editingText->finishEdit();
-	size = imgSize;
-	auto d2d = Ling::D2D::get();
-	auto ctx = d2d->deviceContext.Get();
+    if (editingText) editingText->finishEdit();
+    if (annotationPanel) annotationPanel->finishEditing();
+    bool hasAnnotations = false;
+    for (const auto& shape : history->shapes())
+        if (dynamic_cast<ShapeAnnotation*>(shape.get())) { hasAnnotations = true; break; }
 
-	D2D1_BITMAP_PROPERTIES1 targetProps{
-		.pixelFormat{ D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED) },
-		.dpiX{ 96.0f }, .dpiY{ 96.0f },
-		.bitmapOptions{ D2D1_BITMAP_OPTIONS_TARGET }
-	};
-	ComPtr<ID2D1Bitmap1> targetBmp;
-	auto hr = ctx->CreateBitmap(size, nullptr, 0, &targetProps, targetBmp.GetAddressOf());
-	if (FAILED(hr)) return false;
+    // Keep every device/mapping guard inside this operation. An error dialog is
+    // shown only after restoring the shared context, because it pumps UI events.
+    const bool success = [&]() -> bool {
+        try {
+            const auto imgSize = getImgSize();
+            if (!imgSize.width || !imgSize.height) return false;
+            auto d2d = Ling::D2D::get();
+            auto* ctx = d2d->deviceContext.Get();
+            AnnotationRenderer::Plan plan;
+            if (hasAnnotations) {
+                AnnotationRenderer::Options options;
+                options.title = Lang::get(L"annotation.title");
+                options.emptyNoteText = Lang::get(L"annotation.empty");
+                options.maximumDimension = ctx->GetMaximumBitmapSize();
+                auto notes = annotationNotes();
+                if (FAILED(AnnotationRenderer::makePlan(d2d->dwriteFactory.Get(),
+                    d2d->baseTextFormat.Get(), imgSize, notes, options, plan))) return false;
+            }
 
-	ctx->SetTarget(targetBmp.Get());
-	ctx->SetTransform(D2D1::Matrix3x2F::Identity());
-	ctx->BeginDraw();
-	ctx->Clear(D2D1::ColorF(0, 0.0f));
-	ctx->DrawBitmap(screenImg.Get(), D2D1::RectF(0.f, 0.f, (float)imgSize.width, (float)imgSize.height));
-	for (auto& shape : history->shapes())
-	{
-		shape->paint(ctx);
-	}
-	hr = ctx->EndDraw();
-	// 解绑，下面 CopyFromBitmap 才能把它当 source 读
-	ctx->SetTarget(nullptr);
-	if (FAILED(hr)) return false;
+            struct ContextRestore {
+                ID2D1DeviceContext* context;
+                ComPtr<ID2D1Image> target;
+                D2D1_MATRIX_3X2_F transform{};
+                D2D1_UNIT_MODE units;
+                float dpiX{}, dpiY{};
+                explicit ContextRestore(ID2D1DeviceContext* value) : context(value), units(value->GetUnitMode()) {
+                    context->GetTarget(&target);
+                    context->GetTransform(&transform);
+                    context->GetDpi(&dpiX, &dpiY);
+                }
+                ~ContextRestore() {
+                    context->SetTarget(target.Get());
+                    context->SetTransform(transform);
+                    context->SetDpi(dpiX, dpiY);
+                    context->SetUnitMode(units);
+                }
+            } restore(ctx);
+            ctx->SetDpi(96.f, 96.f);
+            ctx->SetUnitMode(D2D1_UNIT_MODE_PIXELS);
+            ctx->SetTransform(D2D1::Matrix3x2F::Identity());
+            D2D1_BITMAP_PROPERTIES1 targetProps{
+                .pixelFormat{D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)},
+                .dpiX{96.f}, .dpiY{96.f}, .bitmapOptions{D2D1_BITMAP_OPTIONS_TARGET}
+            };
+            ComPtr<ID2D1Bitmap1> targetBmp;
+            auto hr = ctx->CreateBitmap(imgSize, nullptr, 0, &targetProps, &targetBmp);
+            if (FAILED(hr)) return false;
+            ctx->SetTarget(targetBmp.Get());
+            {
+                struct Drawing {
+                    ID2D1DeviceContext* context;
+                    bool active{true};
+                    explicit Drawing(ID2D1DeviceContext* value) : context(value) { context->BeginDraw(); }
+                    ~Drawing() { if (active) context->EndDraw(); }
+                    HRESULT finish() { active = false; return context->EndDraw(); }
+                } drawing(ctx);
+                ctx->Clear(D2D1::ColorF(0, 0.f));
+                ctx->DrawBitmap(screenImg.Get(), D2D1::RectF(0, 0, static_cast<float>(imgSize.width), static_cast<float>(imgSize.height)));
+                for (const auto& shape : history->shapes()) shape->paint(ctx);
+                hr = drawing.finish();
+            }
+            ctx->SetTarget(nullptr);
+            if (FAILED(hr)) return false;
 
-	// GPU 上的 target 位图不能直接 Map，得先拷到一块带 CPU_READ 的位图上
-	D2D1_BITMAP_PROPERTIES1 cpuProps{
-		.pixelFormat{ targetBmp->GetPixelFormat() },
-		.dpiX{ 96.0f }, .dpiY{ 96.0f },
-		.bitmapOptions{ D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW }
-	};
-	ComPtr<ID2D1Bitmap1> cpuBmp;
-	hr = ctx->CreateBitmap(size, nullptr, 0, &cpuProps, cpuBmp.GetAddressOf());
-	if (FAILED(hr)) return false;
-	hr = cpuBmp->CopyFromBitmap(nullptr, targetBmp.Get(), nullptr);
-	if (FAILED(hr)) return false;
-	D2D1_MAPPED_RECT mapped{};
-	hr = cpuBmp->Map(D2D1_MAP_OPTIONS_READ, &mapped);
-	if (FAILED(hr)) return false;
-	// mapped.pitch 按 GPU 行对齐，可能大于 w*4；剪切板和 WIC 都要求紧凑步长，逐行紧缩
-	const UINT32 rowBytes = size.width * 4;
-	pixels.resize((size_t)rowBytes * size.height);
-	for (UINT32 row = 0; row < size.height; ++row)
-	{
-		CopyMemory(pixels.data() + (size_t)row * rowBytes,
-			mapped.bits + (size_t)row * mapped.pitch,
-			rowBytes);
-	}
-	cpuBmp->Unmap();
-	return true;
+            D2D1_SIZE_U outputSize = imgSize;
+            if (hasAnnotations) {
+                ComPtr<ID2D1Bitmap1> composite;
+                if (FAILED(AnnotationRenderer::render(ctx, targetBmp.Get(), plan, composite))) return false;
+                targetBmp = std::move(composite);
+                outputSize = D2D1::SizeU(plan.layout.width, plan.layout.height);
+            }
+            const auto layout = ScreenCapture::Core::pixelLayout(
+                static_cast<int>(outputSize.width), static_cast<int>(outputSize.height), 4);
+            if (!layout || layout->stride > (std::numeric_limits<UINT32>::max)()) return false;
+            // Allocate before Map: allocation failure must not leave a CPU bitmap mapped.
+            std::vector<BYTE> result(layout->bytes);
+            D2D1_BITMAP_PROPERTIES1 cpuProps{
+                .pixelFormat{targetBmp->GetPixelFormat()}, .dpiX{96.f}, .dpiY{96.f},
+                .bitmapOptions{D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW}
+            };
+            ComPtr<ID2D1Bitmap1> cpuBmp;
+            if (FAILED(ctx->CreateBitmap(outputSize, nullptr, 0, &cpuProps, &cpuBmp))) return false;
+            if (FAILED(cpuBmp->CopyFromBitmap(nullptr, targetBmp.Get(), nullptr))) return false;
+            D2D1_MAPPED_RECT mapped{};
+            if (FAILED(cpuBmp->Map(D2D1_MAP_OPTIONS_READ, &mapped))) return false;
+            if (mapped.pitch < layout->stride) { cpuBmp->Unmap(); return false; }
+            for (UINT32 row = 0; row < outputSize.height; ++row)
+                CopyMemory(result.data() + static_cast<std::size_t>(row) * layout->stride,
+                    mapped.bits + static_cast<std::size_t>(row) * mapped.pitch, layout->stride);
+            cpuBmp->Unmap();
+            pixels.swap(result);
+            size = outputSize;
+            return true;
+        } catch (const std::bad_alloc&) {
+            return false;
+        } catch (const std::length_error&) {
+            return false;
+        }
+    }();
+    if (!success && hasAnnotations)
+        MessageBox(hwnd, Lang::get(L"annotation.exportFailed").c_str(), L"ScreenCapture-Plus", MB_OK | MB_ICONWARNING);
+    return success;
 }
 
 BOOL WinPin::setCursor()
 {
+	if (annotationPanel && annotationPanel->cursor()) return TRUE;
 	// 编辑文本时光标形状交给 TextBox 决定（文本区 I 形、滚动条箭头）。
 	// 本函数覆写了基类且不调用它，TextBox 挂在 onCursor 上的那个订阅不会自己被触发，得手动发一次。
-	if (editingText) {
+	if (editingText || (annotationPanel && annotationPanel->isEditing())) {
 		bool handled{ false };
 		onCursor(&handled);
 		if (handled) return TRUE;
