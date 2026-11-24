@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- The default is the existing resource version. Release tags override these four values. -->
+  <PropertyGroup>
+    <VersionMajor Condition="'$(VersionMajor)'==''">2</VersionMajor>
+    <VersionMinor Condition="'$(VersionMinor)'==''">5</VersionMinor>
+    <VersionPatch Condition="'$(VersionPatch)'==''">16</VersionPatch>
+    <VersionRevision Condition="'$(VersionRevision)'==''">0</VersionRevision>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ResourceCompile>
+      <PreprocessorDefinitions>SC_VERSION_MAJOR=$(VersionMajor);SC_VERSION_MINOR=$(VersionMinor);SC_VERSION_PATCH=$(VersionPatch);SC_VERSION_REVISION=$(VersionRevision);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+  </ItemDefinitionGroup>
+</Project>

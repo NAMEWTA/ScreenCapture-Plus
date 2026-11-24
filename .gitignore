@@ -1,9 +1,12 @@
-**/.vs/**
+# Build dependencies and output
+/.deps/
+/artifacts/
+
+# Local IDE state
+**/.vs/
+*.vcxproj.user
+*.aps
 *.TMP
 *.log
 /enc_temp_folder/
-Res.aps
-/x64/
-/ScreenCapture/x64/
-/ScreenCapture/ScreenCapture/x64/
-**/x64/**
+**/x64/

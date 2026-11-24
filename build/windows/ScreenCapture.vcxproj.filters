@@ -1,0 +1,351 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <ItemGroup>
+    <Filter Include="resources">
+      <UniqueIdentifier>{a5fb18c0-f7c0-5df1-b272-e5e17af1c728}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{faf2edae-8a01-5a3f-8bd1-4cc954492c12}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\app">
+      <UniqueIdentifier>{2694e564-31a0-531c-9d1b-f6236b19fbcc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\capture">
+      <UniqueIdentifier>{18d39e26-1eaf-5aa9-b2d0-07eeed01bb7d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\core">
+      <UniqueIdentifier>{2a3f0986-e28b-5a9f-a001-d26d9111b3a0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\editor">
+      <UniqueIdentifier>{1266861b-fafb-5eef-8ddb-4af853a68537}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\editor\shapes">
+      <UniqueIdentifier>{116aac18-50d4-5471-b285-d8da8236db9f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\platform">
+      <UniqueIdentifier>{092e6614-028b-59d2-866d-7cd546bea712}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\platform\windows">
+      <UniqueIdentifier>{faf28593-ba6c-5c04-b975-24d304ba07d0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\recording">
+      <UniqueIdentifier>{9c3240ec-7676-5214-8d83-59f3b83b6030}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\services">
+      <UniqueIdentifier>{127fc957-661f-5a1d-acd1-f1864d828428}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\ui">
+      <UniqueIdentifier>{d7026cd6-637a-53ab-bd0b-23e1a032f87a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\ui\settings">
+      <UniqueIdentifier>{2e6f99dd-f15d-5553-9c46-db5f19ae8bd7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\ui\toolbars">
+      <UniqueIdentifier>{5f35a0ba-a871-5f55-be24-36e5d98f288c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party">
+      <UniqueIdentifier>{aed25906-25e4-5725-9100-1e49baa8bc7f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\cgif">
+      <UniqueIdentifier>{2d05204e-57f9-5489-9f1e-8ce71fc72aa3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\quirc">
+      <UniqueIdentifier>{57193bfa-19f4-59ac-b3fe-39dafbda3053}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\src\app\App.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\app\main.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\capture\CapLong.cpp">
+      <Filter>src\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\capture\CutMask.cpp">
+      <Filter>src\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\capture\WinCap.cpp">
+      <Filter>src\capture</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\History.cpp">
+      <Filter>src\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\ShapeFactory.cpp">
+      <Filter>src\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\WinPin.cpp">
+      <Filter>src\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeArrow.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeBase.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeEllipse.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeEraser.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeLine.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeMosaic.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeNumber.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeRect.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\editor\shapes\ShapeText.cpp">
+      <Filter>src\editor\shapes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\pch.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\recording\CapVideo.cpp">
+      <Filter>src\recording</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\recording\VideoGif.cpp">
+      <Filter>src\recording</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\recording\VideoMp4.cpp">
+      <Filter>src\recording</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\services\ImageExport.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\services\ImageRecognition.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\services\Lang.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\services\Setting.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\services\Update.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\Tip.cpp">
+      <Filter>src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\Tray.cpp">
+      <Filter>src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\settings\WinSetting.cpp">
+      <Filter>src\ui\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\settings\WinSettingAbout.cpp">
+      <Filter>src\ui\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\settings\WinSettingCommon.cpp">
+      <Filter>src\ui\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\settings\WinSettingShortcut.cpp">
+      <Filter>src\ui\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\toolbars\ToolCap.cpp">
+      <Filter>src\ui\toolbars</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\toolbars\ToolLong.cpp">
+      <Filter>src\ui\toolbars</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\toolbars\ToolMain.cpp">
+      <Filter>src\ui\toolbars</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\toolbars\ToolSub.cpp">
+      <Filter>src\ui\toolbars</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\toolbars\ToolVideo.cpp">
+      <Filter>src\ui\toolbars</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\cgif\cgif.c">
+      <Filter>third_party\cgif</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\cgif\cgif_raw.c">
+      <Filter>third_party\cgif</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\cgif\cgif_rgb.c">
+      <Filter>third_party\cgif</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\quirc\decode.c">
+      <Filter>third_party\quirc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\quirc\identify.c">
+      <Filter>third_party\quirc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\quirc\quirc.c">
+      <Filter>third_party\quirc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\quirc\version_db.c">
+      <Filter>third_party\quirc</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\src\app\App.h">
+      <Filter>src\app</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\capture\CapLong.h">
+      <Filter>src\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\capture\CutMask.h">
+      <Filter>src\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\capture\WinCap.h">
+      <Filter>src\capture</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\HistoryStack.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\PixelBuffer.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\ReleaseVersion.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\ScrollStitch.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\History.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\ShapeFactory.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\WinPin.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeArrow.h">
+      <Filter>src\editor\shapes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeBase.h">
+      <Filter>src\editor\shapes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeEllipse.h">
+      <Filter>src\editor\shapes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeEraser.h">
+      <Filter>src\editor\shapes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeLine.h">
+      <Filter>src\editor\shapes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeMosaic.h">
+      <Filter>src\editor\shapes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeNumber.h">
+      <Filter>src\editor\shapes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeRect.h">
+      <Filter>src\editor\shapes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\shapes\ShapeText.h">
+      <Filter>src\editor\shapes</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\pch.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\windows\ComApartment.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\windows\GdiCapture.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\recording\CapVideo.h">
+      <Filter>src\recording</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\recording\VideoGif.h">
+      <Filter>src\recording</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\recording\VideoMp4.h">
+      <Filter>src\recording</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\services\ImageExport.h">
+      <Filter>src\services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\services\ImageRecognition.h">
+      <Filter>src\services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\services\Lang.h">
+      <Filter>src\services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\services\Setting.h">
+      <Filter>src\services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\services\Update.h">
+      <Filter>src\services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\Tip.h">
+      <Filter>src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\Tray.h">
+      <Filter>src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\settings\WinSetting.h">
+      <Filter>src\ui\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\settings\WinSettingAbout.h">
+      <Filter>src\ui\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\settings\WinSettingCommon.h">
+      <Filter>src\ui\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\settings\WinSettingShortcut.h">
+      <Filter>src\ui\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\toolbars\ToolCap.h">
+      <Filter>src\ui\toolbars</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\toolbars\ToolLong.h">
+      <Filter>src\ui\toolbars</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\toolbars\ToolMain.h">
+      <Filter>src\ui\toolbars</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\toolbars\ToolSub.h">
+      <Filter>src\ui\toolbars</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\toolbars\ToolVideo.h">
+      <Filter>src\ui\toolbars</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\third_party\cgif\cgif.h">
+      <Filter>third_party\cgif</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\third_party\cgif\cgif_raw.h">
+      <Filter>third_party\cgif</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\third_party\quirc\quirc.h">
+      <Filter>third_party\quirc</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\third_party\quirc\quirc_internal.h">
+      <Filter>third_party\quirc</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\resources\Version.h">
+      <Filter>resources</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\..\resources\Resource.rc">
+      <Filter>resources</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="..\..\resources\logo.ico">
+      <Filter>resources</Filter>
+    </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\resources\iconfont.ttf">
+      <Filter>resources</Filter>
+    </None>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,7 @@
+#pragma once
+
+// Version.props is the single source of defaults; build.ps1 overrides it for release tags.
+#define SC_STRINGIFY_IMPL(value) #value
+#define SC_STRINGIFY(value) SC_STRINGIFY_IMPL(value)
+#define SC_VERSION_NUMBER SC_VERSION_MAJOR,SC_VERSION_MINOR,SC_VERSION_PATCH,SC_VERSION_REVISION
+#define SC_VERSION_TEXT SC_STRINGIFY(SC_VERSION_MAJOR) "." SC_STRINGIFY(SC_VERSION_MINOR) "." SC_STRINGIFY(SC_VERSION_PATCH) "." SC_STRINGIFY(SC_VERSION_REVISION)

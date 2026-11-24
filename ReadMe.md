@@ -1,6 +1,6 @@
-简体中文 | [English](./Doc/ReadMe.en-US.md) | [Русский](./Doc/ReadMe.ru-RU.md) | [Bahasa Indonesia](./Doc/ReadMe.id-ID.md)
+简体中文 | [English](./docs/ReadMe.en-US.md) | [Русский](./docs/ReadMe.ru-RU.md) | [Bahasa Indonesia](./docs/ReadMe.id-ID.md)
 
-![banner](./Doc/banner.png)
+![banner](./docs/banner.png)
 
 **ScreenCapture** 一个小巧但功能强大的Windows截图工具。
 
@@ -82,19 +82,19 @@
 <table>
   <tr>
     <td align="center">
-      <img alt="支付宝赞助" src="./Doc/alipay.jpg" width="160" height="160">
+      <img alt="支付宝赞助" src="./docs/alipay.jpg" width="160" height="160">
       <p>支付宝赞助</p>
     </td>
     <td align="center">
-      <img alt="微信赞助" src="./Doc/wechat.png" width="160" height="160">
+      <img alt="微信赞助" src="./docs/wechat.png" width="160" height="160">
       <p>微信赞助</p>
     </td>
     <td align="center">
-      <img alt="作者微信" src="./Doc/author.jpg" width="160" height="160">
+      <img alt="作者微信" src="./docs/author.jpg" width="160" height="160">
       <p>作者微信</p>
     </td>
     <td align="center">
-      <img alt="公众号二维码" src="./Doc/gongzhonghao.jpg" width="160" height="160">
+      <img alt="公众号二维码" src="./docs/gongzhonghao.jpg" width="160" height="160">
       <p>公众号：桌面软件</p>
     </td>
   </tr>
