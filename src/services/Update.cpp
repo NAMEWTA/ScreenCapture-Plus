@@ -42,8 +42,8 @@ namespace {
     struct UpdateSession {
         std::atomic<bool> active{ true };
         std::mutex mutex;
-        IAsyncInfo operation{ nullptr };
-        void track(const IAsyncInfo& next) {
+        winrt::Windows::Foundation::IAsyncInfo operation{ nullptr };
+        void track(const winrt::Windows::Foundation::IAsyncInfo& next) {
             {
                 std::lock_guard lock(mutex);
                 operation = next;
@@ -53,7 +53,7 @@ namespace {
         void stop() noexcept {
             active = false;
             try {
-                IAsyncInfo pending{ nullptr };
+                winrt::Windows::Foundation::IAsyncInfo pending{ nullptr };
                 {
                     std::lock_guard lock(mutex);
                     pending = std::move(operation);

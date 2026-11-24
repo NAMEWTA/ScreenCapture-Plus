@@ -67,6 +67,9 @@ jobs:
         run: ./scripts/test-windows.ps1 -Gui
 
       - name: Verify latest release download into Windows Downloads
+        # A tag publication/rebuild may be preparing that release's first assets.
+        # Verify the live latest download on ordinary source builds before publishing.
+        if: github.event_name != 'release' && inputs.release_tag == ''
         run: ./scripts/test-windows.ps1 -Update
 
       - name: Retain diagnostic build logs

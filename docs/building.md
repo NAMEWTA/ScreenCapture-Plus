@@ -60,7 +60,7 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 | 手工运行，不填标签 | 验证所选提交并保存 artifact |
 | 手工运行，填写已存在 Release 标签 | 检出该 tag 重建和上传，供恢复使用 |
 
-发布要求 Release / Debug（常规 main、PR）、核心与脚本检查、原生渲染、单 EXE 启动、真实窗口/剪贴板、真实更新下载和打包门槛全部通过。打包核对版本与产品资源，检查 PE 依赖，拒绝意外增加外部 MSVC、Ling、Yoga 或 gifski DLL。
+新版本声明发布要求 Release / Debug、核心与脚本检查、原生渲染、单 EXE 启动、真实窗口/剪贴板、真实更新下载和打包门槛全部通过。Debug 与真实更新下载在常规 main、PR 和不填标签的手工构建中执行；Release 事件及填写标签的恢复构建不执行这两项，避免待上传资产的版本成为 latest 后，下载门槛反过来阻止它上传首批资产。打包核对版本与产品资源，检查 PE 依赖，拒绝意外增加外部 MSVC、Ling、Yoga 或 gifski DLL。
 
 `windows-x64` 保留 EXE、便携包、符号、构建信息和校验和；`windows-render-checks` 保留原生、GUI 与更新下载报告及图片；失败时尽量保留 `windows-build-logs`。具体保留期以工作流为准。程序 artifact 可能在后续 GUI 检查前已经上传，因此“能下载 artifact”本身不证明完整构建成功。
 

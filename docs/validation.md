@@ -21,6 +21,8 @@
 
 Release 先于 GUI 与更新下载测试，依赖 / 构建设置变化时还需 Debug。完整 CI 顺序、artifact 和发布门槛见 [building.md](building.md)。
 
+真实更新下载是常规 main、PR 及无标签手工构建的门槛。Release 事件和指定标签的恢复构建可能尚未上传该版本的首批资产，不以此时的 latest 下载作为其前置条件；新版本声明发布仍须先通过 main 的完整验证。
+
 ## 纯核心回归
 
 顶层 `tests/*.cpp` 各自有独立 `main`，不依赖显示器、账号或第三方测试框架。失败通过非零退出码表达，不因 Release 的 `NDEBUG` 而失效。
