@@ -49,7 +49,7 @@ void ToolLong::onCreated()
 	tip = std::make_unique<Tip>(this);
 	body->setBg(0xFFFFFFFF);
 	body->setBorder(ScreenCapture::UI::toolbarBorder, 0xA8A8A8ff);
-	ScreenCapture::UI::configureToolbarRow(body);
+	ScreenCapture::UI::configureToolbarRow(body.get());
 	for (size_t i = 0; i < btnIds.size(); i++)
 	{
 		auto btn = body->makeChild<Ling::Button>();

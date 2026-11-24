@@ -51,11 +51,11 @@ void ToolCap::onCreated()
 	tip = std::make_unique<Tip>(this);
 	body->setBg(0xFFFFFFFF);
 	body->setBorder(ScreenCapture::UI::toolbarBorder, 0xA8A8A8ff);
-	ScreenCapture::UI::configureToolbarRow(body);
+	ScreenCapture::UI::configureToolbarRow(body.get());
 	for (size_t i = 0; i < btnIds.size(); i++)
 	{
 		if (btnIds[i] == L"spliter") {
-			ScreenCapture::UI::makeToolbarDivider(body);
+			ScreenCapture::UI::makeToolbarDivider(body.get());
 			continue;
 		}
 		auto btn = body->makeChild<Ling::Button>();

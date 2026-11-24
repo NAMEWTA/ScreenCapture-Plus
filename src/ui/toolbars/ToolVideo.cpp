@@ -55,7 +55,7 @@ void ToolVideo::onCreated()
 	tip->excludeFromCapture();
 	body->setBg(0xFFFFFFFF);
 	body->setBorder(ScreenCapture::UI::toolbarBorder, 0xA8A8A8ff);
-	ScreenCapture::UI::configureToolbarRow(body);
+	ScreenCapture::UI::configureToolbarRow(body.get());
 	showSetting();
 	show();
 }
@@ -68,7 +68,7 @@ void ToolVideo::onMinMaxInfo(MINMAXINFO* mmi)
 
 Ling::Node* ToolVideo::makeSpliter()
 {
-	return ScreenCapture::UI::makeToolbarDivider(body);
+	return ScreenCapture::UI::makeToolbarDivider(body.get());
 }
 
 Ling::Button* ToolVideo::makeIconBtn(const std::wstring& code)
