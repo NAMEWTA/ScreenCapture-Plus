@@ -413,6 +413,11 @@ inline void runClipboardDesignChecks(WinClipboard* history, const fs::path& vide
     historyRequire(found != entries.end(), "Video fixture is missing from the visible history");
     settingsKey(history->hwnd, VK_HOME, pump);
     for (auto index = entries.begin(); index != found; ++index) settingsKey(history->hwnd, VK_DOWN, pump);
+    historyRequire(OpenClipboard(history->hwnd) != FALSE, "Clear clipboard before the history shortcut");
+    const bool emptied = EmptyClipboard() != FALSE;
+    CloseClipboard();
+    historyRequire(emptied, "Empty clipboard before testing the history shortcut");
+    const auto sequence = GetClipboardSequenceNumber();
     std::array<BYTE, 256> original{};
     historyRequire(GetKeyboardState(original.data()) != FALSE, "Read history shortcut keyboard state");
     auto control = original;
@@ -422,6 +427,7 @@ inline void runClipboardDesignChecks(WinClipboard* history, const fs::path& vide
     SendMessageW(history->hwnd, WM_KEYUP, 'C', 0);
     SetKeyboardState(original.data());
     pump(40);
+    historyRequire(GetClipboardSequenceNumber() != sequence, "History Ctrl+C did not update the clipboard");
     requireHistoryClipboard(history->hwnd, *found);
     setNativeTestDpi(history, 96, 760.f, 560.f, pump);
     std::cout << "PASS compact history keyboard selection and Ctrl+C retain the archived video path.\n";
