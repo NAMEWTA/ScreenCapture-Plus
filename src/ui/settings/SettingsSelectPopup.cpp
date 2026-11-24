@@ -96,8 +96,10 @@ SettingsSelectPopup::SettingsSelectPopup(HWND owner, float scale, RECT screenAnc
     const float workWidth = (std::max)(1.f, static_cast<float>(work.right - work.left) - 16.f * dpi);
     const float desiredWidth = (std::max)(180.f * dpi, static_cast<float>(screenAnchor.right - screenAnchor.left));
     const float width = (std::min)(workWidth, (std::min)(360.f * dpi, desiredWidth));
+    // Cap ordinary long lists at whole rows, so End does not leave a thin strip
+    // of the previous row's glyphs visible at the top of an eight-row viewport.
     const float desiredHeight = (std::min)(state->contentHeight + padding * 2.f,
-        Theme::controlHeight * 8.f + separatorHeight + padding * 2.f) * dpi;
+        Theme::controlHeight * 8.f + padding * 2.f) * dpi;
     const float below = (std::max)(0.f, work.bottom - 8.f * dpi - screenAnchor.bottom - gap * dpi);
     const float above = (std::max)(0.f, screenAnchor.top - gap * dpi - work.top - 8.f * dpi);
     const bool placeBelow = below >= desiredHeight || below >= above;
