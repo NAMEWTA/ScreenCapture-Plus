@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "ui/toolbars/ToolMain.h"
 #include "ui/toolbars/ToolSub.h"
+#include "ui/toolbars/ToolbarLayout.h"
 #include "editor/shapes/ShapeBase.h"
 #include "editor/shapes/ShapeText.h"
 #include "editor/shapes/ShapeAnnotation.h"
@@ -16,6 +17,7 @@
 #include "core/PixelBuffer.h"
 
 #include <algorithm>
+#include <climits>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -410,7 +412,8 @@ void WinPin::layoutTools()
 	}
 	auto mainX = static_cast<float>(winRect.right) - toolMain->w;
 	// 垂直方向按整组当前高度裁剪，避免 WinPin 超出工作区时把 ToolSub 挤到屏幕外
-	toolMain->setPosition(clampPos(mainX, toolMain->w, wa.left, wa.right), clampPos(mainY, usedH, wa.top, wa.bottom));
+	ScreenCapture::UI::positionToolbar(toolMain.get(),
+		clampPos(mainX, toolMain->w, wa.left, wa.right), clampPos(mainY, usedH, wa.top, wa.bottom));
 	if (showSub) {
 		toolSub->updatePosition(wa);
 	}
@@ -617,6 +620,13 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 void WinPin::onMove(POINT pos)
 {
 	if (annotationPanel) annotationPanel->pointerMove(pos);
+	// Ling uses a sentinel for WM_MOUSELEAVE. It is not an image coordinate:
+	// treating it as a captured move would drag a pin to the corner and suppress
+	// the click-to-edit focus handoff on mouse-up.
+	if (pos.x == INT_MAX && pos.y == INT_MAX) {
+		if (!isMouseDown && shapeHover) { shapeHover = nullptr; refresh(); }
+		return;
+	}
 	if (!isMouseDown && annotationPanelVisible && annotationPanel && annotationPanel->contains(pos)) {
 		if (shapeHover) { shapeHover = nullptr; refresh(); }
 		return;

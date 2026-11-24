@@ -205,7 +205,8 @@ HRESULT AnnotationRenderer::paintNotes(ID2D1DeviceContext* context, const Plan& 
         const auto& note = plan.notes[row.index];
         if (!note.textLayout || !note.numberLayout) return E_INVALIDARG;
         const float radius = layout.badgeDiameter / 2.0f;
-        const float badgeY = row.y + (row.height - layout.badgeDiameter) / 2.0f;
+        // Keep the identifier beside the first lines of a long note.
+        const float badgeY = row.y;
         brush->SetColor(D2D1::ColorF(note.color.backgroundRgb));
         context->FillEllipse(D2D1::Ellipse({row.x + radius, badgeY + radius}, radius, radius), brush.Get());
         brush->SetColor(D2D1::ColorF(note.color.textRgb));

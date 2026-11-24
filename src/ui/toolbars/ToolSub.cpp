@@ -474,12 +474,12 @@ void ToolSub::updatePosition(const RECT& workArea)
 	if (finalX > upperX) finalX = upperX;
 	// 箭头始终指向按钮中心的屏幕位置，换算成窗口内坐标
 	arrowX = std::clamp(mainX + btnCenterX - finalX, 5.f * dpi, w - 5.f * dpi);
-	setPosition(finalX, static_cast<int>(py));
+	ScreenCapture::UI::positionToolbar(this, finalX, static_cast<int>(py));
 	if (isVisible) {
 		refresh();
 	}
 	else {
-		show();
+		ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 		isVisible = true;
 	}
 }

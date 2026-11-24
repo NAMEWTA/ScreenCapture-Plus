@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <climits>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -26,6 +27,9 @@ using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 
 namespace {
+fs::path evidenceDirectory;
+void screenshot(WinPin* window, const fs::path& path, bool activateWindow = true);
+
 void require(bool condition, const char* message)
 {
     if (!condition) throw std::runtime_error(message);
@@ -83,6 +87,19 @@ ShapeAnnotation* marker(WinPin* window, std::uint64_t number)
     throw std::runtime_error("The expected annotation is absent from active history");
 }
 
+void state(WinPin* window, const char* label)
+{
+    std::cout << "STATE " << label << ": pin=" << window->hwnd << " toolbar=" << window->toolMain->hwnd
+        << " focus=" << GetFocus() << " foreground=" << GetForegroundWindow() << " capture=" << GetCapture()
+        << " hasDragged=" << window->hasDragged << " scale=" << window->scale;
+    if (auto* panel = findNode<AnnotationPanel>(window->body.get()))
+        if (auto* editor = findNode<Ling::TextBox>(panel)) std::cout << " editorFocused=" << editor->isFocused();
+    for (auto* note : markers(window))
+        std::cout << " [#" << note->number() << " center=" << note->center().x << ',' << note->center().y
+            << " textLength=" << note->note().size() << ']';
+    std::cout << '\n';
+}
+
 LPARAM coordinates(POINT point)
 {
     return MAKELPARAM(static_cast<WORD>(point.x), static_cast<WORD>(point.y));
@@ -133,13 +150,20 @@ void toolbar(WinPin* window, const wchar_t* id)
 
 void imageClick(WinPin* window, float x, float y)
 {
+    std::cout << "STEP image click at original pixels " << x << ',' << y << '\n';
     click(window->hwnd, {static_cast<LONG>(std::lround(x * window->scale)),
         static_cast<LONG>(std::lround(y * window->scale))});
+    state(window, "after image click");
 }
 
 void replaceNote(WinPin* window, Ling::TextBox* editor, const std::wstring& value)
 {
-    require(editor->isFocused(), "The shared note editor did not receive focus");
+    if (!editor->isFocused()) {
+        state(window, "note editor focus failure");
+        try { screenshot(window, evidenceDirectory / "failure-editor-focus.png", false); }
+        catch (const std::exception& error) { std::cerr << "Failure screenshot: " << error.what() << '\n'; }
+        throw std::runtime_error("The shared note editor did not receive focus");
+    }
     editor->selectAll();
     for (const wchar_t character : value) SendMessageW(window->hwnd, WM_CHAR, character, 1);
     pump();
@@ -202,9 +226,9 @@ void dragAfterCollapse(WinPin* window, AnnotationPanel* panel)
         "Reopening the notes rail made the annotation jump while dragging");
 }
 
-void screenshot(WinPin* window, const fs::path& path)
+void screenshot(WinPin* window, const fs::path& path, bool activateWindow)
 {
-    activate(window->hwnd);
+    if (activateWindow) activate(window->hwnd);
     window->refresh();
     window->toolMain->refresh();
     pump(250);
@@ -257,6 +281,7 @@ int wmain(int argc, wchar_t** argv)
     try {
         require(argc >= 2, "Usage: GuiIntegrationTests.exe <image-directory> --enter=tray");
         const fs::path directory(argv[1]);
+        evidenceDirectory = directory;
         fs::create_directories(directory);
         std::cout << "Desktop capability: " << GetSystemMetrics(SM_CXVIRTUALSCREEN) << 'x'
             << GetSystemMetrics(SM_CYVIRTUALSCREEN) << ", DPI " << GetDpiForSystem() << '\n';
@@ -301,6 +326,18 @@ int wmain(int argc, wchar_t** argv)
         auto* panel = findNode<AnnotationPanel>(window->body.get());
         auto* editor = panel ? findNode<Ling::TextBox>(panel) : nullptr;
         require(panel && editor, "The real shared annotation editor is missing");
+        window->onMouseMove.add([window](POINT point) {
+            if (point.x == INT_MAX || point.y == INT_MAX || GetCapture() == window->hwnd)
+                std::cout << "TRACE move " << point.x << ',' << point.y << " capture=" << GetCapture()
+                    << " hasDragged=" << window->hasDragged << " leftDown=" << ((GetKeyState(VK_LBUTTON) & 0x8000) != 0) << '\n';
+        });
+        window->onBlur.add([]() {
+            std::cout << "TRACE host blur focus=" << GetFocus() << " foreground=" << GetForegroundWindow() << '\n';
+        });
+        editor->onFocusChanged.add([](Ling::TextBox*, bool focused) {
+            std::cout << "TRACE editor focused=" << focused << " focus=" << GetFocus()
+                << " foreground=" << GetForegroundWindow() << '\n';
+        });
 
         imageClick(window, 110, 90);
         require(markers(window).size() == 1, "The first click did not create one annotation");

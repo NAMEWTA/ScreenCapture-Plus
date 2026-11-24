@@ -34,11 +34,29 @@ inline Ling::Node* makeToolbarDivider(Ling::Node* parent)
 
 inline void applyToolbarExtent(Ling::WinBase* window, const ToolbarExtent& extent)
 {
-    const auto width = toolbarPixelAligned(extent.width, window->dpi);
-    const auto height = toolbarPixelAligned(extent.height, window->dpi);
-    if (std::abs(window->w - width * window->dpi) < .01f &&
-        std::abs(window->h - height * window->dpi) < .01f) return;
-    window->setSize(width, height);
+    const auto width = std::ceil(extent.width * window->dpi);
+    const auto height = std::ceil(extent.height * window->dpi);
+    if (std::abs(window->w - width) < .01f &&
+        std::abs(window->h - height) < .01f) return;
+    window->w = width;
+    window->h = height;
+    // Reflow is layout work, not a focus change. Ling's generic setSize omits
+    // NOACTIVATE and can blur the screenshot's shared text editor here.
+    if (window->hwnd) {
+        SetWindowPos(window->hwnd, nullptr, 0, 0, static_cast<int>(width), static_cast<int>(height),
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOREDRAW);
+    }
+}
+
+inline void positionToolbar(Ling::WinBase* window, int x, int y)
+{
+    if (window->x == x && window->y == y) return;
+    window->x = x;
+    window->y = y;
+    if (window->hwnd) {
+        SetWindowPos(window->hwnd, nullptr, x, y, 0, 0,
+            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOREDRAW);
+    }
 }
 
 inline float toolbarWorkWidth(const RECT& workArea, float dpi)
