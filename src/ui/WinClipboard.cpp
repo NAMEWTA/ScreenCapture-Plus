@@ -214,7 +214,6 @@ std::size_t WinClipboard::thumbnailCount() const {
 
 void WinClipboard::onCreated() {
     enableShadow();
-    enableBorderResize();
     body->setBg(0xF5F5F7FF);
     state->canvas = body->makeChild<Ling::Canvas>();
     state->canvas->setSizePercent(100.f, 100.f);

@@ -73,7 +73,6 @@ void WinSetting::layout()
 void WinSetting::onCreated()
 {
     enableShadow();
-    enableBorderResize();
     body->setBg(Theme::canvas);
     body->setFlexDirection(Ling::FlexDirection::Row);
 
@@ -86,8 +85,7 @@ void WinSetting::onCreated()
     auto* brand = Theme::label(menuBox, std::wstring{ HuhuCapture::Brand::name }, 18.f, 28.f);
     brand->setFontFamily(L"Segoe UI Semibold");
     brand->setMarginLeft(12.f);
-    auto* title = Theme::label(menuBox, Lang::get(L"setting.title"), 14.f, 24.f, Theme::secondary);
-    title->setMargin(12.f, 0.f, 0.f, 24.f);
+    brand->setMarginBottom(24.f);
     initMenuItems(menuBox);
 
     content = body->makeChild<WinSettingCommon>();
