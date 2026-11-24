@@ -9,6 +9,7 @@
 #include "services/ImageExport.h"
 #include "services/Lang.h"
 #include "core/ScrollStitch.h"
+#include "core/ImagePreview.h"
 #include <limits>
 #include <new>
 using namespace Microsoft::WRL;
@@ -177,9 +178,6 @@ void CapLong::firstStep()
 void CapLong::makeImgPreview()
 {
     if (imgW <= 0 || resultH <= 0 || imgData.empty()) return;
-    const float scale = tool ? static_cast<float>(tool->w) / imgW : 1.0f;
-    const int previewW = static_cast<int>(imgW * scale);
-    const int fullPreviewH = static_cast<int>(resultH * scale);
     auto ctx = Ling::D2D::get()->deviceContext;
     const auto maximum = static_cast<int>(ctx->GetMaximumBitmapSize());
     POINT bottom{ tool ? tool->x : win->x, tool ? tool->y : win->y };
@@ -188,30 +186,21 @@ void CapLong::makeImgPreview()
     // The original preview is bottom-aligned above the toolbar. Its invisible
     // top may be hundreds of thousands of rows for a very narrow selection.
     // Rasterize only the visible tail with the identical source coordinates.
-    const int previewH = std::min({ fullPreviewH, static_cast<int>(std::max(0L, bottom.y)), maximum });
-    if (previewW <= 0 || previewH <= 0 || previewW > maximum) {
-        imgPreview.Reset();
-        return;
-    }
-    const int firstPreviewRow = fullPreviewH - previewH;
     try {
-        previewPixels.resize(static_cast<std::size_t>(previewW) * 4 * previewH);
-        for (int y = 0; y < previewH; ++y) {
-            const int srcY = std::min(static_cast<int>((firstPreviewRow + y) / scale), resultH - 1);
-            for (int x = 0; x < previewW; ++x) {
-                const int srcX = std::min(static_cast<int>(x / scale), imgW - 1);
-                const auto src = (static_cast<std::size_t>(srcY) * imgW + srcX) * 4;
-                const auto dst = (static_cast<std::size_t>(y) * previewW + x) * 4;
-                std::copy_n(imgData.data() + src, 4, previewPixels.data() + dst);
-            }
+        const auto size = ScreenCapture::Core::makeImagePreview(imgData, imgW, resultH,
+            tool ? static_cast<float>(tool->w) : static_cast<float>(imgW),
+            static_cast<int>(bottom.y), maximum, previewPixels);
+        if (!size) {
+            imgPreview.Reset();
+            return;
         }
         D2D1_BITMAP_PROPERTIES1 props = {
             .pixelFormat{D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)},
             .dpiX{96.0f}, .dpiY{96.0f}, .bitmapOptions{D2D1_BITMAP_OPTIONS_NONE}
         };
         ComPtr<ID2D1Bitmap1> nextPreview;
-        if (SUCCEEDED(ctx->CreateBitmap(D2D1::SizeU(previewW, previewH), previewPixels.data(),
-                                        previewW * 4, props, nextPreview.GetAddressOf()))) {
+        if (SUCCEEDED(ctx->CreateBitmap(D2D1::SizeU(size->width, size->height), previewPixels.data(),
+                                        size->width * 4, props, nextPreview.GetAddressOf()))) {
             imgPreview = std::move(nextPreview);
         }
     }

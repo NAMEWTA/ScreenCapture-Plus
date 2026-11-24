@@ -8,7 +8,7 @@
 | --- | --- |
 | `PixelBufferTests.cpp` | 尺寸乘法溢出、缓冲长度、奇数宽、多行、BGRA→RGB 通道顺序、alpha 规范化、越界哨兵 |
 | `history_tests.cpp` | 空历史、删除非首项、撤销边界、清 redo、借用解除、延迟回调、地址复用、10,000 条记录扩容 |
-| `scroll_stitch_tests.cpp` | 1,200 次与原始匹配公式对比、100 次拼接像素对比、空白条带与 tie-breaking、灰度权重、非法输入不改结果 |
+| `scroll_stitch_tests.cpp` | 1,200 次与原始匹配公式对比、100 次拼接像素对比、60 次预览可见尾部像素对比、极窄选区内存边界、空白条带与 tie-breaking、灰度权重、非法输入不改结果 |
 | `release_version_tests.cpp` | 三段标签、可选 v、WORD 上限、非法/预发布标签拒绝、数值版本顺序 |
 
 `scripts/smoke.ps1` 把 EXE 复制到隔离临时目录，仅放一个空 `config.json`，以 `--enter=tray` 启动，确认三秒内没有提前退出，然后只结束它自己创建的进程并清理临时目录。此检查验证基本启动、便携配置和内置语言资源，不声称验证了截图、显卡、声音或全部 GUI。

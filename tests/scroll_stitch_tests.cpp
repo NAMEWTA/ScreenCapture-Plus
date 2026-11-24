@@ -1,4 +1,5 @@
 #include "core/ScrollStitch.h"
+#include "core/ImagePreview.h"
 #include <cstdlib>
 #include <iostream>
 #include <random>
@@ -110,5 +111,66 @@ int main()
     const auto savedHeight = resultHeight;
     require(!appendScrollFrame(result, width, resultHeight, {}, frameHeight, 0, 1), "short frame was accepted");
     require(result == saved && resultHeight == savedHeight, "invalid input modified the result");
-    std::cout << "scroll stitching: 1200 randomized matcher comparisons, 100 append comparisons and edge cases passed\n";
+    // Compare the real clipped sampler with the tail of the original complete
+    // nearest-neighbour thumbnail, including non-integer zoom and BGRA alpha.
+    for (int sample = 0; sample < 60; ++sample) {
+        const int sourceWidth = 1 + static_cast<int>(random() % 73);
+        const int sourceHeight = 1 + static_cast<int>(random() % 180);
+        const float targetWidth = 32.5f + static_cast<float>(random() % 160);
+        const int visibleHeight = 1 + static_cast<int>(random() % 200);
+        std::vector<std::uint8_t> source(static_cast<std::size_t>(sourceWidth) * sourceHeight * 4);
+        for (auto& value : source) value = static_cast<std::uint8_t>(random() % 256);
+        const float scale = targetWidth / sourceWidth;
+        const int fullWidth = static_cast<int>(sourceWidth * scale);
+        const int fullHeight = static_cast<int>(sourceHeight * scale);
+        std::vector<std::uint8_t> complete(static_cast<std::size_t>(fullWidth) * fullHeight * 4);
+        for (int y = 0; y < fullHeight; ++y) {
+            const int sourceY = std::min(static_cast<int>(static_cast<float>(y) / scale), sourceHeight - 1);
+            for (int x = 0; x < fullWidth; ++x) {
+                const int sourceX = std::min(static_cast<int>(static_cast<float>(x) / scale), sourceWidth - 1);
+                std::copy_n(source.data() + (static_cast<std::size_t>(sourceY) * sourceWidth + sourceX) * 4,
+                            4, complete.data() + (static_cast<std::size_t>(y) * fullWidth + x) * 4);
+            }
+        }
+        std::vector<std::uint8_t> clipped;
+        const auto size = ScreenCapture::Core::makeImagePreview(source, sourceWidth, sourceHeight,
+            targetWidth, visibleHeight, 16384, clipped);
+        if (fullHeight == 0) {
+            require(!size, "zero-height preview must not allocate");
+            continue;
+        }
+        require(size && size->width == fullWidth && size->height == std::min(fullHeight, visibleHeight),
+                "clipped preview dimensions changed");
+        require(clipped == std::vector<std::uint8_t>(complete.end() - clipped.size(), complete.end()),
+                "visible thumbnail pixels differ from the original full preview");
+    }
+    // The complete thumbnail would be 128 x 4,608,000 (>2 GiB). Only its visible
+    // 1,080 rows should be rasterized, retaining the original bottom alignment.
+    std::vector<std::uint8_t> narrow(36000 * 4);
+    for (int row = 0; row < 36000; ++row) {
+        narrow[row * 4] = static_cast<std::uint8_t>(row % 251);
+        narrow[row * 4 + 1] = static_cast<std::uint8_t>((row / 251) % 251);
+        narrow[row * 4 + 3] = 255;
+    }
+    std::vector<std::uint8_t> preview;
+    const auto narrowSize = ScreenCapture::Core::makeImagePreview(narrow, 1, 36000, 128.0f, 1080, 16384, preview);
+    require(narrowSize && narrowSize->width == 128 && narrowSize->height == 1080,
+            "narrow selection did not limit preview to visible rows");
+    require(preview.size() == 128u * 1080u * 4u, "narrow selection allocated a complete thumbnail");
+    for (int row = 0; row < 1080; ++row) {
+        const int sourceRow = (4608000 - 1080 + row) / 128;
+        require(std::equal(preview.begin() + static_cast<std::size_t>(row) * 128 * 4,
+                           preview.begin() + static_cast<std::size_t>(row) * 128 * 4 + 4,
+                           narrow.begin() + sourceRow * 4), "narrow preview sampled a different row");
+    }
+    const auto previousPreview = preview;
+    require(!ScreenCapture::Core::makeImagePreview({}, 1, 36000, 128.0f, 1080, 16384, preview),
+            "short preview source was accepted");
+    require(!ScreenCapture::Core::makeImagePreview(narrow, 1, 36000, 128.0f, 0, 16384, preview),
+            "invisible preview was allocated");
+    require(!ScreenCapture::Core::makeImagePreview(narrow, 1, 36000,
+                (std::numeric_limits<float>::max)(), 1080, 16384, preview),
+            "overflowing preview dimensions were accepted");
+    require(preview == previousPreview, "invalid preview input modified the previous buffer");
+    std::cout << "scroll stitching: 1200 matcher, 100 append, 60 preview comparisons and edge cases passed\n";
 }

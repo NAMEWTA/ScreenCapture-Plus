@@ -8,6 +8,7 @@
 #include "core/ReleaseVersion.h"
 #include <format>
 #include <winrt/Windows.Web.Http.h>
+#include <winrt/Windows.Web.Http.Headers.h>
 #include <winrt/Windows.Web.Http.Filters.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.System.Threading.h>
