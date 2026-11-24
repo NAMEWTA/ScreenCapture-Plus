@@ -1,3 +1,5 @@
+> ScreenCapture-Plus build and release instructions: [BUILDING.md](BUILDING.md). Architecture and maintenance: [ARCHITECTURE.md](ARCHITECTURE.md).
+
 [简体中文](https://github.com/xland/ScreenCapture/) | [English](./ReadMe.en-US.md) | [Русский](./ReadMe.ru-RU.md) | Bahasa Indonesia
 
 ![banner](./banner.png)
@@ -20,7 +22,7 @@
 
 ## Unduh
 
-[Release](https://github.com/xland/ScreenCapture/releases/) (1MB)
+[Release](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/) (1MB)
 
 ## Sistem Operasi yang Didukung
 

@@ -43,7 +43,7 @@
       <AdditionalDependencies>$(GifskiLibrary);dwmapi.lib;windowsapp.lib;comctl32.lib;imm32.lib;version.lib;mf.lib;mfreadwrite.lib;mfplat.lib;mfuuid.lib;ntdll.lib;userenv.lib;d2d1.lib;d3d11.lib;dxgi.lib;dwrite.lib;windowscodecs.lib;shlwapi.lib;shcore.lib;ole32.lib;oleaut32.lib;uuid.lib;shell32.lib;gdi32.lib;user32.lib;comdlg32.lib;wininet.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ResourceCompile>
-      <AdditionalOptions>/c65001 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/c 65001 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(RepoRoot)resources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Manifest>

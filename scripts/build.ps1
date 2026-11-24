@@ -32,8 +32,20 @@ try {
 }
 $nativeMatch = Select-String -Path $nativeLog -Pattern 'native-static-libs:\s*(.+)$' | Select-Object -Last 1
 if ($nativeMatch) {
-    $nativeLibraries = ($nativeMatch.Matches[0].Groups[1].Value.Trim() -split '\s+' | Select-Object -Unique) -join ';'
-    if ($nativeLibraries -notmatch '^[A-Za-z0-9_.;-]+$') { throw 'Unexpected Rust native library list.' }
+    # rustc emits both library filenames and MSVC /defaultlib:name directives.
+    # Translate the latter to filenames while preserving the reported link order.
+    $libraries = foreach ($entry in ($nativeMatch.Matches[0].Groups[1].Value.Trim() -split '\s+')) {
+        if ($entry -match '^/defaultlib:([A-Za-z0-9_.-]+)$') {
+            $library = $Matches[1]
+            if (-not $library.EndsWith('.lib', [StringComparison]::OrdinalIgnoreCase)) { $library += '.lib' }
+            $library
+        } elseif ($entry -match '^[A-Za-z0-9_.-]+\.lib$') {
+            $entry
+        } else {
+            throw "Unexpected Rust native link directive: $entry"
+        }
+    }
+    $nativeLibraries = $libraries -join ';'
     @"
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemDefinitionGroup><Link><AdditionalDependencies>$nativeLibraries;%(AdditionalDependencies)</AdditionalDependencies></Link></ItemDefinitionGroup>

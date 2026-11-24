@@ -61,7 +61,7 @@ private:
 	std::vector<BYTE> imgData;
 	std::vector<BYTE> img1;
 	ScreenCapture::Platform::GdiCapture capture;
-	std::vector<BYTE> previousGray, currentGray;
+	std::vector<BYTE> previousGray, currentGray, previewPixels;
 	int imgW{ 0 }, imgH{ 0 };
 	int resultH{ 0 };
 	POINT capStartPos{};

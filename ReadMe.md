@@ -2,7 +2,7 @@
 
 ![banner](./docs/banner.png)
 
-**ScreenCapture** 一个小巧但功能强大的Windows截图工具。
+**ScreenCapture-Plus** 是 [ScreenCapture](https://github.com/xland/ScreenCapture) 的长期维护分支，保留原生 Windows 截图工具的功能与交互，持续优化架构、性能和构建发布。
 
 ## 特性
 
@@ -20,7 +20,7 @@
 
 ## 下载
 
-[Release](https://github.com/xland/ScreenCapture/releases/) （1MB）
+[下载本项目的 Release](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/)。发布后 GitHub Actions 自动构建并附加 `ScreenCapture.exe`、便携 ZIP、符号和 SHA256 校验文件；文件大小以实际资产为准。
 
 ## 常用功能与问题
 
@@ -35,9 +35,24 @@
 
 ## 编译
 
-- main分支依赖 [Ling](https://github.com/xland/Ling) GUI 框架.
-- 使用 Visual Studio 2026（With C++ Desktop Dev Kit）即可编译项目。
-- [2.4.25（基于D2D）](https://github.com/xland/ScreenCapture/tree/2.4.25)或 [2.3.3（基于Qt）](https://github.com/xland/ScreenCapture/tree/2.3.3_qt)是以前的稳定分支。
+使用 Windows x64、Visual Studio 2026（C++ Desktop + ATL）、PowerShell 7、Git 和 Rustup。构建脚本自动恢复固定提交的 Ling/Yoga/gifski，统一静态链接；不再依赖开发者电脑上的绝对路径。
+
+```powershell
+pwsh ./scripts/build.ps1 -Configuration Release
+pwsh ./scripts/test.ps1
+pwsh ./scripts/smoke.ps1
+pwsh ./scripts/package.ps1
+```
+
+可执行文件位于 `artifacts/bin/x64/Release/ScreenCapture.exe`。也可在首次构建后打开 `ScreenCapture.slnx` 调试。
+
+- [完整构建与 Release 发布指南](docs/BUILDING.md)
+- [目录、架构、设计选择与性能说明](docs/ARCHITECTURE.md)
+- [自动化覆盖与 Windows 功能验收](docs/VALIDATION.md)
+- [开发约定](CONTRIBUTING.md)
+- [第三方来源与许可](third_party/NOTICE.md)
+
+上游历史稳定分支：[2.4.25（D2D）](https://github.com/xland/ScreenCapture/tree/2.4.25)、[2.3.3（Qt）](https://github.com/xland/ScreenCapture/tree/2.3.3_qt)。
 
 ## 命令行
 
@@ -69,7 +84,7 @@
 
 ## 便携能力
 
-默认情况下 ScreenCapture 会从 `%appdata%\ScreenCapture\Lang` 目录下读取配置信息、语言文件及插件。
+默认配置位于 `%appdata%\ScreenCapture\config.json`，额外语言位于 `%appdata%\ScreenCapture\Lang`，OCR 插件位于 `%appdata%\ScreenCapture\plugin`。
 
 但用户可以在 `ScreenCapture.exe` 同目录下创建一个 `config.json` 的空文件，重启应用，`ScreenCapture` 即会在此文件中设置配置信息。
 
@@ -77,7 +92,9 @@
 
 文字识别插件 `ImageReader.exe` 也可以放置在 `ScreenCapture.exe` 同目录下
 
-## 赞助
+## 上游作者与赞助
+
+保留原作者的署名、MIT 许可与赞助信息。下列联系方式与二维码属于上游作者。
 
 <table>
   <tr>

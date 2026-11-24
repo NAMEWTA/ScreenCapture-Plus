@@ -69,13 +69,17 @@ namespace {
 		return count == 0;
 	}
 
-	std::filesystem::path selfPath()
-	{
-		std::vector<wchar_t> buf(MAX_PATH);
-		auto len = GetModuleFileName(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
-		if (len == 0) return {};
-		return std::filesystem::path{ std::wstring{ buf.data(), len } };
-	}
+    std::filesystem::path selfPath()
+    {
+        std::vector<wchar_t> buffer(MAX_PATH);
+        for (;;) {
+            const auto length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+            if (length == 0) return {};
+            if (length < buffer.size()) return std::filesystem::path{ std::wstring{ buffer.data(), length } };
+            if (buffer.size() >= 32768) return {};
+            buffer.resize(std::min<std::size_t>(buffer.size() * 2, 32768));
+        }
+    }
 
 	// exe 所在的目录能不能写。装在 Program Files 下（没提权）、或者放在只读介质上就不能，
 	// 这种情况下下载了也覆盖不上去，白费服务端的流量，所以下载之前先探一下
@@ -282,13 +286,23 @@ namespace {
 				std::filesystem::remove(target, ec);
 				co_return;
 			}
-			// 回 UI 线程：下面这几个变量和定时器都只在 UI 线程上碰
-			dispatcher.TryEnqueue([lifetime, target, verStr]() {
-                if (!lifetime->active) return;
-				newExePath = target;
-				newVer = verStr;
-				promptLater();
-			});
+            if (!lifetime->active) {
+                std::filesystem::remove(target, ec);
+                co_return;
+            }
+            // The UI may shut down between writing the file and enqueueing its
+            // completion. Retain no orphan download when that race is lost.
+            const bool queued = dispatcher.TryEnqueue([lifetime, target, verStr]() {
+                if (!lifetime->active) {
+                    std::error_code ignored;
+                    std::filesystem::remove(target, ignored);
+                    return;
+                }
+                newExePath = target;
+                newVer = verStr;
+                promptLater();
+            });
+            if (!queued) std::filesystem::remove(target, ec);
 		}
 		catch (...) {
 			// 网络不通、超时、被取消、服务端返回了个错误码、磁盘写不进去：一律静默。

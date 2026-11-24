@@ -54,6 +54,8 @@ CapLong::~CapLong()
 
 void CapLong::dispose()
 {
+    isScrolling = false;
+    capture.reset();
     win->killTimer(scrollMsgId);
     win->killTimer(scrollEndMsgId);
     if (tool) tool->close();
@@ -121,6 +123,7 @@ void CapLong::onUp(POINT pos)
 
 void CapLong::onTimerCB(UINT timerId)
 {
+    if (!isScrolling || isFinish) return;
     if (timerId == scrollMsgId) {
         POINT pt;
         GetCursorPos(&pt);
@@ -157,9 +160,15 @@ void CapLong::firstStep()
         return;
     }
     const auto pixels = capture.pixels();
-    imgData.assign(pixels.begin(), pixels.end());
-    img1 = imgData;
-    ScreenCapture::Core::toGrayscale(img1, imgW, imgH, previousGray);
+    try {
+        imgData.assign(pixels.begin(), pixels.end());
+        img1 = imgData;
+        ScreenCapture::Core::toGrayscale(img1, imgW, imgH, previousGray);
+    }
+    catch (const std::bad_alloc&) {
+        stopCap();
+        return;
+    }
     makeImgPreview();
     win->refresh();
     win->setTimer(88, scrollMsgId); //准备滚动
@@ -167,32 +176,47 @@ void CapLong::firstStep()
 
 void CapLong::makeImgPreview()
 {
-    imgPreview.Reset();
     if (imgW <= 0 || resultH <= 0 || imgData.empty()) return;
-    float previewScaleW = tool ? (float)tool->w / (float)imgW : 1.0f;
-    int previewW = (int)((float)imgW * previewScaleW);
-    int previewH = (int)((float)resultH * previewScaleW);
-    if (previewW > 0 && previewH > 0) {
-        std::vector<BYTE> scaledData((size_t)previewW * 4 * previewH);
-        for (int y = 0; y < previewH; y++) {
-            int srcY = (int)((float)y / previewScaleW);
-            if (srcY >= resultH) srcY = resultH - 1;
-            for (int x = 0; x < previewW; x++) {
-                int srcX = (int)((float)x / previewScaleW);
-                if (srcX >= imgW) srcX = imgW - 1;
-                const auto srcIdx = (static_cast<std::size_t>(srcY) * imgW + srcX) * 4;
-                const auto dstIdx = (static_cast<std::size_t>(y) * previewW + x) * 4;
-                scaledData[dstIdx] = imgData[srcIdx];
-                scaledData[dstIdx + 1] = imgData[srcIdx + 1];
-                scaledData[dstIdx + 2] = imgData[srcIdx + 2];
-                scaledData[dstIdx + 3] = imgData[srcIdx + 3];
+    const float scale = tool ? static_cast<float>(tool->w) / imgW : 1.0f;
+    const int previewW = static_cast<int>(imgW * scale);
+    const int fullPreviewH = static_cast<int>(resultH * scale);
+    auto ctx = Ling::D2D::get()->deviceContext;
+    const auto maximum = static_cast<int>(ctx->GetMaximumBitmapSize());
+    POINT bottom{ tool ? tool->x : win->x, tool ? tool->y : win->y };
+    bottom.y -= static_cast<LONG>(2 * win->dpi);
+    ScreenToClient(win->hwnd, &bottom);
+    // The original preview is bottom-aligned above the toolbar. Its invisible
+    // top may be hundreds of thousands of rows for a very narrow selection.
+    // Rasterize only the visible tail with the identical source coordinates.
+    const int previewH = std::min({ fullPreviewH, static_cast<int>(std::max(0L, bottom.y)), maximum });
+    if (previewW <= 0 || previewH <= 0 || previewW > maximum) {
+        imgPreview.Reset();
+        return;
+    }
+    const int firstPreviewRow = fullPreviewH - previewH;
+    try {
+        previewPixels.resize(static_cast<std::size_t>(previewW) * 4 * previewH);
+        for (int y = 0; y < previewH; ++y) {
+            const int srcY = std::min(static_cast<int>((firstPreviewRow + y) / scale), resultH - 1);
+            for (int x = 0; x < previewW; ++x) {
+                const int srcX = std::min(static_cast<int>(x / scale), imgW - 1);
+                const auto src = (static_cast<std::size_t>(srcY) * imgW + srcX) * 4;
+                const auto dst = (static_cast<std::size_t>(y) * previewW + x) * 4;
+                std::copy_n(imgData.data() + src, 4, previewPixels.data() + dst);
             }
         }
         D2D1_BITMAP_PROPERTIES1 props = {
             .pixelFormat{D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)},
             .dpiX{96.0f}, .dpiY{96.0f}, .bitmapOptions{D2D1_BITMAP_OPTIONS_NONE}
         };
-        Ling::D2D::get()->deviceContext->CreateBitmap(D2D1::SizeU(previewW, previewH), scaledData.data(), previewW * 4, props, imgPreview.GetAddressOf());
+        ComPtr<ID2D1Bitmap1> nextPreview;
+        if (SUCCEEDED(ctx->CreateBitmap(D2D1::SizeU(previewW, previewH), previewPixels.data(),
+                                        previewW * 4, props, nextPreview.GetAddressOf()))) {
+            imgPreview = std::move(nextPreview);
+        }
+    }
+    catch (const std::bad_alloc&) {
+        // The full result is still valid; keep the previous thumbnail available.
     }
 }
 
@@ -230,7 +254,13 @@ void CapLong::capStep()
     int stripH = std::min(comparisonH, imgH - changeStartY);
     if (stripH <= 0) { win->setTimer(500, scrollMsgId); return; }
     int img1StripH = imgH - changeStartY;
-    ScreenCapture::Core::toGrayscale(data, imgW, imgH, currentGray);
+    try {
+        ScreenCapture::Core::toGrayscale(data, imgW, imgH, currentGray);
+    }
+    catch (const std::bad_alloc&) {
+        stopCap();
+        return;
+    }
     const auto grayOffset = static_cast<std::size_t>(changeStartY) * imgW;
     const auto gray1 = std::span<const BYTE>(previousGray).subspan(grayOffset);
     const auto gray2 = std::span<const BYTE>(currentGray).subspan(grayOffset);
@@ -320,6 +350,10 @@ void CapLong::paintImgPreview(ID2D1DeviceContext* ctx)
 
 void CapLong::stopCap()
 {
+    capture.reset();
+    std::vector<BYTE>().swap(img1);
+    std::vector<BYTE>().swap(previousGray);
+    std::vector<BYTE>().swap(currentGray);
     isFinish = true;
     makeStopText();
     win->restoreWin();
