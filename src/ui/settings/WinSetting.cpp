@@ -1,163 +1,172 @@
 #include "pch.h"
 #include "app/Brand.h"
-#include <filesystem>
-#include "app/App.h"
 #include "services/Lang.h"
+#include "ui/settings/SettingsTheme.h"
 #include "ui/settings/WinSetting.h"
 #include "ui/settings/WinSettingCommon.h"
 #include "ui/settings/WinSettingShortcut.h"
 #include "ui/settings/WinSettingAbout.h"
 
+#include <iterator>
+#include <algorithm>
+
+namespace {
 std::unique_ptr<WinSetting> winSetting;
-
-WinSetting::WinSetting() :Ling::WinBase()
-{
-	// 关窗按钮是 body 的子节点，而 close() 正是从它的点击回调里一路进来的 ——
-	// 在那里同步 winSetting.reset() 就是 use-after-free，所以推迟到下一轮消息循环。
-	// 不放掉的话这个对象会一直活着，Ling 那边就永远看不到"一个窗口都不剩"，D2D 设备
-	// 也就永远还不回去
-	onDestroy.add([]() {
-		Ling::App::get()->dq.TryEnqueue([]() { winSetting.reset(); });
-	});
-	setTitle(Lang::get(L"setting.title"));
-	setSize(680, 560);
-	setCenter();
-	createNativeWindow();
+namespace Theme = HuhuCapture::UI::SettingsTheme;
 }
 
-WinSetting::~WinSetting()
+WinSetting::WinSetting() : Ling::WinBase()
 {
-
+    // A close button is owned by this window: defer destruction until its event
+    // callback has returned. Language changes enqueue reopening after this reset.
+    onDestroy.add([]() {
+        Ling::App::get()->dq.TryEnqueue([]() { winSetting.reset(); });
+    });
+    setTitle(Lang::get(L"setting.title"));
+    RECT workArea{};
+    float availableWidth = 880.f, availableHeight = 640.f;
+    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0)) {
+        availableWidth = (std::max)(320.f, (workArea.right - workArea.left - 32.f) / dpi);
+        availableHeight = (std::max)(320.f, (workArea.bottom - workArea.top - 32.f) / dpi);
+    }
+    setSize((std::min)(880.f, availableWidth), (std::min)(640.f, availableHeight));
+    setMinSize((std::min)(800.f, availableWidth), (std::min)(520.f, availableHeight));
+    setCenter();
+    createNativeWindow();
 }
+
+WinSetting::~WinSetting() = default;
 
 void WinSetting::init()
 {
-	// 已经开着就拉到前台，不建第二个。原来是"关掉旧的再建新的"，那样会和上面那个
-	// 延迟释放撞车：排在队列里的 reset 跑起来时放掉的是刚建好的这一个
-	if (winSetting) {
-		SetForegroundWindow(winSetting->hwnd);
-		return;
-	}
-	winSetting.reset(new WinSetting());
+    if (winSetting) {
+        if (IsIconic(winSetting->hwnd)) ShowWindow(winSetting->hwnd, SW_RESTORE);
+        SetForegroundWindow(winSetting->hwnd);
+        return;
+    }
+    winSetting.reset(new WinSetting());
+}
+
+WinSetting* WinSetting::get()
+{
+    return winSetting.get();
 }
 
 void WinSetting::dispose()
 {
-	winSetting.reset();
+    winSetting.reset();
+}
+
+void WinSetting::layout()
+{
+    const bool compact = h / dpi < 560.f;
+    if (content && (styledContent != content || compactLayout != compact)) {
+        styledContent = content;
+        compactLayout = compact;
+        if (compact) content->setPadding(24.f, 48.f, 24.f, 16.f);
+        else content->setPadding(32.f, 56.f, 32.f, 24.f);
+        if (menuIndex == 0) static_cast<WinSettingCommon*>(content)->setCompact(compact);
+    }
+    Ling::WinBase::layout();
 }
 
 void WinSetting::onCreated()
 {
-	enableShadow();
-	body->setBg(HuhuCapture::Brand::surfaceRgba);
-	body->setFlexDirection(Ling::FlexDirection::Row);
-	auto menuBox = body->makeChild<Ling::Node>();
-	menuBox->setBg(HuhuCapture::Brand::creamRgba);
-	menuBox->setWidth(160.f);
-	menuBox->setHeightPercent(100.f);
-	menuBox->setPaddingTop(40.f);
-	initMenuItems(menuBox);
+    enableShadow();
+    enableBorderResize();
+    body->setBg(Theme::canvas);
+    body->setFlexDirection(Ling::FlexDirection::Row);
 
-	content = body->makeChild<WinSettingCommon>();
-	content->setFlexGrow(1.0);
-	content->setHeightPercent(100.f);
-	content->setPaddingTop(40.f);
-	content->setPadding(20.f, 40.f, 20.f, 40.f);
-	content->setFlexDirection(Ling::FlexDirection::Column);
+    auto* menuBox = body->makeChild<Ling::Node>();
+    menuBox->setBg(Theme::surface);
+    menuBox->setWidth(184.f);
+    menuBox->setFlexShrink(0.f);
+    menuBox->setHeightPercent(100.f);
+    menuBox->setPadding(16.f, 56.f, 16.f, 24.f);
+    auto* brand = Theme::label(menuBox, std::wstring{ HuhuCapture::Brand::name }, 18.f, 28.f);
+    brand->setFontFamily(L"Segoe UI Semibold");
+    brand->setMarginLeft(12.f);
+    auto* title = Theme::label(menuBox, Lang::get(L"setting.title"), 14.f, 24.f, Theme::secondary);
+    title->setMargin(12.f, 0.f, 0.f, 24.f);
+    initMenuItems(menuBox);
 
-	auto closeBtn = body->makeChild<Ling::Button>();
-	closeBtn->setSize(42.f, 32.f);
-	closeBtn->setPositionType(Ling::Position::Absolute);
-	closeBtn->setPosition(Ling::Edge::Right, 0);
-	closeBtn->setPosition(Ling::Edge::Top, 0);
-	closeBtn->setHoverColor(0xFFFFFFFF);
-	closeBtn->setHoverBg(0xE81123FF);
-	closeBtn->setText(L"\ue62d");
-	closeBtn->setFontFamily(L"icon");
-	closeBtn->onClick.add([](Ling::Button* btn) {
-		btn->win->close();
-		});
-	show();
+    content = body->makeChild<WinSettingCommon>();
+    Theme::stylePage(content);
+
+    auto* closeButton = body->makeChild<Ling::Button>();
+    closeButton->setId(L"settings-close");
+    closeButton->setSize(48.f, Theme::controlHeight);
+    closeButton->setPositionType(Ling::Position::Absolute);
+    closeButton->setPosition(Ling::Edge::Right, 8.f);
+    closeButton->setPosition(Ling::Edge::Top, 6.f);
+    closeButton->setBorderRadius(11.f);
+    closeButton->setColor(Theme::secondary);
+    closeButton->setHoverColor(Theme::ink);
+    closeButton->setHoverBg(Theme::hairline);
+    closeButton->setText(L"\ue62d");
+    closeButton->setFontFamily(L"icon");
+    closeButton->setFontSize(20.f);
+    closeButton->onClick.add([](Ling::Button* button) { button->win->close(); });
+    show();
 }
+
+void WinSetting::styleMenuItem(Ling::Button* menu, bool selected)
+{
+    menu->setColor(selected ? Theme::blue : Theme::ink);
+    menu->setBg(selected ? Theme::blueTint : Theme::surface);
+    menu->setHoverColor(Theme::blue);
+    menu->setHoverBg(selected ? Theme::blueTint : Theme::canvas);
+}
+
 void WinSetting::initMenuItems(Ling::Node* menuBox)
 {
-	for (size_t i = 0; i < 3; i++)
-	{
-		auto menuItem = menuBox->makeChild<Ling::Button>();
-		menuItem->setFontSize(14.f);
-		menuItem->setHeight(40.f);
-		if (i == 0) {
-			menuItem->setColor(0xFFFFFFFF);
-			menuItem->setBg(HuhuCapture::Brand::inkRgba);
-			menuItem->setHoverColor(0xFFFFFFFF);
-			menuItem->setHoverBg(HuhuCapture::Brand::inkRgba);
-			menuItem->setText(Lang::get(L"setting.common"));
-		}
-		else {
-			menuItem->setHoverColor(0x000000ff);
-			menuItem->setHoverBg(HuhuCapture::Brand::hoverRgba);
-			if (i == 1) {
-				menuItem->setText(Lang::get(L"setting.shortcut"));
-			}
-			else if (i == 2) {
-				menuItem->setText(Lang::get(L"setting.about"));
-			}
-		}
-		menuItem->onClick.add([this](auto menuItem) {this->onMenuItemClick(menuItem);});
-		menus.push_back(menuItem);
-	}
+    const std::wstring keys[]{ L"common", L"shortcut", L"about" };
+    for (size_t index = 0; index < std::size(keys); ++index) {
+        auto* menu = menuBox->makeChild<Ling::Button>();
+        menu->setId(L"settings-menu-" + keys[index]);
+        menu->setFontFamily(L"Segoe UI");
+        menu->setFontSize(17.f);
+        menu->setHeight(Theme::controlHeight);
+        menu->setFlexShrink(0.f);
+        menu->setMarginBottom(8.f);
+        menu->setPaddingLeft(14.f);
+        menu->setAlignItems(Ling::Align::FlexStart);
+        menu->setBorderRadius(11.f);
+        menu->setText(Lang::get(L"setting." + keys[index]));
+        styleMenuItem(menu, index == 0);
+        menu->onClick.add([this](Ling::Button* selected) { onMenuItemClick(selected); });
+        menus.push_back(menu);
+    }
 }
-void WinSetting::onMenuItemClick(Ling::Button* menuItem)
+
+void WinSetting::onMenuItemClick(Ling::Button* menu)
 {
-	auto index = Ling::Util::getIndex(menus, menuItem);
-	if (index < 0 || index == menuIndex) return;
-	// 通用设置里的语言下拉框是挂在 body 上的（要能盖住下面的控件），content 被换掉
-	// 它不会跟着消失，所以切菜单之前先收掉
-	if (menuIndex == 0) {
-		static_cast<WinSettingCommon*>(content)->hideSelectBox();
-	}
-	auto oldItem = menus[menuIndex];
-	oldItem->setColor(0x333333FF);
-	oldItem->setBg(0x00000000);
-	oldItem->setHoverColor(0x000000ff);
-	oldItem->setHoverBg(HuhuCapture::Brand::hoverRgba);
-	menuIndex = index;
-	menuItem->setColor(0xFFFFFFFF);
-	menuItem->setBg(HuhuCapture::Brand::inkRgba);
-	menuItem->setHoverColor(0xFFFFFFFF);
-	menuItem->setHoverBg(HuhuCapture::Brand::inkRgba);
+    const auto index = Ling::Util::getIndex(menus, menu);
+    if (index < 0 || index == menuIndex) return;
+    if (menuIndex == 0) static_cast<WinSettingCommon*>(content)->hideSelectBox();
+    styleMenuItem(menus[menuIndex], false);
+    menuIndex = index;
+    styleMenuItem(menu, true);
 
-	body->removeChild(content);
-	if (menuIndex == 0) {
-		content = body->makeChild<WinSettingCommon>();
-	}
-	else if (menuIndex == 1) {
-		content = body->makeChild<WinSettingShortcut>();
-	}
-	else if (menuIndex == 2) {
-		content = body->makeChild<WinSettingAbout>();
-	}
-	content->setFlexGrow(1.0);
-	content->setHeightPercent(100.f);
-	content->setPadding(20.f,40.f,20.f,40.f);
-	content->setFlexDirection(Ling::FlexDirection::Column);
+    body->removeChild(content);
+    styledContent = nullptr;
+    if (menuIndex == 0) content = body->makeChild<WinSettingCommon>();
+    else if (menuIndex == 1) content = body->makeChild<WinSettingShortcut>();
+    else content = body->makeChild<WinSettingAbout>();
+    Theme::stylePage(content);
 }
 
-LRESULT WinSetting::onHitTest(const POINT pos)
+LRESULT WinSetting::onHitTest(const POINT position)
 {
-	POINT pt = pos;
-	ScreenToClient(hwnd, &pt);
-	if (!isMaximized) {
-		auto result = borderHitTest(pt);
-		if (result != HTCLIENT) return result;
-	}
-	if (pt.x > 0 && pt.y > 0 && pt.x < w - 32 * dpi && pt.y < 40 * dpi) {
-		return HTCAPTION;
-	}
-	if (pt.x > 0 && pt.y > 40*4*dpi && pt.x < 120 * dpi && pt.y < h) {
-		return HTCAPTION;
-	}
-	return HTCLIENT;
+    POINT point = position;
+    ScreenToClient(hwnd, &point);
+    if (!isMaximized) {
+        const auto result = borderHitTest(point);
+        if (result != HTCLIENT) return result;
+    }
+    // Restrict dragging to the title strip; the sidebar's lower area contains
+    // real controls and must not unexpectedly turn clicks into window movement.
+    if (point.x > 0 && point.y > 0 && point.x < w - 64.f * dpi && point.y < 50.f * dpi)
+        return HTCAPTION;
+    return HTCLIENT;
 }
-
-

@@ -15,8 +15,9 @@ public:
 	static Setting* get();
 	std::filesystem::path getDataPath();
 	const JsonObject getConfigObj();
-	void setShortcutKey(const std::wstring& type, const std::vector<std::wstring>& keys);
+	bool setShortcutKey(const std::wstring& type, const std::vector<std::wstring>& keys);
 	std::wstring getShortcutKey(const std::wstring& type);
+	void setShortcutCaptureActive(bool active);
 	void setAutoStart(bool autoStart);
 	bool getAutoStart();
 	std::wstring getLang();
@@ -51,5 +52,6 @@ private:
 	// 成员按声明顺序初始化
 	const std::filesystem::path configPath;
 	JsonObject configObj;
+	bool shortcutCaptureActive{false};
 };
 

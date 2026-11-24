@@ -7,6 +7,7 @@
 #include "ui/toolbars/ToolLong.h"
 #include "app/App.h"
 #include "services/ImageExport.h"
+#include "services/MediaHistory.h"
 #include "services/Lang.h"
 #include "core/ScrollStitch.h"
 #include "core/ImagePreview.h"
@@ -387,10 +388,10 @@ void CapLong::makeStopText()
     stopTextPos = { halfX - halfW, stopTextRect.top + (stopTextRect.bottom - stopTextRect.top - tm.height) / 2 };
 }
 
-void CapLong::copyToClipboard()
+bool CapLong::copyToClipboard()
 {
-    if (imgData.empty()) return;
-    ImageExport::saveToClipboard(imgW, resultH, imgData.data());
+    if (imgData.empty()) return false;
+    return HuhuCapture::MediaHistory::copyImage(win->hwnd, imgW, resultH, imgData.data());
 }
 
 bool CapLong::saveToFile()
@@ -398,7 +399,7 @@ bool CapLong::saveToFile()
     if (imgData.empty()) return false;
     auto path = ImageExport::getSaveFilePath(win->hwnd);
     if (path.empty()) return false;
-    return ImageExport::saveToFile(path, imgW, resultH, imgData.data());
+    return HuhuCapture::MediaHistory::saveImage(win->hwnd, path, imgW, resultH, imgData.data());
 }
 
 void CapLong::pin()

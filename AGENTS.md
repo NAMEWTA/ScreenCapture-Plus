@@ -4,8 +4,9 @@ huhucapture is a native Windows x64 C++20 application using Ling, Win32,
 Direct2D/DirectWrite, and Windows media APIs. It ships as `huhucapture.exe`.
 The canonical repository is `NAMEWTA/huhucapture`; the maintained branch is
 `main`. Start with [CONTRIBUTING.md](CONTRIBUTING.md), then read the relevant
-[architecture](docs/ARCHITECTURE.md), [annotation](docs/ANNOTATIONS.md), and
-[build](docs/BUILDING.md) guides before editing those paths.
+[architecture](docs/architecture.md), [annotation](docs/annotations.md), and
+[build](docs/building.md) guides before editing those paths. Directory, coding,
+and documentation rules live in [conventions](docs/conventions.md).
 
 ## Module and ownership boundaries
 
@@ -56,19 +57,45 @@ The canonical repository is `NAMEWTA/huhucapture`; the maintained branch is
   languages, and command-line behavior unless the task explicitly changes them.
   OCR is absent; do not restore obsolete controls, downloads, or plugin discovery.
 
+## Media archive contracts
+
+- Saving or completing a copy archives the finished image or recording under
+  the Windows Documents known folder's `huhucapture` directory. Use the shared
+  media service for naming, exclusive creation and persistence; UI handlers must
+  not implement a second archive path or delete an entire directory.
+- Use local `YYYYMMDD-HHMMSS` names and collision suffixes. Only completed
+  top-level timestamp-named PNG/GIF/MP4 files belong to history. Keep original
+  files independent of rebuildable thumbnails and the Windows clipboard.
+- Finalize recording before archiving and copy a stable media path. On archive
+  failure retain the temporary recording or editing session and report failure.
+  Cancelling Save As must not discard an already completed archive.
+- Clear only the listed managed media after confirmation, preferring the Recycle
+  Bin. If Windows cannot recycle, retain its additional deletion confirmation;
+  do not silently fall back to permanent deletion. Refresh remaining items after
+  failure or cancellation. Do not
+  touch unrelated files, subdirectories, or copies saved elsewhere.
+- Background thumbnail work is bounded and checks UI lifetime on completion.
+  See [media history](docs/media-history.md) for the persistence and UX contract.
+
 ## Identity, resources, and dependencies
 
 - Use lowercase `huhucapture` for product, executable, solution, configuration,
   and release filenames; use `HuhuCapture` for the C++ namespace. Runtime brand
   values belong in `src/app/Brand.h`; version values belong in
   `build/windows/Version.props`. Keep updater and package metadata consistent.
-- Follow [docs/BRAND.md](docs/BRAND.md) for SVG, PNG, and ICO assets. Brand family
+- Follow [docs/brand.md](docs/brand.md) for SVG, PNG, and ICO assets. Brand family
   association does not imply an unimplemented integration with another product.
 - Keep `Lang/*.json` UTF-16 with BOM. Update embedded and external translations
   together, retaining English fallback and short toolbar labels.
 - Update the lock file for dependency changes. Do not patch restored `.deps` as
   a substitute for a reproducible upgrade. Preserve `LICENSE`, dependency
   notices, and the notices included in release archives.
+- Keep maintenance documents in `docs/` with lowercase kebab-case Markdown
+  names, including lowercase locale suffixes. Standard root discovery files and
+  upstream license filenames retain their canonical names. Document rationale,
+  boundaries and failure semantics; link code rather than duplicating API lists.
+- Settings and history follow [design](docs/design.md); mascot palette and
+  annotation colors have independent roles and must not recolor all UI chrome.
 - Keep generated `artifacts`, `.deps`, IDE state, and personal settings out of
   commits. Documentation must describe current behavior and reproducible steps,
   without obsolete branch, run, or commit narratives.
@@ -97,9 +124,9 @@ missing.
 Core tests, WARP rendering, tray smoke, and scripted GUI checks have different
 coverage. None proves physical input, IME composition, mixed DPI, or audio worked.
 Record actual commands, results, and untested boundaries according to
-[docs/VALIDATION.md](docs/VALIDATION.md). Do not claim checks that did not run.
+[docs/validation.md](docs/validation.md). Do not claim checks that did not run.
 
 Normal stable releases are declared by `releases/publish.json`, matched by
 `Version.props` and `releases/<tag>.md`. The main workflow publishes only after
 all required checks pass; an already published declaration is left unchanged.
-See [docs/BUILDING.md](docs/BUILDING.md) for asset validation and recovery steps.
+See [docs/building.md](docs/building.md) for asset validation and recovery steps.

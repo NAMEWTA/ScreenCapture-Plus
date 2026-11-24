@@ -1,6 +1,6 @@
 # huhucapture 语言文件 / Language files
 
-[项目首页](../README.md) · [English guide](../docs/ReadMe.en-US.md)
+[项目首页](../README.md) · [English guide](readme.en-us.md)
 
 ## 安装与目录优先级
 
@@ -30,7 +30,7 @@
 | `saveHint` | 图片和说明一起导出的提示 |
 | `exportFailed` | 完整结果无法导出的提示 |
 
-用户写入的说明不属于翻译资源，支持换行并参与完整导出排版。界面可显示摘要，但导出不能借助译文截断用户内容。交互与布局见 [批注说明](../docs/ANNOTATIONS.md)。
+用户写入的说明不属于翻译资源，支持换行并参与完整导出排版。界面可显示摘要，但导出不能借助译文截断用户内容。交互与布局见 [批注说明](annotations.md)。
 
 提交前检查文件仍为 UTF-16 BOM、JSON 可解析、缺键回退有效、产品名称正确，并在 Windows 检查按钮宽度与面板提示。语言文件只存字符串资源，不加入脚本、链接推广或外部服务依赖。
 
@@ -44,4 +44,4 @@ Keep **UTF-16 with BOM**, the existing JSON structure, and locale filenames. Mis
 
 Keep the product name `huhucapture` unchanged. Distinguish the ordinary `tool.number` tool from `tool.annotation`, which creates a rectangular region and an associated note. Translate all `annotation` keys in the table above; `addHint` must describe dragging a rectangle. Keep labels short for narrow panels, preserve literal paths / shortcuts / command-line options, and update embedded and external resources together.
 
-User-written notes are not translation resources. They support multiple lines and must remain complete in exports. Validate encoding, JSON, fallback, and layout before submitting a translation. See the [annotation guide](../docs/ANNOTATIONS.md) for behavior details.
+User-written notes are not translation resources. They support multiple lines and must remain complete in exports. Validate encoding, JSON, fallback, and layout before submitting a translation. See the [annotation guide](annotations.md) for behavior details.

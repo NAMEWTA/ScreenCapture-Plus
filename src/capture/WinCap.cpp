@@ -5,6 +5,7 @@
 #include "capture/CutMask.h"
 #include "app/App.h"
 #include "services/ImageExport.h"
+#include "services/MediaHistory.h"
 #include "services/ImageRecognition.h"
 #include "services/Lang.h"
 #include "services/Update.h"
@@ -12,6 +13,7 @@
 #include "recording/CapVideo.h"
 #include "ui/toolbars/ToolCap.h"
 #include "ui/toolbars/ToolVideo.h"
+#include "ui/WinClipboard.h"
 using namespace Microsoft::WRL;
 
 namespace
@@ -298,7 +300,7 @@ void WinCap::onKey(UINT key)
         const bool toClipboard{ key == 'C' };
         if (stage == CapStage::Long && capLong && capLong->hasImage()) {
             // 与 ToolLong::onClick 同一套规则：存盘被取消了就留在原地，图还没丢
-            if (toClipboard) longCopyToClipboard();
+            if (toClipboard) { if (!longCopyToClipboard()) return; }
             else if (!longSaveToFile()) return;
             close();
         }
@@ -331,8 +333,7 @@ void WinCap::copyCurrentStage()
     }
     else if (stage == CapStage::Long && capLong && capLong->hasImage()) {
         // 还没点"开始"滚动时一张图都没有（hasImage），此时不该收工
-        longCopyToClipboard();
-        close();
+        if (longCopyToClipboard()) close();
     }
     else if (stage == CapStage::Video && capVideo) {
         // 停录、存盘、关窗都在 ToolVideo 那边一条龙做完
@@ -474,7 +475,7 @@ void WinCap::onClosed()
         // 用完即走模式下截图结束就退出进程，与 App 构造里的判断对称。
         // 但标注、长截图这两条路是先把图钉到桌面上再关自己的，那种情况下活还没干完，
         // 退出的活交给最后一个关掉的贴图窗口
-        if (!WinPin::hasWindow()) {
+        if (!WinPin::hasWindow() && !WinClipboard::get()) {
             if (Ling::App::get()->args[L"--auto-quit"] == L"true") {
                 Ling::App::get()->quit(0);
             }
@@ -659,9 +660,9 @@ bool WinCap::longSaveToFile()
     return capLong ? capLong->saveToFile() : false;
 }
 
-void WinCap::longCopyToClipboard()
+bool WinCap::longCopyToClipboard()
 {
-    if (capLong) capLong->copyToClipboard();
+    return capLong && capLong->copyToClipboard();
 }
 
 void WinCap::hollowWin()
@@ -748,7 +749,7 @@ void WinCap::saveToFile()
         setToolTopmost(true);
         return;
     }
-    if (ImageExport::saveToFile(path, cw, ch, pixels.data())) {
+    if (HuhuCapture::MediaHistory::saveImage(hwnd, path, cw, ch, pixels.data())) {
         close();
     }
     else {
@@ -761,8 +762,7 @@ void WinCap::copyToClipboard()
     std::vector<BYTE> pixels;
     int cw{ 0 }, ch{ 0 };
     if (!getCutPixels(pixels, cw, ch)) return;
-    ImageExport::saveToClipboard(cw, ch, pixels.data());
-    close();
+    if (HuhuCapture::MediaHistory::copyImage(hwnd, cw, ch, pixels.data())) close();
 }
 
 // 从底图上把选区那块像素读回来。screenImg 在 GPU 上，不能直接 Map，

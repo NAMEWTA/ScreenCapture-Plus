@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "capture/WinCap.h"
 #include "services/ImageExport.h"
+#include "services/MediaHistory.h"
+#include "core/MediaFileName.h"
 #include "services/Lang.h"
 #include "ui/Tip.h"
 #include "ui/toolbars/ToolVideo.h"
@@ -250,20 +252,38 @@ void ToolVideo::onTimerCB(UINT id)
 
 void ToolVideo::saveFile()
 {
-	hide();
-	killTimer(tickTimerId);
-	auto srcPath = win->stopRecord();
-	// 空路径 = 一帧都没录到（刚开录就停了），没什么可存的，别弹保存框去打扰用户
-	if (srcPath.empty()) {
-		win->close();
-		return;
-	}
-	auto tarPath = ImageExport::getSaveFilePath(nullptr, selectIndex == 1 ? L"gif" : L"mp4");
-	if (!tarPath.empty()) {
-		CopyFile(srcPath.data(), tarPath.data(), false);
-	}
-	DeleteFile(srcPath.data());
-	win->close();
+    hide();
+    killTimer(tickTimerId);
+    isRecording = false;
+    const auto source = win->stopRecord();
+    if (source.empty()) { win->close(); return; }
+    const auto destination = ImageExport::getSaveFilePath(win->hwnd, selectIndex == 1 ? L"gif" : L"mp4");
+    const auto archived = HuhuCapture::MediaHistory::archiveFile(source);
+    if (archived.empty()) {
+        // The unique recording remains available for recovery, including after
+        // another recording. Never delete it on a failed archive or dialog.
+        HuhuCapture::MediaHistory::reportError(win->hwnd, source);
+        win->close();
+        return;
+    }
+    DeleteFileW(source.c_str());
+    if (!destination.empty()) {
+        std::error_code error;
+        const bool same = std::filesystem::equivalent(archived, destination, error);
+        if (!same) {
+            error.clear();
+            const std::filesystem::path target(destination);
+            const bool managed = HuhuCapture::Core::parseMediaFileName(target.filename().wstring()).has_value() &&
+                std::filesystem::equivalent(target.parent_path(), HuhuCapture::MediaHistory::directory(), error) && !error;
+            // A default-folder save keeps exactly one history entry. A custom
+            // destination is an exported copy; the stable archive remains.
+            const bool saved = managed
+                ? MoveFileExW(archived.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE
+                : CopyFileW(archived.c_str(), target.c_str(), FALSE) != FALSE;
+            if (!saved) HuhuCapture::MediaHistory::reportError(win->hwnd, archived.wstring());
+        }
+    }
+    win->close();
 }
 
 bool ToolVideo::onSaveKey(bool toClipboard)
@@ -277,17 +297,21 @@ bool ToolVideo::onSaveKey(bool toClipboard)
 
 void ToolVideo::finishRecord(bool toClipboard)
 {
-	hide();
-	killTimer(tickTimerId);
-	auto srcPath = win->stopRecord();
-	if (toClipboard) {
-		// 文件留在临时目录里，剪切板持有的是它的路径，不能删。
-		// 空路径 = 一帧都没录到，没东西可放进剪切板
-		if (!srcPath.empty())
-			ImageExport::addFileToClipboard(srcPath);
-	}
-	else {
-		DeleteFile(srcPath.data());
-	}
-	win->close();
+    hide();
+    killTimer(tickTimerId);
+    isRecording = false;
+    const auto source = win->stopRecord();
+    if (!source.empty()) {
+        if (toClipboard) {
+            const auto archived = HuhuCapture::MediaHistory::archiveFile(source);
+            if (archived.empty()) HuhuCapture::MediaHistory::reportError(win->hwnd, source);
+            else {
+                DeleteFileW(source.c_str());
+                if (!ImageExport::addFileToClipboard(archived.wstring(), win->hwnd))
+                    MessageBoxW(win->hwnd, Lang::get(L"clipboard.copyFailed").c_str(),
+                        Lang::get(L"clipboard.title").c_str(), MB_OK | MB_ICONWARNING | MB_TOPMOST);
+            }
+        } else DeleteFileW(source.c_str()); // Explicit discard is the only destructive completion.
+    }
+    win->close();
 }

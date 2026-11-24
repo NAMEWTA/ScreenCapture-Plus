@@ -22,6 +22,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+#include "MediaHistoryChecks.h"
 
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
@@ -650,7 +651,8 @@ int wmain(int argc, wchar_t** argv)
         const auto regions = exportRegions(window);
         toolbar(window, L"clipboard");
         clipboardPng(directory / "03-real-editor-clipboard.png", width, height, pixels, regions);
-        std::cout << "Real native annotation GUI integration checks passed.\n";
+        HuhuCapture::Tests::runMediaHistoryChecks(directory, [](DWORD milliseconds) { pump(milliseconds); });
+        std::cout << "Real native annotation, media history and settings GUI integration checks passed.\n";
         return 0;
     } catch (const winrt::hresult_error& error) {
         std::cerr << "FAIL WinRT: 0x" << std::hex << static_cast<unsigned long>(error.code().value)

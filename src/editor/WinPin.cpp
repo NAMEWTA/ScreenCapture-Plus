@@ -7,11 +7,13 @@
 #include "editor/shapes/ShapeText.h"
 #include "editor/shapes/ShapeAnnotation.h"
 #include "ui/AnnotationPanel.h"
+#include "ui/WinClipboard.h"
 #include "editor/WinPin.h"
 #include "capture/WinCap.h"
 #include "editor/History.h"
 #include "app/App.h"
 #include "services/ImageExport.h"
+#include "services/MediaHistory.h"
 #include "services/Update.h"
 #include "services/AnnotationRenderer.h"
 #include "services/Lang.h"
@@ -124,7 +126,7 @@ void WinPin::onClosed()
 		std::erase_if(winPins, [this](const std::unique_ptr<WinPin>& p) { return p.get() == this; });
 		// 用完即走模式下，最后一个贴图窗口关掉就退出进程，不驻留在系统里。
 		// 贴图可以同时开好几个（标注、长截图各来一张），所以得等它们都没了才退
-		if (winPins.empty()) {
+		if (winPins.empty() && !WinCap::get() && !WinClipboard::get()) {
 			if (Ling::App::get()->args[L"--auto-quit"] == L"true") {
 				Ling::App::get()->quit(0);
 			}
@@ -866,8 +868,7 @@ void WinPin::copyToClipboard()
 	std::vector<BYTE> pixels;
 	D2D1_SIZE_U size{};
 	if (!getImagePixels(pixels, size)) return;
-	ImageExport::saveToClipboard((int)size.width, (int)size.height, pixels.data());
-	close();
+	if (HuhuCapture::MediaHistory::copyImage(hwnd, (int)size.width, (int)size.height, pixels.data())) close();
 }
 
 void WinPin::saveToFile()
@@ -884,7 +885,7 @@ void WinPin::saveToFile()
 		restoreWindowState(foregroundBeforeDialog);
 		return;
 	}
-	if (ImageExport::saveToFile(path, (int)size.width, (int)size.height, pixels.data())) {
+	if (HuhuCapture::MediaHistory::saveImage(hwnd, path, (int)size.width, (int)size.height, pixels.data())) {
 		close();
 	}
 	else {

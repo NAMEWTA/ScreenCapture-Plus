@@ -198,6 +198,12 @@
     <ClCompile Include="..\..\third_party\quirc\version_db.c">
       <Filter>third_party\quirc</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\services\MediaHistory.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\ui\WinClipboard.cpp">
+      <Filter>src\ui</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\resources\Version.h">
@@ -370,6 +376,18 @@
     </ClInclude>
     <ClInclude Include="..\..\third_party\quirc\quirc_internal.h">
       <Filter>third_party\quirc</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\MediaFileName.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\services\MediaHistory.h">
+      <Filter>src\services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\WinClipboard.h">
+      <Filter>src\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\settings\SettingsTheme.h">
+      <Filter>src\ui\settings</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

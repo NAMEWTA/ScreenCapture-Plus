@@ -10,7 +10,7 @@ namespace {
     constexpr int capShortcutMsgId{ 100 };
     // 配置文件的默认内容。空文件、坏 JSON、缺键都拿它兜底，所以这里列出的每一项
     // 都是代码里会直接按名字取的（见 getLang / getAutoStart / initShortcutKeys）
-    constexpr std::wstring_view defaultConfig{ LR"""({"common":{"autoStart":false,"language":"zh-CN"},"shortcutKey":{"cap":"Ctrl+Alt+A"}})""" };
+    constexpr std::wstring_view defaultConfig{ LR"""({"common":{"autoStart":false,"language":"zh-CN"},"shortcutKey":{"cap":"F1"}})""" };
 }
 
 
@@ -26,6 +26,12 @@ Setting::Setting() :dataPath{ initDataPath() }, configPath{ initConfigPath() }
         JsonObject obj{ nullptr };
         if (JsonObject::TryParse(content, obj)) {
             configObj = obj;
+            auto shortcuts = configObj.GetNamedObject(L"shortcutKey", nullptr);
+            // Migrate the previous default while preserving other custom keys.
+            if (shortcuts && shortcuts.GetNamedString(L"cap", L"") == L"Ctrl+Alt+A") {
+                shortcuts.SetNamedValue(L"cap", JsonValue::CreateStringValue(L"F1"));
+                save();
+            }
             return;
         }
         MessageBox(nullptr, L"config.json parse error，use default config", HuhuCapture::Brand::name.data(), MB_OK | MB_ICONWARNING);
@@ -66,32 +72,48 @@ const JsonObject Setting::getConfigObj()
     return configObj;
 }
 
-void Setting::setShortcutKey(const std::wstring& type, const std::vector<std::wstring>& keys)
+bool Setting::setShortcutKey(const std::wstring& type, const std::vector<std::wstring>& keys)
 {
-    std::wstring str;
-    for (size_t i = 0; i < keys.size(); i++)
-    {
-        str += L"+" + keys[i];
+    std::wstring shortcut;
+    for (const auto& key : keys) {
+        if (!shortcut.empty()) shortcut += L"+";
+        shortcut += key;
     }
-    str.erase(0,1);
-    auto shortcutKey = configObj.GetNamedObject(L"shortcutKey", nullptr);
-    if (!shortcutKey) {
-        shortcutKey = JsonObject();
-        configObj.SetNamedValue(L"shortcutKey", shortcutKey);
-    }
-    shortcutKey.SetNamedValue(type, JsonValue::CreateStringValue(str));
+    if (shortcut.empty()) return false;
     auto app = Ling::App::get();
+    const auto previous = getShortcutKey(type);
     app->unRegHotKey(capShortcutMsgId);
-    app->regHotKey(str, capShortcutMsgId);
+    if (!app->regHotKey(shortcut, capShortcutMsgId)) {
+        if (!shortcutCaptureActive) app->regHotKey(previous, capShortcutMsgId);
+        return false;
+    }
+    if (shortcutCaptureActive) app->unRegHotKey(capShortcutMsgId);
+    auto values = configObj.GetNamedObject(L"shortcutKey", nullptr);
+    if (!values) {
+        values = JsonObject();
+        configObj.SetNamedValue(L"shortcutKey", values);
+    }
+    values.SetNamedValue(type, JsonValue::CreateStringValue(shortcut));
     save();
+    return true;
 }
 
 std::wstring Setting::getShortcutKey(const std::wstring& type)
 {
-    // Missing or malformed settings must not turn reading a shortcut into a crash.
-    auto obj = configObj.GetNamedObject(L"shortcutKey", nullptr);
-    if (!obj) return L"";
-    return std::wstring{ obj.GetNamedString(type, L"") };
+    const auto fallback = type == L"cap" ? L"F1" : L"";
+    const auto values = configObj.GetNamedObject(L"shortcutKey", nullptr);
+    if (!values) return fallback;
+    const std::wstring value{values.GetNamedString(type, fallback)};
+    return value.empty() ? fallback : value;
+}
+
+void Setting::setShortcutCaptureActive(bool active)
+{
+    if (shortcutCaptureActive == active) return;
+    shortcutCaptureActive = active;
+    auto app = Ling::App::get();
+    app->unRegHotKey(capShortcutMsgId);
+    if (!active) app->regHotKey(getShortcutKey(L"cap"), capShortcutMsgId);
 }
 
 void Setting::setAutoStart(bool autoStart)
@@ -247,7 +269,7 @@ void Setting::initShortcutKeys(std::function<void()> onCapture)
     auto lingApp = Ling::App::get();
     // 取不到就用默认的那个组合：热键注册不上顶多是快捷键不好用，不该让程序起不来
     std::wstring capStr{ getShortcutKey(L"cap") };
-    if (capStr.empty()) capStr = L"Ctrl+Alt+A";
+    if (capStr.empty()) capStr = L"F1";
     lingApp->regHotKey(capStr, capShortcutMsgId);
 
     lingApp->onHotKey.add([onCapture](UINT msg) {

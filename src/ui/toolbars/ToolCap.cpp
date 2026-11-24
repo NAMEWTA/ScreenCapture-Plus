@@ -4,6 +4,7 @@
 #include "ui/Tip.h"
 #include "ui/toolbars/ToolCap.h"
 #include "ui/toolbars/ToolbarLayout.h"
+#include "ui/WinClipboard.h"
 
 ToolCap::ToolCap(WinCap* win) : Ling::WinBase(), win(win)
 {
@@ -63,7 +64,7 @@ void ToolCap::onCreated()
 		btn->setText(btnCodes[i]);
 		HuhuCapture::UI::sizeToolbarControl(btn);
 		btn->setHoverBg(0xF2F2F2ff);
-		btn->setFontFamily(L"icon");
+		btn->setFontFamily(btnIds[i] == L"history" ? L"Segoe MDL2 Assets" : L"icon");
 		btn->setFontSize(HuhuCapture::UI::toolbarIconSize);
 		btn->onClick.add([this](Ling::Button* btn) { onClick(btn); });
 		if (!btnTips[i].empty()) {
@@ -88,6 +89,11 @@ void ToolCap::onClick(Ling::Button* btn)
 	}
 	else if (btn->id == L"qrcode") {
 		win->startQrcode();
+	}
+	else if (btn->id == L"history") {
+		win->hide();
+		WinClipboard::init();
+		win->close();
 	}
 	else if (btn->id == L"save") {
 		win->saveToFile();

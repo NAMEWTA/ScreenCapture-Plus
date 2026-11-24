@@ -1,21 +1,26 @@
 #pragma once
 #include <include/Ling.h>
-class WinSettingCommon:public Ling::Node
+#include <memory>
+
+class Tip;
+
+class WinSettingCommon : public Ling::Node
 {
 public:
-	WinSettingCommon(Ling::WinBase* parent);
-	~WinSettingCommon();
-	// 收掉语言下拉框。它挂在 win->body 上而不是挂在本节点里，所以本节点被换掉 / 销毁时
-	// 它不会跟着走，得由外面在合适的时机显式收掉
-	void hideSelectBox();
+    explicit WinSettingCommon(Ling::WinBase* parent);
+    ~WinSettingCommon();
+    void hideSelectBox();
+    void setCompact(bool compact);
 private:
-	void initAutoStartCtrls();
-	void initLangCtrls();
-	void setAutoStartBtn(Ling::Button* btn);
-	void showSelectBox(Ling::Button* btn);
-private:
-	Ling::Button* selectBtn{ nullptr };
-	Ling::ScrollerBox* selectBox{ nullptr };
-	winrt::event_token onMouseDownToken;
-};
+    void initAutoStartCtrls(Ling::Node* card);
+    void initLangCtrls(Ling::Node* card);
+    void initArchiveCtrls();
+    void setAutoStartBtn(Ling::Button* button);
+    void showSelectBox(Ling::Button* button);
 
+    Ling::Button* selectBtn{ nullptr };
+    Ling::Label* footer{ nullptr };
+    Ling::Label* archiveDescription{ nullptr };
+    std::unique_ptr<Tip> tip;
+    bool menuOpen{};
+};

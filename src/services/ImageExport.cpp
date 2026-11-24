@@ -1,10 +1,12 @@
 #include "pch.h"
 #include "services/ImageExport.h"
 #include "services/Lang.h"
+#include "services/MediaHistory.h"
 #include "core/PixelBuffer.h"
 #include <wincodec.h>
 #include <shobjidl.h>
 #include <format>
+#include <filesystem>
 #include <limits>
 
 using Microsoft::WRL::ComPtr;
@@ -44,39 +46,39 @@ namespace {
 
 }
 
-void ImageExport::saveToClipboard(const int w, const int h, BYTE* data)
+bool ImageExport::saveToClipboard(const int w, const int h, BYTE* data, HWND owner)
 {
 	const auto layout = HuhuCapture::Core::pixelLayout(w, h, 4);
-	if (!data || !layout || layout->bytes > (std::numeric_limits<DWORD>::max)()) return;
+	if (!data || !layout || layout->bytes > (std::numeric_limits<DWORD>::max)()) return false;
 	const auto rowBytes = static_cast<DWORD>(layout->stride);
 	const auto imgBytes = static_cast<DWORD>(layout->bytes);
 
 	// ---------- 1) PNG 编码到内存流 ----------
 	ComPtr<IStream> pngStream;
-	if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, pngStream.GetAddressOf()))) return;
-	if (!encodePng(pngStream.Get(), w, h, data)) return;
+	if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, pngStream.GetAddressOf()))) return false;
+	if (!encodePng(pngStream.Get(), w, h, data)) return false;
 	// 流内部的 HGLOBAL 尺寸可能大于实际字节数，拷一份精确大小的出来给剪切板
 	STATSTG stat{};
-	if (FAILED(pngStream->Stat(&stat, STATFLAG_NONAME))) return;
+	if (FAILED(pngStream->Stat(&stat, STATFLAG_NONAME))) return false;
 	SIZE_T pngSize = (SIZE_T)stat.cbSize.QuadPart;
-	if (pngSize == 0) return;
+	if (pngSize == 0) return false;
 	HGLOBAL hPngSrc{ nullptr };
-	if (FAILED(GetHGlobalFromStream(pngStream.Get(), &hPngSrc)) || !hPngSrc) return;
+	if (FAILED(GetHGlobalFromStream(pngStream.Get(), &hPngSrc)) || !hPngSrc) return false;
 	auto srcPtr = GlobalLock(hPngSrc);
-	if (!srcPtr) return;
+	if (!srcPtr) return false;
 	HGLOBAL hPng = GlobalAlloc(GMEM_MOVEABLE, pngSize);
-	if (!hPng) { GlobalUnlock(hPngSrc); return; }
+	if (!hPng) { GlobalUnlock(hPngSrc); return false; }
 	auto dstPtr = GlobalLock(hPng);
-	if (!dstPtr) { GlobalUnlock(hPngSrc); GlobalFree(hPng); return; }
+	if (!dstPtr) { GlobalUnlock(hPngSrc); GlobalFree(hPng); return false; }
 	CopyMemory(dstPtr, srcPtr, pngSize);
 	GlobalUnlock(hPng);
 	GlobalUnlock(hPngSrc);
 
 	// ---------- 2) 构造 CF_DIBV5（带 alpha） ----------
 	HGLOBAL hDibV5 = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPV5HEADER) + imgBytes);
-	if (!hDibV5) { GlobalFree(hPng); return; }
+	if (!hDibV5) { GlobalFree(hPng); return false; }
 	auto pv5 = static_cast<BYTE*>(GlobalLock(hDibV5));
-	if (!pv5) { GlobalFree(hDibV5); GlobalFree(hPng); return; }
+	if (!pv5) { GlobalFree(hDibV5); GlobalFree(hPng); return false; }
 	auto bv5 = reinterpret_cast<BITMAPV5HEADER*>(pv5);
 	*bv5 = {};
 	bv5->bV5Size = sizeof(BITMAPV5HEADER);
@@ -103,9 +105,9 @@ void ImageExport::saveToClipboard(const int w, const int h, BYTE* data)
 	DWORD dibRowBytes = ((DWORD)w * 3 + 3) & ~3u;
 	DWORD dibImgBytes = dibRowBytes * (DWORD)h;
 	HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(BITMAPINFOHEADER) + dibImgBytes);
-	if (!hDib) { GlobalFree(hDibV5); GlobalFree(hPng); return; }
+	if (!hDib) { GlobalFree(hDibV5); GlobalFree(hPng); return false; }
 	auto pDib = static_cast<BYTE*>(GlobalLock(hDib));
-	if (!pDib) { GlobalFree(hDib); GlobalFree(hDibV5); GlobalFree(hPng); return; }
+	if (!pDib) { GlobalFree(hDib); GlobalFree(hDibV5); GlobalFree(hPng); return false; }
 	auto bi = reinterpret_cast<BITMAPINFOHEADER*>(pDib);
 	*bi = {};
 	bi->biSize = sizeof(BITMAPINFOHEADER);
@@ -128,39 +130,67 @@ void ImageExport::saveToClipboard(const int w, const int h, BYTE* data)
 	GlobalUnlock(hDib);
 
 	// ---------- 4) 写入剪切板 ----------
-	if (!OpenClipboard(nullptr)) {
+	if (!owner || !IsWindow(owner) || !OpenClipboard(owner)) {
 		GlobalFree(hDib);
 		GlobalFree(hDibV5);
 		GlobalFree(hPng);
-		return;
+		return false;
 	}
-	EmptyClipboard();
+	if (!EmptyClipboard()) {
+		GlobalFree(hDib); GlobalFree(hDibV5); GlobalFree(hPng);
+		CloseClipboard();
+		return false;
+	}
+	bool copied = false;
 	// SetClipboardData 成功后 HGLOBAL 归剪切板所有，不能再 GlobalFree；失败了才要自己释放
-	if (!SetClipboardData(CF_DIBV5, hDibV5)) {
-		GlobalFree(hDibV5);
-	}
-	if (!SetClipboardData(CF_DIB, hDib)) {
-		GlobalFree(hDib);
-	}
+	if (!SetClipboardData(CF_DIBV5, hDibV5)) GlobalFree(hDibV5);
+	else copied = true;
+	if (!SetClipboardData(CF_DIB, hDib)) GlobalFree(hDib);
+	else copied = true;
 	UINT cfPng = RegisterClipboardFormatW(L"PNG");
 	if (cfPng == 0 || !SetClipboardData(cfPng, hPng)) {
 		GlobalFree(hPng);
 	}
+	else copied = true;
 	CloseClipboard();
+	return copied;
 }
 
 bool ImageExport::saveToFile(const std::wstring& path, const int w, const int h, BYTE* data)
 {
-	if (path.empty() || w <= 0 || h <= 0 || !data) return false;
+	const auto layout = HuhuCapture::Core::pixelLayout(w, h, 4);
+	if (path.empty() || !data || !layout || layout->bytes > (std::numeric_limits<UINT>::max)()) return false;
+	const std::filesystem::path destination(path);
+	GUID id{};
+	wchar_t name[40]{};
+	if (FAILED(CoCreateGuid(&id)) || !StringFromGUID2(id, name, 40)) return false;
+	const auto temporaryPath = destination.parent_path() /
+		(L".huhucapture-" + std::wstring(name) + L".tmp");
+	// Claim a unique sibling before WIC opens it. Only a file created by this
+	// operation is eligible for cleanup, even if a name collision occurs.
+	HANDLE file = CreateFileW(temporaryPath.c_str(), GENERIC_WRITE, 0, nullptr,
+		CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (file == INVALID_HANDLE_VALUE) return false;
+	CloseHandle(file);
+	struct TemporaryFile {
+		std::filesystem::path path;
+		~TemporaryFile() { DeleteFileW(path.c_str()); }
+	} temporary{temporaryPath};
 	ComPtr<IWICImagingFactory> factory;
 	auto hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.GetAddressOf()));
 	if (FAILED(hr)) return false;
 	ComPtr<IWICStream> stream;
 	hr = factory->CreateStream(stream.GetAddressOf());
 	if (FAILED(hr)) return false;
-	hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+	hr = stream->InitializeFromFilename(temporaryPath.c_str(), GENERIC_WRITE);
 	if (FAILED(hr)) return false;
-	return encodePng(stream.Get(), w, h, data);
+	const bool encoded = encodePng(stream.Get(), w, h, data);
+	// The encoder/frame have committed and released their stream references by
+	// now. Close the final WIC handle before renaming on Windows.
+	stream.Reset();
+	if (!encoded) return false;
+	return MoveFileExW(temporaryPath.c_str(), destination.c_str(),
+		MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
 }
 
 std::wstring ImageExport::getSaveFilePath(HWND hwnd, const std::wstring& ext)
@@ -178,6 +208,14 @@ std::wstring ImageExport::getSaveFilePath(HWND hwnd, const std::wstring& ext)
 	saveDialog->SetFileTypes(_countof(filterSpec), filterSpec);
 	saveDialog->SetFileTypeIndex(1);
 	saveDialog->SetDefaultExtension(ext.c_str());
+	const auto historyPath = HuhuCapture::MediaHistory::directory();
+	if (!historyPath.empty()) {
+		std::error_code error;
+		std::filesystem::create_directories(historyPath, error);
+		ComPtr<IShellItem> folder;
+		if (!error && SUCCEEDED(SHCreateItemFromParsingName(historyPath.c_str(), nullptr, IID_PPV_ARGS(folder.GetAddressOf()))))
+			saveDialog->SetFolder(folder.Get());
+	}
 	auto fileName = createFileName(ext);
 	saveDialog->SetFileName(fileName.c_str());
 	// 用户取消时 Show 返回 HRESULT_FROM_WIN32(ERROR_CANCELLED)，一样走 FAILED 分支
@@ -196,39 +234,29 @@ std::wstring ImageExport::getSaveFilePath(HWND hwnd, const std::wstring& ext)
 
 std::wstring ImageExport::createFileName(const std::wstring& ext)
 {
-	SYSTEMTIME st;
-	GetLocalTime(&st);
-	return std::format(L"{:04d}{:02d}{:02d}{:02d}{:02d}{:02d}{:03d}.{}",
-		st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, ext);
+    return HuhuCapture::MediaHistory::suggestedName(ext);
 }
 
-void ImageExport::addFileToClipboard(const std::wstring& filePath)
+bool ImageExport::addFileToClipboard(const std::wstring& filePath, HWND owner)
 {
-	if (!OpenClipboard(nullptr)) return;
-	EmptyClipboard();
-	// DROPFILES 之后紧跟双 \0 结尾的路径列表，这里只放一条
-	auto totalSize = sizeof(DROPFILES) + (filePath.length() + 2) * sizeof(wchar_t);
-	auto hGlobal = GlobalAlloc(GMEM_MOVEABLE, totalSize);
-	if (!hGlobal) {
-		CloseClipboard();
-		return;
-	}
-	auto pDropFiles = static_cast<DROPFILES*>(GlobalLock(hGlobal));
-	if (!pDropFiles) {
-		GlobalFree(hGlobal);
-		CloseClipboard();
-		return;
-	}
-	pDropFiles->pFiles = sizeof(DROPFILES);
-	pDropFiles->fWide = TRUE;
-	auto dest = reinterpret_cast<wchar_t*>(pDropFiles + 1);
-	wcscpy_s(dest, filePath.length() + 1, filePath.c_str());
-	dest[filePath.length() + 1] = L'\0';
-	GlobalUnlock(hGlobal);
-	// 成功后 HGLOBAL 归剪切板所有，只在失败时自己释放
-	if (!SetClipboardData(CF_HDROP, hGlobal)) {
-		GlobalFree(hGlobal);
-	}
-	CloseClipboard();
+    if (filePath.empty() || !owner || !IsWindow(owner)) return false;
+    const auto attributes = GetFileAttributesW(filePath.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) return false;
+    const auto totalSize = sizeof(DROPFILES) + (filePath.length() + 2) * sizeof(wchar_t);
+    auto memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, totalSize);
+    if (!memory) return false;
+    auto drop = static_cast<DROPFILES*>(GlobalLock(memory));
+    if (!drop) { GlobalFree(memory); return false; }
+    drop->pFiles = sizeof(DROPFILES);
+    drop->fWide = TRUE;
+    auto destination = reinterpret_cast<wchar_t*>(drop + 1);
+    wcscpy_s(destination, filePath.length() + 1, filePath.c_str());
+    GlobalUnlock(memory);
+    // Prepare the data before taking ownership, preserving the old clipboard
+    // when allocation/opening fails. The final list has two terminating NULs.
+    if (!OpenClipboard(owner)) { GlobalFree(memory); return false; }
+    const bool result = EmptyClipboard() && SetClipboardData(CF_HDROP, memory);
+    if (!result) GlobalFree(memory);
+    CloseClipboard();
+    return result;
 }
-

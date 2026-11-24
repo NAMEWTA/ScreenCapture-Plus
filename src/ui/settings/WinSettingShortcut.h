@@ -15,7 +15,8 @@ private:
 private:
 	std::vector<Ling::Button*> btns;
 	std::wstring curKey;
-	winrt::event_token onMouseDownToken, onKeyDownToken, onKeyUpToken;
+	Ling::Label* status{ nullptr };
+	winrt::event_token onMouseDownToken{}, onKeyDownToken{}, onKeyUpToken{}, onBlurToken{};
 	std::vector<std::wstring> tempKeys;
 };
 

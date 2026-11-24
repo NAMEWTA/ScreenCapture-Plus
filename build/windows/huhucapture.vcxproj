@@ -98,11 +98,13 @@
     <ClCompile Include="..\..\src\services\ImageExport.cpp" />
     <ClCompile Include="..\..\src\services\ImageRecognition.cpp" />
     <ClCompile Include="..\..\src\services\Lang.cpp" />
+    <ClCompile Include="..\..\src\services\MediaHistory.cpp" />
     <ClCompile Include="..\..\src\services\Setting.cpp" />
     <ClCompile Include="..\..\src\services\Update.cpp" />
     <ClCompile Include="..\..\src\ui\AnnotationPanel.cpp" />
     <ClCompile Include="..\..\src\ui\Tip.cpp" />
     <ClCompile Include="..\..\src\ui\Tray.cpp" />
+    <ClCompile Include="..\..\src\ui\WinClipboard.cpp" />
     <ClCompile Include="..\..\src\ui\settings\WinSetting.cpp" />
     <ClCompile Include="..\..\src\ui\settings\WinSettingAbout.cpp" />
     <ClCompile Include="..\..\src\ui\settings\WinSettingCommon.cpp" />
@@ -156,6 +158,7 @@
     <ClInclude Include="..\..\src\core\HistoryStack.h" />
     <ClInclude Include="..\..\src\core\ImagePreview.h" />
     <ClInclude Include="..\..\src\core\PixelBuffer.h" />
+    <ClInclude Include="..\..\src\core\MediaFileName.h" />
     <ClInclude Include="..\..\src\core\ReleaseVersion.h" />
     <ClInclude Include="..\..\src\core\ScrollStitch.h" />
     <ClInclude Include="..\..\src\editor\History.h" />
@@ -181,12 +184,15 @@
     <ClInclude Include="..\..\src\services\ImageExport.h" />
     <ClInclude Include="..\..\src\services\ImageRecognition.h" />
     <ClInclude Include="..\..\src\services\Lang.h" />
+    <ClInclude Include="..\..\src\services\MediaHistory.h" />
     <ClInclude Include="..\..\src\services\Setting.h" />
     <ClInclude Include="..\..\src\services\Update.h" />
     <ClInclude Include="..\..\src\ui\AnnotationPanel.h" />
     <ClInclude Include="..\..\src\ui\AnnotationPanelLayout.h" />
     <ClInclude Include="..\..\src\ui\Tip.h" />
     <ClInclude Include="..\..\src\ui\Tray.h" />
+    <ClInclude Include="..\..\src\ui\WinClipboard.h" />
+    <ClInclude Include="..\..\src\ui\settings\SettingsTheme.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSetting.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSettingAbout.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSettingCommon.h" />

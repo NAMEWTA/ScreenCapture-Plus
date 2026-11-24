@@ -20,7 +20,7 @@ public:
 	void paint(ID2D1DeviceContext* ctx);
 	// 三个都是 ToolLong 的按钮动作，做完由 ToolLong 关掉宿主窗口。
 	// saveToFile 返回是否真的存下来了：用户在另存为对话框里按了取消时不该收工
-	void copyToClipboard();
+	bool copyToClipboard();
 	bool saveToFile();
 	void pin();
 	// Ctrl+S / Ctrl+C 用：还没点"开始"的时候一张图都没有，此时快捷键不该生效

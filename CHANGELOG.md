@@ -1,6 +1,25 @@
 # huhucapture 更新记录
 
-本文件记录公开版本的产品能力与交付内容。发行文件见 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases)，构建和验证方法见 [BUILDING.md](docs/BUILDING.md) 与 [VALIDATION.md](docs/VALIDATION.md)。
+本文件记录公开版本的产品能力与交付内容。发行文件见 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases)，构建和验证方法见 [building.md](docs/building.md) 与 [validation.md](docs/validation.md)。
+
+## v0.0.2 — 2026-11-24
+
+### 截图与媒体历史
+
+- 默认全局截图快捷键改为 F1；旧默认 Ctrl+Alt+A 迁移到 F1，保留其他自定义快捷键。
+- 保存或完成复制后自动归档到 Windows 文档目录下的 `huhucapture`，遵循系统目录重定向。
+- 截图、批注合图、长图及 GIF / MP4 使用 `YYYYMMDD-HHMMSS` 文件名，同秒重复追加序号，避免覆盖。
+- 二维码右侧和托盘菜单增加“剪切复制板”入口，跨重启恢复历史，显示截图缩略图与视频封面，支持逐项复制和打开所在文件夹。
+- 一键清除确认后默认把当前历史媒体送入回收站，不递归处理无关文件；Windows 无法回收时再次提示确认，失败或取消后保留剩余项。
+- 录屏完成编码并归档后才复制稳定文件路径；取消另存为仍保留已完成录屏，归档失败保留临时结果。
+
+### 设置与维护
+
+- 按指定 Apple 设计语言重新整理设置页布局、字体、控件、分组和中性配色，增加归档目录说明与打开操作。
+- `docs/` Markdown 名称统一小写，集中目录、架构、扩展、编码、UI 与验证约束，合并语言和品牌的分散说明。
+- 保留有实际故障定位用途的 PDB 符号包；README 详细说明每项发行资产、下载选择、校验和同构建符号匹配。
+
+发行文件和测试结果以对应版本的 Release 与 Actions 为准，具体 Windows 桌面、IME、混合 DPI 和音视频设备场景按验证文档单独记录。
 
 ## v0.0.1 — 2026-11-24
 

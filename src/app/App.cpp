@@ -8,6 +8,7 @@
 #include "capture/WinCap.h"
 #include "editor/WinPin.h"
 #include "ui/settings/WinSetting.h"
+#include "ui/WinClipboard.h"
 
 std::unique_ptr<App> app;
 
@@ -30,6 +31,7 @@ void App::dispose()
     WinPin::dispose();
     WinCap::dispose();
     WinSetting::dispose();
+    WinClipboard::dispose();
     Lang::dispose();
     Setting::dispose();
     app.reset();

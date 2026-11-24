@@ -1,8 +1,11 @@
 #include "pch.h"
 #include "services/Lang.h"
 #include "services/Setting.h"
+#include "ui/settings/SettingsTheme.h"
 #include "ui/settings/WinSetting.h"
 #include "ui/settings/WinSettingShortcut.h"
+
+namespace Theme = HuhuCapture::UI::SettingsTheme;
 
 namespace {
     bool isShortcutModifierKey(const std::wstring& key)
@@ -95,62 +98,60 @@ namespace {
 
 
 
-WinSettingShortcut::WinSettingShortcut(Ling::WinBase* parent):Ling::Node(parent)
+WinSettingShortcut::WinSettingShortcut(Ling::WinBase* parent) : Ling::Node(parent)
 {
-    std::vector<std::wstring> keys = { L"cap" };
-    for (auto& key:keys)
-    {
-        auto box = makeChild<Ling::Node>();
-        box->setHeight(39.f);
-        box->setFlexDirection(Ling::FlexDirection::Row);
-        box->setAlignItems(Ling::Align::Center);
+    Theme::pageHeading(this, Lang::get(L"setting.shortcut"), Lang::get(L"shortcut.description"));
+    auto* shortcuts = Theme::card(this);
+    auto* row = Theme::row(shortcuts, 80.f);
+    Theme::label(row, Lang::get(L"shortcut.cap"))->setFlexGrow(1.f);
+    auto* capture = row->makeChild<Ling::Button>();
+    capture->setId(L"cap");
+    Theme::styleButton(capture, 208.f);
+    capture->setFontFamily(L"Segoe UI Semibold");
+    capture->setFontSize(17.f);
+    capture->setText(Setting::get()->getShortcutKey(L"cap"));
+    capture->onClick.add([this](Ling::Button* button) { onBtnClick(button); });
+    btns.push_back(capture);
 
-        auto label = box->makeChild<Ling::Label>();
-        label->setText(Lang::get(L"shortcut."+key));
-        label->setHeightPercent(100.f);
-        label->setJustifyContent(Ling::Justify::Center);
-        label->setFlexGrow(1.f);
-
-        auto btn = box->makeChild<Ling::Button>();
-        btn->setId(key);
-        btn->setText(Setting::get()->getShortcutKey(key));
-        btn->setHeight(28.f);
-        btn->setWidth(120.f);
-        btn->setBg(0xFFFFFFFF);
-        btn->setHoverBg(0xFFFFFFFF);
-        btn->setBorder(1.f, 0xE0E0E0FF);
-        btn->onClick.add([this](Ling::Button* btn) {this->onBtnClick(btn);});
-        btns.push_back(btn);
-
-        auto border = makeChild<Ling::Node>();
-        border->setHeight(1.f);
-        border->setBg(0xE0E0E0FF);
-    }
-
-    auto weakThis = getWeakThis();
-    onKeyDownToken = win->onKeyDown.add([this,weakThis](UINT key) {
-        if (!weakThis.lock()) return;
-        if (this->curKey.empty()) return;
-        this->onKeyDown(key);
+    auto* actions = Theme::row(this);
+    actions->setMarginTop(16.f);
+    status = Theme::label(actions, L"", 14.f, 44.f, Theme::secondary);
+    status->setId(L"settings-shortcut-status");
+    status->setFlexGrow(1.f);
+    auto* reset = actions->makeChild<Ling::Button>();
+    reset->setId(L"settings-reset-shortcut");
+    Theme::styleButton(reset, 144.f);
+    reset->setText(Lang::get(L"shortcut.reset"));
+    reset->onClick.add([this](Ling::Button*) {
+        endCapture();
+        const bool saved = Setting::get()->setShortcutKey(L"cap", { L"F1" });
+        btns.front()->setText(Setting::get()->getShortcutKey(L"cap"));
+        status->setText(Lang::get(saved ? L"shortcut.saved" : L"shortcut.conflict"));
+        status->setColor(saved ? Theme::secondary : Theme::warning);
     });
-    onKeyUpToken = win->onKeyUp.add([this,weakThis](UINT key) {
-        if (!weakThis.lock()) return;
-        if (this->curKey.empty()) return;
-        this->onKeyUp(key);
+
+    const auto weakThis = getWeakThis();
+    onKeyDownToken = win->onKeyDown.add([this, weakThis](UINT key) {
+        if (weakThis.lock() && !curKey.empty()) onKeyDown(key);
     });
-    onMouseDownToken = win->onMouseDown.add([this,weakThis](POINT pos, bool isRight) {
-        if (!weakThis.lock()) return;
-        if (this->curKey.empty()) return;
-        for (auto btn: this->btns)
-        {
-            if(btn->isPosIn(pos)) return;
-        }
-        this->endCapture();
+    onKeyUpToken = win->onKeyUp.add([this, weakThis](UINT key) {
+        if (weakThis.lock() && !curKey.empty()) onKeyUp(key);
+    });
+    onMouseDownToken = win->onMouseDown.add([this, weakThis](POINT position, bool) {
+        if (!weakThis.lock() || curKey.empty()) return;
+        for (auto* button : btns)
+            if (button->isPosIn(position)) return;
+        endCapture();
+    });
+    onBlurToken = win->onBlur.add([this, weakThis]() {
+        if (weakThis.lock()) endCapture();
     });
 }
 
 WinSettingShortcut::~WinSettingShortcut()
 {
+    endCapture();
+    win->onBlur.remove(onBlurToken);
     win->onMouseDown.remove(onMouseDownToken);
     win->onKeyDown.remove(onKeyDownToken);
     win->onKeyUp.remove(onKeyUpToken);
@@ -174,6 +175,12 @@ void WinSettingShortcut::beginCapture(Ling::Button* btn)
 {
     curKey = btn->id;
     tempKeys.clear();
+    Setting::get()->setShortcutCaptureActive(true);
+    status->setText(L"");
+    btn->setBg(Theme::blueTint);
+    btn->setHoverBg(Theme::blueTint);
+    btn->setColor(Theme::blue);
+    btn->setBorder(2.f, Theme::focusBlue);
     btn->setText(Lang::get(L"shortcut.pressKey"));
 }
 
@@ -183,16 +190,24 @@ void WinSettingShortcut::endCapture()
     for (auto& btn : btns)
     {
         if (btn->id == curKey) {
+            Theme::styleButton(btn, 208.f);
+            btn->setFontFamily(L"Segoe UI Semibold");
+            btn->setFontSize(17.f);
             btn->setText(Setting::get()->getShortcutKey(curKey));
             break;
         }
     }
     curKey.clear();
     tempKeys.clear();
+    Setting::get()->setShortcutCaptureActive(false);
 }
 
 void WinSettingShortcut::onKeyDown(UINT key)
 {
+    if (key == VK_ESCAPE) {
+        endCapture();
+        return;
+    }
     auto keyStr = keyToStr(key);
     if (keyStr.empty()) return;
 
@@ -215,16 +230,22 @@ void WinSettingShortcut::onKeyDown(UINT key)
     bool isContains = std::find(tempKeys.begin(), tempKeys.end(), keyStr) != tempKeys.end();
     if (isContains) return;
     tempKeys.push_back(keyStr);
+    auto ordered = tempKeys;
+    normalizeShortcutKeys(ordered);
+    for (auto* button : btns)
+        if (button->id == curKey) button->setText(joinShortcutKeys(ordered));
 }
 
 void WinSettingShortcut::onKeyUp(UINT key)
 {
     if (curKey.empty()) return;
     normalizeShortcutKeys(tempKeys);
-    if (isValidShortcutKeys(tempKeys)) {
-        Setting::get()->setShortcutKey(curKey, tempKeys);
-    }
+    const bool valid = isValidShortcutKeys(tempKeys);
+    const bool saved = valid && Setting::get()->setShortcutKey(curKey, tempKeys);
     endCapture();
+    status->setText(Lang::get(saved ? L"shortcut.saved" :
+        (valid ? L"shortcut.conflict" : L"shortcut.invalid")));
+    status->setColor(saved ? Theme::secondary : Theme::warning);
 }
 
 std::wstring WinSettingShortcut::keyToStr(UINT vkCode)

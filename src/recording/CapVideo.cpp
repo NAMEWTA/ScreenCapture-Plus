@@ -13,6 +13,17 @@
 #include <atlbase.h>
 
 namespace {
+    std::wstring recordingPath(const wchar_t* extension)
+    {
+        const auto root = Setting::get()->getDataPath() / L"recordings";
+        std::error_code error;
+        std::filesystem::create_directories(root, error);
+        GUID id{};
+        wchar_t name[40]{};
+        if (error || FAILED(CoCreateGuid(&id)) || !StringFromGUID2(id, name, 40)) return {};
+        return (root / (std::wstring(L"capture-") + name + L"." + extension)).wstring();
+    }
+
     class MediaFoundationSession final {
     public:
         MediaFoundationSession() : result_(MFStartup(MF_VERSION)) {}
@@ -124,7 +135,8 @@ void CapVideo::startMp4(bool useSpeaker, bool useMic)
 {
     if (isRecording()) return;
     auto& cutMask = win->cutMask;
-    auto videoTempPath = Setting::get()->getDataPath();
+    const auto videoTempPath = recordingPath(L"mp4");
+    if (videoTempPath.empty()) { showRecordError(Lang::get(L"video.recordFailed"), Lang::get(L"about.sysTip")); return; }
     mp4Param = std::make_unique<VideoMp4::DESKTOPCAPTUREPARAMS>();
     // 编码格式不在这里定，交给下面采集线程里那个"HEVC 不行就退 H.264"的循环
     // 录制区域先夹回桌面范围，再做对齐 —— 只会往里缩，不会越出桌面。
@@ -143,7 +155,7 @@ void CapVideo::startMp4(bool useSpeaker, bool useMic)
     const long rcW = std::max(4l, (rcRight - rcLeft) & ~3l);
     const long rcH = std::max(2l, (rcBottom - rcTop) & ~1l);
     mp4Param->rx = { rcLeft, rcTop, rcLeft + rcW, rcTop + rcH };
-    mp4Param->f = videoTempPath.append(L"temp.mp4").wstring();
+    mp4Param->f = videoTempPath;
     mp4Param->EndMS = 0;
     mp4Param->fps = 30;
     mp4Param->vbrm = 2;
@@ -211,13 +223,14 @@ void CapVideo::startGif()
 {
     if (isRecording()) return;
     auto& cutMask = win->cutMask;
-    auto videoTempPath = Setting::get()->getDataPath();
+    const auto videoTempPath = recordingPath(L"gif");
+    if (videoTempPath.empty()) { showRecordError(Lang::get(L"video.recordFailed"), Lang::get(L"about.sysTip")); return; }
     gifParam = std::make_unique<VideoGif::GifParam>();
     gifParam->x = (int)(win->x + cutMask->maskRect.left);
     gifParam->y = (int)(win->y + cutMask->maskRect.top);
     gifParam->w = (int)(cutMask->maskRect.right - cutMask->maskRect.left);
     gifParam->h = (int)(cutMask->maskRect.bottom - cutMask->maskRect.top);
-    gifParam->path = videoTempPath.append(L"temp.gif").wstring();
+    gifParam->path = videoTempPath;
     captureThread = std::jthread([this](std::stop_token) {
         try {
             VideoGif::createGif(gifParam.get());

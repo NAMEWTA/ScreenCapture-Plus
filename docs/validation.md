@@ -2,7 +2,7 @@
 
 ## 如何读取验证结果
 
-本文定义验证范围、执行方式与证据位置。某项检查列在本文中，不代表某次构建已经执行或通过。huhucapture v0.0.1 的构建结果以对应提交的 [Windows Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 为准，发行文件以 [Release](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.1) 的 `build-info.json` 和 SHA256 为准。
+本文定义验证范围、执行方式与证据位置。某项检查列在本文中，不代表某次构建已经执行或通过。huhucapture v0.0.2 的构建结果以对应提交的 [Windows Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 为准，发行文件以 [Release](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.2) 的 `build-info.json` 和 SHA256 为准。
 
 核心测试、离屏渲染、启动检查、脚本 GUI 和人工桌面验收分别记录。报告至少包含提交 SHA、命令、环境、结果与证据；未执行的场景明确写为未执行。更换产品身份或资源后，应重新验证对应提交，不能把先前生成的截图当作本次品牌、版本和程序启动的通过记录。
 
@@ -11,14 +11,14 @@
 | 命令 | 验证层次 | 主要输出 |
 | --- | --- | --- |
 | `pwsh ./scripts/build.ps1 -Configuration Release` | 正式 x64 编译和链接 | `artifacts/bin/x64/Release/huhucapture.exe` |
-| `pwsh ./scripts/test.ps1` | 八个纯核心程序及 PowerShell 语法 | 测试退出码与日志 |
+| `pwsh ./scripts/test.ps1` | 纯核心程序及 PowerShell 语法 | 测试退出码与日志 |
 | `pwsh ./scripts/test-windows.ps1` | 真实 DWrite / D2D / WIC 离屏合成 | `artifacts/tests/windows` |
 | `pwsh ./scripts/smoke.ps1` | 独立 EXE / 便携配置启动 | 启动与退出日志 |
 | `pwsh ./scripts/test-windows.ps1 -Gui` | 正式编辑器对象、窗口和剪贴板 | `artifacts/tests/windows/gui` |
 | `pwsh ./scripts/package.ps1` | 版本、PE 依赖、包内容和校验和 | 五项发布资产 |
 | `pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore` | Debug 编译 / 链接，构建设置一致性 | Debug 产物 |
 
-Release 先于 GUI 测试，依赖 / 构建设置变化时还需 Debug。完整 CI 顺序、artifact 和发布门槛见 [BUILDING.md](BUILDING.md)。
+Release 先于 GUI 测试，依赖 / 构建设置变化时还需 Debug。完整 CI 顺序、artifact 和发布门槛见 [building.md](building.md)。
 
 ## 纯核心回归
 
@@ -96,6 +96,22 @@ GUI 进程有 45 秒硬超时，只终止测试启动的进程。硬件 D3D11 �
 
 品牌及版本变更需核对 `huhucapture.exe` 文件属性、窗口 / 托盘 / About 标识、图标、默认配置路径、更新资产名和 ZIP 内容。文件成功编译不能替代对这些可见入口的检查。
 
+## 媒体历史与设置的专项验收
+
+这些项目定义 v0.0.2 的可观察契约。自动测试实际覆盖的断言以测试源码与本次运行报告为准，其余项目在真实桌面记录，不能因为功能已经写入代码就标记为通过。
+
+| 场景 | 需要观察的结果 |
+| --- | --- |
+| 默认与升级快捷键 | 新配置按 F1 截图；旧默认 Ctrl+Alt+A 迁移到 F1，其他自定义值保留 |
+| 文件生命周期 | 截图、批注合图、长截图、GIF / MP4 保存或复制后在文档目录下留存；重启可再次找到 |
+| 系统目录与命名 | 跟随重定向的 Documents，中文路径可用；秒级文件名正确，同秒后缀不覆盖既有文件 |
+| 保存中断 | 磁盘不可写、空间不足或编码失败时不报告成功；保留编辑或录屏结果；取消另存为后历史仍有归档 |
+| 复制兼容 | 图片可粘贴为图像，视频可粘贴为文件；后续录制不会覆盖先前复制的文件；剪贴板被占用时明确失败 |
+| 历史列表 | 图片和视频都有可辨认预览，失败有占位；大量媒体可滚动，关闭窗口时后台回调不访问失效对象 |
+| 文件外部变化 | 文件在资源管理器中移动/删除后列表可恢复，复制或定位失败有反馈 |
+| 一键清除 | 先确认，默认送回收站；无法回收时 Windows 再提示确认；初次取消不改文件，执行中断/失败刷新剩余项，不处理子目录或无关文件 |
+| 设置可读性 | 大字号标签、控件状态和焦点清楚；通用/快捷键/关于的全部操作仍可用；长路径与语言列表不挤压/裁切 |
+
 ## Windows 人工桌面矩阵
 
 未附环境、操作和结果的条目视为未执行。记录提交、Windows 版本、显卡与驱动、显示器位置 / 分辨率 / DPI、输入法和音源，至少覆盖一个混合 DPI 双屏环境。
@@ -111,7 +127,7 @@ GUI 进程有 45 秒硬超时，只终止测试启动的进程。硬件 D3D11 �
 | 保存和复制 | PNG / 剪贴板含全部说明；中文、换行、长 URL、紧凑文本和多列；失败 / 取消保存不丢编辑内容 |
 | 缩放与极端尺寸 | 小选区、1px 图像边界、长图、大图缩小预览、新建编号可读；合图仍按原图物理像素读取 |
 | 输入快捷键 | 文字输入的选择 / 删除 / 复制不影响整条批注；Ctrl+S 保存；Esc 后图形撤销 / 重做 / 复制恢复 |
-| 启动和常驻 | 默认截图、托盘、重复启动、全局热键和退出；无残留窗口 / 线程 |
+| 启动和常驻 | 默认 F1、托盘、重复启动、自定义快捷键和退出；无残留窗口 / 线程 |
 | 选区与原绘图工具 | 主屏、负坐标副屏、跨屏、调整、Esc、取色；各图形、Shift 约束、修改 / 删除、普通序号独立 |
 | 钉图与剪贴板兼容 | 多窗口、拖动、缩放、双击；复制到浏览器、Electron、Office 和旧式 DIB 程序 |
 | 长截图 | 平滑滚动、固定 / 纯色顶部、底部兜底、滚到底、极窄区域和连续多段；结束后仍可编辑和保存 |

@@ -44,7 +44,7 @@ public:
 	void longPin();
 	// 用户在另存为对话框里取消时返回 false，此时图还在，不该收工
 	bool longSaveToFile();
-	void longCopyToClipboard();
+	bool longCopyToClipboard();
 public:
 	// CapLong / CapVideo 用的就是这一份选区，它们自己不再框选
 	std::unique_ptr<CutMask> cutMask;
