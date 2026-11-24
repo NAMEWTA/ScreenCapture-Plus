@@ -433,6 +433,69 @@ inline void runClipboardDesignChecks(WinClipboard* history, const fs::path& vide
     std::cout << "PASS compact history keyboard selection and Ctrl+C retain the archived video path.\n";
 }
 
+inline void runClipboardCaptureChecks(WinClipboard* history, const std::function<void(DWORD)>& pump)
+{
+    setNativeTestDpi(history, 96, 760.f, 560.f, pump);
+    settingsKey(history->hwnd, VK_HOME, pump);
+    SetForegroundWindow(history->hwnd);
+    SetFocus(history->hwnd);
+    struct PointerState {
+        HWND window;
+        std::array<BYTE, 256> keyboard{};
+        explicit PointerState(HWND value) : window(value) {
+            historyRequire(GetKeyboardState(keyboard.data()) != FALSE, "Read capture-check keyboard state");
+        }
+        ~PointerState() {
+            SetKeyboardState(keyboard.data());
+            if (GetCapture() == window) ReleaseCapture();
+        }
+    } pointer(history->hwnd);
+
+    // A title-bar move uses the same HWND capture as client controls. Establish
+    // capture without a list press, then exercise the production DPI handler.
+    // The screen origins are controlled coordinates, not a second monitor.
+    const UINT scales[]{120, 144};
+    for (const auto dpi : scales) {
+        const auto work = settingsWorkArea(history->hwnd);
+        const float factor = dpi / 96.f;
+        const LONG width = (std::min)(static_cast<LONG>(std::lround(760.f * factor)), work.right - work.left - 32);
+        const LONG height = (std::min)(static_cast<LONG>(std::lround(560.f * factor)), work.bottom - work.top - 32);
+        RECT suggested{dpi == 120 ? -80L : 24L, dpi == 120 ? -24L : 16L, 0, 0};
+        suggested.right = suggested.left + width;
+        suggested.bottom = suggested.top + height;
+        SetCapture(history->hwnd);
+        historyRequire(GetCapture() == history->hwnd, "Establish externally owned window capture");
+        SendMessageW(history->hwnd, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&suggested));
+        historyRequire(GetCapture() == history->hwnd, "DPI change interrupted the window move capture");
+        pump(40);
+        RECT actual{};
+        historyRequire(GetWindowRect(history->hwnd, &actual) != FALSE && EqualRect(&actual, &suggested),
+            "DPI change did not retain the suggested screen position and size");
+        historyRequire(GetCapture() == history->hwnd, "Layout released the window move capture");
+        ReleaseCapture();
+    }
+    setNativeTestDpi(history, 96, 760.f, 560.f, pump);
+
+    // A real list button press, unlike the capture above, belongs to the client
+    // interaction and must be cancelled when its DPI-dependent geometry changes.
+    const POINT copy{static_cast<LONG>(std::lround(history->w - 172.f)), 170};
+    const auto coordinates = MAKELPARAM(static_cast<WORD>(copy.x), static_cast<WORD>(copy.y));
+    auto down = pointer.keyboard;
+    down[VK_LBUTTON] |= 0x80;
+    historyRequire(SetKeyboardState(down.data()) != FALSE, "Hold the history client button");
+    SendMessageW(history->hwnd, WM_MOUSEMOVE, 0, coordinates);
+    SendMessageW(history->hwnd, WM_LBUTTONDOWN, MK_LBUTTON, coordinates);
+    historyRequire(GetCapture() == history->hwnd, "History client button did not capture the pointer");
+    const auto sequence = GetClipboardSequenceNumber();
+    setNativeTestDpi(history, 120, 760.f, 560.f, pump);
+    historyRequire(GetCapture() != history->hwnd, "DPI change left a stale client button capture");
+    SetKeyboardState(pointer.keyboard.data());
+    SendMessageW(history->hwnd, WM_LBUTTONUP, 0, coordinates);
+    historyRequire(GetClipboardSequenceNumber() == sequence, "Cancelled client press unexpectedly copied a file");
+    setNativeTestDpi(history, 96, 760.f, 560.f, pump);
+    std::cout << "PASS clipboard DPI capture ownership: window capture retained, positive/negative suggested origins applied, client press cancelled without a copy.\n";
+}
+
 inline void runMediaHistoryChecks(const fs::path& evidence, const std::function<void(DWORD)>& pump)
 {
     struct Files {
@@ -522,6 +585,7 @@ inline void runMediaHistoryChecks(const fs::path& evidence, const std::function<
         "History list did not render the specific PNG and MP4 previews");
     captureHistoryWindow(history, evidence / L"07-clipboard-history.png", pump);
     runClipboardDesignChecks(history, video, evidence, pump);
+    runClipboardCaptureChecks(history, pump);
     SendMessageW(history->hwnd, WM_KEYDOWN, VK_DOWN, 0);
     SendMessageW(history->hwnd, WM_KEYUP, VK_DOWN, 0);
     SendMessageW(history->hwnd, WM_KEYDOWN, VK_F5, 0);

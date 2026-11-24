@@ -1,6 +1,6 @@
 # 构建与发布
 
-本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.4**，Windows 文件版本为 **0.0.4.0**。版本号来自 [Version.props](../build/windows/Version.props)，发布意图来自 [publish.json](../releases/publish.json)。
+本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。版本号来自 [Version.props](../build/windows/Version.props)，发布意图来自 [publish.json](../releases/publish.json)。
 
 ## 环境与依赖决策
 
@@ -20,6 +20,7 @@ pwsh ./scripts/test.ps1
 pwsh ./scripts/test-windows.ps1
 pwsh ./scripts/smoke.ps1
 pwsh ./scripts/test-windows.ps1 -Gui
+pwsh ./scripts/test-windows.ps1 -Update
 pwsh ./scripts/package.ps1
 ```
 
@@ -30,6 +31,8 @@ pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore
 ```
 
 生成物集中在 `artifacts`，依赖恢复到 `.deps`，两者均不提交。测试的能力边界、证据和物理设备验收见 [验证指南](validation.md)。
+
+`test-windows.ps1 -Update` 会访问真实 GitHub 稳定 Release，并通过正式关于页将 EXE 下载到系统 Downloads；测试只清理本次拥有的下载。该模式使用独立的 90 秒测试进程超时，常规 `-Gui` 保持 45 秒。联网失败会使更新下载检查失败，不能用既有 artifact 替代这项门槛。运行时的文件与失败规则见 [更新下载](updates.md)。
 
 ## 发行资产的分工
 
@@ -57,13 +60,13 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 | 手工运行，不填标签 | 验证所选提交并保存 artifact |
 | 手工运行，填写已存在 Release 标签 | 检出该 tag 重建和上传，供恢复使用 |
 
-发布要求 Release / Debug（常规 main、PR）、核心与脚本检查、原生渲染、单 EXE 启动、真实窗口/剪贴板和打包门槛全部通过。打包核对版本与产品资源，检查 PE 依赖，拒绝意外增加外部 MSVC、Ling、Yoga 或 gifski DLL。
+发布要求 Release / Debug（常规 main、PR）、核心与脚本检查、原生渲染、单 EXE 启动、真实窗口/剪贴板、真实更新下载和打包门槛全部通过。打包核对版本与产品资源，检查 PE 依赖，拒绝意外增加外部 MSVC、Ling、Yoga 或 gifski DLL。
 
-`windows-x64` 保留 EXE、便携包、符号、构建信息和校验和；`windows-render-checks` 保留原生/GUI 报告与图片；失败时尽量保留 `windows-build-logs`。具体保留期以工作流为准。程序 artifact 可能在后续 GUI 检查前已经上传，因此“能下载 artifact”本身不证明完整构建成功。
+`windows-x64` 保留 EXE、便携包、符号、构建信息和校验和；`windows-render-checks` 保留原生、GUI 与更新下载报告及图片；失败时尽量保留 `windows-build-logs`。具体保留期以工作流为准。程序 artifact 可能在后续 GUI 检查前已经上传，因此“能下载 artifact”本身不证明完整构建成功。
 
 ## 声明新版本
 
-一次发布在同一提交中修改：
+发行所指向的提交必须同时包含相互匹配的：
 
 1. `build/windows/Version.props` 默认版本；
 2. `releases/publish.json` 的稳定 tag 与说明路径；
@@ -74,8 +77,8 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 ```json
 {
   "schemaVersion": 1,
-  "tag": "v0.0.4",
-  "notes": "releases/v0.0.4.md"
+  "tag": "v0.0.5",
+  "notes": "releases/v0.0.5.md"
 }
 ```
 

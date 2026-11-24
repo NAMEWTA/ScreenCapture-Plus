@@ -124,6 +124,21 @@ struct WinClipboard::State {
     bool loading{}, failed{}, statusError{}, closed{}, reopen{}, dragging{};
     Target focused{}, hovered{}, pressed{};
 
+    bool hasClientCapture(HWND window) const {
+        if ((!dragging && pressed.action == None) || GetCapture() != window) return false;
+        GUITHREADINFO thread{sizeof(GUITHREADINFO)};
+        // A native title-bar move/resize also captures this HWND. A DPI change
+        // during that loop must not release the system's capture and end the drag.
+        return !GetGUIThreadInfo(GetCurrentThreadId(), &thread) || !(thread.flags & GUI_INMOVESIZE);
+    }
+    void cancelPointer(HWND window) {
+        const bool release = hasClientCapture(window);
+        pressed = {};
+        hovered = {};
+        dragging = false;
+        if (release) ReleaseCapture();
+    }
+
     D2D1_RECT_F listRect(const WinClipboard& window) const {
         const auto d = window.dpi;
         return D2D1::RectF(inset * d, 128.f * d, window.w - inset * d, window.h - 72.f * d);
@@ -236,10 +251,7 @@ WinClipboard::WinClipboard() : state(std::make_unique<State>()) {
         // Closing the native window never waits for a slow thumbnail provider.
     });
     onDpiChanged.add([this] {
-        state->pressed = {};
-        state->hovered = {};
-        state->dragging = false;
-        if (GetCapture() == hwnd) ReleaseCapture();
+        state->cancelPointer(hwnd);
         MONITORINFO monitor{sizeof(MONITORINFO)};
         if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) {
             const auto& area = monitor.rcWork;
@@ -303,9 +315,7 @@ void WinClipboard::onCreated() {
     });
     onKeyDown.add([this](UINT key) { keyDown(key); });
     onBlur.add([this] {
-        state->pressed = {};
-        state->dragging = false;
-        if (GetCapture() == hwnd) ReleaseCapture();
+        state->cancelPointer(hwnd);
         refresh();
     });
     onTimer.add([this](UINT id) { if (id == workerTimer) pollWorker(); });
@@ -391,7 +401,7 @@ void WinClipboard::reload() {
     state->scrollY = 0;
     state->selected = noEntry;
     state->focused = {};
-    state->pressed = {};
+    state->cancelPointer(hwnd);
     auto& work = *state->work;
     {
         std::lock_guard lock(work.mutex);
@@ -409,8 +419,7 @@ void WinClipboard::showPage(std::size_t page) {
     const auto last = state->entries.empty() ? 0 : (state->entries.size() - 1) / pageSize;
     state->page = (std::min)(page, last);
     state->scrollY = 0;
-    state->hovered = {};
-    state->pressed = {};
+    state->cancelPointer(hwnd);
     state->rows.clear();
     auto& work = *state->work;
     {
@@ -681,7 +690,10 @@ void WinClipboard::selectEntry(std::size_t index) {
 }
 
 void WinClipboard::pointerMove(POINT position) {
-    if (state->dragging && GetCapture() != hwnd) state->dragging = false;
+    if ((state->dragging || state->pressed.action != None) && GetCapture() != hwnd) {
+        state->cancelPointer(hwnd);
+        refresh();
+    }
     if (position.x == INT_MAX && position.y == INT_MAX) {
         state->hovered = {};
         refresh();
@@ -723,11 +735,11 @@ void WinClipboard::pointerDown(POINT position, bool right) {
 void WinClipboard::pointerUp(POINT position, bool right) {
     if (right) return;
     const auto pressed = state->pressed;
-    state->pressed = {};
-    state->dragging = false;
-    if (GetCapture() == hwnd) ReleaseCapture();
+    const bool ownedCapture = state->hasClientCapture(hwnd);
+    state->cancelPointer(hwnd);
     state->buildTargets(*this);
-    if (pressed.action != None && pressed == state->hit(*this, position)) activate(pressed.action, pressed.index);
+    state->hovered = state->hit(*this, position);
+    if (ownedCapture && pressed.action != None && pressed == state->hovered) activate(pressed.action, pressed.index);
     if (!state->closed) refresh();
 }
 

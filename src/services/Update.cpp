@@ -1,358 +1,352 @@
 #include "pch.h"
 #include "app/Brand.h"
-#include <filesystem>
-#include <fstream>
-#include <chrono>
+#include "core/ReleaseVersion.h"
+#include "services/Lang.h"
+#include "services/Setting.h"
+#include "services/Update.h"
+
+#include <algorithm>
 #include <array>
 #include <atomic>
-#include <memory>
-#include "core/ReleaseVersion.h"
+#include <chrono>
+#include <cmath>
+#include <filesystem>
 #include <format>
+#include <memory>
+#include <mutex>
+#include <vector>
+#include <shlobj.h>
+#include <winrt/Windows.Security.Cryptography.h>
+#include <winrt/Windows.Security.Cryptography.Core.h>
+#include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.System.Threading.h>
 #include <winrt/Windows.Web.Http.h>
 #include <winrt/Windows.Web.Http.Headers.h>
 #include <winrt/Windows.Web.Http.Filters.h>
-#include <winrt/Windows.Storage.Streams.h>
-#include <winrt/Windows.System.Threading.h>
-#include "services/Update.h"
-#include "services/Setting.h"
-#include "services/Lang.h"
-
 
 namespace {
-	using namespace winrt::Windows::Foundation;
-	using namespace winrt::Windows::Data::Json;
-	using namespace winrt::Windows::Web::Http;
-	using namespace winrt::Windows::Web::Http::Filters;
-	using namespace winrt::Windows::Storage::Streams;
-	using winrt::Windows::System::Threading::ThreadPoolTimer;
+    using namespace winrt::Windows::Foundation;
+    using namespace winrt::Windows::Data::Json;
+    using namespace winrt::Windows::Web::Http;
+    using namespace winrt::Windows::Web::Http::Filters;
+    using namespace winrt::Windows::Storage::Streams;
+    using namespace winrt::Windows::Security::Cryptography;
+    using namespace winrt::Windows::Security::Cryptography::Core;
+    using winrt::Windows::System::Threading::ThreadPoolTimer;
+    using Dispatcher = winrt::Windows::System::DispatcherQueue;
+    using Stage = Update::Stage;
+    using Error = Update::Error;
 
-	constexpr auto versionUrl = HuhuCapture::Brand::latestReleaseApiUrl;
-	constexpr auto assetPrefix = HuhuCapture::Brand::releaseAssetPrefix;
-	constexpr auto releaseUrl = HuhuCapture::Brand::releasesUrl;
-	// 下载下来的新版 exe 就叫这个名字。跟正式的 exe 名字区分开 —— 用户可能把 exe 改过名，
-	// 覆盖的时候按当前 exe 的实际路径来，不能按这个名字来
-	constexpr auto newExeName = HuhuCapture::Brand::updateExecutableName;
-
-    struct UpdateSession { std::atomic<bool> active{ true }; };
-    auto session = std::make_shared<UpdateSession>();
-    bool disposed{ false };
-
+    constexpr std::uint64_t maximumDownload = 64ull * 1024 * 1024;
+    struct UpdateFailure { Error error; };
+    struct UpdateSession {
+        std::atomic<bool> active{ true };
+        std::mutex mutex;
+        IAsyncInfo operation{ nullptr };
+        void track(const IAsyncInfo& next) {
+            {
+                std::lock_guard lock(mutex);
+                operation = next;
+            }
+            if (!active && next) next.Cancel();
+        }
+        void stop() noexcept {
+            active = false;
+            try {
+                IAsyncInfo pending{ nullptr };
+                {
+                    std::lock_guard lock(mutex);
+                    pending = std::move(operation);
+                    operation = nullptr;
+                }
+                // Cancellation may complete a coroutine immediately. Do not
+                // hold the mutex when its cleanup calls track(nullptr).
+                if (pending) pending.Cancel();
+            } catch (...) {}
+        }
+    };
     struct RequestTimeout {
         ThreadPoolTimer timer{ nullptr };
         ~RequestTimeout() noexcept { try { if (timer) timer.Cancel(); } catch (...) {} }
     };
-
-	bool checked{ false };              //一次运行只查一次服务端，查过就不再动了
-	UINT_PTR checkTimer{ 0 };
-	UINT_PTR promptTimer{ 0 };
-	std::filesystem::path newExePath;   //已经下载好的新版 exe，空的表示还没有
-	std::wstring newVer;
-
-	//今天是第几天（1970-01-01 以来的天数）。一天最多查一次，就靠这个数记账
-	long long today()
-	{
-		auto day = std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now());
-		return day.time_since_epoch().count();
-	}
-
-	BOOL CALLBACK onEnumWin(HWND hwnd, LPARAM param)
-	{
-		if (!IsWindowVisible(hwnd)) return TRUE;
-		*reinterpret_cast<int*>(param) += 1;
-		return FALSE; //找到一个就够了
-	}
-	// 空闲 = 屏幕上一个窗口都没有，只剩托盘图标待命。截图窗口、贴图窗口、设置窗口都在本线程上，
-	// 挨个问一遍 IsWindowVisible 就够了，不用逐个类去问自己的状态（Ling::App 那个消息窗口
-	// 是 HWND_MESSAGE 的，从来不可见，不会误判）
-	bool isIdle()
-	{
-		int count{ 0 };
-		EnumThreadWindows(GetCurrentThreadId(), onEnumWin, reinterpret_cast<LPARAM>(&count));
-		return count == 0;
-	}
-
-    std::filesystem::path selfPath()
-    {
-        std::vector<wchar_t> buffer(MAX_PATH);
-        for (;;) {
-            const auto length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-            if (length == 0) return {};
-            if (length < buffer.size()) return std::filesystem::path{ std::wstring{ buffer.data(), length } };
-            if (buffer.size() >= 32768) return {};
-            buffer.resize(std::min<std::size_t>(buffer.size() * 2, 32768));
+    struct StagedFile {
+        std::filesystem::path path;
+        HANDLE handle{ INVALID_HANDLE_VALUE };
+        ~StagedFile() {
+            if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+            if (!path.empty()) { std::error_code ignored; std::filesystem::remove(path, ignored); }
         }
+        void close() {
+            if (handle != INVALID_HANDLE_VALUE) { CloseHandle(handle); handle = INVALID_HANDLE_VALUE; }
+        }
+    };
+
+    auto session = std::make_shared<UpdateSession>();
+    Update::Status current;
+    winrt::event<winrt::delegate<>> changed;
+    bool disposed{}, checked{};
+    UINT_PTR checkTimer{}, promptTimer{};
+    std::uint64_t requestId{};
+
+    bool busy() { return current.stage == Stage::Checking || current.stage == Stage::Downloading; }
+    void publish(Update::Status next) { current = std::move(next); changed(); }
+    bool post(const std::shared_ptr<UpdateSession>& lifetime, const Dispatcher& dispatcher,
+        std::uint64_t id, Update::Status next, bool progress = false)
+    {
+        if (!lifetime->active) return false;
+        try {
+            return dispatcher.TryEnqueue([lifetime, id, next = std::move(next), progress]() mutable {
+                if (!lifetime->active || id != requestId || (progress && current.stage != Stage::Downloading)) return;
+                publish(std::move(next));
+            });
+        } catch (...) { return false; }
     }
 
-	// exe 所在的目录能不能写。装在 Program Files 下（没提权）、或者放在只读介质上就不能，
-	// 这种情况下下载了也覆盖不上去，白费服务端的流量，所以下载之前先探一下
-	bool canWrite(const std::filesystem::path& dir)
-	{
-		auto probe = (dir / HuhuCapture::Brand::updateProbeName).wstring();
-		auto file = CreateFile(probe.data(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-			FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
-		if (file == INVALID_HANDLE_VALUE) return false;
-		CloseHandle(file); //DELETE_ON_CLOSE，关掉就没了，不用自己删
-		return true;
-	}
+    long long today()
+    {
+        return std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now()).time_since_epoch().count();
+    }
+    BOOL CALLBACK onEnumWin(HWND hwnd, LPARAM count)
+    {
+        if (!IsWindowVisible(hwnd)) return TRUE;
+        ++*reinterpret_cast<int*>(count);
+        return FALSE;
+    }
+    bool isIdle()
+    {
+        int count{};
+        EnumThreadWindows(GetCurrentThreadId(), onEnumWin, reinterpret_cast<LPARAM>(&count));
+        return count == 0;
+    }
 
-	void removeNewExe()
-	{
-		if (newExePath.empty()) return;
-		std::error_code ec;
-		std::filesystem::remove(newExePath, ec);
-		newExePath.clear();
-	}
+    std::filesystem::path downloadsDirectory()
+    {
+        PWSTR raw{};
+        const auto result = SHGetKnownFolderPath(FOLDERID_Downloads, KF_FLAG_CREATE, nullptr, &raw);
+        std::filesystem::path path;
+        if (SUCCEEDED(result) && raw) path = raw;
+        if (raw) CoTaskMemFree(raw);
+        if (path.empty()) throw UpdateFailure{ Error::Folder };
+        return path;
+    }
 
-	//路径要放进 PowerShell 的单引号字符串里，里面本来有的单引号得翻倍
-	std::wstring quotePath(const std::filesystem::path& path)
-	{
-		std::wstring str = path.wstring();
-		size_t pos{ 0 };
-		while ((pos = str.find(L'\'', pos)) != std::wstring::npos) {
-			str.insert(pos, 1, L'\'');
-			pos += 2;
-		}
-		return L"'" + str + L"'";
-	}
+    // Only this request's exclusively created .part file is removed on failure.
+    // The final rename never replaces an existing file, including the active EXE.
+    std::filesystem::path retainExecutable(const std::filesystem::path& directory,
+        const std::vector<BYTE>& bytes, const std::array<int, 3>& version,
+        const std::wstring& versionText, const std::shared_ptr<UpdateSession>& lifetime)
+    {
+        StagedFile staged;
+        for (unsigned attempt = 0; attempt < 1000; ++attempt) {
+            staged.path = directory / std::format(L"{}-v{}-{}-{}-{}.part", HuhuCapture::Brand::name, versionText,
+                GetCurrentProcessId(), GetTickCount64(), attempt);
+            staged.handle = CreateFileW(staged.path.c_str(), GENERIC_WRITE, 0, nullptr,
+                CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (staged.handle != INVALID_HANDLE_VALUE) break;
+            const auto error = GetLastError();
+            // A name collision is not ours to delete.
+            staged.path.clear();
+            if (error != ERROR_FILE_EXISTS && error != ERROR_ALREADY_EXISTS) throw UpdateFailure{ Error::Save };
+        }
+        if (staged.handle == INVALID_HANDLE_VALUE) throw UpdateFailure{ Error::Save };
+        DWORD written{};
+        if (!WriteFile(staged.handle, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) ||
+            written != bytes.size() || !FlushFileBuffers(staged.handle)) throw UpdateFailure{ Error::Save };
+        staged.close();
+        if (Ling::Util::getVerNum(staged.path.wstring()) != version) throw UpdateFailure{ Error::Integrity };
+        if (!lifetime->active) throw UpdateFailure{ Error::Save };
+        for (unsigned collision = 0; collision < 10000; ++collision) {
+            if (!lifetime->active) throw UpdateFailure{ Error::Save };
+            const auto suffix = collision ? std::format(L"-{:03}", collision) : std::wstring{};
+            const auto target = directory / std::format(L"{}-v{}-windows-x64{}.exe", HuhuCapture::Brand::name, versionText, suffix);
+            if (MoveFileExW(staged.path.c_str(), target.c_str(), MOVEFILE_WRITE_THROUGH)) {
+                staged.path.clear();
+                return target;
+            }
+            const auto error = GetLastError();
+            if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS &&
+                GetFileAttributesW(target.c_str()) == INVALID_FILE_ATTRIBUTES) throw UpdateFailure{ Error::Save };
+        }
+        throw UpdateFailure{ Error::Save };
+    }
 
-	// 起一段 PowerShell 收尾：等本进程退出（exe 开着的时候覆盖不掉自己）、把新 exe 覆盖过去、
-	// 用 --enter=tray 把新版本拉起来（只挂托盘，不弹截图窗口）、最后把中间文件和脚本自己删掉。
-	// 返回脚本有没有起成功 —— 没起成功就别退出进程了，不然用户以为在升级，其实什么也没发生
-	bool startScript(const std::filesystem::path& exePath)
-	{
-		auto scriptPath = Setting::get()->getDataPath() / L"update.ps1";
-		std::wstring pid = std::to_wstring(GetCurrentProcessId());
-		std::wstring script;
-		script += L"$ErrorActionPreference='SilentlyContinue'\r\n";
-		script += L"Wait-Process -Id " + pid + L" -Timeout 60\r\n";
-		script += L"Start-Sleep -Milliseconds 500\r\n";
-		//直接覆盖，不先删旧的：万一拷贝失败，用户手上至少还有个能用的旧版本
-		script += L"Copy-Item -LiteralPath " + quotePath(newExePath) + L" -Destination " + quotePath(exePath) + L" -Force\r\n";
-		script += L"if ($?) { Start-Process -FilePath " + quotePath(exePath) + L" -ArgumentList '--enter=tray' }\r\n";
-		script += L"Remove-Item -LiteralPath " + quotePath(newExePath) + L" -Force\r\n";
-		//脚本删自己：PowerShell 已经把整个文件读完了，删得掉
-		script += L"Remove-Item -LiteralPath " + quotePath(scriptPath) + L" -Force\r\n";
-		{
-			// Windows PowerShell 读没有 BOM 的 .ps1 会按 ANSI 解码，路径里带中文（中文用户名下的
-			// %appdata% 就是）会整段乱掉，所以写 UTF-8 + BOM
-			std::ofstream file{ scriptPath, std::ios::binary | std::ios::trunc };
-			if (!file) return false;
-			file << "\xEF\xBB\xBF" << Ling::Util::convertToStr(script);
-			if (!file.good()) return false;
-		}
-		std::wstring cmd{ L"powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" };
-		cmd += scriptPath.wstring() + L"\"";
-		STARTUPINFO si{ .cb{ sizeof(STARTUPINFO) } };
-		PROCESS_INFORMATION pi{};
-		// CREATE_NO_WINDOW：不让 PowerShell 的黑窗口闪出来，整个升级过程对用户无感
-		auto flag = CreateProcess(nullptr, cmd.data(), nullptr, nullptr, FALSE,
-			CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-		if (!flag) return false;
-		CloseHandle(pi.hThread);
-		CloseHandle(pi.hProcess);
-		return true;
-	}
+    void promptLater();
+    void CALLBACK onPromptTimer(HWND, UINT, UINT_PTR id, DWORD)
+    {
+        KillTimer(nullptr, id);
+        if (promptTimer == id) promptTimer = 0;
+        if (disposed || current.stage != Stage::Available) return;
+        if (!isIdle()) { promptLater(); return; }
+        const auto text = std::format(L"{} {}\n\n{}", Lang::get(L"update.found"), current.version,
+            Lang::get(L"update.promptDownload"));
+        const auto answer = MessageBoxW(nullptr, text.c_str(), HuhuCapture::Brand::name.data(),
+            MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND);
+        if (answer == IDYES) Update::downloadLatest();
+    }
+    void promptLater()
+    {
+        if (!disposed && current.stage == Stage::Available && !promptTimer)
+            promptTimer = SetTimer(nullptr, 0, 5000, onPromptTimer);
+    }
 
-	void promptRestart()
-	{
-		auto title = Lang::get(L"about.sysTip");
-		auto text = std::format(L"{} {}\n\n{}", Lang::get(L"update.found"), newVer, Lang::get(L"update.tip"));
-		auto btnId = MessageBox(nullptr, text.data(), title.data(),
-			MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
-		//不升就把下载的文件删掉，别占着地方。明天空闲时还会再查一次、再问一次
-		if (btnId != IDOK) {
-			removeNewExe();
-			return;
-		}
-		auto exePath = selfPath();
-		if (exePath.empty() || !startScript(exePath)) {
-			removeNewExe();
-			return;
-		}
-		//退出让位，剩下的活交给脚本
-		Ling::App::get()->quit(0);
-	}
-
-	// exe 所在目录写不进去时的提醒：自动升级这条路走不通，问用户要不要自己去下载页面。
-	// 不挂定时器反复等空闲 —— 这只是个提醒，等不到就算了，明天还有机会
-	void promptNoPermission(const std::wstring& verStr)
-	{
-		if (!isIdle()) return;
-		auto title = Lang::get(L"about.sysTip");
-		auto text = std::format(L"{} {}\n\n{}", Lang::get(L"update.found"), verStr, Lang::get(L"update.noPermission"));
-		auto btnId = MessageBox(nullptr, text.data(), title.data(), MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
-		if (btnId != IDOK) return;
-		ShellExecute(nullptr, L"open", releaseUrl.data(), nullptr, nullptr, SW_SHOWNORMAL);
-	}
-
-	void promptLater();
-
-	void CALLBACK onPromptTimer(HWND, UINT, UINT_PTR id, DWORD)
-	{
-        if (disposed) return;
-		KillTimer(nullptr, id);
-		if (promptTimer == id) promptTimer = 0;
-		if (newExePath.empty()) return;
-		if (!isIdle()) {
-			promptLater(); //用户又忙起来了，过会儿再看
-			return;
-		}
-		promptRestart();
-	}
-
-	// 弹窗只在空闲时弹：用户正在框选、正在录屏、正在标注的时候抢焦点，等于把人家的活搅了。
-	// 所以下载完不马上弹，隔几秒看一眼空不空
-	void promptLater()
-	{
-		if (newExePath.empty() || promptTimer) return;
-		promptTimer = SetTimer(nullptr, 0, 5000, onPromptTimer);
-	}
-
-	winrt::fire_and_forget doCheck(std::shared_ptr<UpdateSession> lifetime,
-                                 winrt::Windows::System::DispatcherQueue dispatcher,
-                                 std::filesystem::path dataPath, std::array<int, 3> localVersion)
-	{
-		// 网络请求和文件写入都挪到后台线程：这条路上任何一步都可能卡好几秒，
-		// 挂在 UI 线程上就是整个应用不动了（热键、托盘一起没反应）
-		co_await winrt::resume_background();
-		try {
-			if (!lifetime->active) co_return;
-			auto exePath = selfPath();
-			if (exePath.empty()) co_return;
-			HttpBaseProtocolFilter filter;
-			// MostRecent：每次都去问服务端，没变就用本地缓存（一个 304，几乎不耗流量）。
-			// 写行为设成 NoCache 是不让响应体进 WinINet 的缓存 —— 那个 exe 有好几 M，没必要存两份
-			filter.CacheControl().ReadBehavior(HttpCacheReadBehavior::MostRecent);
-			filter.CacheControl().WriteBehavior(HttpCacheWriteBehavior::NoCache);
+    winrt::fire_and_forget request(std::shared_ptr<UpdateSession> lifetime, Dispatcher dispatcher,
+        std::uint64_t id, std::array<int, 3> localVersion, bool downloadRequested)
+    {
+        co_await winrt::resume_background();
+        Error failure = Error::Network;
+        try {
+            if (!lifetime->active) co_return;
+            HttpBaseProtocolFilter filter;
+            filter.CacheControl().ReadBehavior(HttpCacheReadBehavior::MostRecent);
+            filter.CacheControl().WriteBehavior(HttpCacheWriteBehavior::NoCache);
             HttpClient client{ filter };
             client.DefaultRequestHeaders().TryAppendWithoutValidation(L"User-Agent", HuhuCapture::Brand::name);
             client.DefaultRequestHeaders().TryAppendWithoutValidation(L"Accept", L"application/vnd.github+json");
-			auto op = client.GetStringAsync(Uri{ versionUrl });
-			// 10 秒还没回来就撤：这是后台顺手干的活，不值得一直挂着一个连接。
-			// Cancel 之后下面的 co_await 会抛，一路走到 catch 里
-			RequestTimeout guard{ ThreadPoolTimer::CreateTimer([op](const ThreadPoolTimer&) { op.Cancel(); },
-                std::chrono::seconds(10)) };
-			std::wstring body{ co_await op };
-			guard.timer.Cancel();
+            auto metadata = client.GetStringAsync(Uri{ HuhuCapture::Brand::latestReleaseApiUrl });
+            lifetime->track(metadata);
+            RequestTimeout metadataTimeout{ ThreadPoolTimer::CreateTimer(
+                [metadata](const ThreadPoolTimer&) { metadata.Cancel(); }, std::chrono::seconds(10)) };
+            const std::wstring body{ co_await metadata };
+            metadataTimeout.timer.Cancel();
             if (!lifetime->active) co_return;
-			JsonObject obj{ nullptr };
-			//服务端返回的东西不是合法 JSON（被网关塞了个错误页之类）：当没这回事
-			if (!JsonObject::TryParse(body, obj)) co_return;
-            if (obj.GetNamedBoolean(L"draft", false) || obj.GetNamedBoolean(L"prerelease", false)) co_return;
-            const auto parsed = HuhuCapture::Core::parseReleaseVersion(obj.GetNamedString(L"tag_name", L""));
-            if (!parsed || *parsed <= localVersion) co_return;
-            const auto remote = *parsed;
-            // Resolve the executable from this exact release. A mutable /latest/
-            // download URL could switch versions between metadata and download.
-            std::wstring exeUrl;
-            auto assets = obj.GetNamedArray(L"assets", JsonArray{});
-            for (uint32_t i = 0; i < assets.Size(); ++i) {
-                auto asset = assets.GetObjectAt(i);
-                if (asset.GetNamedString(L"name", L"") != HuhuCapture::Brand::executableName) continue;
-                const std::wstring candidate{ asset.GetNamedString(L"browser_download_url", L"") };
-                if (candidate.starts_with(assetPrefix)) exeUrl = candidate;
-                break;
-            }
-            // Publishing a release starts the build; assets may not exist yet.
-            if (exeUrl.empty()) co_return;
-			auto verStr = std::format(L"{}.{}.{}", remote[0], remote[1], remote[2]);
-			if (!canWrite(exePath.parent_path())) {
-				dispatcher.TryEnqueue([lifetime, verStr]() { if (lifetime->active) promptNoPermission(verStr); });
-				co_return;
-			}
-            auto download = client.GetBufferAsync(Uri{ exeUrl });
-            RequestTimeout downloadTimeout{ ThreadPoolTimer::CreateTimer(
-                [download](const ThreadPoolTimer&) { download.Cancel(); }, std::chrono::seconds(60)) };
-            auto buffer = co_await download;
-            downloadTimeout.timer.Cancel();
-            if (!lifetime->active) co_return;
-			std::vector<BYTE> bytes(buffer.Length());
-			DataReader::FromBuffer(buffer).ReadBytes(bytes);
-			//不是 PE 文件：多半下回来的是错误页，不是 exe
-			if (bytes.size() < 2 || bytes[0] != 'M' || bytes[1] != 'Z') co_return;
-			std::error_code ec;
-			std::filesystem::create_directories(dataPath, ec);
-			auto target = dataPath / newExeName;
-			{
-				std::ofstream file{ target, std::ios::binary | std::ios::trunc };
-				if (!file) co_return;
-                file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-                file.close();
-                if (!file) {
-                    std::filesystem::remove(target, ec);
-                    co_return;
-                }
-			}
-			// 下回来的到底是不是服务端说的那个版本：对不上就不敢拿它替换用户的 exe
-			if (Ling::Util::getVerNum(target.wstring()) != remote) {
-				std::filesystem::remove(target, ec);
-				co_return;
-			}
-            if (!lifetime->active) {
-                std::filesystem::remove(target, ec);
+            failure = Error::Metadata;
+            JsonObject release{ nullptr };
+            if (!JsonObject::TryParse(body, release) || release.GetNamedBoolean(L"draft", false) ||
+                release.GetNamedBoolean(L"prerelease", false)) throw UpdateFailure{ failure };
+            const std::wstring tag{ release.GetNamedString(L"tag_name", L"") };
+            const auto version = HuhuCapture::Core::parseReleaseVersion(tag);
+            if (!version) throw UpdateFailure{ failure };
+            const auto versionText = std::format(L"{}.{}.{}", (*version)[0], (*version)[1], (*version)[2]);
+            if (tag != L"v" + versionText) throw UpdateFailure{ failure };
+            if (!downloadRequested && *version <= localVersion) {
+                lifetime->track(nullptr);
+                post(lifetime, dispatcher, id, {});
                 co_return;
             }
-            // The UI may shut down between writing the file and enqueueing its
-            // completion. Retain no orphan download when that race is lost.
-            const bool queued = dispatcher.TryEnqueue([lifetime, target, verStr]() {
-                if (!lifetime->active) {
-                    std::error_code ignored;
-                    std::filesystem::remove(target, ignored);
-                    return;
-                }
-                newExePath = target;
-                newVer = verStr;
-                promptLater();
-            });
-            if (!queued) std::filesystem::remove(target, ec);
-		}
-		catch (...) {
-			// 网络不通、超时、被取消、服务端返回了个错误码、磁盘写不进去：一律静默。
-			// 自动升级是顺手做的事，不该拿弹窗打扰用户，明天空闲时再来
-		}
-	}
+            const auto expectedUrl = std::wstring{ HuhuCapture::Brand::releaseAssetPrefix } + tag + L"/" +
+                std::wstring{ HuhuCapture::Brand::executableName };
+            std::wstring downloadUrl, digest;
+            std::uint64_t size{};
+            const auto assets = release.GetNamedArray(L"assets", JsonArray{});
+            for (const auto& value : assets) {
+                const auto asset = value.GetObject();
+                if (asset.GetNamedString(L"name", L"") != HuhuCapture::Brand::executableName) continue;
+                downloadUrl = asset.GetNamedString(L"browser_download_url", L"");
+                digest = asset.GetNamedString(L"digest", L"");
+                const auto rawSize = asset.GetNamedNumber(L"size", 0);
+                if (!std::isfinite(rawSize) || rawSize < 2 || rawSize > maximumDownload || std::floor(rawSize) != rawSize)
+                    throw UpdateFailure{ failure };
+                size = static_cast<std::uint64_t>(rawSize);
+                break;
+            }
+            if (downloadUrl != expectedUrl || !digest.starts_with(L"sha256:") || digest.size() != 71 ||
+                !std::all_of(digest.begin() + 7, digest.end(), [](wchar_t c) {
+                    return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f');
+                })) throw UpdateFailure{ failure };
+            if (!downloadRequested) {
+                lifetime->track(nullptr);
+                dispatcher.TryEnqueue([lifetime, id, versionText]() {
+                    if (!lifetime->active || id != requestId) return;
+                    publish({ Stage::Available, versionText });
+                    promptLater();
+                });
+                co_return;
+            }
 
-	void CALLBACK onCheckTimer(HWND, UINT, UINT_PTR id, DWORD)
-	{
-        if (disposed) return;
-		KillTimer(nullptr, id);
-		if (checkTimer == id) checkTimer = 0;
-		//这十几秒里用户又开始截图了：这次不查，下次回到空闲还会再来
-		if (!isIdle()) return;
-		checked = true;
-		//查过就记账，成没成功都算 —— 一天一次，失败了也没必要今天反复试
-		Setting::get()->setUpdateCheckDay(today());
-        auto app = Ling::App::get();
-        if (!app || disposed) return;
-        // Capture UI-owned state before resuming on a worker; no singleton is
-        // dereferenced by the coroutine after app/window teardown.
-        doCheck(session, app->dq, Setting::get()->getDataPath(), Ling::Util::getVerNum());
-	}
+            failure = Error::Folder;
+            const auto directory = downloadsDirectory();
+            if (!lifetime->active) co_return;
+            post(lifetime, dispatcher, id, { Stage::Downloading, versionText, {}, 0, size });
+            failure = Error::Network;
+            auto download = client.GetBufferAsync(Uri{ downloadUrl });
+            lifetime->track(download);
+            auto reported = std::make_shared<std::atomic<unsigned>>(101);
+            download.Progress([lifetime, dispatcher, id, versionText, size, reported](const auto& operation, const HttpProgress& progress) {
+                if (!lifetime->active) { operation.Cancel(); return; }
+                // HttpProgress includes response headers; allow bounded header
+                // overhead and check the exact body length after completion.
+                if (progress.BytesReceived > size + 1024 * 1024) { operation.Cancel(); return; }
+                const auto received = (std::min)(progress.BytesReceived, size);
+                const auto percent = static_cast<unsigned>(received * 100 / size);
+                if (reported->exchange(percent) == percent) return;
+                post(lifetime, dispatcher, id, { Stage::Downloading, versionText, {}, received, size }, true);
+            });
+            RequestTimeout downloadTimeout{ ThreadPoolTimer::CreateTimer(
+                [download](const ThreadPoolTimer&) { download.Cancel(); }, std::chrono::seconds(60)) };
+            const auto buffer = co_await download;
+            downloadTimeout.timer.Cancel();
+            if (!lifetime->active) co_return;
+            failure = Error::Integrity;
+            if (buffer.Length() != size) throw UpdateFailure{ failure };
+            const auto algorithm = HashAlgorithmProvider::OpenAlgorithm(HashAlgorithmNames::Sha256());
+            const auto expectedHash = CryptographicBuffer::DecodeFromHexString(digest.substr(7));
+            if (!CryptographicBuffer::Compare(algorithm.HashData(buffer), expectedHash)) throw UpdateFailure{ failure };
+            std::vector<BYTE> bytes(buffer.Length());
+            DataReader::FromBuffer(buffer).ReadBytes(bytes);
+            if (bytes.size() < 2 || bytes[0] != 'M' || bytes[1] != 'Z') throw UpdateFailure{ failure };
+            failure = Error::Save;
+            const auto target = retainExecutable(directory, bytes, *version, versionText, lifetime);
+            // A completed verified file belongs to the user, even if settings
+            // closes or the UI dispatcher shuts down before receiving this event.
+            lifetime->track(nullptr);
+            post(lifetime, dispatcher, id, { Stage::Downloaded, versionText, target, size, size });
+        } catch (const UpdateFailure& error) {
+            lifetime->track(nullptr);
+            post(lifetime, dispatcher, id, { Stage::Failed, {}, {}, 0, 0, error.error });
+        } catch (...) {
+            lifetime->track(nullptr);
+            post(lifetime, dispatcher, id, { Stage::Failed, {}, {}, 0, 0, failure });
+        }
+    }
+
+    void begin(bool downloadRequested)
+    {
+        if (disposed || busy()) return;
+        auto* app = Ling::App::get();
+        if (!app) return;
+        if (checkTimer) KillTimer(nullptr, checkTimer);
+        if (promptTimer) KillTimer(nullptr, promptTimer);
+        checkTimer = promptTimer = 0;
+        if (downloadRequested) {
+            checked = true;
+            Setting::get()->setUpdateCheckDay(today());
+        }
+        ++requestId;
+        publish({ Stage::Checking });
+        // Capture UI-owned state once; the worker never accesses settings,
+        // language objects, windows, or application singletons.
+        request(session, app->dq, requestId, Ling::Util::getVerNum(), downloadRequested);
+    }
+    void CALLBACK onCheckTimer(HWND, UINT, UINT_PTR id, DWORD)
+    {
+        KillTimer(nullptr, id);
+        if (checkTimer == id) checkTimer = 0;
+        if (disposed || checked || !isIdle() || busy()) return;
+        checked = true;
+        Setting::get()->setUpdateCheckDay(today());
+        begin(false);
+    }
 }
 
 void Update::checkLater()
 {
-    if (disposed) return;
-	//已经下载好了、只是还没找到弹窗的时机：接着等空闲
-	if (!newExePath.empty()) {
-		promptLater();
-		return;
-	}
-	if (checked || checkTimer) return;
-	auto lingApp = Ling::App::get();
-	if (!lingApp) return;
-	//用完即走模式：人家就是要截一张图就退，别在这种一次性进程里搞后台请求
-	if (lingApp->args[L"--auto-quit"] == L"true") return;
-	if (Setting::get()->getUpdateCheckDay() >= today()) return; //今天查过了
-	// 空闲不代表用户走开了，很可能马上又要截一张。等 15 秒再动手，
-	// 这段时间里又开始干活了就作罢（见 onCheckTimer）
-	checkTimer = SetTimer(nullptr, 0, 15000, onCheckTimer);
+    if (disposed || busy() || checked || checkTimer) return;
+    auto* app = Ling::App::get();
+    if (!app || app->args[L"--auto-quit"] == L"true" || Setting::get()->getUpdateCheckDay() >= today()) return;
+    checkTimer = SetTimer(nullptr, 0, 15000, onCheckTimer);
 }
 
+void Update::downloadLatest() { begin(true); }
+Update::Status Update::status() { return current; }
+winrt::event_token Update::subscribe(std::function<void()> handler)
+{
+    return changed.add([handler = std::move(handler)] { handler(); });
+}
+void Update::unsubscribe(winrt::event_token token) { changed.remove(token); }
 void Update::dispose()
 {
     disposed = true;
-    session->active = false;
+    session->stop();
     if (checkTimer) KillTimer(nullptr, checkTimer);
     if (promptTimer) KillTimer(nullptr, promptTimer);
     checkTimer = promptTimer = 0;

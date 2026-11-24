@@ -13,7 +13,7 @@ This project is derived from [xland / ScreenCapture](https://github.com/xland/Sc
 
 It is part of the [huhu](https://github.com/NAMEWTA/huhu) brand family. The Huhu mascot and capture-corner identity, asset variants, and usage rules are documented in the [brand guide](brand.md).
 
-[Download v0.0.4](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.4) · [All releases](https://github.com/NAMEWTA/huhucapture/releases) · [Report an issue](https://github.com/NAMEWTA/huhucapture/issues)
+[Download v0.0.5](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) · [All releases](https://github.com/NAMEWTA/huhucapture/releases) · [Report an issue](https://github.com/NAMEWTA/huhucapture/issues)
 
 ## Explain a region, save one image
 
@@ -61,15 +61,19 @@ For normal use, choose the EXE or the portable ZIP. Other assets support debuggi
 | Asset | Purpose |
 | --- | --- |
 | `huhucapture.exe` | Standalone x64 app with embedded Simplified Chinese and English; the updater uses this name |
-| `huhucapture-v0.0.4-windows-x64.zip` | The same EXE, additional `Lang` files, licenses/notices, and build metadata |
-| `huhucapture-v0.0.4-windows-x64-symbols.zip` | Matching PDB debugging symbols for crash stacks, functions, and source locations; not needed to run the app |
+| `huhucapture-v0.0.5-windows-x64.zip` | The same EXE, additional `Lang` files, licenses/notices, and build metadata |
+| `huhucapture-v0.0.5-windows-x64-symbols.zip` | Matching PDB debugging symbols for crash stacks, functions, and source locations; not needed to run the app |
 | `build-info.json` | Source SHA, version, architecture, toolchain, pinned dependencies, and EXE SHA256 |
 | `SHA256SUMS.txt` | SHA256 checksums for the other four release assets |
 | GitHub `Source code (zip / tar.gz)` | Tagged source snapshot for developers; no built EXE |
 
 To debug, download symbols and the EXE from the **same release build**, extract the PDBs, and add their directory to Visual Studio or WinDbg's symbol search path. Use the source commit in `build-info.json` for source-level debugging. Another build's PDB cannot be substituted even if its version number is identical. See [Microsoft's PDB documentation](https://learn.microsoft.com/en-us/visualstudio/debugger/specify-symbol-dot-pdb-and-source-files-in-the-visual-studio-debugger).
 
-Use `Get-FileHash .\huhucapture.exe -Algorithm SHA256` in PowerShell and compare with the corresponding line in `SHA256SUMS.txt`. Exit the running application before replacing it manually. The built-in updater uses this repository's stable releases and asks before installing.
+Use `Get-FileHash .\huhucapture.exe -Algorithm SHA256` in PowerShell and compare with the corresponding line in `SHA256SUMS.txt`.
+
+In **Settings → About**, download the latest stable EXE directly to the Windows **Downloads** known folder, including a relocated folder. The page shows progress, the completed file's location, and an action to open the download folder. Local filenames include the release version, and existing files are preserved with collision-safe suffixes. Size, SHA256, and executable version are checked before the temporary download becomes a completed EXE; failures can be retried.
+
+The daily check still prompts when a newer stable version is available and uses the same download flow after confirmation. Downloading does not replace or launch the running program. Exit the old application, rename the download to the original executable name (normally `huhucapture.exe`), replace the EXE you normally use, and then start the downloaded version. See the [update download contract](updates.md).
 
 The default capture shortcut is **F1**. Upgrading replaces the former default `Ctrl+Alt+A` with F1 while preserving other custom shortcuts. Existing huhucapture configuration remains in use.
 
@@ -113,6 +117,7 @@ pwsh ./scripts/test.ps1
 pwsh ./scripts/test-windows.ps1
 pwsh ./scripts/smoke.ps1
 pwsh ./scripts/test-windows.ps1 -Gui
+pwsh ./scripts/test-windows.ps1 -Update
 pwsh ./scripts/package.ps1
 ```
 

@@ -42,6 +42,7 @@ pwsh ./scripts/test.ps1
 pwsh ./scripts/test-windows.ps1
 pwsh ./scripts/smoke.ps1
 pwsh ./scripts/test-windows.ps1 -Gui
+pwsh ./scripts/test-windows.ps1 -Update
 pwsh ./scripts/package.ps1
 ```
 

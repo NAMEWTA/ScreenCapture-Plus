@@ -16,8 +16,6 @@ inline constexpr std::wstring_view releasesUrl{ L"https://github.com/NAMEWTA/huh
 inline constexpr std::wstring_view latestReleaseApiUrl{ L"https://api.github.com/repos/NAMEWTA/huhucapture/releases/latest" };
 inline constexpr std::wstring_view releaseAssetPrefix{ L"https://github.com/NAMEWTA/huhucapture/releases/download/" };
 inline constexpr std::wstring_view executableName{ L"huhucapture.exe" };
-inline constexpr std::wstring_view updateExecutableName{ L"huhucapture.update.exe" };
-inline constexpr std::wstring_view updateProbeName{ L"huhucapture.update.probe" };
 
 // Ling colors use RRGGBBAA. These are product chrome colors, separate from annotation colors.
 inline constexpr std::uint32_t inkRgba{ 0x67381FFF };

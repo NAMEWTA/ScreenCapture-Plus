@@ -110,6 +110,7 @@ pwsh ./scripts/test.ps1
 pwsh ./scripts/test-windows.ps1
 pwsh ./scripts/smoke.ps1
 pwsh ./scripts/test-windows.ps1 -Gui
+pwsh ./scripts/test-windows.ps1 -Update
 pwsh ./scripts/package.ps1
 ```
 
@@ -120,6 +121,9 @@ Also build Debug when changing dependencies or build settings. Pure tests in
 objects and drives real windows; keep that entry point outside the shipping EXE.
 It has a hard timeout and fails explicitly when graphics/input capabilities are
 missing.
+The separate `-Update` mode exercises the user-triggered download against the
+current published GitHub release. It has its own network budget and removes only
+the completed file created by that check; normal GUI checks remain offline.
 
 Core tests, WARP rendering, tray smoke, and scripted GUI checks have different
 coverage. None proves physical input, IME composition, mixed DPI, or audio worked.

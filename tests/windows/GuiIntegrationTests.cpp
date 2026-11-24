@@ -22,8 +22,10 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 #include "MediaHistoryChecks.h"
+#include "UpdateDownloadChecks.h"
 
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
@@ -606,6 +608,13 @@ int wmain(int argc, wchar_t** argv)
         std::cout << "Starting the production application and native editor window.\n";
         ApplicationLifetime lifetime;
         App::init();
+        const bool verifyUpdate = std::any_of(argv + 2, argv + argc,
+            [](const wchar_t* argument) { return std::wstring_view(argument) == L"--verify-update"; });
+        if (verifyUpdate) {
+            HuhuCapture::Tests::runUpdateDownloadChecks(directory, [](DWORD milliseconds) { pump(milliseconds); });
+            std::cout << "Real native Downloads update integration check passed.\n";
+            return 0;
+        }
         Update::dispose(); // This isolated GUI check never performs a background update.
         constexpr UINT width = 480, height = 360;
         std::vector<BYTE> pixels(static_cast<std::size_t>(width) * height * 4);

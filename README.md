@@ -13,7 +13,7 @@
 
 项目属于 [huhu](https://github.com/NAMEWTA/huhu) 品牌家族，采用虎虎形象与截图范围角标。产品名称、程序文件、配置目录和发布资产统一使用 `huhucapture`。品牌资产及使用约定见 [品牌说明](docs/brand.md)。
 
-[下载 v0.0.4](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.4) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
+[下载 v0.0.5](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
 
 ## 截图与说明，一起保存
 
@@ -75,8 +75,8 @@
 | 发布文件 | 包含什么 | 什么时候需要 |
 | --- | --- | --- |
 | `huhucapture.exe` | 可直接运行的 Windows x64 单文件，内置简体中文和英语；也是更新器使用的固定文件名 | 日常使用，下载后运行 |
-| `huhucapture-v0.0.4-windows-x64.zip` | 同一份 EXE、`Lang` 额外语言、依赖许可/声明和 `build-info.json` | 想完整保留分发内容，解压后运行其中的 EXE |
-| `huhucapture-v0.0.4-windows-x64-symbols.zip` | 与本次 Release 构建配套的 PDB 调试符号 | 开发者分析崩溃、调用栈或断点时使用；普通运行无需下载 |
+| `huhucapture-v0.0.5-windows-x64.zip` | 同一份 EXE、`Lang` 额外语言、依赖许可/声明和 `build-info.json` | 想完整保留分发内容，解压后运行其中的 EXE |
+| `huhucapture-v0.0.5-windows-x64-symbols.zip` | 与本次 Release 构建配套的 PDB 调试符号 | 开发者分析崩溃、调用栈或断点时使用；普通运行无需下载 |
 | `build-info.json` | 仓库与源提交 SHA、标签、Windows 版本、架构、工具链、固定依赖和 EXE 的 SHA256 | 提交问题或核对一个文件究竟来自哪次构建 |
 | `SHA256SUMS.txt` | 上述 EXE、两种 ZIP 和构建信息的 SHA256 校验值 | 核对下载是否完整、文件是否与该 Release 一致 |
 | GitHub 自动提供的 `Source code (zip / tar.gz)` | 对应标签的源码快照 | 自行编译或阅读源码；其中不包含已构建的可运行 EXE |
@@ -97,7 +97,11 @@ Get-FileHash .\huhucapture.exe -Algorithm SHA256
 
 ### 更新与默认快捷键
 
-手动更新前先退出正在运行的进程，再替换并启动新文件。程序内的更新检查使用本仓库的稳定 Release，并在安装前请求确认。
+在 **设置 → 关于** 点击 **下载最新版本**，程序会在后台下载本仓库最新稳定版 EXE 到系统“下载”目录（Downloads），并遵循该目录的移动或重定向。界面显示进度，成功后给出实际文件位置，并可直接打开下载文件夹。
+
+文件使用带版本的名称，例如 `huhucapture-v0.0.5-windows-x64.exe`；已有同名文件时另取不冲突的名称。完成下载并通过大小、SHA256 和版本校验后才生成最终 EXE，失败可重试。后台每日新版本检查仍保留，确认下载后使用同一流程。
+
+下载完成后，先退出旧程序，将下载文件改成原程序的文件名（通常为 `huhucapture.exe`），替换日常使用的 EXE 后重新启动。程序不会自动覆盖运行中的文件或执行下载的新版。目录、校验和失败边界见 [更新下载说明](docs/updates.md)。
 
 默认全局截图快捷键改为 **F1**。升级时，旧默认 `Ctrl+Alt+A` 迁移为 F1，其他自定义快捷键保留；仍可在设置的快捷键页面修改。已有 `%appdata%\huhucapture\config.json` 或 EXE 旁的便携配置继续使用。
 
@@ -150,6 +154,7 @@ pwsh ./scripts/test.ps1
 pwsh ./scripts/test-windows.ps1
 pwsh ./scripts/smoke.ps1
 pwsh ./scripts/test-windows.ps1 -Gui
+pwsh ./scripts/test-windows.ps1 -Update
 pwsh ./scripts/package.ps1
 ```
 
@@ -164,6 +169,7 @@ pwsh ./scripts/package.ps1
 | [界面设计](docs/design.md) | 设置与媒体历史的字体、颜色、布局及交互 |
 | [批注说明](docs/annotations.md) | 交互、稳定身份、完整导出和失败语义 |
 | [架构与扩展](docs/architecture.md) | 目录职责、资源所有权、数据流、性能约束 |
+| [更新下载](docs/updates.md) | 系统 Downloads、下载完成条件与文件保护边界 |
 | [构建与发布](docs/building.md) | 固定依赖、本地构建、Actions、版本与资产 |
 | [验证指南](docs/validation.md) | 自动测试范围、证据路径、手工验收 |
 | [贡献指南](CONTRIBUTING.md) | 开发流程、改动边界与提交要求 |

@@ -66,6 +66,9 @@ jobs:
       - name: Verify real annotation editor interactions and clipboard export
         run: ./scripts/test-windows.ps1 -Gui
 
+      - name: Verify latest release download into Windows Downloads
+        run: ./scripts/test-windows.ps1 -Update
+
       - name: Retain diagnostic build logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (Node 24)

@@ -13,7 +13,7 @@ Proyek ini dikembangkan dari [xland / ScreenCapture](https://github.com/xland/Sc
 
 Proyek ini merupakan bagian dari keluarga merek [huhu](https://github.com/NAMEWTA/huhu). Identitasnya memakai karakter Huhu dan sudut bingkai tangkapan. Aset serta aturan penggunaannya tersedia di [panduan merek](brand.md).
 
-[Unduh v0.0.4](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.4) · [Semua rilis](https://github.com/NAMEWTA/huhucapture/releases) · [Laporkan masalah](https://github.com/NAMEWTA/huhucapture/issues)
+[Unduh v0.0.5](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) · [Semua rilis](https://github.com/NAMEWTA/huhucapture/releases) · [Laporkan masalah](https://github.com/NAMEWTA/huhucapture/issues)
 
 ## Area dan penjelasan dalam satu gambar
 
@@ -61,15 +61,19 @@ Untuk pemakaian biasa, pilih EXE atau ZIP portabel.
 | Berkas | Kegunaan |
 | --- | --- |
 | `huhucapture.exe` | Program x64 siap jalan dengan bahasa Mandarin Sederhana dan Inggris |
-| `huhucapture-v0.0.4-windows-x64.zip` | EXE yang sama, bahasa tambahan, lisensi, dan informasi build |
-| `huhucapture-v0.0.4-windows-x64-symbols.zip` | Simbol PDB untuk debugging dan analisis crash; tidak diperlukan untuk menjalankan aplikasi |
+| `huhucapture-v0.0.5-windows-x64.zip` | EXE yang sama, bahasa tambahan, lisensi, dan informasi build |
+| `huhucapture-v0.0.5-windows-x64-symbols.zip` | Simbol PDB untuk debugging dan analisis crash; tidak diperlukan untuk menjalankan aplikasi |
 | `build-info.json` | Commit sumber, versi, arsitektur, toolchain, dependensi, dan SHA256 EXE |
 | `SHA256SUMS.txt` | Nilai SHA256 untuk empat aset rilis lainnya |
 | `Source code (zip / tar.gz)` dari GitHub | Snapshot sumber pada tag, tanpa EXE hasil build |
 
 Untuk debugging, ekstrak PDB dari **build yang sama** dengan EXE lalu tambahkan foldernya ke jalur pencarian simbol Visual Studio atau WinDbg. PDB dari build lain tidak dapat dianggap cocok hanya karena nomor versinya sama. Gunakan commit dalam `build-info.json` untuk membaca sumber. Jalankan `Get-FileHash .\huhucapture.exe -Algorithm SHA256` dan cocokkan hasilnya dengan `SHA256SUMS.txt`.
 
-Keluar dari aplikasi sebelum mengganti berkas secara manual. Pembaruan bawaan meminta persetujuan. Pintasan tangkapan default kini **F1**: nilai default lama `Ctrl+Alt+A` dipindahkan ke F1, sementara pintasan khusus lainnya dan konfigurasi yang sudah ada tetap dipakai.
+Di **Pengaturan → Tentang**, unduh EXE rilis stabil terbaru langsung ke folder **Downloads** sistem Windows, termasuk jika foldernya sudah dipindahkan. Halaman menampilkan kemajuan, lokasi berkas yang selesai, dan tindakan untuk membuka folder unduhan. Nama berkas memuat versi; nama yang sudah ada diberi akhiran baru agar berkas lama tetap tersimpan. Ukuran, SHA256, dan versi EXE diperiksa sebelum unduhan sementara menjadi berkas akhir. Unduhan yang gagal dapat dicoba kembali.
+
+Pemeriksaan harian tetap menawarkan versi stabil yang lebih baru dan memakai alur unduhan yang sama setelah persetujuan. Unduhan tidak mengganti atau menjalankan program secara otomatis. Tutup program lama, ubah nama unduhan menjadi nama EXE semula (biasanya `huhucapture.exe`), ganti EXE yang biasa dipakai, lalu jalankan versi baru. Lihat [aturan unduhan pembaruan](updates.md).
+
+Pintasan tangkapan default kini **F1**: nilai default lama `Ctrl+Alt+A` dipindahkan ke F1, sementara pintasan khusus lainnya dan konfigurasi yang sudah ada tetap dipakai.
 
 | Tindakan | Pintasan |
 | --- | --- |
@@ -109,6 +113,7 @@ pwsh ./scripts/test.ps1
 pwsh ./scripts/test-windows.ps1
 pwsh ./scripts/smoke.ps1
 pwsh ./scripts/test-windows.ps1 -Gui
+pwsh ./scripts/test-windows.ps1 -Update
 pwsh ./scripts/package.ps1
 ```
 
