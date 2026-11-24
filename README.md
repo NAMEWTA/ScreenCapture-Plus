@@ -11,7 +11,7 @@
 
 项目属于 [huhu](https://github.com/NAMEWTA/huhu) 品牌家族，采用虎虎形象与截图范围角标。产品名称、程序文件、配置目录和发布资产统一使用 `huhucapture`。品牌资产及使用约定见 [品牌说明](docs/brand.md)。
 
-[下载 v0.0.2](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.2) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
+[下载 v0.0.3](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.3) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
 
 ## 截图与说明，一起保存
 
@@ -56,9 +56,11 @@
 
 也可以从托盘右键菜单直接打开“剪切复制板”。一键清除会先确认，默认把列表中的归档媒体送入系统回收站；如果 Windows 无法回收，会再次提示确认。它只管理归档目录顶层符合命名规则的 PNG / GIF / MP4，不递归处理其他文件，也不删除另存到其他位置的副本。失败或取消后保留剩余项并刷新列表。完整边界见 [媒体历史设计](docs/media-history.md)。
 
-### 更清楚的设置页
+### 更协调的桌面设置
 
-设置页按指定的 [Apple 设计语言](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/apple/DESIGN.md) 重整为清晰的导航与分组内容：中性浅灰画布、白色内容区、深色正文和单一蓝色交互，大字号标签、统一控件尺寸与留白。保留通用、快捷键和关于页面，增加归档目录说明与打开目录操作。界面约定见 [设计文档](docs/design.md)。
+设置页沿用指定的 [Apple 设计语言](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/apple/DESIGN.md)，采用紧凑的桌面比例：720 × 500 逻辑像素窗口、居中的内容列、14px 正文与 32px 控件，中性浅灰画布搭配白色分组和单一蓝色交互。通用、快捷键和关于页面共用字体、对齐与间距规则。
+
+语言下拉框与展开列表使用一致的字号和样式，当前语言有勾选提示。方向键移动高亮，Enter 确认；Esc 或点击外部取消。归档目录可以直接打开，较长路径保留完整操作目标。比例、弹层和 DPI 约定见 [设计文档](docs/design.md)。
 
 ## 下载与运行
 
@@ -69,8 +71,8 @@
 | 发布文件 | 包含什么 | 什么时候需要 |
 | --- | --- | --- |
 | `huhucapture.exe` | 可直接运行的 Windows x64 单文件，内置简体中文和英语；也是更新器使用的固定文件名 | 日常使用，下载后运行 |
-| `huhucapture-v0.0.2-windows-x64.zip` | 同一份 EXE、`Lang` 额外语言、依赖许可/声明和 `build-info.json` | 想完整保留分发内容，解压后运行其中的 EXE |
-| `huhucapture-v0.0.2-windows-x64-symbols.zip` | 与本次 Release 构建配套的 PDB 调试符号 | 开发者分析崩溃、调用栈或断点时使用；普通运行无需下载 |
+| `huhucapture-v0.0.3-windows-x64.zip` | 同一份 EXE、`Lang` 额外语言、依赖许可/声明和 `build-info.json` | 想完整保留分发内容，解压后运行其中的 EXE |
+| `huhucapture-v0.0.3-windows-x64-symbols.zip` | 与本次 Release 构建配套的 PDB 调试符号 | 开发者分析崩溃、调用栈或断点时使用；普通运行无需下载 |
 | `build-info.json` | 仓库与源提交 SHA、标签、Windows 版本、架构、工具链、固定依赖和 EXE 的 SHA256 | 提交问题或核对一个文件究竟来自哪次构建 |
 | `SHA256SUMS.txt` | 上述 EXE、两种 ZIP 和构建信息的 SHA256 校验值 | 核对下载是否完整、文件是否与该 Release 一致 |
 | GitHub 自动提供的 `Source code (zip / tar.gz)` | 对应标签的源码快照 | 自行编译或阅读源码；其中不包含已构建的可运行 EXE |

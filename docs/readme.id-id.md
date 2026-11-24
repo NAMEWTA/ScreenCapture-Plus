@@ -11,7 +11,7 @@
 
 Proyek ini merupakan bagian dari keluarga merek [huhu](https://github.com/NAMEWTA/huhu). Identitasnya memakai karakter Huhu dan sudut bingkai tangkapan. Aset serta aturan penggunaannya tersedia di [panduan merek](brand.md).
 
-[Unduh v0.0.2](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.2) · [Semua rilis](https://github.com/NAMEWTA/huhucapture/releases) · [Laporkan masalah](https://github.com/NAMEWTA/huhucapture/issues)
+[Unduh v0.0.3](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.3) · [Semua rilis](https://github.com/NAMEWTA/huhucapture/releases) · [Laporkan masalah](https://github.com/NAMEWTA/huhucapture/issues)
 
 ## Area dan penjelasan dalam satu gambar
 
@@ -48,7 +48,7 @@ Buka riwayat melalui ikon tepat di sebelah kanan pembacaan QR pada toolbar tangk
 
 Riwayat juga dapat dibuka langsung dari menu tray. Hapus semua meminta konfirmasi dan secara default memindahkan media yang tercantum ke Recycle Bin. Jika Windows tidak dapat mendaur ulangnya, Windows meminta konfirmasi tambahan sebelum penghapusan permanen. Berkas lain, subfolder, dan salinan di lokasi lain tidak diproses. Kegagalan atau pembatalan menyegarkan daftar berkas yang tersisa.
 
-Pengaturan ditata ulang mengikuti [desain Apple](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/apple/DESIGN.md) yang diminta: latar netral, kelompok putih, teks lebih besar, kontrol konsisten, dan satu warna biru untuk interaksi.
+Pengaturan mengikuti [desain Apple](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/apple/DESIGN.md) dengan skala desktop yang ringkas: jendela 720 × 500 piksel logis, kolom konten di tengah, teks utama 14px, dan kontrol setinggi 32px. Semua halaman memakai jarak, perataan, dan aksen biru yang konsisten. Pemilih bahasa dan panel opsinya memakai tipografi yang sama, dengan tanda centang pada bahasa aktif. Tombol panah memindahkan sorotan, Enter mengonfirmasi, sedangkan Esc atau klik di luar membatalkan. Lihat [panduan desain](design.md).
 
 ## Unduh dan jalankan
 
@@ -59,8 +59,8 @@ Untuk pemakaian biasa, pilih EXE atau ZIP portabel.
 | Berkas | Kegunaan |
 | --- | --- |
 | `huhucapture.exe` | Program x64 siap jalan dengan bahasa Mandarin Sederhana dan Inggris |
-| `huhucapture-v0.0.2-windows-x64.zip` | EXE yang sama, bahasa tambahan, lisensi, dan informasi build |
-| `huhucapture-v0.0.2-windows-x64-symbols.zip` | Simbol PDB untuk debugging dan analisis crash; tidak diperlukan untuk menjalankan aplikasi |
+| `huhucapture-v0.0.3-windows-x64.zip` | EXE yang sama, bahasa tambahan, lisensi, dan informasi build |
+| `huhucapture-v0.0.3-windows-x64-symbols.zip` | Simbol PDB untuk debugging dan analisis crash; tidak diperlukan untuk menjalankan aplikasi |
 | `build-info.json` | Commit sumber, versi, arsitektur, toolchain, dependensi, dan SHA256 EXE |
 | `SHA256SUMS.txt` | Nilai SHA256 untuk empat aset rilis lainnya |
 | `Source code (zip / tar.gz)` dari GitHub | Snapshot sumber pada tag, tanpa EXE hasil build |

@@ -105,6 +105,7 @@
     <ClCompile Include="..\..\src\ui\Tip.cpp" />
     <ClCompile Include="..\..\src\ui\Tray.cpp" />
     <ClCompile Include="..\..\src\ui\WinClipboard.cpp" />
+    <ClCompile Include="..\..\src\ui\settings\SettingsSelectPopup.cpp" />
     <ClCompile Include="..\..\src\ui\settings\WinSetting.cpp" />
     <ClCompile Include="..\..\src\ui\settings\WinSettingAbout.cpp" />
     <ClCompile Include="..\..\src\ui\settings\WinSettingCommon.cpp" />
@@ -193,6 +194,7 @@
     <ClInclude Include="..\..\src\ui\Tray.h" />
     <ClInclude Include="..\..\src\ui\WinClipboard.h" />
     <ClInclude Include="..\..\src\ui\settings\SettingsTheme.h" />
+    <ClInclude Include="..\..\src\ui\settings\SettingsSelectPopup.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSetting.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSettingAbout.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSettingCommon.h" />

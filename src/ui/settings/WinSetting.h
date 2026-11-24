@@ -20,8 +20,10 @@ private:
 private:
 	std::vector<Ling::Button*> menus;
 	int menuIndex{ 0 };
+	Ling::Node* contentHost{nullptr};
 	Ling::Node* content{nullptr};
 	Ling::Node* styledContent{nullptr};
+	float contentWidth{-1.f};
 	bool compactLayout{};
 };
 

@@ -17,13 +17,32 @@ inline constexpr std::uint32_t blue = 0x0066CCFF;
 inline constexpr std::uint32_t focusBlue = 0x0071E3FF;
 inline constexpr std::uint32_t blueTint = 0xEAF3FFFF;
 inline constexpr std::uint32_t warning = 0xB42318FF;
-inline constexpr float controlHeight = 44.f;
+inline constexpr wchar_t fontFamily[] = L"Segoe UI";
+inline constexpr wchar_t semiboldFamily[] = L"Segoe UI Semibold";
+inline constexpr float bodySize = 14.f;
+inline constexpr float bodyLineHeight = 20.f;
+inline constexpr float captionSize = 12.f;
+inline constexpr float captionLineHeight = 18.f;
+inline constexpr float headingSize = 22.f;
+inline constexpr float headingLineHeight = 30.f;
+inline constexpr float controlHeight = 32.f;
+inline constexpr float controlRadius = 8.f;
+inline constexpr float rowHeight = 56.f;
+inline constexpr float singleRowHeight = 48.f;
+inline constexpr float cardRadius = 12.f;
+inline constexpr float cardInset = 18.f;
+inline constexpr float groupGap = 16.f;
+inline constexpr float windowWidth = 720.f;
+inline constexpr float windowHeight = 500.f;
+inline constexpr float sidebarWidth = 160.f;
+inline constexpr float pageMaximumWidth = 560.f;
+inline constexpr float pageInset = 24.f;
 
 inline Ling::Label* label(Ling::Node* parent, const std::wstring& text,
-    float size = 17.f, float height = 26.f, std::uint32_t color = ink)
+    float size = bodySize, float height = bodyLineHeight, std::uint32_t color = ink)
 {
     auto* result = parent->makeChild<Ling::Label>();
-    result->setFontFamily(L"Segoe UI");
+    result->setFontFamily(fontFamily);
     result->setFontSize(size);
     result->setColor(color);
     result->setText(text);
@@ -36,10 +55,11 @@ inline Ling::Label* label(Ling::Node* parent, const std::wstring& text,
 inline void pageHeading(Ling::Node* parent, const std::wstring& title,
     const std::wstring& description)
 {
-    auto* heading = label(parent, title, 28.f, 42.f);
-    heading->setFontFamily(L"Segoe UI Semibold");
-    auto* subtitle = label(parent, description, 14.f, 24.f, secondary);
-    subtitle->setMarginBottom(20.f);
+    auto* heading = label(parent, title, headingSize, headingLineHeight);
+    heading->setFontFamily(semiboldFamily);
+    auto* subtitle = label(parent, description, captionSize, captionLineHeight, secondary);
+    subtitle->setMarginTop(2.f);
+    subtitle->setMarginBottom(groupGap);
 }
 
 inline Ling::Node* card(Ling::Node* parent)
@@ -47,14 +67,14 @@ inline Ling::Node* card(Ling::Node* parent)
     auto* result = parent->makeChild<Ling::Node>();
     result->setBg(surface);
     result->setBorder(1.f, hairline);
-    result->setBorderRadius(18.f);
-    result->setPadding(24.f, 8.f, 24.f, 8.f);
+    result->setBorderRadius(cardRadius);
+    result->setPadding(cardInset, 6.f, cardInset, 6.f);
     result->setFlexDirection(Ling::FlexDirection::Column);
     result->setFlexShrink(0.f);
     return result;
 }
 
-inline Ling::Node* row(Ling::Node* parent, float height = 64.f)
+inline Ling::Node* row(Ling::Node* parent, float height = rowHeight)
 {
     auto* result = parent->makeChild<Ling::Node>();
     result->setFlexDirection(Ling::FlexDirection::Row);
@@ -72,13 +92,15 @@ inline void divider(Ling::Node* parent)
     result->setBg(hairline);
 }
 
-inline void styleButton(Ling::Button* button, float width = 160.f, bool primary = false)
+inline void styleButton(Ling::Button* button, float width = 120.f, bool primary = false)
 {
     button->setSize(width, controlHeight);
     button->setFlexShrink(0.f);
-    button->setFontFamily(L"Segoe UI");
-    button->setFontSize(16.f);
-    button->setBorderRadius(primary ? 22.f : 11.f);
+    button->setFontFamily(fontFamily);
+    button->setFontSize(bodySize);
+    button->setJustifyContent(Ling::Justify::Center);
+    button->setAlignItems(Ling::Align::Center);
+    button->setBorderRadius(controlRadius);
     button->setBorder(1.f, primary ? blue : hairline);
     button->setColor(primary ? surface : ink);
     button->setHoverColor(primary ? surface : blue);
@@ -91,8 +113,8 @@ inline void stylePage(Ling::Node* page)
 {
     page->setFlexGrow(1.f);
     page->setFlexShrink(1.f);
-    page->setHeightPercent(100.f);
-    page->setPadding(32.f, 56.f, 32.f, 24.f);
+    // The window's content host supplies the shared, centered column and gutters.
+    page->setPadding(0.f);
     page->setFlexDirection(Ling::FlexDirection::Column);
 }
 

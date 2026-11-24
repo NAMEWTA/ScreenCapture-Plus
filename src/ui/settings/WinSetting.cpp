@@ -24,13 +24,21 @@ WinSetting::WinSetting() : Ling::WinBase()
     });
     setTitle(Lang::get(L"setting.title"));
     RECT workArea{};
-    float availableWidth = 880.f, availableHeight = 640.f;
+    float availableWidth = Theme::windowWidth, availableHeight = Theme::windowHeight;
     if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0)) {
         availableWidth = (std::max)(320.f, (workArea.right - workArea.left - 32.f) / dpi);
         availableHeight = (std::max)(320.f, (workArea.bottom - workArea.top - 32.f) / dpi);
     }
-    setSize((std::min)(880.f, availableWidth), (std::min)(640.f, availableHeight));
-    setMinSize((std::min)(800.f, availableWidth), (std::min)(520.f, availableHeight));
+    setSize((std::min)(Theme::windowWidth, availableWidth), (std::min)(Theme::windowHeight, availableHeight));
+    setMinSize((std::min)(640.f, availableWidth), (std::min)(400.f, availableHeight));
+    onDpiChanged.add([this]() {
+        MONITORINFO monitor{ sizeof(MONITORINFO) };
+        if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) {
+            const auto& area = monitor.rcWork;
+            setMinSize((std::min)(640.f, (area.right - area.left - 32.f) / dpi),
+                (std::min)(400.f, (area.bottom - area.top - 32.f) / dpi));
+        }
+    });
     setCenter();
     createNativeWindow();
 }
@@ -59,13 +67,19 @@ void WinSetting::dispose()
 
 void WinSetting::layout()
 {
-    const bool compact = h / dpi < 560.f;
+    const bool compact = h / dpi < 460.f;
+    const float width = (std::max)(0.f, (std::min)(Theme::pageMaximumWidth,
+        w / dpi - Theme::sidebarWidth - Theme::pageInset * 2.f));
     if (content && (styledContent != content || compactLayout != compact)) {
         styledContent = content;
         compactLayout = compact;
-        if (compact) content->setPadding(24.f, 48.f, 24.f, 16.f);
-        else content->setPadding(32.f, 56.f, 32.f, 24.f);
+        contentHost->setPadding(Theme::pageInset, compact ? 32.f : 40.f,
+            Theme::pageInset, compact ? 16.f : 24.f);
         if (menuIndex == 0) static_cast<WinSettingCommon*>(content)->setCompact(compact);
+    }
+    if (content && contentWidth != width) {
+        contentWidth = width;
+        content->setWidth(width);
     }
     Ling::WinBase::layout();
 }
@@ -78,32 +92,39 @@ void WinSetting::onCreated()
 
     auto* menuBox = body->makeChild<Ling::Node>();
     menuBox->setBg(Theme::surface);
-    menuBox->setWidth(184.f);
+    menuBox->setWidth(Theme::sidebarWidth);
     menuBox->setFlexShrink(0.f);
     menuBox->setHeightPercent(100.f);
-    menuBox->setPadding(16.f, 56.f, 16.f, 24.f);
-    auto* brand = Theme::label(menuBox, std::wstring{ HuhuCapture::Brand::name }, 18.f, 28.f);
-    brand->setFontFamily(L"Segoe UI Semibold");
-    brand->setMarginLeft(12.f);
-    brand->setMarginBottom(24.f);
+    menuBox->setPadding(12.f, 40.f, 12.f, 20.f);
+    auto* brand = Theme::label(menuBox, std::wstring{ HuhuCapture::Brand::name }, 15.f, 24.f);
+    brand->setFontFamily(Theme::semiboldFamily);
+    brand->setMarginLeft(10.f);
+    brand->setMarginBottom(20.f);
     initMenuItems(menuBox);
 
-    content = body->makeChild<WinSettingCommon>();
+    contentHost = body->makeChild<Ling::Node>();
+    contentHost->setId(L"settings-content-host");
+    contentHost->setFlexGrow(1.f);
+    contentHost->setFlexShrink(1.f);
+    contentHost->setHeightPercent(100.f);
+    contentHost->setFlexDirection(Ling::FlexDirection::Column);
+    contentHost->setAlignItems(Ling::Align::Center);
+    content = contentHost->makeChild<WinSettingCommon>();
     Theme::stylePage(content);
 
     auto* closeButton = body->makeChild<Ling::Button>();
     closeButton->setId(L"settings-close");
-    closeButton->setSize(48.f, Theme::controlHeight);
+    closeButton->setSize(36.f, 32.f);
     closeButton->setPositionType(Ling::Position::Absolute);
-    closeButton->setPosition(Ling::Edge::Right, 8.f);
-    closeButton->setPosition(Ling::Edge::Top, 6.f);
-    closeButton->setBorderRadius(11.f);
+    closeButton->setPosition(Ling::Edge::Right, 6.f);
+    closeButton->setPosition(Ling::Edge::Top, 4.f);
+    closeButton->setBorderRadius(Theme::controlRadius);
     closeButton->setColor(Theme::secondary);
     closeButton->setHoverColor(Theme::ink);
     closeButton->setHoverBg(Theme::hairline);
     closeButton->setText(L"\ue62d");
     closeButton->setFontFamily(L"icon");
-    closeButton->setFontSize(20.f);
+    closeButton->setFontSize(16.f);
     closeButton->onClick.add([](Ling::Button* button) { button->win->close(); });
     show();
 }
@@ -122,14 +143,14 @@ void WinSetting::initMenuItems(Ling::Node* menuBox)
     for (size_t index = 0; index < std::size(keys); ++index) {
         auto* menu = menuBox->makeChild<Ling::Button>();
         menu->setId(L"settings-menu-" + keys[index]);
-        menu->setFontFamily(L"Segoe UI");
-        menu->setFontSize(17.f);
-        menu->setHeight(Theme::controlHeight);
+        menu->setFontFamily(Theme::fontFamily);
+        menu->setFontSize(Theme::bodySize);
+        menu->setHeight(36.f);
         menu->setFlexShrink(0.f);
-        menu->setMarginBottom(8.f);
-        menu->setPaddingLeft(14.f);
+        menu->setMarginBottom(4.f);
+        menu->setPaddingLeft(10.f);
         menu->setAlignItems(Ling::Align::FlexStart);
-        menu->setBorderRadius(11.f);
+        menu->setBorderRadius(Theme::controlRadius);
         menu->setText(Lang::get(L"setting." + keys[index]));
         styleMenuItem(menu, index == 0);
         menu->onClick.add([this](Ling::Button* selected) { onMenuItemClick(selected); });
@@ -146,11 +167,12 @@ void WinSetting::onMenuItemClick(Ling::Button* menu)
     menuIndex = index;
     styleMenuItem(menu, true);
 
-    body->removeChild(content);
+    contentHost->removeChild(content);
     styledContent = nullptr;
-    if (menuIndex == 0) content = body->makeChild<WinSettingCommon>();
-    else if (menuIndex == 1) content = body->makeChild<WinSettingShortcut>();
-    else content = body->makeChild<WinSettingAbout>();
+    contentWidth = -1.f;
+    if (menuIndex == 0) content = contentHost->makeChild<WinSettingCommon>();
+    else if (menuIndex == 1) content = contentHost->makeChild<WinSettingShortcut>();
+    else content = contentHost->makeChild<WinSettingAbout>();
     Theme::stylePage(content);
 }
 
@@ -164,7 +186,7 @@ LRESULT WinSetting::onHitTest(const POINT position)
     }
     // Restrict dragging to the title strip; the sidebar's lower area contains
     // real controls and must not unexpectedly turn clicks into window movement.
-    if (point.x > 0 && point.y > 0 && point.x < w - 64.f * dpi && point.y < 50.f * dpi)
+    if (point.x > 0 && point.y > 0 && point.x < w - 48.f * dpi && point.y < 32.f * dpi)
         return HTCAPTION;
     return HTCLIENT;
 }

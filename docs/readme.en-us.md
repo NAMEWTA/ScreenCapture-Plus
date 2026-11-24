@@ -11,7 +11,7 @@
 
 It is part of the [huhu](https://github.com/NAMEWTA/huhu) brand family. The Huhu mascot and capture-corner identity, asset variants, and usage rules are documented in the [brand guide](brand.md).
 
-[Download v0.0.2](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.2) · [All releases](https://github.com/NAMEWTA/huhucapture/releases) · [Report an issue](https://github.com/NAMEWTA/huhucapture/issues)
+[Download v0.0.3](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.3) · [All releases](https://github.com/NAMEWTA/huhucapture/releases) · [Report an issue](https://github.com/NAMEWTA/huhucapture/issues)
 
 ## Explain a region, save one image
 
@@ -48,7 +48,7 @@ Open **Capture history** immediately to the right of QR decoding in the capture 
 
 The tray menu also opens history directly. Clear all first asks for confirmation and normally moves listed archive media to the Recycle Bin. If Windows cannot recycle an item, it asks for an additional confirmation before permanent deletion. Only supported, timestamp-named files in the archive's top level are managed; unrelated files, subfolders, and copies saved elsewhere are retained. Failure or cancellation refreshes the remaining items. See [media history](media-history.md) for the contract.
 
-Settings now use the requested [Apple design language](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/apple/DESIGN.md): a neutral canvas, white groups, larger readable type, consistent controls, and a single blue interaction color. General, shortcut, and about pages remain available, with access to the archive directory.
+Settings follow the requested [Apple design language](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/apple/DESIGN.md) at a compact desktop scale: a 720 × 500 logical-pixel window, a centered content column, 14px body text, and 32px controls. General, shortcut, and about pages share neutral surfaces, alignment, and a single blue interaction color. The language selector and its popup use matching typography and spacing, with a checkmark for the current choice. Arrow keys move the highlight; Enter confirms, while Esc or clicking outside cancels. See the [design guide](design.md).
 
 ## Download and run
 
@@ -59,8 +59,8 @@ For normal use, choose the EXE or the portable ZIP. Other assets support debuggi
 | Asset | Purpose |
 | --- | --- |
 | `huhucapture.exe` | Standalone x64 app with embedded Simplified Chinese and English; the updater uses this name |
-| `huhucapture-v0.0.2-windows-x64.zip` | The same EXE, additional `Lang` files, licenses/notices, and build metadata |
-| `huhucapture-v0.0.2-windows-x64-symbols.zip` | Matching PDB debugging symbols for crash stacks, functions, and source locations; not needed to run the app |
+| `huhucapture-v0.0.3-windows-x64.zip` | The same EXE, additional `Lang` files, licenses/notices, and build metadata |
+| `huhucapture-v0.0.3-windows-x64-symbols.zip` | Matching PDB debugging symbols for crash stacks, functions, and source locations; not needed to run the app |
 | `build-info.json` | Source SHA, version, architecture, toolchain, pinned dependencies, and EXE SHA256 |
 | `SHA256SUMS.txt` | SHA256 checksums for the other four release assets |
 | GitHub `Source code (zip / tar.gz)` | Tagged source snapshot for developers; no built EXE |

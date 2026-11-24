@@ -3,6 +3,7 @@
 #include <memory>
 
 class Tip;
+class SettingsSelectPopup;
 
 class WinSettingCommon : public Ling::Node
 {
@@ -11,6 +12,7 @@ public:
     ~WinSettingCommon();
     void hideSelectBox();
     void setCompact(bool compact);
+    SettingsSelectPopup* languagePopup() const;
 private:
     void initAutoStartCtrls(Ling::Node* card);
     void initLangCtrls(Ling::Node* card);
@@ -19,8 +21,10 @@ private:
     void showSelectBox(Ling::Button* button);
 
     Ling::Button* selectBtn{ nullptr };
+    Ling::Label* selectArrow{ nullptr };
     Ling::Label* footer{ nullptr };
     Ling::Label* archiveDescription{ nullptr };
     std::unique_ptr<Tip> tip;
-    bool menuOpen{};
+    std::unique_ptr<SettingsSelectPopup> selectPopup;
+    winrt::event_token movedToken{}, sizeToken{}, dpiToken{};
 };

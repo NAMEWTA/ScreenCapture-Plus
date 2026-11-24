@@ -102,25 +102,26 @@ WinSettingShortcut::WinSettingShortcut(Ling::WinBase* parent) : Ling::Node(paren
 {
     Theme::pageHeading(this, Lang::get(L"setting.shortcut"), Lang::get(L"shortcut.description"));
     auto* shortcuts = Theme::card(this);
-    auto* row = Theme::row(shortcuts, 80.f);
+    auto* row = Theme::row(shortcuts);
     Theme::label(row, Lang::get(L"shortcut.cap"))->setFlexGrow(1.f);
     auto* capture = row->makeChild<Ling::Button>();
     capture->setId(L"cap");
-    Theme::styleButton(capture, 208.f);
-    capture->setFontFamily(L"Segoe UI Semibold");
-    capture->setFontSize(17.f);
+    Theme::styleButton(capture, 180.f);
+    capture->setFontFamily(Theme::semiboldFamily);
     capture->setText(Setting::get()->getShortcutKey(L"cap"));
     capture->onClick.add([this](Ling::Button* button) { onBtnClick(button); });
     btns.push_back(capture);
 
-    auto* actions = Theme::row(this);
-    actions->setMarginTop(16.f);
-    status = Theme::label(actions, L"", 14.f, 44.f, Theme::secondary);
+    auto* actions = Theme::row(this, Theme::controlHeight);
+    actions->setMarginTop(Theme::groupGap);
+    status = Theme::label(actions, L"", Theme::captionSize, Theme::controlHeight, Theme::secondary);
     status->setId(L"settings-shortcut-status");
     status->setFlexGrow(1.f);
+    status->setFlexShrink(1.f);
+    status->setMarginRight(12.f);
     auto* reset = actions->makeChild<Ling::Button>();
     reset->setId(L"settings-reset-shortcut");
-    Theme::styleButton(reset, 144.f);
+    Theme::styleButton(reset, 120.f);
     reset->setText(Lang::get(L"shortcut.reset"));
     reset->onClick.add([this](Ling::Button*) {
         endCapture();
@@ -190,9 +191,8 @@ void WinSettingShortcut::endCapture()
     for (auto& btn : btns)
     {
         if (btn->id == curKey) {
-            Theme::styleButton(btn, 208.f);
-            btn->setFontFamily(L"Segoe UI Semibold");
-            btn->setFontSize(17.f);
+            Theme::styleButton(btn, 180.f);
+            btn->setFontFamily(Theme::semiboldFamily);
             btn->setText(Setting::get()->getShortcutKey(curKey));
             break;
         }

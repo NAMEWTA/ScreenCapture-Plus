@@ -5,6 +5,7 @@
 #include "services/Setting.h"
 #include "ui/Tip.h"
 #include "ui/settings/SettingsTheme.h"
+#include "ui/settings/SettingsSelectPopup.h"
 #include "ui/settings/WinSetting.h"
 #include "ui/settings/WinSettingCommon.h"
 
@@ -22,13 +23,22 @@ WinSettingCommon::WinSettingCommon(Ling::WinBase* parent) : Ling::Node(parent)
     Theme::divider(preferences);
     initLangCtrls(preferences);
     initArchiveCtrls();
-    footer = Theme::label(this, Lang::get(L"setting.savedImmediately"), 14.f, 24.f, Theme::secondary);
-    footer->setMarginTop(16.f);
+    footer = Theme::label(this, Lang::get(L"setting.savedImmediately"), Theme::captionSize,
+        Theme::captionLineHeight, Theme::secondary);
+    footer->setMarginTop(12.f);
+    const auto weakThis = getWeakThis();
+    const auto hidePopup = [this, weakThis]() { if (weakThis.lock()) hideSelectBox(); };
+    movedToken = win->onMoved.add(hidePopup);
+    sizeToken = win->onSizeChanged.add(hidePopup);
+    dpiToken = win->onDpiChanged.add(hidePopup);
 }
 
 WinSettingCommon::~WinSettingCommon()
 {
-    hideSelectBox();
+    win->onMoved.remove(movedToken);
+    win->onSizeChanged.remove(sizeToken);
+    win->onDpiChanged.remove(dpiToken);
+    selectPopup.reset();
 }
 
 void WinSettingCommon::initAutoStartCtrls(Ling::Node* card)
@@ -36,16 +46,18 @@ void WinSettingCommon::initAutoStartCtrls(Ling::Node* card)
     auto* row = Theme::row(card);
     auto* copy = row->makeChild<Ling::Node>();
     copy->setFlexGrow(1.f);
+    copy->setFlexShrink(1.f);
     Theme::label(copy, Lang::get(L"setting.autoStart"));
-    Theme::label(copy, Lang::get(L"setting.autoStartDescription"), 14.f, 22.f, Theme::secondary);
+    Theme::label(copy, Lang::get(L"setting.autoStartDescription"), Theme::captionSize,
+        Theme::captionLineHeight, Theme::secondary);
 
     auto* button = row->makeChild<Ling::Button>();
     button->setId(L"settings-autostart");
-    button->setSize(64.f, Theme::controlHeight);
+    button->setSize(44.f, 36.f);
     button->setFlexShrink(0.f);
-    button->setBorderRadius(11.f);
+    button->setBorderRadius(Theme::controlRadius);
     button->setFontFamily(L"icon");
-    button->setFontSize(32.f);
+    button->setFontSize(28.f);
     button->setHoverBg(Theme::canvas);
     setAutoStartBtn(button);
     button->onClick.add([this](Ling::Button* clicked) {
@@ -57,7 +69,7 @@ void WinSettingCommon::initAutoStartCtrls(Ling::Node* card)
 
 void WinSettingCommon::initLangCtrls(Ling::Node* card)
 {
-    auto* row = Theme::row(card);
+    auto* row = Theme::row(card, Theme::singleRowHeight);
     Theme::label(row, Lang::get(L"setting.language"))->setFlexGrow(1.f);
     const auto current = Setting::get()->getLang();
     const auto languages = Lang::get()->getSupportedLang();
@@ -70,36 +82,47 @@ void WinSettingCommon::initLangCtrls(Ling::Node* card)
     }
     selectBtn = row->makeChild<Ling::Button>();
     selectBtn->setId(L"settings-language");
-    Theme::styleButton(selectBtn, 208.f);
-    selectBtn->setText(name + L"  ▾");
+    Theme::styleButton(selectBtn, 180.f);
+    selectBtn->setPadding(12.f, 0.f, 32.f, 0.f);
+    selectBtn->setAlignItems(Ling::Align::FlexStart);
+    selectBtn->setText(name);
+    selectArrow = Theme::label(selectBtn, L"▾", Theme::captionSize, Theme::controlHeight, Theme::secondary);
+    selectArrow->setPositionType(Ling::Position::Absolute);
+    selectArrow->setPosition(Ling::Edge::Right, 10.f);
+    selectArrow->setPosition(Ling::Edge::Top, 0.f);
+    selectArrow->setWidth(16.f);
+    selectArrow->setAlignItems(Ling::Align::Center);
     selectBtn->onClick.add([this](Ling::Button* button) { showSelectBox(button); });
 }
 
 void WinSettingCommon::initArchiveCtrls()
 {
     auto* archive = Theme::card(this);
-    archive->setMarginTop(20.f);
-    archive->setPadding(24.f, 16.f, 24.f, 16.f);
+    archive->setMarginTop(Theme::groupGap);
+    archive->setPadding(Theme::cardInset, 14.f, Theme::cardInset, 14.f);
     auto* row = Theme::row(archive, Theme::controlHeight);
     auto* heading = Theme::label(row, Lang::get(L"setting.archiveTitle"));
-    heading->setFontFamily(L"Segoe UI Semibold");
+    heading->setFontFamily(Theme::semiboldFamily);
     heading->setFlexGrow(1.f);
     auto* open = row->makeChild<Ling::Button>();
     open->setId(L"settings-archive-folder");
-    Theme::styleButton(open, 144.f);
+    Theme::styleButton(open, 120.f);
     open->setText(Lang::get(L"setting.openArchive"));
 
-    archiveDescription = Theme::label(archive, Lang::get(L"setting.archiveDescription"), 14.f, 24.f, Theme::secondary);
+    archiveDescription = Theme::label(archive, Lang::get(L"setting.archiveDescription"),
+        Theme::captionSize, Theme::captionLineHeight, Theme::secondary);
+    archiveDescription->setMarginTop(6.f);
     const auto directory = HuhuCapture::MediaHistory::directory();
     const auto fullPath = directory.wstring();
     // Ling's basic Label deliberately has no wrapping. Compact only this display
     // string, and retain the complete path in the folder button's tooltip/action.
     wchar_t compactPath[64]{};
     const bool compacted = !fullPath.empty() &&
-        PathCompactPathExW(compactPath, fullPath.c_str(), 48, 0);
+        PathCompactPathExW(compactPath, fullPath.c_str(), 40, 0);
     Theme::label(archive, compacted ? std::wstring{ compactPath } : fullPath,
-        14.f, 24.f, Theme::secondary);
-    Theme::label(archive, Lang::get(L"setting.archiveNaming"), 14.f, 24.f, Theme::secondary);
+        Theme::captionSize, Theme::captionLineHeight, Theme::secondary);
+    Theme::label(archive, Lang::get(L"setting.archiveNaming"), Theme::captionSize,
+        Theme::captionLineHeight, Theme::secondary);
     if (!fullPath.empty()) tip->bind(open, fullPath);
     open->onClick.add([this, directory](Ling::Button*) {
         tip->hide();
@@ -121,7 +144,12 @@ void WinSettingCommon::setAutoStartBtn(Ling::Button* button)
 void WinSettingCommon::hideSelectBox()
 {
     if (tip) tip->hide();
-    if (menuOpen) EndMenu();
+    if (selectPopup) selectPopup->dismiss();
+}
+
+SettingsSelectPopup* WinSettingCommon::languagePopup() const
+{
+    return selectPopup.get();
 }
 
 void WinSettingCommon::setCompact(bool compact)
@@ -137,43 +165,37 @@ void WinSettingCommon::setCompact(bool compact)
 
 void WinSettingCommon::showSelectBox(Ling::Button* button)
 {
-    if (menuOpen) return;
+    if (selectPopup) { selectPopup->dismiss(); return; }
     tip->hide();
-    std::vector<std::pair<std::wstring, std::wstring>> languages;
+    std::vector<SettingsSelectPopup::Item> languages;
     for (const auto& language : Lang::get()->getSupportedLang()) {
         if (std::none_of(languages.begin(), languages.end(), [&language](const auto& existing) {
-            return existing.second == language.second;
-        })) languages.push_back(language);
+            return existing.value == language.second;
+        })) languages.push_back({ language.first, language.second });
     }
     const auto current = Setting::get()->getLang();
-    HMENU menu = CreatePopupMenu();
-    if (!menu) return;
-    for (size_t index = 0; index < languages.size(); ++index) {
-        const auto flags = MF_STRING | (languages[index].second == current ? MF_CHECKED : 0);
-        AppendMenuW(menu, flags, static_cast<UINT_PTR>(index + 1), languages[index].first.c_str());
-    }
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    const UINT moreId = static_cast<UINT>(languages.size() + 1);
-    AppendMenuW(menu, MF_STRING, moreId, Lang::get(L"setting.getMoreLang").c_str());
-    POINT anchor{ static_cast<LONG>(button->x + button->w), static_cast<LONG>(button->y + button->h + 6.f * win->dpi) };
-    ClientToScreen(win->hwnd, &anchor);
+    languages.push_back({ Lang::get(L"setting.getMoreLang"), L"__more__", true });
+    POINT origin{ static_cast<LONG>(button->x), static_cast<LONG>(button->y) };
+    ClientToScreen(win->hwnd, &origin);
+    const RECT anchor{ origin.x, origin.y, origin.x + static_cast<LONG>(button->w),
+        origin.y + static_cast<LONG>(button->h) };
     const auto weakThis = getWeakThis();
-    menuOpen = true;
-    // The native menu supplies reliable DPI, scrolling, arrow keys and Esc. The
-    // framework's basic Button does not compensate for a ScrollerBox offset.
-    const UINT selection = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN,
-        anchor.x, anchor.y, win->hwnd, nullptr);
-    DestroyMenu(menu);
-    if (!weakThis.lock()) return;
-    menuOpen = false;
-    if (selection == moreId) {
-        ShellExecuteW(win->hwnd, L"open", HuhuCapture::Brand::languagesUrl.data(),
-            nullptr, nullptr, SW_SHOWNORMAL);
-    } else if (selection > 0 && selection <= languages.size()) {
-        const auto& chosen = languages[selection - 1].second;
-        if (chosen == current) return;
-        Setting::get()->setLang(chosen);
-        win->close();
-        Ling::App::get()->dq.TryEnqueue([]() { WinSetting::init(); });
-    }
+    selectBtn->setBorderColor(Theme::focusBlue);
+    selectArrow->setText(L"▴");
+    selectPopup = std::make_unique<SettingsSelectPopup>(win->hwnd, win->dpi, anchor,
+        std::move(languages), current, [this, weakThis, current](std::optional<std::wstring> chosen) {
+            if (!weakThis.lock()) return;
+            selectPopup.reset();
+            selectBtn->setBorderColor(Theme::hairline);
+            selectArrow->setText(L"▾");
+            if (!chosen || *chosen == current) return;
+            if (*chosen == L"__more__") {
+                ShellExecuteW(win->hwnd, L"open", HuhuCapture::Brand::languagesUrl.data(),
+                    nullptr, nullptr, SW_SHOWNORMAL);
+                return;
+            }
+            Setting::get()->setLang(*chosen);
+            win->close();
+            Ling::App::get()->dq.TryEnqueue([]() { WinSetting::init(); });
+        });
 }

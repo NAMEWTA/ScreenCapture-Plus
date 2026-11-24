@@ -2,6 +2,19 @@
 
 本文件记录公开版本的产品能力与交付内容。发行文件见 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases)，构建和验证方法见 [building.md](docs/building.md) 与 [validation.md](docs/validation.md)。
 
+## v0.0.3 — 2026-11-24
+
+### 设置页比例与对齐
+
+- 将设置窗口调整为 720 × 500 逻辑像素、160px 侧栏与居中内容列，统一页面标题、卡片和操作控件的对齐。
+- 正文采用 14px、辅助文字 12px、标题 22px、主要控件高 32px；统一行高、圆角与留白，改善桌面缩放下整体过大的观感。
+- 语言触发器与弹层使用一致的字体和视觉状态，分别布局语言文字、箭头与当前选项勾选。
+- 语言列表支持方向键高亮、Enter 提交、Esc 与点击外部取消；补齐弹层定位、滚动命中及所属窗口生命周期约束。
+- 精简六种语言的设置标签，去除多余冒号；截图快捷键明确标为“开始截图” / “Start capture”，英语语言扩展入口改为“Get more languages”。
+- 设计文档补充 Apple HIG、Fluent 2 与 WinUI Gallery 参考，验证约定明确区分原生比例渲染与真实混合 DPI 显示器验收。
+
+发行文件和检查结果以本版本对应的 Release 与 Actions 为准。
+
 ## v0.0.2 — 2026-11-24
 
 ### 截图与媒体历史
