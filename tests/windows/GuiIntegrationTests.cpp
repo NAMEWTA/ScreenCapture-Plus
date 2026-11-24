@@ -247,15 +247,15 @@ PartialDrag interruptImageDrag(WinPin* window, D2D1_POINT_2F start,
     return partial;
 }
 
-bool near(float left, float right, float tolerance = 2.0f)
+bool nearlyEqual(float left, float right, float tolerance = 2.0f)
 {
     return std::abs(left - right) <= tolerance;
 }
 
 bool sameBounds(D2D1_RECT_F actual, D2D1_RECT_F expected)
 {
-    return near(actual.left, expected.left) && near(actual.top, expected.top) &&
-        near(actual.right, expected.right) && near(actual.bottom, expected.bottom);
+    return nearlyEqual(actual.left, expected.left) && nearlyEqual(actual.top, expected.top) &&
+        nearlyEqual(actual.right, expected.right) && nearlyEqual(actual.bottom, expected.bottom);
 }
 
 void regionGeometry(ShapeAnnotation* note, D2D1_RECT_F expected, float creationScale, float dpi)
@@ -398,12 +398,12 @@ void dragAfterCollapse(WinPin* window, AnnotationPanel* panel)
     const auto scale = window->scale;
     imageDrag(window, before, {before.x + 24.0f / scale, before.y + 16.0f / scale});
     const auto after = marker(window, 2)->center();
-    require(near(after.x - before.x, 24.0f / scale) && near(after.y - before.y, 16.0f / scale),
+    require(nearlyEqual(after.x - before.x, 24.0f / scale) && nearlyEqual(after.y - before.y, 16.0f / scale),
         "Reopening the notes rail made the annotation jump while dragging");
     const auto moved = marker(window, 2)->bounds();
-    require(near(moved.right - moved.left, bounds.right - bounds.left) &&
-        near(moved.bottom - moved.top, bounds.bottom - bounds.top) &&
-        near(moved.left - bounds.left, after.x - before.x) && near(moved.top - bounds.top, after.y - before.y),
+    require(nearlyEqual(moved.right - moved.left, bounds.right - bounds.left) &&
+        nearlyEqual(moved.bottom - moved.top, bounds.bottom - bounds.top) &&
+        nearlyEqual(moved.left - bounds.left, after.x - before.x) && nearlyEqual(moved.top - bounds.top, after.y - before.y),
         "Dragging the annotation badge did not move its complete rectangle");
 }
 
@@ -624,9 +624,9 @@ int wmain(int argc, wchar_t** argv)
         require(markers(window).size() == 1 && marker(window, 2)->note() == secondNote,
             "Redo failed to restore the matching annotation and note");
         regionGeometry(marker(window, 2), {258.0f, 110.0f, 424.0f, 232.0f}, creationScale, window->dpi);
-        require(near(marker(window, 2)->color().r, secondColor.r, 0.001f) &&
-            near(marker(window, 2)->color().g, secondColor.g, 0.001f) &&
-            near(marker(window, 2)->color().b, secondColor.b, 0.001f),
+        require(nearlyEqual(marker(window, 2)->color().r, secondColor.r, 0.001f) &&
+            nearlyEqual(marker(window, 2)->color().g, secondColor.g, 0.001f) &&
+            nearlyEqual(marker(window, 2)->color().b, secondColor.b, 0.001f),
             "History restoration changed the annotation's automatic color");
         std::cout << "PASS real list selection, selected deletion, toolbar undo and redo preserve region, color and note.\n";
 
