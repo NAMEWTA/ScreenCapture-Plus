@@ -19,6 +19,9 @@ changing editor or export behavior; build details are in `docs/BUILDING.md`.
 - Ordinary number markers and annotations are independent tools. Annotation IDs
   and colors remain stable through undo/redo and deletion. The right rail uses
   one shared note editor; do not add one input control per marker.
+- Passive toolbar layout must use `SWP_NOACTIVATE`; it must not steal input
+  focus or mouse capture. Filter Ling's mouse-leave sentinel before image
+  hit-testing or dragging.
 - Export every active annotation's complete text. Fit readable text/badges and
   spacing, then grow the canvas/columns within checked limits. Preserve original
   source pixels at the left; report failure instead of silently dropping text.

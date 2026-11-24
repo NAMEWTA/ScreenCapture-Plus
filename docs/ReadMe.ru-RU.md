@@ -2,6 +2,8 @@
 
 ![ScreenCapture-Plus](banner.png)
 
+PNG из настоящего редактора во время GUI-теста. После удаления #1 номера и цвета #2 и #3 сохраняются.
+
 # ScreenCapture-Plus
 
 **ScreenCapture-Plus v0.0.1** — развиваемая ветка [xland/ScreenCapture](https://github.com/xland/ScreenCapture), нативного приложения Windows для снимков экрана. Доступны рисование, длинные снимки, запись GIF / MP4, распознавание QR-кодов и нумерованные примечания, которые сохраняются вместе с изображением.

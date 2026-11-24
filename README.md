@@ -2,6 +2,8 @@
 
 ![ScreenCapture-Plus](docs/banner.png)
 
+正式批注工具实际复制得到的合成 PNG（GUI 自动化验证示例；删除 #1 后保留 #2、#3 的编号与配色）。
+
 # ScreenCapture-Plus
 
 **ScreenCapture-Plus v0.0.1** 是 [xland/ScreenCapture](https://github.com/xland/ScreenCapture) 的 Windows 原生截图工具维护分支。支持截图、绘图、长截图、GIF / MP4 录屏与二维码识别，并提供可随图片一起导出的编号批注。

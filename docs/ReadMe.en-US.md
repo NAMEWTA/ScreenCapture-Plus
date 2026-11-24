@@ -2,6 +2,8 @@
 
 ![ScreenCapture-Plus](banner.png)
 
+PNG copied from the real annotation editor during GUI validation. Deleting #1 preserves the IDs and colors of #2 and #3.
+
 # ScreenCapture-Plus
 
 **ScreenCapture-Plus v0.0.1** is a maintained fork of [xland/ScreenCapture](https://github.com/xland/ScreenCapture), a native Windows screenshot application. It supports drawing, scrolling captures, GIF / MP4 recording, QR decoding, and numbered notes exported alongside the image.

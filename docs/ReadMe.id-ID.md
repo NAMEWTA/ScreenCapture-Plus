@@ -2,6 +2,8 @@
 
 ![ScreenCapture-Plus](banner.png)
 
+PNG yang disalin dari editor asli saat uji GUI. Setelah #1 dihapus, nomor dan warna #2 serta #3 tetap sama.
+
 # ScreenCapture-Plus
 
 **ScreenCapture-Plus v0.0.1** adalah cabang pemeliharaan [xland/ScreenCapture](https://github.com/xland/ScreenCapture), aplikasi tangkapan layar native Windows. Fitur mencakup gambar anotasi, tangkapan panjang, rekaman GIF / MP4, pembacaan kode QR, serta catatan bernomor yang diekspor bersama gambar.
