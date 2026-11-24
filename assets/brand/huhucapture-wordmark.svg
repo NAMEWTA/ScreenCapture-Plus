@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="744" height="128" viewBox="0 0 744 128" role="img" aria-labelledby="title desc">
+  <title id="title">huhucapture</title>
+  <desc id="desc">The lowercase name huhucapture, drawn from custom rounded geometric strokes. No font or external resource is required.</desc>
+  <g id="wordmark" fill="none" stroke="#67381F" stroke-linecap="round" stroke-linejoin="round" transform="translate(8 3)">
+    <g id="huhu" stroke-width="13">
+      <path id="h-1" d="M8 16V88M8 60C8 31 52 31 52 60V88"/>
+      <path id="u-1" transform="translate(68)" d="M8 42V65C8 96 52 96 52 65V42"/>
+      <path id="h-2" transform="translate(136)" d="M8 16V88M8 60C8 31 52 31 52 60V88"/>
+      <path id="u-2" transform="translate(204)" d="M8 42V65C8 96 52 96 52 65V42"/>
+    </g>
+    <g id="capture" stroke-width="10.5" transform="translate(278)">
+      <path id="c" d="M51 47C33 30 8 40 8 64C8 88 33 98 51 81"/>
+      <path id="a" transform="translate(64)" d="M52 42V88M52 65C52 34 8 34 8 65C8 96 52 96 52 65"/>
+      <path id="p" transform="translate(132)" d="M8 42V110M8 65C8 34 52 34 52 65C52 96 8 96 8 65"/>
+      <path id="t" transform="translate(200)" d="M24 21V72Q24 88 42 88H48M8 42H46"/>
+      <path id="u-3" transform="translate(260)" d="M8 42V65C8 96 52 96 52 65V42"/>
+      <path id="r" transform="translate(328)" d="M8 88V42M8 61C8 45 22 36 42 42"/>
+      <path id="e" transform="translate(382)" d="M8 65H52C52 34 8 34 8 65C8 90 33 98 52 81"/>
+    </g>
+  </g>
+</svg>

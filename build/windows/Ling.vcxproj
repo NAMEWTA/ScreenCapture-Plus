@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="Paths.props" />
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{540bb258-d062-4159-8cf3-fe9ab9e4b0ae}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>Ling</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="Common.props" />
+  <PropertyGroup>
+    <OutDir>$(ArtifactsRoot)lib\$(Platform)\$(Configuration)\</OutDir>
+    <TargetName>Ling</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(LingRoot);$(LingRoot)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <WarningLevel>Level3</WarningLevel>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="$(LingRoot)src\Slider.cpp" />
+    <ClCompile Include="$(LingRoot)src\Button.cpp" />
+    <ClCompile Include="$(LingRoot)src\Color.cpp" />
+    <ClCompile Include="$(LingRoot)src\D2D.cpp" />
+    <ClCompile Include="$(LingRoot)src\Image.cpp" />
+    <ClCompile Include="$(LingRoot)src\ImageBox.cpp" />
+    <ClCompile Include="$(LingRoot)src\Canvas.cpp" />
+    <ClCompile Include="$(LingRoot)src\Node.cpp" />
+    <ClCompile Include="$(LingRoot)src\App.cpp" />
+    <ClCompile Include="$(LingRoot)src\Ling.cpp" />
+    <ClCompile Include="$(LingRoot)src\ScrollerBox.cpp" />
+    <ClCompile Include="$(LingRoot)src\Label.cpp" />
+    <ClCompile Include="$(LingRoot)src\Text.cpp" />
+    <ClCompile Include="$(LingRoot)src\TextBox.cpp" />
+    <ClCompile Include="$(LingRoot)src\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(LingRoot)src\Util.cpp" />
+    <ClCompile Include="$(LingRoot)src\WinBase.cpp" />
+  </ItemGroup>
+  <Target Name="CheckLingSource" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(LingRoot)src\Ling.cpp')" Text="Ling sources are missing. Run pwsh scripts/restore.ps1 first." />
+  </Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

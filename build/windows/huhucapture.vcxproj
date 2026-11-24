@@ -1,0 +1,210 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
+  <Import Project="Paths.props" />
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{967bc419-6e05-4d12-a5bd-6cf5e5af37c0}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>HuhuCapture</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="Common.props" />
+  <Import Project="Version.props" />
+  <Import Project="$(ArtifactsRoot)dependencies\gifski-native.props" Condition="Exists('$(ArtifactsRoot)dependencies\gifski-native.props')" />
+  <Import Project="ApplicationDependencies.props" />
+  <PropertyGroup>
+    <TargetName>huhucapture</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ResourceCompile>
+      <AdditionalOptions>/c 65001 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(RepoRoot)resources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Manifest>
+      <EnableSegmentHeap>true</EnableSegmentHeap>
+      <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>
+    </Manifest>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\..\resources\Resource.rc" />
+    <Image Include="..\..\resources\logo.ico" />
+    <None Include="..\..\resources\iconfont.ttf" />
+    <ClInclude Include="..\..\resources\Version.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="Ling.vcxproj">
+      <Project>{540bb258-d062-4159-8cf3-fe9ab9e4b0ae}</Project>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <ProjectReference Include="Yoga.vcxproj">
+      <Project>{28bb8cf9-fdec-47f2-9b06-600b089caaf5}</Project>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\src\app\App.cpp" />
+    <ClCompile Include="..\..\src\app\main.cpp" />
+    <ClCompile Include="..\..\src\capture\CapLong.cpp" />
+    <ClCompile Include="..\..\src\capture\CutMask.cpp" />
+    <ClCompile Include="..\..\src\capture\WinCap.cpp" />
+    <ClCompile Include="..\..\src\editor\History.cpp" />
+    <ClCompile Include="..\..\src\editor\ShapeFactory.cpp" />
+    <ClCompile Include="..\..\src\editor\WinPin.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeAnnotation.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeArrow.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeBase.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeEllipse.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeEraser.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeLine.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeMosaic.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeNumber.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeRect.cpp" />
+    <ClCompile Include="..\..\src\editor\shapes\ShapeText.cpp" />
+    <ClCompile Include="..\..\src\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp" />
+    <ClCompile Include="..\..\src\recording\CapVideo.cpp" />
+    <ClCompile Include="..\..\src\recording\VideoGif.cpp" />
+    <ClCompile Include="..\..\src\recording\VideoMp4.cpp" />
+    <ClCompile Include="..\..\src\services\AnnotationRenderer.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\services\ImageExport.cpp" />
+    <ClCompile Include="..\..\src\services\ImageRecognition.cpp" />
+    <ClCompile Include="..\..\src\services\Lang.cpp" />
+    <ClCompile Include="..\..\src\services\Setting.cpp" />
+    <ClCompile Include="..\..\src\services\Update.cpp" />
+    <ClCompile Include="..\..\src\ui\AnnotationPanel.cpp" />
+    <ClCompile Include="..\..\src\ui\Tip.cpp" />
+    <ClCompile Include="..\..\src\ui\Tray.cpp" />
+    <ClCompile Include="..\..\src\ui\settings\WinSetting.cpp" />
+    <ClCompile Include="..\..\src\ui\settings\WinSettingAbout.cpp" />
+    <ClCompile Include="..\..\src\ui\settings\WinSettingCommon.cpp" />
+    <ClCompile Include="..\..\src\ui\settings\WinSettingShortcut.cpp" />
+    <ClCompile Include="..\..\src\ui\toolbars\ToolCap.cpp" />
+    <ClCompile Include="..\..\src\ui\toolbars\ToolLong.cpp" />
+    <ClCompile Include="..\..\src\ui\toolbars\ToolMain.cpp" />
+    <ClCompile Include="..\..\src\ui\toolbars\ToolSub.cpp" />
+    <ClCompile Include="..\..\src\ui\toolbars\ToolVideo.cpp" />
+    <ClCompile Include="..\..\third_party\cgif\cgif.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\cgif\cgif_raw.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\cgif\cgif_rgb.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\quirc\decode.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>QUIRC_MAX_REGIONS=65534;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\quirc\identify.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>QUIRC_MAX_REGIONS=65534;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\quirc\quirc.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>QUIRC_MAX_REGIONS=65534;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\..\third_party\quirc\version_db.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>QUIRC_MAX_REGIONS=65534;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\src\app\App.h" />
+    <ClInclude Include="..\..\src\app\Brand.h" />
+    <ClInclude Include="..\..\src\capture\CapLong.h" />
+    <ClInclude Include="..\..\src\capture\CutMask.h" />
+    <ClInclude Include="..\..\src\capture\WinCap.h" />
+    <ClInclude Include="..\..\src\core\Annotation.h" />
+    <ClInclude Include="..\..\src\core\AnnotationRegion.h" />
+    <ClInclude Include="..\..\src\core\HistoryStack.h" />
+    <ClInclude Include="..\..\src\core\ImagePreview.h" />
+    <ClInclude Include="..\..\src\core\PixelBuffer.h" />
+    <ClInclude Include="..\..\src\core\ReleaseVersion.h" />
+    <ClInclude Include="..\..\src\core\ScrollStitch.h" />
+    <ClInclude Include="..\..\src\editor\History.h" />
+    <ClInclude Include="..\..\src\editor\ShapeFactory.h" />
+    <ClInclude Include="..\..\src\editor\WinPin.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeAnnotation.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeArrow.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeBase.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeEllipse.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeEraser.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeLine.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeMosaic.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeNumber.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeRect.h" />
+    <ClInclude Include="..\..\src\editor\shapes\ShapeText.h" />
+    <ClInclude Include="..\..\src\pch.h" />
+    <ClInclude Include="..\..\src\platform\windows\ComApartment.h" />
+    <ClInclude Include="..\..\src\platform\windows\GdiCapture.h" />
+    <ClInclude Include="..\..\src\recording\CapVideo.h" />
+    <ClInclude Include="..\..\src\recording\VideoGif.h" />
+    <ClInclude Include="..\..\src\recording\VideoMp4.h" />
+    <ClInclude Include="..\..\src\services\AnnotationRenderer.h" />
+    <ClInclude Include="..\..\src\services\ImageExport.h" />
+    <ClInclude Include="..\..\src\services\ImageRecognition.h" />
+    <ClInclude Include="..\..\src\services\Lang.h" />
+    <ClInclude Include="..\..\src\services\Setting.h" />
+    <ClInclude Include="..\..\src\services\Update.h" />
+    <ClInclude Include="..\..\src\ui\AnnotationPanel.h" />
+    <ClInclude Include="..\..\src\ui\AnnotationPanelLayout.h" />
+    <ClInclude Include="..\..\src\ui\Tip.h" />
+    <ClInclude Include="..\..\src\ui\Tray.h" />
+    <ClInclude Include="..\..\src\ui\settings\WinSetting.h" />
+    <ClInclude Include="..\..\src\ui\settings\WinSettingAbout.h" />
+    <ClInclude Include="..\..\src\ui\settings\WinSettingCommon.h" />
+    <ClInclude Include="..\..\src\ui\settings\WinSettingShortcut.h" />
+    <ClInclude Include="..\..\src\ui\toolbars\ToolCap.h" />
+    <ClInclude Include="..\..\src\ui\toolbars\ToolLong.h" />
+    <ClInclude Include="..\..\src\ui\toolbars\ToolMain.h" />
+    <ClInclude Include="..\..\src\ui\toolbars\ToolSub.h" />
+    <ClInclude Include="..\..\src\ui\toolbars\ToolVideo.h" />
+    <ClInclude Include="..\..\src\ui\toolbars\ToolbarLayout.h" />
+    <ClInclude Include="..\..\src\ui\toolbars\ToolbarMetrics.h" />
+    <ClInclude Include="..\..\third_party\cgif\cgif.h" />
+    <ClInclude Include="..\..\third_party\cgif\cgif_raw.h" />
+    <ClInclude Include="..\..\third_party\quirc\quirc.h" />
+    <ClInclude Include="..\..\third_party\quirc\quirc_internal.h" />
+  </ItemGroup>
+  <Target Name="CheckNativeDependencies" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(GifskiLibrary)') Or !Exists('$(ArtifactsRoot)dependencies\gifski-native.props')" Text="The static GIF encoder is missing. Run pwsh scripts/build.ps1 to restore and build all dependencies." />
+  </Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

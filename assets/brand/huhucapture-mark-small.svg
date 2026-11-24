@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">huhucapture small mark</title>
+  <desc id="desc">Optically simplified whole orange cat inside a capture frame, for 16 to 48 pixel icons. Fewer stripes and thicker contours preserve the silhouette.</desc>
+  <g id="capture-frame" fill="none" stroke="#67381F" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M136 76H76V136M376 76H436V136M436 376V436H376M136 436H76V376"/>
+  </g>
+  <g id="tabby" stroke="#67381F" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path id="tail" fill="#FFA94D" d="M295 368C351 401 389 360 375 319C370 302 371 290 383 288C400 283 413 306 413 337C413 393 370 420 296 405Z"/>
+    <path id="body" fill="#FFA94D" d="M196 230C159 255 151 296 156 343C160 393 191 413 244 413C299 413 337 384 337 340C338 296 317 252 288 231Z"/>
+    <ellipse id="belly" cx="246" cy="334" rx="50" ry="61" fill="#FFF5EA" stroke="none"/>
+    <path id="raised-paw" fill="#FFF5EA" d="M315 267C328 249 328 226 331 209C333 196 346 190 357 197C371 194 382 205 378 218C375 247 366 268 348 284Z"/>
+    <path id="head" fill="#FFA94D" d="M164 163L160 113L202 133C229 122 256 122 283 133L324 113L320 164C340 193 334 220 314 236C296 253 271 260 242 260C211 260 187 252 169 237C146 219 145 191 164 163Z"/>
+    <path id="forehead" fill="none" stroke="#BF5E20" stroke-width="18" d="M242 133V157"/>
+    <path id="eyes" fill="none" stroke-width="13" d="M188 199Q198 188 208 199M277 199Q287 188 297 199"/>
+    <path id="nose" fill="#67381F" stroke="none" d="M230 214H254L242 228Z"/>
+  </g>
+</svg>

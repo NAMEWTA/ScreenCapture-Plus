@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- huhucapture has its own release sequence. Release tags override these values. -->
+  <PropertyGroup>
+    <VersionMajor Condition="'$(VersionMajor)'==''">0</VersionMajor>
+    <VersionMinor Condition="'$(VersionMinor)'==''">0</VersionMinor>
+    <VersionPatch Condition="'$(VersionPatch)'==''">1</VersionPatch>
+    <VersionRevision Condition="'$(VersionRevision)'==''">0</VersionRevision>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ResourceCompile>
+      <PreprocessorDefinitions>HUHU_VERSION_MAJOR=$(VersionMajor);HUHU_VERSION_MINOR=$(VersionMinor);HUHU_VERSION_PATCH=$(VersionPatch);HUHU_VERSION_REVISION=$(VersionRevision);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+  </ItemDefinitionGroup>
+</Project>
