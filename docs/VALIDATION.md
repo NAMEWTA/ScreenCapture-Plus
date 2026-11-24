@@ -4,24 +4,27 @@
 
 v0.0.2 增加矩形范围批注的纯几何回归及真实 GUI 场景。纯 C++ 标注、区域、历史、图像与工具栏布局回归可以在 Linux 或 Windows 运行。Windows Release/Debug、原生渲染 PNG、启动、打包与发布结果，以对应提交的 [GitHub Actions 记录](https://github.com/NAMEWTA/ScreenCapture-Plus/actions)为准。
 
-### v0.0.1 验证基线
+### v0.0.2 范围批注
 
-**2026-11-24：功能提交 `cea6f91608ff5cb99ee28b08ada79faa960c03a7` 的 [PR Windows CI（run 45319371553）](https://github.com/NAMEWTA/ScreenCapture-Plus/actions/runs/45319371553) 全部通过。** 下列记录来自本轮批注功能构建；未执行的人工桌面项目仍按下文保留。
+**2026-11-24：功能提交 `dbc1f0794a7d49b7669629fedabaa7428fea4414` 的 [PR Windows CI（run 45326301187）](https://github.com/NAMEWTA/ScreenCapture-Plus/actions/runs/45326301187) 全部通过。** 下列是实际观察结果，不包含未执行的人工桌面场景。
 
 | 环境 / 检查 | 已观察结果 |
 | --- | --- |
-| Linux C++20 / GCC | 7 个核心程序严格编译并通过，包含批注身份/颜色/布局、侧栏和工具栏几何 |
+| Linux C++20 / GCC | 8 个核心程序严格编译并通过；新几何测试包含非整数缩放下最小框跨原点/远端往返 |
 | GitHub `windows-2025` x64 / MSVC v145 | Release 与 Debug 均成功 |
-| Windows 核心与脚本 | 7 个核心程序通过；PowerShell 脚本语法有效 |
-| D3D11 WARP / DWrite / D2D / WIC | 六组 PNG 生成与回读通过，完整文字、原图像素/alpha、边界与上下文恢复通过 |
-| 独立 EXE / 便携配置 | 隔离目录托盘启动通过，未依赖应用外置 DLL 或 MSVC 运行库 |
-| 真实 GUI，1024×768，96 DPI | 独立备注输入、列表编辑/删除、撤销/重做、编辑后新增、边缘拖动均通过；放置后输入框保持焦点 |
-| 正式复制命令 | 从系统剪贴板读取并解码 840×360 PNG，原图和完整批注栏同时存在 |
-| 发布包 | EXE 版本 0.0.1.0、PE 依赖、便携包、符号、构建信息与 SHA256 文件检查通过 |
+| Windows 核心与脚本 | 8 个核心程序通过；PowerShell 构建及发布脚本语法有效 |
+| D3D11 WARP / DWrite / D2D / WIC | 六组 PNG 生成与回读通过，完整文字、原图像素/alpha、边界及上下文恢复通过 |
+| 独立 EXE / 便携配置 | 隔离目录托盘启动通过 |
+| 真实 GUI，1024×768，96 DPI | 正/反方向拖框、小编号左上角定位、完成后焦点输入、列表编辑/删除、撤销/重做均通过 |
+| 区域拖动与恢复 | 调整大小、四边保尺寸限制、收起侧栏后的边缘拖动、捕获中断恢复、单击/零面积/1px 误拖清理通过 |
+| 正式复制命令 | 从系统剪贴板读取并解码 840×360 PNG；矩形、图内小编号和右侧编号同色，矩形内部没有填色 |
+| 发布包 | EXE 版本 0.0.2.0、PE 依赖、便携包、符号、构建信息与 SHA256 文件检查通过 |
 
-`windows-render-checks` 工件保留原生渲染、真实窗口截图及 GUI 日志。README 配图来自正式复制命令的原始 PNG。最终 main 构建与 Release 仍由各自的工作流重新验证，发布状态以 [v0.0.1 Release](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/tag/v0.0.1) 为准。
+[本次 `windows-render-checks` 工件](https://github.com/NAMEWTA/ScreenCapture-Plus/actions/runs/45326301187/artifacts/14889309241) 保留原生渲染、真实窗口截图及 GUI 日志。README 配图直接使用正式复制命令取得的原始 PNG；已检查矩形范围、小编号及说明布局。最终 main 会重新执行同一套验证，正式资产以 [v0.0.2 Release](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/tag/v0.0.2) 为准。
 
-本轮 GUI 回归同时验证了两个修复：被动工具栏重排不再激活工具窗口，鼠标离开哨兵不再被解释为批注拖动。
+### v0.0.1 验证基线
+
+上一版的 [PR Windows CI（run 45319371553）](https://github.com/NAMEWTA/ScreenCapture-Plus/actions/runs/45319371553) 与 [main 构建/发布（run 45320766814）](https://github.com/NAMEWTA/ScreenCapture-Plus/actions/runs/45320766814) 已通过 7 个核心程序、Release/Debug、六组原生渲染、托盘启动、点击式批注 GUI 与打包。该版同时修复了被动工具栏重排抢焦点及鼠标离开哨兵被误当拖动的问题。历史结果对应 [v0.0.1](https://github.com/NAMEWTA/ScreenCapture-Plus/releases/tag/v0.0.1)，当前新增范围批注按上表单独验证。
 
 ## 自动化覆盖
 

@@ -2,7 +2,7 @@
 
 ![ScreenCapture-Plus](docs/banner.png)
 
-正式批注工具实际复制得到的合成 PNG（GUI 自动化验证示例；删除 #1 后保留 #2、#3 的编号与配色）。
+v0.0.2 范围批注工具实际复制得到的合成 PNG（GUI 自动化验证示例；删除 #1 后保留 #2、#3 的编号与配色）。
 
 # ScreenCapture-Plus
 
