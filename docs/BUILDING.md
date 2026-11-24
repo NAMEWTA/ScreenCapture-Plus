@@ -23,6 +23,8 @@ pwsh ./scripts/package.ps1
 
 构建脚本自动发现 VS2026，恢复固定依赖，构建 gifski 静态库，再执行 MSBuild。Ling 和 Yoga 用仓库内的薄工程包装固定源码，由项目引用保证顺序。所有 C++ 与 Rust 静态库使用静态 CRT；无需在源码内设置开发者私有盘符。
 
+Debug 同样使用 release 静态 CRT（`/MT`），以匹配 Rust 静态库；保留禁用优化、PDB、运行时检查和普通断言，不在 C++ 编译中定义会选择 debug CRT 的 `_DEBUG`。
+
 产物：`artifacts/bin/x64/Release/ScreenCapture.exe`。符号与中间文件也位于 `artifacts`，依赖源码位于 `.deps`，两者均不提交。完成首次依赖构建后可打开根目录 `ScreenCapture.slnx` 调试，或运行：
 
 ```powershell
