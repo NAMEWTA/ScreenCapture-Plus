@@ -1,0 +1,10 @@
+* text=auto
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.c text eol=lf
+*.ps1 text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+# Existing language resources are UTF-16; preserve their exact encoding/bytes.
+Lang/*.json -text

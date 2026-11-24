@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="Paths.props" />
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{28bb8cf9-fdec-47f2-9b06-600b089caaf5}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>Yoga</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="Common.props" />
+  <PropertyGroup>
+    <OutDir>$(ArtifactsRoot)lib\$(Platform)\$(Configuration)\</OutDir>
+    <TargetName>Yoga</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(LingRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <WarningLevel>Level3</WarningLevel>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="$(LingRoot)yoga\algorithm\AbsoluteLayout.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\algorithm\Baseline.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\algorithm\Cache.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\algorithm\CalculateLayout.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\algorithm\FlexLine.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\algorithm\PixelGrid.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\config\Config.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\debug\AssertFatal.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\debug\Log.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\event\event.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\node\LayoutResults.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\node\Node.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\YGConfig.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\YGEnums.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\YGNode.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\YGNodeLayout.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\YGNodeStyle.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\YGPixelGrid.cpp" />
+    <ClCompile Include="$(LingRoot)yoga\YGValue.cpp" />
+  </ItemGroup>
+  <Target Name="CheckYogaSource" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(LingRoot)yoga\Yoga.h')" Text="Yoga sources are missing. Run pwsh scripts/restore.ps1 first." />
+  </Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
