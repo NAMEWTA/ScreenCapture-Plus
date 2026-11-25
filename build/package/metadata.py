@@ -169,6 +169,9 @@ def audit_tree(root: Path, kind: str, *, development=False):
     require(kind in KINDS, 'Unknown package form')
     platform, architecture, _, _ = KINDS[kind]
     binary_dir = root if platform == 'windows' else root / 'bin'
+    qt_conf = binary_dir/'qt.conf'
+    require(qt_conf.is_file() and not qt_conf.is_symlink() and qt_conf.stat().st_size,
+            'Actual Qt runtime path configuration is missing')
     marker = json_read(binary_dir/'installation.json', 16384)
     require(marker == {'schemaVersion': 1, 'product': PRODUCT, 'platform': platform,
                        'architecture': architecture, 'packageKind': kind},

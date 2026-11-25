@@ -204,6 +204,10 @@ set_target_properties(huhucapture PROPERTIES CXX_EXTENSIONS OFF
 include(build/cmake/qt-install.cmake)
 
 if(BUILD_TESTING)
+    add_executable(qt_package_runtime_probe tests/qt/package_runtime_probe.cpp)
+    target_compile_features(qt_package_runtime_probe PRIVATE cxx_std_20)
+    set_target_properties(qt_package_runtime_probe PROPERTIES CXX_EXTENSIONS OFF)
+    target_link_libraries(qt_package_runtime_probe PRIVATE Qt6::Core Qt6::Network)
     add_executable(qt_application tests/qt/application_tests.cpp)
     target_link_libraries(qt_application PRIVATE huhucapture_application)
     set_target_properties(qt_application PROPERTIES CXX_EXTENSIONS OFF)

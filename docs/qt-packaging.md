@@ -133,6 +133,19 @@ python3 scripts/package-qt.py aggregate \
 
 `python3 tests/package_metadata_tests.py` 使用真实文件、真实 ZIP、真实编译器生成的 ELF 元数据探针，验证改动检测、越界符号链接、资产身份、传输头、排他写入、嵌入身份与旁置记录不一致，以及脏源码的正式模式拒绝。这些测试不伪造可安装产品，也不把 metadata probe 计为应用安装证据。
 
+安装目录的 TLS 实测使用单独编译的 `qt_package_runtime_probe`，然后运行：
+
+```sh
+python3 scripts/test-qt-package-runtime.py \
+  --prefix artifacts/install/runtime \
+  --probe artifacts/cmake/application/qt_package_runtime_probe \
+  --certificate tests/fixtures/qt-tls/localhost-test-cert.pem \
+  --private-key tests/fixtures/qt-tls/localhost-test-key.pem \
+  --report artifacts/package-tls-runtime.json
+```
+
+Windows 把 `--probe` 指向对应配置目录的 `.exe`。辅助脚本清除开发用 Qt/动态库搜索环境，在可写的实际安装目录中排他放置一个临时探针，以验证 Windows 的 app-local CRT 搜索行为；结束后只删除这个身份，产品文件和 `qt.conf` 保持原样。探针核对实际加载的 Qt 库、TLS 插件及 Linux OpenSSL / Windows CRT 的路径都在该安装树中，报告运行版本、文件 SHA256 和大小。它创建真正的本地 TLS 连接，要求正常证书验证拒绝公开测试自签证书；不会导入信任根、忽略错误或访问外部网络。缺少 OpenSSL 时若偶然回退到构建机 `/usr/lib`，即使 TLS 握手能够进行，这个测试仍会失败。该探针不随产品打包，也不代替桌面图形安装验收。
+
 完整发布前需要另外记录：从本次真实完整包运行的新下载器本地 HTTP 测试、同 SHA 双平台构建测试、干净 Windows 的安装/升级/卸载及 CRT 独立性、Ubuntu/Kubuntu 实际安装和 Portal/Wayland/X11 用户旅程、包内所有动态依赖和许可对应源码审核。Qt 首版进入 latest 后再跑真实 GitHub latest 下载烟测。原有单 EXE 更新器的桥接发行与跳过桥接的手动迁移说明依旧是独立门槛，不能由本文件或一次打包成功代替。
 
 ## 官方实现依据

@@ -13,6 +13,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/mem.h>
 }
 #ifdef _WIN32
 #include "platform/windows/ComApartment.h"
@@ -24,6 +25,7 @@ extern "C" {
 #endif
 
 #include <array>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -55,14 +57,54 @@ void writeJson(const QString& path, const QJsonObject& value)
 }
 #endif
 struct Input {
+    QFile file;
+    qint64 size{};
+    AVIOContext* io{};
     AVFormatContext* context{};
     AVPacket* packet{av_packet_alloc()};
-    ~Input() { av_packet_free(&packet); avformat_close_input(&context); }
+    ~Input()
+    {
+        av_packet_free(&packet); avformat_close_input(&context);
+        if (io) { av_freep(&io->buffer); avio_context_free(&io); }
+    }
+    static int read(void* opaque, std::uint8_t* bytes, int count)
+    {
+        auto& input = *static_cast<Input*>(opaque);
+        const auto read = input.file.read(reinterpret_cast<char*>(bytes), count);
+        return read < 0 ? AVERROR(EIO) : read == 0 ? AVERROR_EOF : static_cast<int>(read);
+    }
+    static std::int64_t seek(void* opaque, std::int64_t offset, int whence)
+    {
+        auto& input = *static_cast<Input*>(opaque);
+        if (whence == AVSEEK_SIZE) return input.size;
+        whence &= ~AVSEEK_FORCE;
+        qint64 base{};
+        if (whence == SEEK_CUR) base = input.file.pos();
+        else if (whence == SEEK_END) base = input.size;
+        else if (whence != SEEK_SET) return AVERROR(EINVAL);
+        if (base < 0 || base > input.size || offset < -base || offset > input.size - base)
+            return AVERROR_INVALIDDATA;
+        return input.file.seek(base + offset) ? base + offset : AVERROR(EIO);
+    }
+    static int denyExternal(AVFormatContext*, AVIOContext**, const char*, int, AVDictionary**)
+    { return AVERROR(EPERM); }
     void open(const QString& path)
     {
         require(packet, "Allocate a real compressed packet");
-        const auto encoded = path.toUtf8();
-        require(avformat_open_input(&context, encoded.constData(), nullptr, nullptr) == 0 &&
+        file.setFileName(path);
+        require(file.open(QIODevice::ReadOnly), "Open the actual owned local fixture");
+        size = file.size(); require(size > 0 && size <= 256 * 1024 * 1024, "Read a bounded encoded fixture");
+        auto* buffer = static_cast<unsigned char*>(av_malloc(32768));
+        require(buffer, "Allocate bounded local fixture IO");
+        io = avio_alloc_context(buffer, 32768, 0, this, read, nullptr, seek);
+        if (!io) { av_free(buffer); throw std::runtime_error("Allocate local fixture IO state"); }
+        context = avformat_alloc_context(); require(context, "Allocate the real MOV demuxer");
+        context->pb = io; context->flags |= AVFMT_FLAG_CUSTOM_IO; context->io_open = denyExternal;
+        // The Windows production inspection profile intentionally contains no
+        // file or network protocol. Use the same local QFile AVIO boundary as
+        // the real inspector, including Unicode paths and denied external IO.
+        const auto* mov = av_find_input_format("mov");
+        require(mov && avformat_open_input(&context, nullptr, mov, nullptr) == 0 &&
             avformat_find_stream_info(context, nullptr) >= 0, "Read actual MP4 stream descriptions");
     }
 };
