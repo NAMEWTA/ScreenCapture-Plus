@@ -1,6 +1,6 @@
 #pragma once
 
-#include <libportal/parent.h>
+#include <libportal/portal.h>
 #include <gio/gio.h>
 #include "platform/linux/portal/PortalTypes.h"
 #include <QObject>

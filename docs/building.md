@@ -12,6 +12,11 @@ ctest --preset core
 
 Qt 验证严格使用 6.12.1 的 Core / Gui / Widgets / Network / Svg。SDK 恢复步骤、固定 aqtinstall 提交和实际平台架构见 [.github/workflows/qt-validation.yml](../.github/workflows/qt-validation.yml)；不能以另一个发行版 Qt 代替。Linux SDK 包含 QtWayland 和匹配的私有头，实际中文字体也是导出验证的前置条件。安装并将该 SDK 的 `bin` 与前缀加入环境后：
 
+CI 通过 aqt 官方支持的 `AQT_CONFIG` 读取 [build/aqt.ini](../build/aqt.ini)，
+串行恢复共享安装目录的 SDK 归档，避免 Windows 外部 7-Zip 并行创建同一目录的竞态。
+该设置来自固定 aqt 源码的 `Settings.concurrency` / `run_installer`，
+不修改下载内容、不关闭 SHA256 校验，也不忽略解压错误。
+
 ```sh
 cmake --preset qt-validation
 cmake --build --preset qt-validation --parallel 2

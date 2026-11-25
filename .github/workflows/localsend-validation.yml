@@ -30,6 +30,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     env:
+      AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
       CARGO_BUILD_JOBS: 2
       CARGO_TARGET_DIR: ${{ github.workspace }}/artifacts/cargo/localsend
       RUST_BACKTRACE: 1
