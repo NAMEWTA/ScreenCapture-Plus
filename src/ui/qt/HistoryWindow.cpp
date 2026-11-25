@@ -184,6 +184,7 @@ HistoryWindow::HistoryWindow(QWidget* parent) : QWidget(parent), state_(std::mak
     state_->rowsLayout = new QVBoxLayout(state_->rowsHost);
     state_->rowsLayout->setContentsMargins(0, 0, 0, 0); state_->rowsLayout->setSpacing(8);
     state_->rowsLayout->addStretch(); state_->scroll->setWidget(state_->rowsHost); outer->addWidget(state_->scroll, 1);
+    state_->rowsHost->setAutoFillBackground(false);
     state_->empty = new QWidget(state_->scroll->viewport()); state_->empty->setObjectName(QStringLiteral("historyEmpty"));
     state_->empty->setAttribute(::Qt::WA_TransparentForMouseEvents);
     auto* emptyLayout = new QVBoxLayout(state_->empty); emptyLayout->setContentsMargins(12, 12, 12, 12);

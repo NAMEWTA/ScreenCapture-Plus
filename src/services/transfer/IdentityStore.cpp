@@ -49,30 +49,48 @@ bool addressValid(const QString& value)
         address.toString() == value;
 }
 
-IdentityError readPrivate(const QString& path, qsizetype limit, QByteArray& bytes, bool& exists)
+IdentityError fileFailure(IdentityFileDiagnostic& diagnostic, IdentityError failure,
+    IdentityFilePhase phase, std::error_code error = {}, int qtError = 0)
+{
+    diagnostic.phase = phase;
+    diagnostic.error = error;
+    diagnostic.qtFileError = qtError;
+    return failure;
+}
+
+IdentityError readPrivate(const QString& path, qsizetype limit, QByteArray& bytes,
+    bool& exists, IdentityFileDiagnostic& diagnostic)
 {
     bytes.clear();
     exists = false;
     std::error_code error;
     if (!Platform::isPrivateStorage(nativePath(QFileInfo(path).absolutePath()), true, error))
-        return IdentityError::Permissions;
+        return fileFailure(diagnostic, IdentityError::Permissions, IdentityFilePhase::ReadDirectory, error);
     if (!Platform::isPrivateStorage(nativePath(path), false, error)) {
         if (error == std::errc::no_such_file_or_directory) return IdentityError::None;
-        return IdentityError::Permissions;
+        return fileFailure(diagnostic, IdentityError::Permissions, IdentityFilePhase::ReadPermissions, error);
     }
     exists = true;
     auto handle = Platform::openRegularFileReadOnly(nativePath(path), error);
-    if (!handle) return IdentityError::Read;
+    if (!handle) return fileFailure(diagnostic, IdentityError::Read, IdentityFilePhase::ReadOpen, error);
     const auto before = Platform::readFileDescriptorSnapshot(handle.get(), error);
-    if (!before || before->bytes > static_cast<std::uint64_t>(limit)) return IdentityError::Read;
+    if (!before) return fileFailure(diagnostic, IdentityError::Read, IdentityFilePhase::ReadSnapshot, error);
+    if (before->bytes > static_cast<std::uint64_t>(limit))
+        return fileFailure(diagnostic, IdentityError::Read, IdentityFilePhase::ReadSnapshot,
+            std::make_error_code(std::errc::file_too_large));
     QFile input;
-    if (!input.open(handle.get(), QIODevice::ReadOnly, QFileDevice::DontCloseHandle)) return IdentityError::Read;
+    if (!input.open(handle.get(), QIODevice::ReadOnly, QFileDevice::DontCloseHandle))
+        return fileFailure(diagnostic, IdentityError::Read, IdentityFilePhase::ReadOpen, {}, input.error());
     bytes = input.read(limit + 1);
-    if (input.error() != QFileDevice::NoError || bytes.size() > limit || !input.atEnd()) return IdentityError::Read;
+    if (input.error() != QFileDevice::NoError || bytes.size() > limit || !input.atEnd())
+        return fileFailure(diagnostic, IdentityError::Read, IdentityFilePhase::ReadContents, {}, input.error());
     const auto after = Platform::readFileDescriptorSnapshot(handle.get(), error);
+    if (!after) return fileFailure(diagnostic, IdentityError::ChangedOnDisk, IdentityFilePhase::ReadRecheck, error);
     const auto named = Platform::readFileSnapshot(nativePath(path), error);
-    if (!after || !named || *before != *after || *after != *named ||
-        after->bytes != static_cast<std::uint64_t>(bytes.size())) return IdentityError::ChangedOnDisk;
+    if (!named) return fileFailure(diagnostic, IdentityError::ChangedOnDisk, IdentityFilePhase::ReadRecheck, error);
+    if (*before != *after || *after != *named || after->bytes != static_cast<std::uint64_t>(bytes.size()))
+        return fileFailure(diagnostic, IdentityError::ChangedOnDisk, IdentityFilePhase::ReadRecheck,
+            std::make_error_code(std::errc::state_not_recoverable));
     return IdentityError::None;
 }
 
@@ -117,14 +135,14 @@ bool trustValid(const QJsonObject& document)
     return true;
 }
 
-IdentityError publishNew(const QString& path, const QByteArray& bytes)
+IdentityError publishNew(const QString& path, const QByteArray& bytes, IdentityFileDiagnostic& diagnostic)
 {
     const auto directory = nativePath(QFileInfo(path).absolutePath());
     std::error_code error;
     const auto staging = Platform::createExclusiveTemporaryFile(directory, error);
-    if (staging.empty()) return IdentityError::Write;
+    if (staging.empty()) return fileFailure(diagnostic, IdentityError::Write, IdentityFilePhase::CreateTemporary, error);
     const auto claimed = Platform::readFileSnapshot(staging, error);
-    if (!claimed) return IdentityError::Write;
+    if (!claimed) return fileFailure(diagnostic, IdentityError::Write, IdentityFilePhase::ClaimTemporary, error);
     bool published{};
     const auto cleanup = qScopeGuard([&] {
         if (published) return;
@@ -132,19 +150,24 @@ IdentityError publishNew(const QString& path, const QByteArray& bytes)
         const auto current = Platform::readFileSnapshot(staging, ignored);
         if (current && current->identity == claimed->identity) std::filesystem::remove(staging, ignored);
     });
-    if (!Platform::isPrivateStorage(staging, false, error)) return IdentityError::Permissions;
     auto handle = Platform::openOwnedEmptyFileForWrite(staging, claimed->identity, error);
-    if (!handle) return IdentityError::Write;
+    if (!handle) return fileFailure(diagnostic, IdentityError::Write, IdentityFilePhase::OpenTemporary, error);
+    if (!Platform::initializeCreatedPrivateFile(handle.get(), claimed->identity, error, diagnostic.creation))
+        return fileFailure(diagnostic, IdentityError::Permissions, IdentityFilePhase::InitializeTemporary, error);
     QFile output;
     if (!output.open(handle.get(), QIODevice::ReadWrite, QFileDevice::DontCloseHandle) ||
-        output.write(bytes) != bytes.size() || !output.flush()) return IdentityError::Write;
+        output.write(bytes) != bytes.size() || !output.flush())
+        return fileFailure(diagnostic, IdentityError::Write, IdentityFilePhase::WriteTemporary, {}, output.error());
     output.close();
-    if (output.error() != QFileDevice::NoError || !handle.close(error)) return IdentityError::Write;
+    if (output.error() != QFileDevice::NoError)
+        return fileFailure(diagnostic, IdentityError::Write, IdentityFilePhase::CloseTemporary, {}, output.error());
+    if (!handle.close(error)) return fileFailure(diagnostic, IdentityError::Write, IdentityFilePhase::CloseTemporary, error);
     const auto committed = Platform::commitFileNoReplace(staging, nativePath(path));
     published = committed.committed();
     if (committed.durable()) return IdentityError::None;
-    if (committed.committed()) return IdentityError::DurabilityUnknown;
-    return committed.error == std::errc::file_exists ? IdentityError::ChangedOnDisk : IdentityError::Write;
+    const auto failure = committed.committed() ? IdentityError::DurabilityUnknown :
+        (committed.error == std::errc::file_exists ? IdentityError::ChangedOnDisk : IdentityError::Write);
+    return fileFailure(diagnostic, failure, IdentityFilePhase::PublishTemporary, committed.error);
 }
 
 int takeBuffer(HuhuBuffer* raw, QByteArray& bytes, qsizetype maximum)
@@ -190,28 +213,31 @@ QString IdentityStore::trustPath() const
 
 IdentityResult IdentityStore::current(IdentityError error, int status) const
 {
-    if (error != IdentityError::None) return {error, status, {}, {}, {}, false};
+    if (error != IdentityError::None) return {error, status, {}, {}, {}, false, diagnostic_};
     return {error, status, identity_, trust_.value(QStringLiteral("peers")).toArray(),
-        identity_.value(QStringLiteral("fingerprint")).toString(), false};
+        identity_.value(QStringLiteral("fingerprint")).toString(), false, diagnostic_};
 }
 
 IdentityResult IdentityStore::loadOrCreate(std::stop_token stop)
 {
+    diagnostic_ = {};
     loaded_ = false;
     if (stop.stop_requested()) return current(IdentityError::Cancelled);
     if (directory_.isEmpty()) return current(IdentityError::Path);
-    if (!QDir().mkpath(directory_, ownerDirectory)) return current(IdentityError::Path);
+    if (!QDir().mkpath(directory_, ownerDirectory))
+        return current(fileFailure(diagnostic_, IdentityError::Path, IdentityFilePhase::CreateDirectory));
     std::error_code error;
-    if (!Platform::isPrivateStorage(nativePath(directory_), true, error)) return current(IdentityError::Permissions);
+    if (!Platform::isPrivateStorage(nativePath(directory_), true, error))
+        return current(fileFailure(diagnostic_, IdentityError::Permissions, IdentityFilePhase::DirectoryPermissions, error));
     directory_ = QDir(directory_).canonicalPath();
     if (directory_.isEmpty()) return current(IdentityError::Path);
     QLockFile lock(identityPath() + QStringLiteral(".lock"));
     lock.setStaleLockTime(0);
     if (!lock.tryLock(0)) return current(IdentityError::Locked);
     bool exists{};
-    auto failure = readPrivate(identityPath(), maximumIdentityBytes, identityBytes_, exists);
+    auto failure = readPrivate(identityPath(), maximumIdentityBytes, identityBytes_, exists, diagnostic_);
     if (failure != IdentityError::None) return current(failure);
-    failure = readPrivate(trustPath(), maximumTrustBytes, trustBytes_, trustExisted_);
+    failure = readPrivate(trustPath(), maximumTrustBytes, trustBytes_, trustExisted_, diagnostic_);
     if (failure != IdentityError::None) return current(failure);
     trust_ = {{QStringLiteral("schema"), 1}, {QStringLiteral("peers"), QJsonArray{}}};
     if (trustExisted_ && (!parseObject(trustBytes_, trust_) || !trustValid(trust_)))
@@ -228,7 +254,7 @@ IdentityResult IdentityStore::loadOrCreate(std::stop_token stop)
         status = validateIdentity(identityBytes_, identity_);
         if (status != HUHU_OK) return current(IdentityError::InvalidIdentity, status);
         if (stop.stop_requested()) return current(IdentityError::Cancelled);
-        failure = publishNew(identityPath(), identityBytes_);
+        failure = publishNew(identityPath(), identityBytes_, diagnostic_);
         if (failure != IdentityError::None) return current(failure);
         created = true;
     } else {
@@ -244,6 +270,7 @@ IdentityResult IdentityStore::loadOrCreate(std::stop_token stop)
 IdentityResult IdentityStore::rememberPeer(const QString& address, quint16 port,
     const QString& fingerprint, const QString& alias, std::stop_token stop)
 {
+    diagnostic_ = {};
     if (!loaded_ || !addressValid(address) || !port || !fingerprintValid(fingerprint) || !bounded(alias, 256))
         return current(IdentityError::InvalidTrust);
     if (stop.stop_requested()) return current(IdentityError::Cancelled);
@@ -252,9 +279,9 @@ IdentityResult IdentityStore::rememberPeer(const QString& address, quint16 port,
     if (!lock.tryLock(0)) return current(IdentityError::Locked);
     QByteArray currentIdentity, currentTrust;
     bool identityExists{}, trustExists{};
-    auto failure = readPrivate(identityPath(), maximumIdentityBytes, currentIdentity, identityExists);
+    auto failure = readPrivate(identityPath(), maximumIdentityBytes, currentIdentity, identityExists, diagnostic_);
     if (failure != IdentityError::None) return current(failure);
-    failure = readPrivate(trustPath(), maximumTrustBytes, currentTrust, trustExists);
+    failure = readPrivate(trustPath(), maximumTrustBytes, currentTrust, trustExists, diagnostic_);
     if (failure != IdentityError::None) return current(failure);
     if (!identityExists || identityBytes_ != currentIdentity || trustExisted_ != trustExists || trustBytes_ != currentTrust)
         return current(IdentityError::ChangedOnDisk);
@@ -288,19 +315,30 @@ IdentityResult IdentityStore::rememberPeer(const QString& address, quint16 port,
     if (encoded.size() > maximumTrustBytes || !trustValid(candidate)) return current(IdentityError::InvalidTrust);
     if (stop.stop_requested()) return current(IdentityError::Cancelled);
     if (!trustExisted_) {
-        failure = publishNew(trustPath(), encoded);
+        failure = publishNew(trustPath(), encoded, diagnostic_);
         if (failure != IdentityError::None) return current(failure);
     } else {
         QSaveFile output(trustPath());
         output.setDirectWriteFallback(false);
-        if (!output.open(QIODevice::WriteOnly) || output.write(encoded) != encoded.size()) return current(IdentityError::Write);
+        if (!output.open(QIODevice::WriteOnly))
+            return current(fileFailure(diagnostic_, IdentityError::Write, IdentityFilePhase::OpenReplacement, {}, output.error()));
+        std::error_code error;
+        const auto descriptor = output.handle(); // Same Qt-owned temporary object, never a pathname reopen.
+        const auto claimed = Platform::readFileDescriptorSnapshot(descriptor, error);
+        if (!claimed)
+            return current(fileFailure(diagnostic_, IdentityError::Write, IdentityFilePhase::ClaimReplacement, error));
+        if (!Platform::initializeCreatedPrivateFile(descriptor, claimed->identity, error, diagnostic_.creation))
+            return current(fileFailure(diagnostic_, IdentityError::Permissions, IdentityFilePhase::InitializeReplacement, error));
+        if (output.write(encoded) != encoded.size())
+            return current(fileFailure(diagnostic_, IdentityError::Write, IdentityFilePhase::WriteReplacement, {}, output.error()));
         QByteArray latest;
         bool stillExists{};
-        failure = readPrivate(trustPath(), maximumTrustBytes, latest, stillExists);
+        failure = readPrivate(trustPath(), maximumTrustBytes, latest, stillExists, diagnostic_);
         if (failure != IdentityError::None) return current(failure);
         if (!stillExists || latest != trustBytes_) return current(IdentityError::ChangedOnDisk);
         if (stop.stop_requested()) return current(IdentityError::Cancelled);
-        if (!output.commit()) return current(IdentityError::Write);
+        if (!output.commit())
+            return current(fileFailure(diagnostic_, IdentityError::Write, IdentityFilePhase::CommitReplacement, {}, output.error()));
     }
     trust_ = std::move(candidate);
     trustBytes_ = encoded;

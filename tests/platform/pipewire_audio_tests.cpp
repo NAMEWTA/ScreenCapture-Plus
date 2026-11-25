@@ -1,4 +1,5 @@
 #include "platform/linux/pipewire/PipeWireAudio.h"
+#include "platform/linux/pipewire/AudioSampleGrid.h"
 
 #include <array>
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -22,11 +24,43 @@ std::size_t descriptors()
     for (const auto& entry : std::filesystem::directory_iterator("/proc/self/fd")) { static_cast<void>(entry); ++count; }
     return count;
 }
+
+void sampleGrid()
+{
+    using linuxPlatform::audioSampleIndex;
+    for (std::uint32_t sample = 0; sample < 48'000; ++sample) {
+        require(audioSampleIndex(core::MediaClock::duration::zero(), sample) == sample,
+            "Every sample in an aligned second has its own exact source index, without repeated preceding PCM");
+        require(audioSampleIndex(5ms, sample) == 240 + sample,
+            "An integral source offset preserves all later sample positions");
+    }
+    require(audioSampleIndex(-1ns, 0) == -1 && audioSampleIndex(-1ns, 1) == 0,
+        "A request before the first sample remains a real gap until its next sample time");
+    require(audioSampleIndex(20'833ns, 0) == 0 && audioSampleIndex(20'834ns, 0) == 1,
+        "Native packet offsets preserve the actual boundary on both sides of one 48 kHz sample");
+    require(audioSampleIndex(-20'834ns, 0) == -2 && audioSampleIndex(-20'833ns, 0) == -1,
+        "Negative packet offsets use floor rather than truncation toward zero");
+    // A native timestamp is integral nanoseconds; sample ordinal itself must
+    // remain exact even across packets whose start is a truncated rational ns.
+    for (std::uint32_t block = 0; block < 12; ++block) {
+        const auto first = block * 4096;
+        const auto nativeStart = std::chrono::duration_cast<core::MediaClock::duration>(
+            linuxPlatform::AudioSampleDuration{first});
+        for (std::uint32_t sample = 0; sample < 4096; ++sample)
+            require(audioSampleIndex(-nativeStart, first + sample) == sample,
+                "Native packet boundary rounding must not repeat or skip an intra-packet sample");
+    }
+    const auto largest = audioSampleIndex((core::MediaClock::duration::max)(), 0);
+    const auto smallest = audioSampleIndex((core::MediaClock::duration::min)(), 0);
+    require(largest && *largest > 0 && smallest && *smallest < 0,
+        "Scaling extreme native clock durations must not wrap before the checked sample conversion");
+}
 }
 
 int main()
 {
     try {
+        sampleGrid();
         std::array<char, 64> directory{};
         const std::string pattern = "/tmp/huhucapture-audio-XXXXXX";
         std::copy(pattern.begin(), pattern.end(), directory.begin());
@@ -64,6 +98,7 @@ int main()
         }
         require(descriptors() == before, "Repeated native failure and cancellation release every capture descriptor");
         std::cout << "PASS real PipeWire missing-endpoint preparation, three requested-source combinations, cancellation, bounded join and descriptor release\n";
+        std::cout << "PASS exact 48 kHz sample positions, native packet boundaries, signed gaps and clock-range arithmetic\n";
         std::cout << "NOT RUN: real monitor/microphone samples, mixing, hotplug or long-running audio/video drift\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }

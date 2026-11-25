@@ -2,6 +2,7 @@
 #include "core/MediaClock.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QException>
 #include <QImage>
@@ -67,6 +68,12 @@ native::X11Rectangle physical(QWidget& widget)
 struct Capture { bool accepted{}; std::string error; QImage pixels; };
 Capture capture(native::X11Rectangle selected, core::CaptureControlSurface control)
 {
+    // The probe paints and changes SHAPE on Qt's XCB connection, whereas the
+    // real capture worker owns another connection. Expose/paintEvent counters
+    // and a query on a third connection do not flush/order Qt's requests.
+    // Qt's public XCB sync performs its own connection roundtrip after event
+    // delivery. This is test-window request ordering, not a compositor fence.
+    QGuiApplication::sync();
     auto future = QtConcurrent::run([=] {
         native::X11Capture source;
         Capture value;
@@ -84,14 +91,24 @@ Capture capture(native::X11Rectangle selected, core::CaptureControlSurface contr
         throw;
     }
 }
-void cleanPixels(const Capture& value, QColor expected)
+void cleanPixels(const Capture& value, QColor expected, const char* stage)
 {
-    if (!value.accepted) throw std::runtime_error("Real guarded readback failed: " + value.error);
+    if (!value.accepted) throw std::runtime_error(std::string(stage) + ": real guarded readback failed: " + value.error);
     require(!value.pixels.isNull(), "Read actual guarded pixels");
+    const auto directory = QDir::current().filePath(QStringLiteral("x11-controls-evidence"));
+    require(QDir().mkpath(directory), "Create actual X11 pixel evidence directory");
+    const auto path = QDir(directory).filePath(QString::fromLatin1(stage) + QStringLiteral(".png"));
+    require(value.pixels.save(path), "Save every actual guarded readback before inspecting it");
     for (int y = 0; y < value.pixels.height(); ++y)
-        for (int x = 0; x < value.pixels.width(); ++x)
-            require(value.pixels.pixelColor(x, y) == expected,
-                "Every selected native pixel must remain the target, including under the hollow outline");
+        for (int x = 0; x < value.pixels.width(); ++x) {
+            const auto actual = value.pixels.pixelColor(x, y);
+            if (actual != expected)
+                throw std::runtime_error(std::string(stage) + ": selected pixel (" + std::to_string(x) + "," +
+                    std::to_string(y) + ") is " + actual.name(QColor::HexArgb).toStdString() + ", expected " +
+                    expected.name(QColor::HexArgb).toStdString() + "; actual readback: " + path.toStdString());
+        }
+    std::cout << "PASS actual guarded pixels: " << stage << " (" << value.pixels.width() << 'x' <<
+        value.pixels.height() << ")\n";
 }
 void refused(const Capture& value)
 { require(!value.accepted && !value.error.empty() && value.pixels.isNull(), "A real unsafe control transition must not publish any captured pixels"); }
@@ -109,27 +126,27 @@ int main(int argc, char** argv)
         Painted control(controlColor); control.setGeometry(30, 200, 90, 44); control.show(); control.raise();
         waitFor([&] { return control.windowHandle() && control.windowHandle()->isExposed() && control.paints; });
         const auto id = static_cast<std::uintptr_t>(control.winId());
-        cleanPixels(capture(selected, {id, core::CaptureControlPlacement::Outside}), target);
+        cleanPixels(capture(selected, {id, core::CaptureControlPlacement::Outside}), target, "initial-outside");
 
         control.move(pattern.pos() + QPoint(30, 30));
         waitFor([&] { return physical(control).x > selected.x; });
         refused(capture(selected, {id, core::CaptureControlPlacement::Outside}));
         control.setGeometry(30, 200, 90, 44);
         waitFor([&] { const auto value = physical(control); return value.x + value.width < selected.x; });
-        cleanPixels(capture(selected, {id, core::CaptureControlPlacement::Outside}), target);
+        cleanPixels(capture(selected, {id, core::CaptureControlPlacement::Outside}), target, "moved-outside");
         control.resize(260, 44);
         waitFor([&] { const auto value = physical(control); return value.x + value.width > selected.x; });
         refused(capture(selected, {id, core::CaptureControlPlacement::Outside}));
 
         control.hide();
         waitFor([&] { return !control.windowHandle()->isExposed(); });
-        cleanPixels(capture(selected, {id, core::CaptureControlPlacement::Hidden}), target);
+        cleanPixels(capture(selected, {id, core::CaptureControlPlacement::Hidden}), target, "hidden");
         control.setGeometry(pattern.geometry().adjusted(-10, -10, 10, 10));
         const auto hole = control.rect().adjusted(8, 8, -8, -8);
         control.setMask(QRegion(control.rect()) - QRegion(hole));
         const auto before = control.paints; control.show(); control.raise();
         waitFor([&] { return control.windowHandle()->isExposed() && control.paints > before; });
-        cleanPixels(capture(selected, {id, core::CaptureControlPlacement::Outside}), target);
+        cleanPixels(capture(selected, {id, core::CaptureControlPlacement::Outside}), target, "hollow-outline");
         refused(capture(selected, {id, core::CaptureControlPlacement::Hidden}));
         control.clearMask();
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);

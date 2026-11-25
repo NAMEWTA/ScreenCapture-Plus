@@ -103,6 +103,14 @@
       "digestSource": "https://api.github.com/repos/microsoft/winget-pkgs/git/blobs/fc7b0d3c465e3759e2609f43c965f4ca5a82c434",
       "digestGitBlob": "fc7b0d3c465e3759e2609f43c965f4ca5a82c434",
       "source": "https://sourceforge.net/projects/nsis/files/NSIS%203/3.11/",
+      "sourceRepository": "https://github.com/nsis-dev/nsis",
+      "sourceCommit": "7359413009afd4f0fff472d841fc2f2cc0e0a5f8",
+      "compilerRelativePath": "Bin/makensis.exe",
+      "reviewedSources": [
+        {"path": "Examples/makensis.nsi", "blob": "7bf8f94d0e1d521890db89926f3732f902a8755f", "scope": "The official setup installs the launcher at the root and the actual compiler under Bin."},
+        {"path": "Contrib/SubStart/substart.c", "blob": "03b445a7d8b68f02ed346426fe192abef8bbae3c", "scope": "The root executable starts the identically named executable under Bin and returns its result."},
+        {"path": "Source/build.cpp", "blob": "bbea0fe868b5edf9b03923114deff045701044c1", "scope": "Compiler include and stub directories use the explicit NSISDIR or the parent of the compiler directory."}
+      ],
       "license": "zlib/libpng; retain included component licenses"
     }
   }

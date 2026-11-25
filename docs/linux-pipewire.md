@@ -20,6 +20,14 @@ Portal 会话必须活到 worker 返回。正常停止先请求 worker 的 stop 
 
 每个取出的 `pw_buffer` 都由局部归还对象持有：空帧、损坏帧、内存格式不支持、消费者异常和正常帧均在同一 worker 上归还。只有按行复制到帧池后的 `FrameLease` 可以离开该回调。消费者收到 lease 前，原生 buffer 已经排回 PipeWire；格式变更和 `remove_buffer` 不会撤销消费者持有的像素。停止后先移除监听，再销毁 stream、core、事件源、context 和 loop。只保留首个失败的类别、原生错误码和消息；取消不会覆盖已经发生的错误。
 
+### 未自动映射的实际 MemFd
+
+`PW_STREAM_FLAG_MAP_BUFFERS` 不保证每个 MemFd 的 `data` 都非空：固定 PipeWire `stream.c::impl_port_use_buffers` 还要求 `SPA_DATA_FLAG_MAPPABLE`。固定 Portal-wlr 0.8.1 的 SHM 分支却合法地提供 `type=MemFd, flags=0, data=null`。`adcf6972` 的真实 Sway/ext-image-copy-capture CI 已成功授权、进入 Streaming 并取到首 buffer，旧应用在此处拒绝，不能记为成功采流。
+
+[CpuPlaneMapping](../src/platform/linux/pipewire/CpuPlaneMapping.h) 对该实际 CPU FD 使用上游 `pw_map_range_init` 和 `mmap(PROT_READ, MAP_SHARED)`。先对同一个借用 FD 做 `fstat`，验证 regular SHM 存储、`mapoffset + maxsize` 实际长度、每帧预算及页对齐溢出；不通过路径重新打开文件，不改变原生 flags/data/fd，也不接管或关闭生产者描述符。已有 PipeWire 映射仍直接借用。临时映射只活到按行复制结束，在归还 `pw_buffer` 前解除；发布的 FrameLease 仅引用应用自有帧池。DMA-BUF 和无地址 MemPtr 仍明确失败。
+
+Portal-wlr 的 `screencast_common.c` 使用 `shm_open`、立即 `shm_unlink`、`ftruncate` 创建这类共享存储，并没有 memfd seals。因此本接缝不把 seal 作为合法 SHM 的前置条件；它依赖 PipeWire dequeue 所有权期间生产者保持 buffer 存储稳定，不能宣称抵御违反协议的并发截断。2026-11-25 的本地固定 1.6.11 测试已真实创建 MemFd 和 POSIX SHM，验证非页对齐 offset、逐字节内容、只读/不可执行映射、真实过短 FD 拒绝、预算、DMA 拒绝、原生 FD 保留、借用映射保留及作用域结束后的 `mincore(ENOMEM)`。同轮原有 socket/epoll/取消/截止检查通过；修复后的 compositor 正向采流仍须由新 CI 裁决。
+
 ## 共用帧合同与预算
 
 [MediaFrame](../src/core/MediaFrame.h) 只依赖标准 C++20 和项目既有 `PixelBuffer`、`MediaClock` 规则。它不要求媒体帧转成 QImage。共享合同可描述 BGRA8、RGBA8、NV12 和 I420 的 CPU 布局；本批 PipeWire 接入只协商前两者及等价的无 alpha RGBx/BGRx 输入。
@@ -68,12 +76,15 @@ Portal 会话必须活到 worker 返回。正常停止先请求 worker 的 stop 
 | [audio-capture.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/examples/audio-capture.c) | `2429a2d3491b6621cddd48492161b184ae378ca4` | 输入流状态、dequeue/queue 生命周期；空数据也必须归还，取消改用独立 loop event |
 | [gstpipewiresrc.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/gst/gstpipewiresrc.c) | `9918a631ac033fbf61d8dfb783767928d972334b` | 内存类型、buffer 移除、时间戳、crop/transform 和协商边界；没有引入 GStreamer |
 | [stream.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/pipewire/stream.c) | `a4f96cff2b4b2127901b15822c1b5c94665b3c98` | MAP_BUFFERS、mapoffset、MemFd 映射/释放与 adapter 建立 |
+| [mem.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/pipewire/mem.h) | `0c3ce73bcd762bd76e9e1a9ca3a9ac8ce3ae9fb1` | 直接调用官方页对齐/溢出检查 `pw_map_range_init`；额外核对同一 FD 的物理长度，不自行重写映射范围算法 |
 | [main-loop.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/pipewire/main-loop.c) | `6e73a13cb33c04db3c7f50b115dfdda0a48ef025` | enter/iterate/leave；本接缝在持续 dispatch 错误时明确终止，而非无限重试 |
 | [buffer.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/spa/include/spa/buffer/buffer.h)、[meta.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/spa/include/spa/buffer/meta.h) | `29ef9f5349771dab09e0aff50662400a1812f6ef` / `287410f02426e06e869ba38f8919734ca52b0797` | chunk 有效区间、元数据最小尺寸、时间戳、旋转含义 |
 | [raw-utils.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/spa/include/spa/param/video/raw-utils.h)、[color.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/spa/include/spa/param/video/color.h) | `738f64cf481b04106455422976c9cbc9bafe95ec` / `68b69a5b3f8df83c25a6ee11fcb8ad843345d17f` | 固定版本的格式字段及颜色枚举，不凭 README 推断默认值 |
 | [module-adapter/adapter.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/modules/module-adapter/adapter.c) | `e049ccc4d5aec11208df7f197819f269fcd0fadd` | Video stream 的 videoconvert factory 运行时依赖，即使 CPU passthrough 也不能只分发主 `.so` |
 
 本数据面改写自上述 MIT 示例，保留 Wim Taymans 的 2018/2022 版权与 SPDX 标识。[原始 COPYING](../third_party/patches/pipewire/COPYING) 来自固定提交，blob 为 `aa100ce9c02238111b56e394ad5a13311e23a521`。这不表示整个 PipeWire 源码树、Qt、Portal 或最终软件编码组合都只有 MIT；最终分发必须按实际编入的文件和依赖保留对应许可。
+
+上述 MemFd 兼容条件还逐行核对了 Portal-wlr 0.8.1 提交 `e1d5d16f0e064a0b788c5d70c11461b15ee7a4af` 的 [`pipewire_screencast.c`](https://github.com/emersion/xdg-desktop-portal-wlr/blob/e1d5d16f0e064a0b788c5d70c11461b15ee7a4af/src/screencast/pipewire_screencast.c)（blob `603c9e0138f9960fa34dfc0928e38ff5ee9701b9`）和 [`screencast_common.c`](https://github.com/emersion/xdg-desktop-portal-wlr/blob/e1d5d16f0e064a0b788c5d70c11461b15ee7a4af/src/screencast/screencast_common.c)（blob `721da038d7164c2671f4316fd8c2c58877289198`）；只核对其缓冲合同，没有复制该后端进应用或修改测试生产者。
 
 ## 受控连接失败修复
 

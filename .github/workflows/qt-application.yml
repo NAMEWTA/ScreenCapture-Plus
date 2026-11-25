@@ -173,6 +173,7 @@ jobs:
             artifacts/cmake/application-linux/CMakeCache.txt
             artifacts/cmake/application-linux/Testing/Temporary/
             artifacts/cmake/application-linux/native-capture/
+            artifacts/cmake/application-linux/x11-controls-evidence/
             artifacts/cmake/application-linux/x11-recording/
             artifacts/cmake/application-linux/scroll-render/
             artifacts/cmake/application-linux/pipewire-audio/

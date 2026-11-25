@@ -180,6 +180,8 @@ public:
         footerScroll->setHorizontalScrollBarPolicy(::Qt::ScrollBarAlwaysOff);
         footerScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: none; }"));
         footerScroll->setWidget(footer);
+        footer->setAutoFillBackground(false);
+        footerScroll->viewport()->setAutoFillBackground(false);
         collapse = new QToolButton(this); remove = new QToolButton(this);
         collapse->setObjectName(QStringLiteral("annotationCollapse"));
         remove->setObjectName(QStringLiteral("annotationDelete"));

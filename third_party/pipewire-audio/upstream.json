@@ -63,7 +63,7 @@
       "Preserve existing two-source native stream, bounded queues, prepare/read sum-and-limit mixer and worker teardown.",
       "Allocate only selected rings within the caller combined byte budget; check native channel positions and sink selection failures.",
       "Reject absent PCM intervals instead of manufacturing up to 100 ms silence; only native GAP/EMPTY buffers explicitly represent silence.",
-      "The existing graph-clock mapping still requires actual device/long-running drift verification, separately from unavailable-endpoint tests."
+      "Use each actual buffer.time and one bounded common native-to-steady clock anchor instead of estimating a new callback-latency offset from the latest report on every buffer; keep integer sample intervals and reject real PCM gaps. The changed mapping still requires a real six-case graph rerun and physical/long-running drift verification."
     ],
     "license": "MIT (project LICENSE, Copyright (c) 2026 NAMEWTA)"
   },
@@ -77,6 +77,12 @@
       "path": "src/gst/gstpipewiresrc.c",
       "blob": "9918a631ac033fbf61d8dfb783767928d972334b",
       "use": "Read mature source buffer timestamp handling; no GStreamer runtime or copied device layer is introduced."
+    },
+    {
+      "path": "src/pipewire/stream.h",
+      "blob": "d5cd87188e70bad43a587c07bf6bb62187b68163",
+      "license": "MIT",
+      "use": "Read the per-buffer capture cycle time contract, its common native domain with pw_stream_get_nsec, and the distinct pw_time.now latest report before removing callback-latency offset jitter. Capture timestamps remain native; no silence or fake packet continuity is introduced."
     }
   ],
   "localProjectReuse": {
@@ -152,5 +158,10 @@
       "source-loss"
     ],
     "scope": "Real private native graph, original production PipeWireAudio, PCM clock coverage, graph rate conversion, mix/clamp and owned-process loss. Does not prove physical device policy, hardware capture, long-running A/V calibration or installation."
+  },
+  "sampleGrid": {
+    "implementation": "src/platform/linux/pipewire/AudioSampleGrid.h",
+    "rule": "floor((requestBegin - packetBegin) * sampleRate) + requestSampleOrdinal; preserve signed gaps, do not round each ordinal through native nanoseconds. Split whole seconds before checked scaling.",
+    "verification": "Fixed-SDK strict build and local numeric regression passed: 48000 distinct positions, native 4096-frame packet boundaries, negative gaps, extrema. These tests do not stand in for the real six-case PipeWire graph or physical audio devices."
   }
 }

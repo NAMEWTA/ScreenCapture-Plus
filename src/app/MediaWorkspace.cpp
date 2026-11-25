@@ -229,7 +229,28 @@ struct MediaWorkspace::State {
                 if (!alive) return;
                 const auto found = std::find(jobs.begin(), jobs.end(), job);
                 if (found != jobs.end()) { queuedBytes -= job->bytes; jobs.erase(found); }
-                if (stopping) { notifyBusy(); return; }
+                if (stopping) {
+                    // Shutdown cancels further UI/output stages, not an error
+                    // the worker has already returned. Keep one real failure
+                    // visible to the host before its final busy/drain check.
+                    QString message, retainedPath;
+                    bool failed = result.failure && result.failure.code != Media::Error::Cancelled;
+                    if (failed) { message = result.failure.detail; retainedPath = result.archived.path; }
+                    if (!failed) {
+                        const auto removalFailure = std::find_if(result.removals.cbegin(), result.removals.cend(),
+                            [](const auto& item) { return item.failure && item.failure.code != Desktop::Error::Cancelled; });
+                        if (removalFailure != result.removals.cend()) {
+                            failed = true; message = removalFailure->failure.detail; retainedPath = removalFailure->entry.path;
+                        }
+                    }
+                    if (failed) {
+                        if (message.isEmpty()) message = QStringLiteral("The media operation failed before completion");
+                        if (!retainedPath.isEmpty()) message += QChar(u'\n') + retainedPath;
+                        Q_EMIT owner->operationFailed(message);
+                    }
+                    if (alive) notifyBusy();
+                    return;
+                }
                 // Cancellation also covers work which has returned while its
                 // GUI completion is still queued. Never start a new stage or
                 // show a confirmation for that cancelled operation.

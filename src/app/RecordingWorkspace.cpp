@@ -513,8 +513,22 @@ RecordingWorkspace::RecordingWorkspace(std::shared_ptr<Media::MediaArchiveServic
 RecordingWorkspace::~RecordingWorkspace()
 {
     shutdown();
+    // State's control snapshot is declared after the outlines and would be
+    // destroyed first. Native surface destruction still dispatches our event
+    // filter until QObject's base destructor removes it. Tear down these owned
+    // windows while the complete State exists, including abnormal owner loss
+    // before the asynchronous session has reported shutdownFinished.
+    state_->guardingControls = false;
+    const auto detach = [this](QWidget* widget) {
+        if (!widget) return;
+        widget->removeEventFilter(this);
+        if (auto* native = widget->windowHandle()) native->removeEventFilter(this);
+    };
+    for (const auto& outline : state_->outlines) detach(outline.get());
+    state_->outlines.clear();
     if (state_->window) {
-        auto* window = state_->window.data(); disconnect(window, nullptr, this, nullptr); delete window;
+        auto* window = state_->window.data(); detach(window);
+        disconnect(window, nullptr, this, nullptr); delete window;
     }
 }
 void RecordingWorkspace::setTranslator(ui::DesktopTranslator translator)

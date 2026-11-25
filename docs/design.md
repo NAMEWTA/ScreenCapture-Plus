@@ -48,6 +48,12 @@ Apple 的 [Typography](https://developer.apple.com/design/human-interface-guidel
 
 字号、行高、控件高度和间距应一起评估。只增大字体会挤压内容，只缩小字体会损失可读性。截图工具条和媒体历史有各自的操作密度；不能通过修改全局常量，把设置页的紧凑尺寸传播到捕获工具条的 44px 点击区域。
 
+Qt 的结构性滚动容器需要同时保持 viewport 和内容背景透明。
+固定 Qt 的 [`QScrollArea::setWidget`](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/widgets/widgets/qscrollarea.cpp)
+会主动打开内容控件的 `autoFillBackground`，因此应在交给滚动容器之后再关闭它。
+设置页、历史行容器和批注页脚沿用各自已有画布；白色卡片与文本输入仍自行绘制。
+只给 `QScrollArea` 设置透明样式不足以消除内容上的系统默认灰色矩形。
+
 虎虎图标和品牌插画保留自身的橘色与奶油色，规则见 [品牌资源](brand.md)。品牌插画与自动批注配色不决定设置页的背景和选中颜色。
 
 ## 媒体历史的列表密度

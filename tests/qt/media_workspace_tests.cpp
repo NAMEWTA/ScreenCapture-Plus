@@ -13,6 +13,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QMessageBox>
 #include <QPointer>
 #include <QTemporaryDir>
@@ -149,7 +150,6 @@ void workspaceJourneys(const QString& root)
     auto archive = std::make_shared<media::MediaArchiveService>(root + QStringLiteral("/workspace-archive"));
     desktop::SystemClipboard clipboard;
     desktop::FileRevealer revealer;
-    application::MediaWorkspace workspace(archive, clipboard, revealer);
     HuhuCapture::Localization::LanguageCatalog language({
 #ifdef Q_OS_WIN
         HuhuCapture::Localization::ResourcePolicy::WindowsDirectoryFallback,
@@ -158,6 +158,9 @@ void workspaceJourneys(const QString& root)
 #endif
         root, root});
     require(language.load(QStringLiteral("zh-CN")).usable, "Load actual shared Chinese resources");
+    // The windows retain this translator until the workspace destroys them,
+    // including when a failed assertion unwinds before explicit shutdown.
+    application::MediaWorkspace workspace(archive, clipboard, revealer);
     workspace.setTranslator([&](QStringView key) { return language.text(key); });
     QImage source(80, 60, QImage::Format_ARGB32); source.fill(QColor(7, 77, 177, 210));
     source.setPixelColor(1, 2, QColor(0, 0, 0, 0));
@@ -365,6 +368,55 @@ void completedArchiveOutput(const QString& root)
     std::cout << "PASS completed archive output reuses real chooser/export/identity checks without duplicate publication\n";
 }
 
+void completedFailureDuringShutdown(const QString& root)
+{
+    const auto blocked = root + QStringLiteral("/archive-parent-is-a-file");
+    QFile file(blocked);
+    require(file.open(QIODevice::WriteOnly | QIODevice::NewOnly) && file.write("retain original") == 15,
+        "Create a real existing file where an archive parent directory is required");
+    file.close();
+    QImage source(31, 23, QImage::Format_ARGB32); source.fill(QColor(17, 43, 109, 255));
+    for (const bool destroyFromFailure : {false, true}) {
+        auto archive = std::make_shared<media::MediaArchiveService>(blocked + QStringLiteral("/archive"));
+        desktop::SystemClipboard clipboard; desktop::FileRevealer revealer;
+        QObject origin;
+        auto workspace = std::make_unique<application::MediaWorkspace>(archive, clipboard, revealer);
+        unsigned failures{}, completions{}, editorWindows{};
+        QString failure;
+        QObject::connect(workspace.get(), &application::MediaWorkspace::operationFailed, &origin,
+            [&](const QString& detail) {
+                ++failures; failure = detail;
+                if (destroyFromFailure) workspace.reset();
+            });
+        QObject::connect(workspace.get(), &application::MediaWorkspace::editorOpened, &origin,
+            [&](auto*) { ++editorWindows; });
+        require(workspace->outputImage(&origin, nullptr, 1, ui::OutputIntent::Archive, source,
+            [&](ui::OutputResult, const QString&) { ++completions; }),
+            "Admit an actual archive request before closing the application");
+        const auto watchers = workspace->findChildren<QFutureWatcherBase*>(QString(), Qt::FindDirectChildrenOnly);
+        require(watchers.size() == 1, "Observe the one real QtConcurrent archive worker");
+        const auto until = std::chrono::steady_clock::now() + 20s;
+        // Deliberately do not dispatch GUI events: the actual filesystem worker
+        // finishes, then shutdown occurs before its queued result is delivered.
+        while (!watchers.front()->isFinished()) {
+            require(std::chrono::steady_clock::now() < until, "The real archive worker completes without a GUI callback");
+            std::this_thread::sleep_for(1ms);
+        }
+        require(workspace->busy() && failures == 0 && completions == 0,
+            "Completed work still awaits its real GUI delivery before shutdown");
+        workspace->shutdown();
+        waitFor([&] { return !workspace || !workspace->busy(); }, "Shutdown drains the completed archive result");
+        require(failures == 1 && !failure.isEmpty() && completions == 0 && editorWindows == 0,
+            "Shutdown reports the real archive error once without reopening a journey or completing cancelled output");
+        require(bool(workspace) != destroyFromFailure,
+            "A synchronous host may destroy the workspace while receiving the retained shutdown error");
+        require(read(blocked) == QByteArray("retain original") && !QFileInfo::exists(blocked + QStringLiteral("/archive")),
+            "Failed archive and shutdown preserve the independent existing file");
+        settle();
+    }
+    std::cout << "PASS actual completed archive errors survive shutdown and synchronous host destruction\n";
+}
+
 int main(int argc, char** argv)
 {
     // These checks drive actual Qt dialog widgets. Native OS file pickers and
@@ -377,6 +429,7 @@ int main(int argc, char** argv)
         workspaceJourneys(temporary.path());
         directImageOutput(temporary.path());
         completedArchiveOutput(temporary.path());
+        completedFailureDuringShutdown(temporary.path());
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

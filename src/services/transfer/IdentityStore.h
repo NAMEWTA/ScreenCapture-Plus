@@ -1,5 +1,7 @@
 #pragma once
 
+#include "platform/PrivateStorage.h"
+
 #include <QByteArray>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -13,6 +15,23 @@ enum class IdentityError {
     InvalidTrust, ChangedOnDisk, Write, DurabilityUnknown,
 };
 
+enum class IdentityFilePhase {
+    None, CreateDirectory, DirectoryPermissions, ReadDirectory, ReadPermissions,
+    ReadOpen, ReadSnapshot, ReadContents, ReadRecheck, CreateTemporary,
+    ClaimTemporary, OpenTemporary, InitializeTemporary, WriteTemporary,
+    CloseTemporary, PublishTemporary, OpenReplacement, ClaimReplacement,
+    InitializeReplacement, WriteReplacement, CommitReplacement,
+};
+
+// Safe diagnostic state for file failures; nativeStatus below remains the Rust
+// status. No OS error is invented for a Qt operation that exposes only a Qt code.
+struct IdentityFileDiagnostic {
+    IdentityFilePhase phase{IdentityFilePhase::None};
+    std::error_code error;
+    int qtFileError{};
+    Platform::PrivateFileCreation creation;
+};
+
 struct IdentityResult {
     IdentityError error{IdentityError::None};
     int nativeStatus{};
@@ -22,6 +41,7 @@ struct IdentityResult {
     QJsonArray trustedPeers;
     QString fingerprint;
     bool created{};
+    IdentityFileDiagnostic fileDiagnostic;
     bool ok() const noexcept { return error == IdentityError::None; }
 };
 
@@ -51,6 +71,7 @@ private:
     QJsonObject trust_;
     bool loaded_{};
     bool trustExisted_{};
+    IdentityFileDiagnostic diagnostic_;
 };
 
 } // namespace HuhuCapture::Transfer

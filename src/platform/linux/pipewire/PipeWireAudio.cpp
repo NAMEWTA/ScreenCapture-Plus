@@ -3,6 +3,7 @@
  * Copyright © 2022 Wim Taymans. See third_party/pipewire-audio/.
  */
 #include "platform/linux/pipewire/PipeWireAudio.h"
+#include "platform/linux/pipewire/AudioSampleGrid.h"
 
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
@@ -17,6 +18,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -27,14 +29,15 @@ using namespace Recording;
 using Clock = Core::MediaClock;
 constexpr std::size_t maximumPacketFrames = 4096;
 constexpr std::size_t packetCount = 64;
-constexpr auto sampleDuration = std::chrono::duration<double>(1.0 / AudioSource::sampleRate);
+using SampleDuration = AudioSampleDuration;
 
 struct Packet {
     Clock::time_point begin;
     std::uint32_t frames{};
+    std::uint64_t nativeCycle{}, reportTicks{};
+    std::int64_t reportTime{}, reportDelay{};
+    std::uint64_t reportBuffered{};
     std::array<float, maximumPacketFrames * AudioSource::channels> samples;
-    Clock::time_point end() const
-    { return begin + std::chrono::duration_cast<Clock::duration>(sampleDuration * frames); }
 };
 struct Ring {
     bool enabled{}, streaming{}, received{};
@@ -89,19 +92,27 @@ public:
         if (output.empty() || output.size() % channels || output.size() / channels > maximumPacketFrames)
             return {EINVAL, "Invalid bounded audio output buffer", false};
         const auto frames = output.size() / channels;
-        const auto end = begin + std::chrono::duration_cast<Clock::duration>(sampleDuration * frames);
         std::unique_lock lock(mutex_);
         reading_ = true;
+        const auto expired = [begin](const Packet& packet) {
+            const auto index = audioSampleIndex(begin - packet.begin, 0);
+            return index && *index >= packet.frames;
+        };
         for (auto& ring : rings_) {
-            while (ring.count && ring.packets[ring.head].end() <= begin) {
+            while (ring.count && expired(ring.packets[ring.head])) {
                 ring.head = (ring.head + 1) % ring.packets.size(); --ring.count;
             }
         }
-        const auto ready = [this, end] {
+        const auto ready = [this, begin, frames] {
             if (failure_ || finished_) return true;
             for (const auto& ring : rings_) {
                 if (!ring.enabled) continue;
-                if (!ring.count || ring.packets[(ring.head + ring.count - 1) % ring.packets.size()].end() < end) return false;
+                if (!ring.count) return false;
+                const auto& last = ring.packets[(ring.head + ring.count - 1) % ring.packets.size()];
+                const auto index = audioSampleIndex(begin - last.begin, static_cast<std::uint32_t>(frames - 1));
+                // Invalid arithmetic is reported by read, rather than waiting
+                // indefinitely for a packet that cannot repair the request.
+                if (index && *index >= last.frames) return false;
             }
             return true;
         };
@@ -113,23 +124,37 @@ public:
         std::fill(output.begin(), output.end(), 0.0f);
         for (auto& ring : rings_) {
             if (!ring.enabled) continue;
-            while (ring.count && ring.packets[ring.head].end() <= begin) {
+            while (ring.count && expired(ring.packets[ring.head])) {
                 ring.head = (ring.head + 1) % ring.packets.size(); --ring.count;
             }
             std::size_t packetOffset{};
             for (std::size_t sample = 0; sample < frames; ++sample) {
-                const auto at = begin + std::chrono::duration_cast<Clock::duration>(sampleDuration * sample);
-                while (packetOffset < ring.count && ring.packets[(ring.head + packetOffset) % ring.packets.size()].end() <= at)
+                std::optional<std::int64_t> position;
+                while (packetOffset < ring.count) {
+                    const auto& packet = ring.packets[(ring.head + packetOffset) % ring.packets.size()];
+                    position = audioSampleIndex(begin - packet.begin, static_cast<std::uint32_t>(sample));
+                    if (!position) return {EOVERFLOW, "The requested PCM sample position exceeds the clock range", false};
+                    if (*position < packet.frames) break;
                     ++packetOffset;
+                }
                 if (packetOffset >= ring.count) return {EPIPE, "Audio timeline ended before the requested samples", false};
                 const auto& packet = ring.packets[(ring.head + packetOffset) % ring.packets.size()];
-                if (at < packet.begin) {
+                if (*position < 0) {
                     // Only native GAP/EMPTY buffers represent actual silence.
                     // A missing interval is not a licence to fabricate up to
                     // 100 ms of PCM and then report that both sources arrived.
-                    return {EPIPE, "The requested audio interval has no captured samples", false};
+                    const auto at = begin + std::chrono::duration_cast<Clock::duration>(SampleDuration{sample});
+                    const auto nanoseconds = [](auto value) {
+                        return std::chrono::duration_cast<std::chrono::nanoseconds>(value).count();
+                    };
+                    return {EPIPE, "The requested audio interval has no captured samples (gap_ns=" +
+                        std::to_string(nanoseconds(packet.begin - at)) + ", request_frame=" + std::to_string(sample) +
+                        ", packet_frames=" + std::to_string(packet.frames) + ", native_cycle=" +
+                        std::to_string(packet.nativeCycle) + ", report_now=" + std::to_string(packet.reportTime) +
+                        ", report_ticks=" + std::to_string(packet.reportTicks) + ", delay=" +
+                        std::to_string(packet.reportDelay) + ", buffered=" + std::to_string(packet.reportBuffered) + ")", false};
                 }
-                const auto index = static_cast<std::size_t>(std::chrono::duration<double>(at - packet.begin).count() * sampleRate);
+                const auto index = static_cast<std::size_t>(*position);
                 if (index >= packet.frames) return {EPIPE, "The captured PCM clock does not cover the requested sample", false};
                 for (std::size_t channel = 0; channel < channels; ++channel)
                     output[sample * channels + channel] += packet.samples[index * channels + channel];
@@ -153,6 +178,32 @@ private:
     std::optional<AudioReadResult> failure_;
     bool finished_{}, reading_{}, budgetError_{};
     std::jthread worker_;
+    // Only the native worker accesses this calibration. Both requested
+    // streams use the same mapping; callback scheduling does not move it.
+    struct ClockAnchor { Clock::time_point steady; std::uint64_t native{}; };
+    std::optional<ClockAnchor> clock_;
+
+    bool calibrate(pw_stream* stream) noexcept
+    {
+        if (clock_) return true;
+        auto shortest = Clock::duration::max();
+        ClockAnchor anchor;
+        for (unsigned attempt = 0; attempt < 4; ++attempt) {
+            const auto before = Clock::now();
+            const auto native = pw_stream_get_nsec(stream);
+            const auto after = Clock::now();
+            if (after - before < shortest) {
+                shortest = after - before;
+                anchor = {before + shortest / 2, native};
+            }
+        }
+        if (!anchor.native || shortest > std::chrono::duration_cast<Clock::duration>(SampleDuration{1}) / 2) {
+            fail(EIO, "The native audio clock could not be related to the recording clock within half a sample");
+            return false;
+        }
+        clock_ = anchor;
+        return true;
+    }
 
     void fail(int error, const char* detail) noexcept
     {
@@ -221,10 +272,10 @@ private:
         if (pw_stream_get_time_n(state.stream, &timing, sizeof(timing)) < 0 || !timing.rate.num || !timing.rate.denom) {
             state.owner->fail(EIO, "The audio stream did not provide its graph clock"); return;
         }
-        const auto now = Clock::now();
         const auto graphNow = pw_stream_get_nsec(state.stream);
         if (timing.now < 0 || graphNow < static_cast<std::uint64_t>(timing.now) ||
-            graphNow - static_cast<std::uint64_t>(timing.now) > 1'000'000'000ull) {
+            graphNow - static_cast<std::uint64_t>(timing.now) > 1'000'000'000ull || !buffer->time ||
+            buffer->time > graphNow || graphNow - buffer->time > 1'000'000'000ull) {
             state.owner->fail(EINVAL, "The audio graph clock discontinuity is too large"); return;
         }
         const double delaySeconds = std::max(0.0, static_cast<double>(timing.delay) * timing.rate.num / timing.rate.denom) +
@@ -232,7 +283,19 @@ private:
         if (!std::isfinite(delaySeconds) || delaySeconds > 2.0) {
             state.owner->fail(EINVAL, "The audio device latency exceeds the bounded timeline"); return;
         }
-        const auto begin = now - std::chrono::nanoseconds(graphNow - static_cast<std::uint64_t>(timing.now)) -
+        if (!state.owner->calibrate(state.stream)) return;
+        const auto& anchor = *state.owner->clock_;
+        const auto forward = buffer->time >= anchor.native;
+        const auto distance = forward ? buffer->time - anchor.native : anchor.native - buffer->time;
+        if (distance > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
+            state.owner->fail(EOVERFLOW, "The native audio clock exceeds the recording timeline"); return;
+        }
+        const auto elapsed = std::chrono::nanoseconds(static_cast<std::int64_t>(distance));
+        // stream.c stamps pw_buffer.time with this buffer's actual graph cycle.
+        // pw_time.now may already describe a newer cycle when the main loop
+        // dequeues an older buffer. Re-estimating an offset on every callback
+        // also turns two clock-call latencies into artificial packet gaps.
+        const auto begin = anchor.steady + (forward ? elapsed : -elapsed) -
             std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(delaySeconds));
         try {
             std::lock_guard lock(state.owner->mutex_);
@@ -253,6 +316,8 @@ private:
             } else {
                 auto& packet = ring.packets[(ring.head + ring.count) % ring.packets.size()];
                 packet.begin = begin; packet.frames = frames;
+                packet.nativeCycle = buffer->time; packet.reportTime = timing.now;
+                packet.reportTicks = timing.ticks; packet.reportDelay = timing.delay; packet.reportBuffered = timing.buffered;
                 const auto* data = static_cast<const std::uint8_t*>(plane.data) + plane.chunk->offset;
                 if ((plane.chunk->flags & SPA_CHUNK_FLAG_EMPTY) || (header && (header->flags & SPA_META_HEADER_FLAG_GAP)))
                     std::fill_n(packet.samples.data(), frames * channels, 0.0f);

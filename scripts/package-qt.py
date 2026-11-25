@@ -125,10 +125,18 @@ def windows_installer(prefix: Path, output: Path, workspace: Path, version: str,
                  'Supply the exact reviewed NSIS distribution; arbitrary PATH compilers are not packaging inputs')
     distribution = workspace/'nsis'; distribution.mkdir()
     run([tool('7z'),'x','-y','-o'+str(distribution),nsis_archive])
-    candidates = list(distribution.rglob('makensis.exe'))
-    meta.require(len(candidates) == 1, 'The official NSIS archive has no unambiguous compiler')
+    # The fixed setup contains a root SubStart launcher and the real compiler
+    # in Bin. Their matching basenames are the official distribution layout.
+    candidates = [path for path in distribution.rglob('makensis.exe') if path.parent.name.casefold() == 'bin']
+    meta.require(len(candidates) == 1, 'The official NSIS archive has no unambiguous Bin/makensis.exe compiler')
     compiler = candidates[0]
-    compiler_version = run([compiler, '/VERSION'], capture=True).strip()
+    nsis_root = compiler.parent.parent
+    meta.require((nsis_root/'Include/MUI2.nsh').is_file() and (nsis_root/'Stubs/uninst').is_file(),
+                 'The fixed compiler is missing its own include files or uninstaller stub')
+    environment = os.environ.copy()
+    environment['NSISDIR'] = str(nsis_root)
+    environment.pop('NSISCONFDIR', None)
+    compiler_version = run([compiler, '/VERSION'], env=environment, capture=True).strip()
     meta.require(compiler_version == 'v3.11', 'Use the reviewed NSIS 3.11 compiler, not an unspecified PATH version')
     records = meta.inventory(prefix)
     install, remove, directories = [], [], set()
@@ -148,10 +156,11 @@ def windows_installer(prefix: Path, output: Path, workspace: Path, version: str,
     for key, value in replacements.items(): source = source.replace('@'+key+'@', value)
     meta.require(not re.search(r'@[A-Z_]+@', source), 'Unexpanded installer template token')
     script = workspace/'installer.nsi'; script.write_text(source, encoding='utf-8-sig')
-    run([compiler, '/NOCONFIG', '/INPUTCHARSET', 'UTF8', script])
+    run([compiler, '/NOCONFIG', '/INPUTCHARSET', 'UTF8', script], env=environment)
     meta.verify_inventory(prefix, records)
     meta.require(output.is_file() and output.stat().st_size > 0, 'NSIS did not create the complete installer')
     return {'name':'nsis','version':compiler_version,'sha256':meta.sha256(compiler),
+            'compilerPath':compiler.relative_to(distribution).as_posix(),
             'source':specification['source'], 'distributionSha256':specification['sha256'],
             'templateSha256':meta.sha256(ROOT/'build/package/user-installer.nsi.in')}
 

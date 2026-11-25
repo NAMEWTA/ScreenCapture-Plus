@@ -34,5 +34,29 @@
     "A new session or source owner is not introduced for the shared toolbar.",
     "Wayland buffer freshness is not inferred from an X11 rectangle or an arbitrary delay."
   ],
-  "verification": "Shared UI and native X11 probe compiled locally with fixed Qt 6.12.1; actual QWidget cases ran offscreen. Native Windows/X11 compositor and physical-desktop pixel acceptance remain separate tests."
+  "verification": "Shared UI and native X11 probe compiled locally with fixed Qt 6.12.1; actual QWidget cases ran offscreen. Native Windows/X11 compositor and physical-desktop pixel acceptance remain separate tests.",
+  "testWindowOrdering": {
+    "repository": "https://github.com/qt/qtbase.git",
+    "ref": "5af1a37e31a869cd6eb8a73d82e2c71a450e6634",
+    "version": "6.12.1",
+    "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+    "copiedImplementation": false,
+    "files": [
+      {
+        "path": "src/gui/kernel/qguiapplication.cpp",
+        "blob": "fec2e580d808fe46a6715aee1e5e217fb8dbcef0",
+        "use": "Call the official public sync API to drain the owned Xvfb test windows before independent native readback."
+      },
+      {
+        "path": "src/plugins/platforms/xcb/qxcbintegration.cpp",
+        "blob": "99cce9519b2804ebecc8d2b46e537a197ef8c625",
+        "use": "Verify SyncState support and delegation to the actual Qt connection."
+      },
+      {
+        "path": "src/plugins/platforms/xcb/qxcbconnection.cpp",
+        "blob": "0a6ac915d77ce8500f35c4ca401ddb39f262a01e",
+        "use": "Verify that sync waits for an actual get_input_focus reply on the same XCB connection that submitted window/SHAPE/backing-store requests; do not treat this as composited-desktop presentation."
+      }
+    ]
+  }
 }

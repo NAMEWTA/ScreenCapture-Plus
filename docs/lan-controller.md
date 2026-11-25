@@ -47,7 +47,7 @@ Rust runtime。打开设置/设备窗也不隐式启用。此前明确保存的�
 
 首次身份写入复用排他暂存和 `FileCommitter::commitFileNoReplace`，不覆盖碰巧
 出现的同名文件。读取复用不跟随最终链接的原生句柄，核对打开对象及命名对象
-身份。`Platform::isPrivateStorage` 是唯一权限差异边界：Linux 要求当前 uid
+身份。`Platform::PrivateStorage` 是唯一权限差异边界：Linux 要求当前 uid
 且 group/other 无权限；Windows 检查实际 owner/DACL，允许本用户、SYSTEM、
 Administrators，以及 Qt 为其他主体保留的只读属性、READ_CONTROL、SYNCHRONIZE
 元数据权限，拒绝其他主体读取内容、列目录、修改、执行或接管 ACL。不能证明
@@ -55,9 +55,26 @@ Administrators，以及 Qt 为其他主体保留的只读属性、READ_CONTROL�
 
 目录创建使用 [Qt `QDir::mkpath` 的权限参数](https://doc.qt.io/qt-6/qdir.html#mkpath)。
 Windows 判断核对了
-[Qt v6.12.0 QNativeFilePermissions](https://github.com/qt/qtbase/blob/v6.12.0/src/corelib/io/qfilesystemengine_win.cpp)
+[Qt v6.12.1 QNativeFilePermissions](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/io/qfilesystemengine_win.cpp)
 生成的 ACL。仅切换 Windows 只读属性的 `QFile::setPermissions` 不能冒充私钥
 DACL 保护。这里调用已有 Qt/OS API，不复制 Qt 文件引擎源码。
+
+新建身份暂存和 `QSaveFile` 信任替换在写入第一个字节前，另调用
+`initializeCreatedPrivateFile`。它只接受调用方刚排他创建、身份匹配、内容为空
+且现有访问权限已经私有的同一文件对象。Windows 若实际 owner 等于进程的
+`TokenOwner`、但不同于 `TokenUser`，才通过 `ReOpenFile` 取得该对象的元数据
+句柄并设置本用户为 owner，随后重验对象、owner 和 DACL。不会通过路径重开、
+扩大 DACL、启用额外特权或修复已有身份文件。Linux 不修改权限，除单一链接
+文件外仅接受 `F_GETFL` 明确证明为 `O_TMPFILE` 的尚未命名空文件；普通已删除
+文件和多硬链接都拒绝。该区别来自 Qt 的真实原子替换行为。
+
+此处逐行核对固定 Qt 6.12.1 的 `qfilesystemengine_win.cpp`（blob
+`970440508e67846a493a49880358e58b3cfa0c0a`）、`qtemporaryfile.cpp`
+（`90c302209b85627f3873f9ea672536756e6255b8`）、`qsavefile.cpp`
+（`10383e2c5909ca56c994663c871855786127e607`）和 `qfsfileengine_win.cpp`
+（`1575a2ec5bce70841e98085cdd9473dde2d89abc`）。Qt 的临时文件创建与显式权限
+文件创建采用不同的 Windows 安全描述符路径；具体失败仍须读取实际 owner、
+默认 owner 与 DACL 的布尔观测和原生错误码，不能只凭权限失败猜测原因。
 
 信任只绑定用户在发送前明确核对的证书指纹：最多 128 个身份、每个身份 8 个
 端点、256 KiB，按最近明确确认淘汰最旧记录。淘汰后须重新确认。已知证书换 IP
@@ -123,6 +140,12 @@ QTcpServer 实际占用端口、实际 TLS PNG 传输、销毁发送窗后的继
 确认/拒绝、共享归档、重启身份/信任、损坏身份保留和配置冲突。相同证书的实际
 127.0.0.2 端点验证设备合并和换 IP；公告记录实际成功或组播不可用结果。
 **本新增目标必须以新提交实际 CI 为准，不能继承 c575 的通过状态。**
+
+私有存储子集已在固定 Qt 6.12.1 和匹配源指纹的真实 Rust 库下执行：实际 RSA
+重开、信任原子替换、真实 `O_TMPFILE`、错误身份、非空/多链接/普通已删除文件
+拒绝，以及取消替换后原文件身份与字节保留。显式 `--identity-only` 入口只报告
+这些文件和身份检查，不运行网络或完整控制器。Windows 新建对象 owner 接缝仍
+待原生 CI 的实际观测；Linux 子集通过不能替代它，也不能作为物理互传验收。
 
 物理 Windows↔Linux/同平台双机、网卡/VPN、防火墙、DHCP/休眠/热插拔、完整
 PNG/GIF/MP4 端到端与持续负载性能仍按 P10a/P12 分别提供证据。通用 PROTOCOL

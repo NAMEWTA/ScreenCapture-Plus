@@ -5,6 +5,7 @@
  * Fixed source and adaptation boundaries: docs/linux-pipewire.md.
  */
 #include "platform/linux/pipewire/PipeWireCapture.h"
+#include "platform/linux/pipewire/CpuPlaneMapping.h"
 #include "core/PixelBuffer.h"
 
 #include <pipewire/pipewire.h>
@@ -375,8 +376,8 @@ struct Capture {
             ++result.stats.emptyDrops;
             return {};
         }
-        if (!data.data || data.maxsize == 0 || data.maxsize > options.pool.maximumBytes / options.pool.slotCount) {
-            fail(Code::InvalidBuffer, -EINVAL, "PipeWire did not provide a mapped CPU plane within its byte limit");
+        if (data.maxsize == 0 || data.maxsize > options.pool.maximumBytes / options.pool.slotCount) {
+            fail(Code::InvalidBuffer, -EINVAL, "PipeWire did not provide a CPU plane within its byte limit");
             return {};
         }
         const auto offset = static_cast<std::size_t>(data.chunk->offset % data.maxsize);
@@ -429,7 +430,16 @@ struct Capture {
             ++result.stats.poolDrops;
             return {};
         }
-        const auto* pixels = static_cast<const std::uint8_t*>(data.data) + offset;
+        // Some legitimate SHM producers supply MemFd with flags=0/data=null.
+        // MAP_BUFFERS only maps planes marked MAPPABLE. Map that actual CPU FD
+        // locally, without changing the producer's flags/data/FD; this view is
+        // destroyed before ReturnBuffer queues the original native buffer.
+        const CpuPlaneMapping mapping(data, options.pool.maximumBytes / options.pool.slotCount);
+        if (mapping.error()) {
+            fail(Code::InvalidBuffer, mapping.error(), mapping.message());
+            return {};
+        }
+        const auto* pixels = mapping.pixels() + offset;
         for (std::uint32_t y = 0; y < source.rows; ++y) {
             auto destination = writable->row(0, y);
             std::memcpy(destination.data(), pixels + static_cast<std::size_t>(stride) * y, source.rowBytes);

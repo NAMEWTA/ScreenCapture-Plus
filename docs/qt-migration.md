@@ -70,7 +70,7 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 
 应用所有权、启动和退出屏障见 [共享 Qt 宿主](qt-application.md)。截图与录屏的接线见 [共享工作区](capture-workspaces.md)，来源与坐标约束见 [采集服务](screen-capture.md) 和 [授权实时源](live-capture-source.md)，长截图的保留规则见 [共享长截图模型](scroll-capture.md)，软件编码和 AAC 尾样本合同见 [Linux 录制](linux-recording.md)。[完整包更新](qt-updates.md)、[同源打包](qt-packaging.md) 和 [实际安装生命周期](installation-validation.md) 分别记录下载、部署与运行验证边界。这些实现尚不代表整个工作包已经验收。
 
-上述聚合与桥接结果对应提交 `1f516bf5799551af1776839f56a21a16e652a4c1` 的 [Windows / Linux 聚合运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45620326677) 和 [旧 Windows 回归](https://github.com/NAMEWTA/huhucapture/actions/runs/45620326937)。桥接受控文件流验证不是实际完整 Qt 安装包升级；全量应用与原生截图的同轮失败仍保留，不由这两项通过替代。
+提交 `adcf6972575c9c5d91380b13417a446d0761a7aa` 的 [Windows / Linux 聚合运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45624686198)、[旧 Windows 回归](https://github.com/NAMEWTA/huhucapture/actions/runs/45624686136) 与 [严格视频检查](https://github.com/NAMEWTA/huhucapture/actions/runs/45624686305) 已通过。相同提交的 [Qt 验证](https://github.com/NAMEWTA/huhucapture/actions/runs/45624687125) 中，Windows Debug / Release 各 66 项通过；Linux Debug 的 75 项组件检查通过，但后续真实 Sway / Portal / PipeWire 首帧因未映射 MemFd 失败，Release 阶段没有执行。该失败促成了 CPU FD 映射修复，修复后的真实桌面结果须由后续 CI 裁决。聚合、组件和桥接受控流检查仍不能替代完整产品或跨版本安装升级验收。
 
 ## 平台支持与验证口径
 

@@ -29,7 +29,7 @@
 python3 scripts/restore-packaging-tools.py --platform linux --output .deps/packaging-tools
 ```
 
-Windows 使用 `--platform windows`。输出目录必须为空。脚本按 `build/package/dependencies.lock.json` 下载固定官方资产，流式计算 SHA256，核对精确字节数，并保留工具的固定提交源码、许可证及来源清单。Windows 下载固定 NSIS 3.11 发行文件，不运行该安装器；真正打包时使用 7-Zip 解开该已验证文件，直接调用其中唯一的 `makensis.exe`。不会从开发机 PATH 中随便找一个 NSIS 编译器。
+Windows 使用 `--platform windows`。输出目录必须为空。脚本按 `build/package/dependencies.lock.json` 下载固定官方资产，流式计算 SHA256，核对精确字节数，并保留工具的固定提交源码、许可证及来源清单。Windows 下载固定 NSIS 3.11 发行文件，不运行该安装器；真正打包时使用 7-Zip 解开该已验证文件，直接调用 `Bin/makensis.exe`，并把 `NSISDIR` 指向同一发行文件解出的资源根目录。官方包还包含一个同名根目录启动器，不能要求递归搜索整个目录只有一个 `makensis.exe`。固定 setup、SubStart 和 compiler 初始化源码的版本与 blob 记录在打包锁中；不会从开发机 PATH 中随便找一个 NSIS 编译器或引入其他版本的 include/stub。
 
 Linux 使用四项独立锁定的工具：linuxdeploy、它的 Qt 插件、appimagetool 和 type-2 runtime。appimagetool 总是收到 `--runtime-file`，不能临时下载一个浮动 latest runtime。固定官方 asset ID 对应的实际二进制、源码和许可字节已经分别核对；锁文件保存这些 SHA256 和长度，不接受 bootstrap-only 工具。复用来源与最初取得这些字节的独立开发工作见 [准确归属记录](../third_party/project-reuse/qt-packaging-upstream.json)。恢复脚本不安装或发布产品。
 
@@ -70,6 +70,13 @@ Linux 安装还必须配置 `HUHUCAPTURE_OPENSSL_RUNTIME_DIR`，指向已恢复 
 | Windows | FFmpeg 对应配置 prefix 的 `licenses`，至少有 `ffmpeg/LICENSE.md` 和 `ffmpeg/COPYING.LGPLv2.1`；另将已取得的 Qt 许可原文保留为 `qt/` | `licenses/runtime/` |
 
 仓库自身 `LICENSE`、`third_party/NOTICE.md`、随源码保存的第三方许可和主依赖锁另行安装。若匹配 Qt SDK 带 `sbom/`，同时安装为 `qt-sbom/`。SBOM 便于关联实际 SDK，不能代替许可原文、对应源码或可重建资料。开发打包检查运行目录包含许可材料；正式发行仍须审核整套实际组合，尤其是 Linux GPL 配置的 FFmpeg/x264、AGPL 的 gifski、完整 Rust vendor 依赖和 Qt 自带第三方库。
+
+项目随源码保留的通知以 `build/package/runtime-notices.json` 为唯一显式安装清单。
+原先仅按 `LICENSE*` / `COPYING*` 文件名匹配会漏掉 KDE `LICENSES/` 内的文本、
+FFmpeg 示例作者通知和协议 XML 内的完整版权声明；现在保留其原相对路径和原文。
+纯 CMake 安装直接校验清单与文件，不要求生产配置发现 Python。该清单描述已有
+项目通知，不能据其内容推断每个上游都进入了运行二进制，也不能代替实际系统库、
+Qt SDK 和 Rust 依赖的逐项来源及对应源码核对。
 
 ## 生成实际平台包
 

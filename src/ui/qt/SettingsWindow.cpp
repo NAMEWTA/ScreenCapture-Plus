@@ -287,6 +287,10 @@ SettingsWindow::SettingsWindow(QWidget* parent) : QWidget(parent), state_(std::m
     state_->pages = new QStackedWidget; state_->pages->setObjectName(QStringLiteral("settingsPages"));
     makeGeneral(); makeShortcut();
     state_->about = new AboutPanel; state_->pages->addWidget(state_->about); scroll->setWidget(state_->pages);
+    // QScrollArea::setWidget enables auto-fill on its content. Keep this
+    // structural page transparent so the shared canvas remains visible.
+    state_->pages->setAutoFillBackground(false);
+    scroll->viewport()->setAutoFillBackground(false);
     state_->contentLayout->addWidget(scroll, 1);
     state_->status = Theme::label(column, 12); state_->status->setObjectName(QStringLiteral("settingsStatus")); state_->status->setWordWrap(true);
     state_->contentLayout->addWidget(state_->status); state_->status->hide();

@@ -56,7 +56,7 @@ libx264 当前使用 `veryfast`、CRF 18、2 个线程、10 帧 lookahead、最�
 
 系统声音使用 PipeWire sink monitor，麦克风使用默认输入设备，各自通过实际原生 stream 请求 stereo 48 kHz float PCM。它们不使用仅限 ScreenCast 的远端 FD。所有被用户选择的来源都必须在期限内产生真实 PCM；一个来源失败不能悄悄省略该音轨。实际 GAP/EMPTY buffer 可表达静音，缺失的 PCM 时间区间不能用补造静音当作采集成功。适配层按 caller 的总字节预算为被选择的来源分配 ring，检查声道位置、chunk 范围、原生错误和非有限样本；编码器只接收有界连续样本序列。
 
-当前继承的 PipeWire graph clock 映射仍须用实际音频图、设备和长录制核对；严格缺口拒绝可能暴露设备时钟、量化与调度差异。实际 monitor/microphone、双源混音、热插拔、权限变化、48 kHz 转换质量和长时间 A/V drift **未由本批测试验收**。不能仅凭缺失端点测试成功就把系统音频、麦克风和 P09 标为完成。
+PipeWire graph clock 映射仍须用实际设备和长录制核对；严格缺口拒绝可能暴露设备时钟、量化与调度差异。下面分别记录私有真实图和实体设备的证据，不能仅凭缺失端点或短音频图测试就把系统音频、麦克风和 P09 标为完成。
 
 新增 [`live_recording_tests.cpp`](../tests/qt/live_recording_tests.cpp) 已用固定 SDK 严格编译、实际运行并通过项目代码的 ASan/UBSan：有界帧池/队列、静止首帧、变化帧、共享归一化、真实 GIF/H.264 编码和严格解码、来源权限/方向终态、claim 一次性、per-request Qt 会话及持久归档。输入明确是 codec/worker fixture，不冒充屏幕设备。新增 [`pipewire_audio_tests.cpp`](../tests/platform/pipewire_audio_tests.cpp) 实际检查三种来源组合在不存在的原生端点下失败、取消、线程回收、文件描述符归还及过小总 PCM 预算拒绝；它没有产生设备音频。两者的 sanitizer 限制与上文一致。
 
@@ -90,10 +90,20 @@ python scripts/test-pipewire-audio.py \
   --artifacts artifacts/pipewire-audio/debug
 ```
 
-每个 case 保留真实 registry、port 链接、daemon/信号/采集日志和 JSON 结果；失败不会中止其余独立 case 的诊断，整项工作仍以非零退出报告未通过。2026-11-25 两个 C++ probe 已用固定 251 SDK 实际严格编译/链接，Python 入口通过语法与参数检查。本地启动自己拥有的 PipeWire server 时，`protocol-native` 创建端点实际返回 `Operation not permitted`，进程退出 255 且未建立 socket；这不是正向测试通过。**六项实际图运行等待 CI，音频设备与发布门槛继续未验收。**
+每个 case 保留真实 registry、port 链接、daemon/信号/采集日志和 JSON 结果；失败不会中止其余独立 case 的诊断，整项工作仍以非零退出报告未通过。2026-11-25 两个 C++ probe 已用固定 251 SDK 实际严格编译/链接，Python 入口通过语法与参数检查。本地启动自己拥有的 PipeWire server 时，`protocol-native` 创建端点实际返回 `Operation not permitted`，进程退出 255 且未建立 socket；本地没有正向图运行结果。实际 CI 结果见后文；音频设备与发布门槛继续未验收。
 
 ### 原生图归属核对的实际 CI 修正
 
 首次完整应用 Linux CI 的六个图 case 都在连接前归属检查处失败，未执行到 PCM 验收。保留的真实 registry 显示：信号 Node 通过 `client.id` 指向 Client，PID 位于该 Client 的 `pipewire.sec.pid` / `application.process.id`，并不保证重复出现在 Node 上。wrapper 现在要求唯一对应 Client，核对由原生协议服务端确认的 `pipewire.sec.pid` 与自己启动的精确 `Popen.pid` 一致；Client 若同时给出 application PID，也必须一致。歧义、缺失 Client、错误 PID 都拒绝，没有以节点名称代替进程归属。
 
-固定 PipeWire 的 `keys.h` 和 `impl-client.c` 确认安全 PID 是服务端来源且不可由 Client 更新覆盖，源码定位已加入 `pipewire-audio/upstream.json`。本地用六份实际 CI registry 离线核对，通过 12 个真实 Node→Client 关系，以及错误 PID、缺失/重复 Client、伪造应用 PID 等 48 个拒绝断言；这些检查只验证 registry 结构和所有权逻辑。六个真实 PCM 图 case 必须在修正后的 CI 重新运行，仍不能宣称已经通过或代替实体音频设备验收。
+固定 PipeWire 的 `keys.h` 和 `impl-client.c` 确认安全 PID 是服务端来源且不可由 Client 更新覆盖，源码定位已加入 `pipewire-audio/upstream.json`。本地用六份实际 CI registry 离线核对，通过 12 个真实 Node→Client 关系，以及错误 PID、缺失/重复 Client、伪造应用 PID 等 48 个拒绝断言；这些检查只验证 registry 结构和所有权逻辑。
+
+### 实际 PCM 时序失败与有界修正
+
+提交 `1f516bf5799551af1776839f56a21a16e652a4c1` 的 Linux 完整应用 CI 实际通过 microphone、mixed、clipped-mix、daemon-loss、source-loss 五个私有图 case。前三项分别得到精确 144,000 个双声道样本；已选择的 440/880 Hz 分量、未选来源隔离和限幅断言通过。两个故障 case 在 24,576 个真实样本后分别终止自己的 daemon 或输入源，生产适配器返回原生 `EPIPE`，五项描述符差值均为零。system case 在第一段读取中报“requested audio interval has no captured samples”；整套六项仍未通过。原始证据 ZIP SHA256 为 `317918aee672c1f3f9f0833c8f75771b80755644a67aba1267dddd4cbf3a36b2`。
+
+固定 `stream.h` 与 `stream.c` 区分了最新 `pw_time.now` 报告和每个 `pw_buffer.time`：后者是该 buffer 自己进入流时的原生 graph cycle。继承代码重新采样两次时钟来计算每包 offset，并用最新报告给旧队列 buffer 定时；调用间调度差异可被误当作 PCM 空洞。修正只在同一 worker 内校准一次原生单调时钟到录制 steady clock 的对应关系，两个来源共用这个锚点；四次有界括号读取得到最小测量区间，精度不足半个采样点即明确失败。每包随后使用其实际 `buffer.time`，保留真实 latency 和 resampler buffered 数值。读取位置直接保留整数样本网格：对请求起点相对当前包的实际 clock 偏移只做一次向下取整，再加整数样本序号；跨包、覆盖范围和真实缺口使用同一规则。不再把每个 `sample/48000` 先截断到纳秒再反算样本，避免 `1 → 20833 ns → 0` 重复读取前一个 PCM。负偏移仍保留为缺口；既不补静音，也不将 packet 起点强行拼接到上一包。大时钟差先拆整秒和不足一秒余数，再进行有检查的换算。
+
+此修正不补造静音、不修改采样率或混音，也不把缺口强行贴到前包尾部。真实缺样本继续失败，并记录缺口纳秒数、请求样本位置、原生 cycle、report ticks、delay 与 buffered 值，便于下一次真实图裁决。固定 SDK 已实际严格编译这一修正并通过三种来源组合的真实缺失端点、取消、预算和 FD 清理测试；**修改后的六种正向图尚待 CI，实体设备、长期漂移和硬件延迟校准均未通过验收**。
+
+本地时间换算回归另行验证整秒 48,000 个互不重复索引、实际纳秒表示的 4,096 帧包边界、正负偏移及原生时钟极值；这是数值单元验证，与真实 PipeWire 图分开记录。修正后的三个原生目标严格编译通过，缺失端点、取消及 FD 释放检查通过；六种真实私有音频图仍待下一 CI，不据此宣称实体设备或长期同步已经通过。

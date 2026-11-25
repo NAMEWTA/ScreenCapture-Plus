@@ -63,8 +63,8 @@ install(FILES "${PROJECT_BINARY_DIR}/package/installation.json"
     "${PROJECT_BINARY_DIR}/package/$<CONFIG>/build-identity.json" DESTINATION "${_huhu_bin}" COMPONENT Runtime)
 install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" "${PROJECT_SOURCE_DIR}/third_party/NOTICE.md"
     DESTINATION "${_huhu_licenses}" COMPONENT Runtime)
-install(DIRECTORY "${PROJECT_SOURCE_DIR}/third_party/" DESTINATION "${_huhu_licenses}/project"
-    COMPONENT Runtime FILES_MATCHING PATTERN "LICENSE*" PATTERN "COPYING*" PATTERN "*.LICENSE")
+include("${PROJECT_SOURCE_DIR}/build/cmake/runtime-notices.cmake")
+huhucapture_install_runtime_notices("${_huhu_licenses}")
 install(FILES "${PROJECT_SOURCE_DIR}/build/dependencies.lock.json"
     DESTINATION "${_huhu_licenses}" COMPONENT Runtime)
 get_target_property(_huhu_qt_core_file Qt6::Core IMPORTED_LOCATION_RELEASE)
