@@ -5,6 +5,7 @@
 #include "core/PixelBuffer.h"
 
 #include <shellapi.h>
+#include <shlobj.h>
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <cstring>

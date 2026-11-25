@@ -4,6 +4,7 @@
 #include "platform/windows/DesktopFiles.h"
 #include "platform/windows/ComApartment.h"
 
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
