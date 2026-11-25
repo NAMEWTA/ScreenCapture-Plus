@@ -1,0 +1,88 @@
+name: Pinned Qt packaging dependencies
+
+on:
+  push:
+    paths:
+      - '.github/workflows/packaging-dependencies.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaging-dependencies-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download fixed official assets and preserve provenance
+        env:
+          GH_READ_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          root = Path('artifacts/packaging-dependencies')
+          root.mkdir(parents=True)
+          specs = [
+              dict(key='linuxdeploy', repository='linuxdeploy/linuxdeploy', tag='1-alpha-20251107-1', commit='cc7b86472c3caa3fd729b9dc502fd2aa78394257', assetId=313839329, name='linuxdeploy-x86_64.AppImage', size=19421688, sha256='c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d', licenseFile='LICENSE.txt'),
+              dict(key='linuxdeployPluginQt', repository='linuxdeploy/linuxdeploy-plugin-qt', tag='1-alpha-20250213-1', commit='ce5291e25979d7d6417551d787f308b88c1b8d76', assetId=228957072, name='linuxdeploy-plugin-qt-x86_64.AppImage', size=12317424, sha256=None, licenseFile='LICENSE.txt'),
+              dict(key='appimagetool', repository='AppImage/appimagetool', tag='1.9.1', commit='8c8c91f762b412a19f4e8d2c4b35afb98f2d7c81', assetId=324406736, name='appimagetool-x86_64.AppImage', size=15092216, sha256='ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0', licenseFile='LICENSE'),
+              dict(key='appimageRuntime', repository='AppImage/type2-runtime', tag='20251108', commit='dd6cebedcbddde9c82f89b011e8e1d40b6e43868', assetId=326011592, name='runtime-x86_64', size=944632, sha256='2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d', licenseFile='LICENSE'),
+          ]
+          def fetch(url, destination, limit, api=False):
+              headers = {'User-Agent': 'huhucapture-packaging-inputs'}
+              if api:
+                  if not url.startswith('https://api.github.com/'):
+                      raise RuntimeError('API authentication must stay on GitHub API')
+                  headers['Authorization'] = 'Bearer ' + os.environ['GH_READ_TOKEN']
+                  headers['Accept'] = 'application/vnd.github+json'
+              digest = hashlib.sha256(); length = 0
+              with urlopen(Request(url, headers=headers), timeout=90) as response, destination.open('xb') as output:
+                  while block := response.read(1024 * 1024):
+                      length += len(block)
+                      if length > limit: raise RuntimeError('Download exceeds declared budget: ' + url)
+                      digest.update(block); output.write(block)
+              return {'name': destination.name, 'size': length, 'sha256': digest.hexdigest(), 'url': url}
+          manifest = {'schemaVersion': 1, 'scope': 'Build tools only; initial missing upstream digest is bootstrap evidence, not a release acceptance', 'tools': []}
+          for spec in specs:
+              folder = root / spec['key']; folder.mkdir()
+              api = f"https://api.github.com/repos/{spec['repository']}/releases/tags/{spec['tag']}"
+              fetch(api, folder/'release.json', 1024*1024, True)
+              release = json.loads((folder/'release.json').read_text())
+              if release['target_commitish'] != spec['commit'] or release['tag_name'] != spec['tag']:
+                  raise RuntimeError('Release source identity changed')
+              asset = next(a for a in release['assets'] if a['id'] == spec['assetId'])
+              url = f"https://github.com/{spec['repository']}/releases/download/{spec['tag']}/{spec['name']}"
+              if asset['name'] != spec['name'] or asset['size'] != spec['size'] or asset['browser_download_url'] != url:
+                  raise RuntimeError('Release asset identity changed')
+              if spec['sha256'] and asset.get('digest') != 'sha256:' + spec['sha256']:
+                  raise RuntimeError('Official release digest differs from the reviewed pin')
+              actual = fetch(url, folder/spec['name'], spec['size'])
+              if actual['size'] != spec['size'] or (spec['sha256'] and actual['sha256'] != spec['sha256']):
+                  raise RuntimeError('Downloaded asset bytes differ from the reviewed pin')
+              actual['bootstrapOnly'] = spec['sha256'] is None
+              license_url = f"https://raw.githubusercontent.com/{spec['repository']}/{spec['commit']}/{spec['licenseFile']}"
+              license_record = fetch(license_url, folder/spec['licenseFile'], 1024*1024)
+              source_url = f"https://codeload.github.com/{spec['repository']}/tar.gz/{spec['commit']}"
+              source_record = fetch(source_url, folder/'source.tar.gz', 64*1024*1024)
+              manifest['tools'].append({**spec, 'download': actual, 'license': license_record, 'sourceArchive': source_record})
+              print(spec['key'], actual['sha256'], 'BOOTSTRAP' if actual['bootstrapOnly'] else 'VERIFIED')
+          (root/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
+          entries = []
+          for path in sorted(root.rglob('*')):
+              if path.is_file(): entries.append(hashlib.sha256(path.read_bytes()).hexdigest()+'  '+path.relative_to(root).as_posix())
+          (root/'SHA256SUMS.txt').write_text('\n'.join(entries)+'\n')
+          PY
+      - name: Preserve verified tools and bootstrap digest evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qt-packaging-dependencies-linux-amd64
+          path: artifacts/packaging-dependencies/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
