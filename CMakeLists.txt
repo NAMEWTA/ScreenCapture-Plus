@@ -136,8 +136,12 @@ if(HUHUCAPTURE_QT_VALIDATION)
         pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.80)
         find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
         add_library(huhucapture_portal STATIC
+            src/platform/linux/portal/PortalTypes.h
+            src/platform/linux/portal/PortalSupport.h
             src/platform/linux/portal/PortalCapture.h
-            src/platform/linux/portal/PortalCapture.cpp)
+            src/platform/linux/portal/PortalCapture.cpp
+            src/platform/linux/portal/PortalShortcuts.h
+            src/platform/linux/portal/PortalShortcuts.cpp)
         set_target_properties(huhucapture_portal PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
         target_compile_definitions(huhucapture_portal PRIVATE QT_NO_KEYWORDS)
         target_link_libraries(huhucapture_portal PUBLIC huhucapture_core Qt6::Core Qt6::Gui
@@ -151,9 +155,21 @@ if(HUHUCAPTURE_QT_VALIDATION)
         add_test(NAME portal_missing_session_bus COMMAND portal_fault_tests --no-bus)
         set_tests_properties(portal_missing_service portal_missing_session_bus PROPERTIES
             TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        add_executable(portal_shortcuts_fault_tests tests/platform/portal_shortcuts_fault_tests.cpp)
+        target_compile_definitions(portal_shortcuts_fault_tests PRIVATE QT_NO_KEYWORDS)
+        target_link_libraries(portal_shortcuts_fault_tests PRIVATE huhucapture_portal PkgConfig::LIBPORTAL PkgConfig::GIO)
+        add_test(NAME portal_shortcuts_missing_service
+            COMMAND "${DBUS_RUN_SESSION}" -- $<TARGET_FILE:portal_shortcuts_fault_tests>)
+        add_test(NAME portal_shortcuts_missing_session_bus COMMAND portal_shortcuts_fault_tests --no-bus)
+        add_test(NAME portal_session_bus_disconnection COMMAND portal_shortcuts_fault_tests --disconnect-bus)
+        set_tests_properties(portal_shortcuts_missing_service portal_shortcuts_missing_session_bus
+            portal_session_bus_disconnection PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         add_executable(portal_capture_probe tests/platform/portal_capture_probe.cpp)
         target_compile_definitions(portal_capture_probe PRIVATE QT_NO_KEYWORDS)
         target_link_libraries(portal_capture_probe PRIVATE huhucapture_portal)
+        add_executable(portal_shortcuts_probe tests/platform/portal_shortcuts_probe.cpp)
+        target_compile_definitions(portal_shortcuts_probe PRIVATE QT_NO_KEYWORDS)
+        target_link_libraries(portal_shortcuts_probe PRIVATE huhucapture_portal)
         # This executable requires a real desktop and user authorization. It is
         # deliberately not reported as a passing offscreen CTest capture test.
     endif()

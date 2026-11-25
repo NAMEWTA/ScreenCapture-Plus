@@ -18,9 +18,12 @@ def main():
     parser.add_argument("--workspace", type=Path, default=root / ".deps/portal-validation")
     options = parser.parse_args()
     specification = json.loads((root / "build/dependencies.lock.json").read_text(encoding="utf-8"))["qtMigration"]["libportal"]
-    patch = root / specification["patch"]
-    if hashlib.sha256(patch.read_bytes()).hexdigest() != specification["patchSha256"]:
-        raise SystemExit("libportal patch differs from the reviewed dependency lock")
+    patches = []
+    for item in specification["patches"]:
+        patch = root / item["path"]
+        if hashlib.sha256(patch.read_bytes()).hexdigest() != item["sha256"]:
+            raise SystemExit(f"libportal patch differs from the reviewed dependency lock: {patch.name}")
+        patches.append(patch)
 
     workspace = options.workspace.resolve()
     # Never reset or clean an existing source checkout or a caller's files.
@@ -38,8 +41,9 @@ def main():
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
     if actual != specification["commit"]:
         raise SystemExit(f"Unexpected libportal revision: {actual}")
-    run("git", "apply", "--check", str(patch), cwd=source)
-    run("git", "apply", str(patch), cwd=source)
+    for patch in patches:
+        run("git", "apply", "--check", str(patch), cwd=source)
+        run("git", "apply", str(patch), cwd=source)
     run("meson", "setup", str(build), str(source), "--prefix=" + str(prefix), "--libdir=lib",
         "-Dbackend-qt6=enabled", "-Dbackend-qt5=disabled", "-Dbackend-gtk3=disabled",
         "-Dbackend-gtk4=disabled", "-Dintrospection=false", "-Dvapi=false", "-Ddocs=false",
@@ -48,7 +52,7 @@ def main():
     run("meson", "install", "-C", str(build))
     metadata = {
         "repository": specification["repository"], "commit": actual,
-        "patchSha256": specification["patchSha256"],
+        "patches": specification["patches"],
         "qtVersion": json.loads((root / "build/dependencies.lock.json").read_text(encoding="utf-8"))["qtMigration"]["qt"]["version"],
         "prefix": str(prefix),
     }

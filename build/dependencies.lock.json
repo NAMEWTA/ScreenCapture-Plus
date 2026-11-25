@@ -42,8 +42,16 @@
       "version": "0.11.0",
       "commit": "fc4d62cfe131e8494c82f597f92b2234d584c367",
       "license": "LGPL-3.0-only",
-      "patch": "third_party/patches/libportal/0001-capture-request-lifetime-and-async-fd.patch",
-      "patchSha256": "5fa507079a165e5a65d3f178173c18953465e0a66cd5c6660b0df809dc291cc7"
+      "patches": [
+        {
+          "path": "third_party/patches/libportal/0001-capture-request-lifetime-and-async-fd.patch",
+          "sha256": "5fa507079a165e5a65d3f178173c18953465e0a66cd5c6660b0df809dc291cc7"
+        },
+        {
+          "path": "third_party/patches/libportal/0002-globalshortcuts-lifetime-and-qt-parent.patch",
+          "sha256": "c7236263f0c21dd925cc55356fc89a66fa4a2271c7f8fdae39871f6b5cf068f9"
+        }
+      ]
     },
     "softwareMedia": {
       "status": "P00 API and distribution-input validation; not desktop recording acceptance",

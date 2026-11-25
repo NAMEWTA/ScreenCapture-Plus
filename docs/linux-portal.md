@@ -1,10 +1,10 @@
 # Linux Portal 控制面
 
-本模块是 Issue #5 的 P00/P05 前置工作。它提供真实 Portal 能力查询、截图请求、ScreenCast 授权与 PipeWire remote 文件描述符交接；没有实现 PipeWire 视频帧消费、音频、Linux 编码器或正式 Qt 截图界面。编译通过、故障测试通过和桌面采集验收必须分别记录。GlobalShortcuts 的实际绑定及取消也仍是 P00 的独立未完成项。
+本模块是 Issue #5 的 P00/P05 前置工作。它提供真实 Portal 能力查询、截图请求、ScreenCast 授权与 PipeWire remote 文件描述符交接，以及 GlobalShortcuts 会话、绑定和触发控制。它没有实现 PipeWire 视频帧消费、音频或正式 Qt 截图界面。编译通过、故障测试通过和桌面采集/快捷键验收必须分别记录。
 
 ## 模块边界
 
-入口为 [PortalCapture](../src/platform/linux/portal/PortalCapture.h)，实现位于同目录。CMake 目标为 `huhucapture_portal`，仅 Linux 的 `HUHUCAPTURE_PORTAL_VALIDATION=ON` 启用，并要求 `HUHUCAPTURE_QT_VALIDATION=ON`。公共头只有 Qt/标准库类型，不向编辑模型暴露 `XdpPortal`、GObject、GVariant 或 PipeWire 类型。
+入口为 [PortalCapture](../src/platform/linux/portal/PortalCapture.h) 和 [PortalShortcuts](../src/platform/linux/portal/PortalShortcuts.h)，实现位于同目录。两者共用 PortalTypes 的错误合同及 PortalSupport 的初始化、错误转换和 context 检查。CMake 目标为 `huhucapture_portal`，仅 Linux 的 `HUHUCAPTURE_PORTAL_VALIDATION=ON` 启用，并要求 `HUHUCAPTURE_QT_VALIDATION=ON`。公共头只有 Qt/标准库类型，不向编辑模型暴露 `XdpPortal`、GObject、GVariant 或 PipeWire 类型。
 
 - 直接链接 libportal 的 Screenshot、CreateSession、SelectSources、Start、Session.Close 和 Qt parent helper。仅用 GIO 查询公共 `Properties.GetAll` 能力，不另写一套 Portal 请求协议。
 - Screenshot 成功返回 Portal 给出的有效本地文件 URI。它不代表图片已经解码、导入历史或复制到剪贴板；那些操作由共享媒体服务完成。
@@ -16,7 +16,9 @@
 
 控制器的构造、使用和销毁均在 QApplication 线程。运行时要求 Qt 的 GLib dispatcher，并检查 thread-default context 与全局 default context 一致。GLib async 回调、Qt parent 导出、取消、session close 均在此线程执行；不创建第二个 GMainLoop，不从其他线程迭代同一个 context。Qt 6.12.1 的 [dispatcher 实现](https://github.com/qt/qtbase/blob/v6.12.1/src/corelib/kernel/qeventdispatcher_glib.cpp) 是该约束的来源。
 
-libportal 0.11.0 的 `xdp_portal_initable_new()` 内部仍调用同步 `g_bus_get_sync()`。控制器只在 GTask worker 上构造它，完成后把对象交给 Qt 线程。没有使用会在 session bus 缺失时 abort 的 `xdp_portal_new()` 或 `XdpQt::globalPortalObject()`。GUI 线程不等待 join 或同步 DBus 请求。
+libportal 0.11.0 的 `xdp_portal_initable_new()` 内部仍调用同步 `g_bus_get_sync()`。控制器只在 GTask worker 上构造它，完成后把对象交给 Qt 线程。没有使用会在 session bus 缺失时 abort 的 `xdp_portal_new()` 或 `XdpQt::globalPortalObject()`。GUI 线程不等待 join 或同步 DBus 请求。共享 GIO bus 连接显式设置 `exit-on-close=FALSE`，否则 [GIO 的默认行为](https://docs.gtk.org/gio/func.bus_get_sync.html) 可能在运行中断线时直接结束进程。`closed` 信号交给同一 Qt/GLib context 处理，取消待决请求并释放活动会话；不绕过文件或媒体清理。
+
+**Wayland parent 导出仍有已确认的上游阻塞风险。** 固定 libportal 的 Qt helper 调用 `QDesktopUnixServices::portalWindowIdentifier()`；Qt 6.12.1 在首次 Wayland foreign handle 导出时可能执行同步 `wl_display_roundtrip_queue()`。因此当前控制面不能被描述为已经满足完整的 GUI 非阻塞门槛。不得把 `QWindow` 移交 worker 规避线程规则；必须在平台 parent 接缝复用官方异步导出对象或有来源的实现。Shortcuts 包装已拒绝空句柄、`wayland:`、`x11:` 和 `x11:0`，但这不解决同步等待。源码依据为 Qt 的 [qwaylandplatformservices.cpp](https://github.com/qt/qtbase/blob/v6.12.1/src/plugins/platforms/wayland/qwaylandplatformservices.cpp) 和 [qwaylandxdgshell.cpp](https://github.com/qt/qtbase/blob/v6.12.1/src/plugins/platforms/wayland/plugins/shellintegration/xdg-shell/qwaylandxdgshell.cpp)；实际修复及桌面验收仍是发布前置条件。
 
 每次授权拥有自己的 cancellable、请求编号、parent 连接和回调状态。parent 在请求完成前销毁会取消该请求；迟到回调仍完成原请求并清理资源，不访问已销毁 QObject。控制器销毁后，异步回调保留清理状态但不再发 UI 信号。应用退出编排仍应先取消待决请求、等待终态回调，再结束事件循环；不能先停掉整个 dispatcher 后把异步资源清理算作完成。
 
@@ -30,6 +32,14 @@ libportal 0.11.0 的 `xdp_portal_initable_new()` 内部仍调用同步 `g_bus_ge
 
 截图和 ScreenCast 的版本与失败分别记录，单个接口存在不代表所有接口可用。所选 source/cursor 模式必须被当前 Portal 广告支持；旧接口缺少 cursor 控制或 v4 persistence 时不会悄悄忽略调用方选项。失效 restore token 按真实错误返回，后续 UI 决定是否重新请求授权。
 
+## GlobalShortcuts 会话与重绑
+
+GlobalShortcuts 的能力单独查询。控制器直接调用 libportal 的 CreateSession、BindShortcuts、ListShortcuts 和 Close；没有自行重写授权 D-Bus 协议。偏好触发键采用 XDG shortcuts 规范字符串，不能直接传入 Qt 的本地化按键展示文本。实际展示文本取 Portal 返回的 `trigger_description`，不能把偏好键当作已经获准的键。
+
+[接口规范](https://github.com/flatpak/xdg-desktop-portal/blob/main/data/org.freedesktop.portal.GlobalShortcuts.xml) 限制每个 session 只能 BindShortcuts 一次，并允许返回部分绑定。控制器据此创建候选 session；只有返回全部请求 ID、有效 trigger 描述且 session 仍存活，才交付新绑定并关闭旧 session。失败、取消和待决 parent 销毁只清理候选 session。旧 session 在请求期间保持连接。不同桌面对同应用多个 session 的限制及重绑冲突必须实机验证，不能把保留旧 session 的代码行为当作旧快捷键实际仍触发的测试证据。
+
+活动会话不依赖已经完成授权的窗口寿命。激活/释放事件只转发当前活动会话，带有 Portal 原始毫秒时间戳和可选 activation token；token 不持久化、不写入探针日志。收到 ShortcutsChanged 后用真实 ListShortcuts 刷新完整绑定，合并重复刷新请求并按会话代次忽略旧回调。刷新失败显式报告，不覆盖当前已知列表。服务或 bus 消失、外部 session close 会关闭活动绑定并报告不可用。
+
 ## 固定上游与受控补丁
 
 依赖版本、源码 SHA 和补丁 SHA 以 [依赖锁](../build/dependencies.lock.json) 为唯一构建输入。目标基线为 libportal 0.11.0，提交 `fc4d62cfe131e8494c82f597f92b2234d584c367`；Qt parent 库必须与应用的 Qt 6.12.1 及其 private headers 同源构建。
@@ -42,6 +52,7 @@ libportal 0.11.0 的 `xdp_portal_initable_new()` 内部仍调用同步 `g_bus_ge
 | [remote.c](https://github.com/flatpak/libportal/blob/fc4d62cfe131e8494c82f597f92b2234d584c367/libportal/remote.c) | CreateSession、SelectSources、Start、FD 与 stream 元数据 |
 | [session.c](https://github.com/flatpak/libportal/blob/fc4d62cfe131e8494c82f597f92b2234d584c367/libportal/session.c) | session 注册、关闭、引用拥有关系 |
 | [portal.c](https://github.com/flatpak/libportal/blob/fc4d62cfe131e8494c82f597f92b2234d584c367/libportal/portal.c) | session bus 初始化及失败行为 |
+| [globalshortcuts.c](https://github.com/flatpak/libportal/blob/fc4d62cfe131e8494c82f597f92b2234d584c367/libportal/globalshortcuts.c) | 会话、绑定、激活、实际列表与 g_rc_box 生命周期 |
 | [portal-qt6.cpp](https://github.com/flatpak/libportal/blob/fc4d62cfe131e8494c82f597f92b2234d584c367/libportal/portal-qt6.cpp) | 直接复用 Qt parent；Qt ≥6.9 使用 QDesktopUnixServices |
 | [libportal/meson.build](https://github.com/flatpak/libportal/blob/fc4d62cfe131e8494c82f597f92b2234d584c367/libportal/meson.build) | GIO ≥2.80、Qt private ABI 和 backend 选项 |
 
@@ -55,6 +66,8 @@ libportal 0.11.0 的 `xdp_portal_initable_new()` 内部仍调用同步 `g_bus_ge
 6. 新增异步 `xdp_session_open_pipewire_remote_async/finish`，直接使用 GIO 的 FD/cancellable API，保留错误和 FD 所有权；不在 GUI 调用原有同步接口。
 
 检索上游后续提交时，main 比固定版本仅多两个提交，Screenshot/remote/session 未获得对应修复。已复核既有 [b7be557](https://github.com/flatpak/libportal/commit/b7be557098e57cf8c65c176984d9a4e8df2907b8)、[b8c57df](https://github.com/flatpak/libportal/commit/b8c57df1ea6d72984c96f6c34428626dc74325e9)、[0977a830](https://github.com/flatpak/libportal/commit/0977a83082979c221eb00743e86cab1f5dc5b685) 的处理依据：Close 后由调用者完成任务、返回终态前断开 cancellable handler、取消必须返回错误。补丁沿用这些规则，不把旧修复误报为当前问题已解决。
+
+[第二个补丁](../third_party/patches/libportal/0002-globalshortcuts-lifetime-and-qt-parent.patch) 独立修改 globalshortcuts.c/.h，保留第一个补丁的固定哈希。它复用原来的 g_rc_box Call，修复预取消、Close 后不完成 GTask、终态 handler 断开次序、迟到方法回调与失败临时 session 清理，并增加 `bind_shortcuts_with_parent()` 窄包装。该包装调用原 BindShortcuts API 和现有 parent exporter，为导出回调与请求回调各保留独立引用，直到真正回调结束才释放 parent。它不增加新的授权协议，也不改变原 API。GlobalShortcuts 上游实现起点为 [280c128](https://github.com/flatpak/libportal/commit/280c1281e0d1710574d3409869097df0de61c366)；固定版本之后未找到对应生命周期修复可直接移植。原始 globalshortcuts.c 和 .h blob 分别为 `59b35c2462ada102554628b80cc23147275973ae`、`70a6920ef2374c2b575cf450afe366052bb0d010`。
 
 被修改的原文件版权归 Matthias Clasen；libportal Qt helper 还保留 Georges Basile Stavracas Neto、Jan Grulich、Neal Gompa 和 GNOME Foundation 等原始归属。libportal 和本补丁按 LGPL-3.0-only 使用，附带原始 [COPYING](../third_party/patches/libportal/COPYING) 与其所引用的 [GPL v3 文本](../third_party/patches/libportal/COPYING.GPL3)。后者来自 Qt 6.12.1 的 `LICENSES/GPL-3.0-only.txt`，原 blob `94a9ed024d3859793618152ea559a168bbcbb5e2`。不能将新增库重新标为 MIT；正式打包还必须提供匹配的动态库、源码、受控补丁和许可记录。
 
@@ -73,14 +86,20 @@ export LD_LIBRARY_PATH="$PWD/.deps/portal-validation/install/lib:$HUHUCAPTURE_QT
 cmake -S . -B artifacts/portal -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DBUILD_TESTING=ON -DHUHUCAPTURE_QT_VALIDATION=ON \
   -DHUHUCAPTURE_PORTAL_VALIDATION=ON
-cmake --build artifacts/portal --target portal_fault_tests portal_capture_probe
+cmake --build artifacts/portal --target portal_fault_tests portal_capture_probe \
+  portal_shortcuts_fault_tests portal_shortcuts_probe
 dbus-run-session -- artifacts/portal/portal_fault_tests
 artifacts/portal/portal_fault_tests --no-bus
+dbus-run-session -- artifacts/portal/portal_shortcuts_fault_tests
+artifacts/portal/portal_shortcuts_fault_tests --no-bus
+artifacts/portal/portal_shortcuts_fault_tests --disconnect-bus
 ```
 
 依赖脚本从固定 commit 的干净私有目录检出，核对补丁哈希和 `git apply --check`，再用 Meson 构建 Qt6 backend。默认关闭其他 UI backend、文档、introspection、vapi 和上游测试；这只是本模块的受控编译输入，不代表跳过后续产品或桌面验收。已有工作目录不会被脚本 reset/clean，重建时选择新的空 workspace。
 
 `portal_fault_tests` 使用真实 session bus 和一个不存在的服务。它验证 unavailable、立即取消、预取消、错误后 cleanup cancellation、Qt/GLib 同线程分发，并等待 GObject weak-finalize 来证明迟到方法回调已释放引用。它没有模拟 Portal 成功响应，也不证明任何桌面支持截图或录屏。`--no-bus` 验证缺失总线时返回错误而非 abort。
+
+`portal_shortcuts_fault_tests` 对真实缺失服务执行 GlobalShortcuts CreateSession 的未取消、立即取消、预取消及引用释放检查。`--disconnect-bus` 自行启动一个隔离的真实 dbus-daemon，在两个控制器获得连接之后实际终止它，要求进程继续运行、closed 在 Qt 线程分发、新请求返回 Unavailable。该测试没有构造假的 Portal 服务，不能证明活动桌面会话的清理或按键触发成功。
 
 真实桌面上可以运行以下探针，并保存输出、桌面/Portal 版本和人工操作记录：
 
@@ -90,8 +109,17 @@ artifacts/portal/portal_capture_probe --screenshot
 artifacts/portal/portal_capture_probe --screencast
 artifacts/portal/portal_capture_probe --screencast --cancel-after-ms 500
 artifacts/portal/portal_capture_probe --screenshot --destroy-parent-after-ms 500
+artifacts/portal/portal_shortcuts_probe
+artifacts/portal/portal_shortcuts_probe --bind
+artifacts/portal/portal_shortcuts_probe --bind --cancel-after-ms 500
+artifacts/portal/portal_shortcuts_probe --bind --destroy-parent-after-ms 500
+artifacts/portal/portal_shortcuts_probe --bind --close-parent-after-bind
+artifacts/portal/portal_shortcuts_probe --bind --rebind-trigger CTRL+SHIFT+F12
+artifacts/portal/portal_shortcuts_probe --bind --rebind-trigger CTRL+SHIFT+F12 --cancel-rebind-after-ms 500
 ```
 
 探针返回的 `remoteFdValid` 只证明打开了真实 FD，输出始终明确 `framesDecoded=false`；没有用空帧或 Mock 代替 PipeWire 采流。权限等待的 120 秒探针截止值只负责让验证失败退出，不作为生产请求“完成”条件。
 
-当前工作环境没有可声明的 GNOME/Plasma Wayland 桌面，因此接受/拒绝/取消授权、parent 销毁、session 外部关闭、restore token 失效、真实截图内容与多屏缩放均是 **not run**。GlobalShortcuts、PipeWire 帧/音频、FFmpeg、完整应用退出和发行包部署仍需后续实现与验收。具体编译和自动故障检查结果以对应提交的 CI 为准，不用本说明预先宣称通过。
+Shortcuts 探针的 `--bind` 必须观察到真实 Activated 信号才通过，默认等待 15 秒，可用 `--hold-ms` 调整人工观察时间。成功重绑或取消重绑后会重新统计激活；取消重绑还检查旧列表与 session 保留。未收到真实激活不会用能力版本或绑定返回值替代通过结果。
+
+当前工作环境没有可声明的 GNOME/Plasma Wayland 桌面，因此接受/拒绝/取消授权、parent 销毁、session 外部关闭、restore token 失效、真实截图内容、多屏缩放、快捷键实际绑定/触发/重绑均是 **not run**。Wayland parent 异步导出、PipeWire 帧/音频、完整应用退出和发行包部署仍需后续实现与验收。具体编译和自动故障检查结果以对应提交的 CI 为准，不用本说明预先宣称通过。

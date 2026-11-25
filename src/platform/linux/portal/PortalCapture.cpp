@@ -5,6 +5,7 @@
 #include <libportal-qt6/portal-qt6.h>
 
 #include "platform/linux/portal/PortalCapture.h"
+#include "platform/linux/portal/PortalSupport.h"
 
 #include <QAbstractEventDispatcher>
 #include <QGuiApplication>
@@ -19,75 +20,7 @@
 #include <utility>
 
 namespace HuhuCapture::Platform::Linux {
-namespace {
-
-using Code = PortalFailure::Code;
-
-PortalFailure failure(Code code, QString message)
-{
-    PortalFailure result;
-    result.code = code;
-    result.message = std::move(message);
-    return result;
-}
-
-PortalFailure fromError(const GError* error)
-{
-    if (!error) return failure(Code::Failed, QStringLiteral("Portal returned no result or error"));
-    auto result = failure(Code::Failed, QString::fromUtf8(error->message));
-    result.domain = QString::fromUtf8(g_quark_to_string(error->domain));
-    result.nativeCode = error->code;
-    g_autofree char* remote = g_dbus_error_get_remote_error(error);
-    if (remote) result.remoteError = QString::fromUtf8(remote);
-    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-        result.code = Code::Cancelled;
-    else if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED)
-             || g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED)
-             || result.remoteError == QStringLiteral("org.freedesktop.portal.Error.NotAllowed"))
-        result.code = Code::Denied;
-    else if (g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN)
-             || g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_NAME_HAS_NO_OWNER)
-             || g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_NO_SERVER)
-             || g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CONNECTION_CLOSED)
-             || g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NOT_CONNECTED))
-        result.code = Code::Unavailable;
-    else if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED)
-             || g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_INTERFACE)
-             || g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD))
-        result.code = Code::Unsupported;
-    return result;
-}
-
-struct InitializedPortal {
-    XdpPortal* portal{};
-    GDBusConnection* bus{};
-    ~InitializedPortal() { g_clear_object(&bus); g_clear_object(&portal); }
-};
-
-void initializeInWorker(GTask* task, gpointer, gpointer, GCancellable* cancellable)
-{
-    // Even xdp_portal_initable_new calls g_bus_get_sync internally in 0.11.0.
-    // Construct it on GIO's worker pool; use the object only on the Qt thread
-    // after this result is handed back. No worker owns or dispatches a GMainLoop.
-    if (g_task_return_error_if_cancelled(task)) return;
-    try {
-        auto result = std::make_unique<InitializedPortal>();
-        g_autoptr(GError) error = nullptr;
-        result->bus = g_bus_get_sync(G_BUS_TYPE_SESSION, cancellable, &error);
-        if (!result->bus) { g_task_return_error(task, g_steal_pointer(&error)); return; }
-        result->portal = xdp_portal_initable_new(&error);
-        if (!result->portal) { g_task_return_error(task, g_steal_pointer(&error)); return; }
-        g_task_return_pointer(task, result.release(), [](gpointer value) {
-            delete static_cast<InitializedPortal*>(value);
-        });
-    }
-    catch (...) {
-        g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED,
-                               "Could not allocate Portal initialization state");
-    }
-}
-
-} // namespace
+using namespace PortalSupport;
 
 struct PortalCapture::Private : std::enable_shared_from_this<Private> {
     struct Operation {
@@ -130,6 +63,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
     GDBusConnection* bus{};
     GCancellable* initialization{g_cancellable_new()};
     guint nameWatch{};
+    gulong busClosedHandler{};
     QByteArray busName;
     PortalCapabilities capabilities;
     std::shared_ptr<Operation> operation;
@@ -149,6 +83,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
     ~Private() {
         if (pipeWireFd >= 0) ::close(pipeWireFd);
         if (nameWatch) g_bus_unwatch_name(nameWatch);
+        if (bus) g_clear_signal_handler(&busClosedHandler, bus);
         g_clear_object(&initialization);
         g_clear_object(&bus);
         g_clear_object(&portal);
@@ -158,17 +93,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         return owner && QThread::currentThread() == owner->thread();
     }
     PortalFailure checkContext() {
-        if (!qGuiApp || !onOwnerThread() || owner->thread() != qGuiApp->thread())
-            return failure(Code::InvalidState, QStringLiteral("Portal control must run on the QApplication thread"));
-        auto* dispatcher = QAbstractEventDispatcher::instance();
-        capabilities.qtPlatform = QGuiApplication::platformName();
-        capabilities.dispatcher = dispatcher ? QString::fromLatin1(dispatcher->metaObject()->className()) : QString();
-        if (!dispatcher || !dispatcher->inherits("QEventDispatcherGlib"))
-            return failure(Code::Unsupported, QStringLiteral("Qt's GLib event dispatcher is required"));
-        auto* context = g_main_context_get_thread_default();
-        if (context && context != g_main_context_default())
-            return failure(Code::Unsupported, QStringLiteral("Portal and Qt must share the default GLib context"));
-        return {};
+        return PortalSupport::checkContext(owner, capabilities.qtPlatform, capabilities.dispatcher);
     }
 
     void cancel(const std::shared_ptr<Operation>& pending, PortalFailure reason) {
@@ -193,6 +118,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         cancel(operation, failure(Code::Cancelled, QStringLiteral("Portal owner destroyed")));
         closeActive();
         if (nameWatch) g_bus_unwatch_name(std::exchange(nameWatch, 0));
+        if (bus) g_clear_signal_handler(&busClosedHandler, bus);
         owner = nullptr;
     }
 
@@ -272,6 +198,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         }
         state->portal = std::exchange(initialized->portal, nullptr);
         state->bus = std::exchange(initialized->bus, nullptr);
+        state->busClosedHandler = g_signal_connect(state->bus, "closed", G_CALLBACK(busClosed), state.get());
         state->probesPending = 2;
         for (const auto screenCast : {false, true}) {
             g_dbus_connection_call(state->bus, state->busName.constData(), "/org/freedesktop/portal/desktop",
@@ -304,6 +231,11 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
             }
         }
         if (--state->probesPending != 0) return;
+        if (g_dbus_connection_is_closed(state->bus)) {
+            const auto unavailable = failure(Code::Unavailable, QStringLiteral("The session bus disconnected during initialization"));
+            state->capabilities.screenshot.failure = unavailable;
+            state->capabilities.screenCast.failure = unavailable;
+        }
         state->initializing = false;
         state->ready = state->capabilities.screenshot.available() || state->capabilities.screenCast.available();
         PortalFailure overall;
@@ -315,14 +247,25 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         if (state->owner) Q_EMIT state->owner->initialized(state->capabilities, overall);
     }
 
+    void unavailable(PortalFailure reason) {
+        ready = false;
+        capabilities.screenshot.failure = reason;
+        capabilities.screenCast.failure = reason;
+        cancel(operation, reason);
+        closeActive(std::move(reason));
+    }
     static void portalVanished(GDBusConnection*, const gchar*, gpointer data) {
-        auto* raw = static_cast<Private*>(data);
-        const auto state = raw->shared_from_this();
+        const auto state = static_cast<Private*>(data)->shared_from_this();
+        if (!state->stopped)
+            state->unavailable(failure(Code::Unavailable, QStringLiteral("The desktop Portal service disappeared")));
+    }
+    static void busClosed(GDBusConnection*, gboolean, GError* error, gpointer data) {
+        const auto state = static_cast<Private*>(data)->shared_from_this();
         if (state->stopped) return;
-        state->ready = false;
-        const auto error = failure(Code::Unavailable, QStringLiteral("The desktop Portal service disappeared"));
-        state->cancel(state->operation, error);
-        state->closeActive(error);
+        Q_ASSERT(state->onOwnerThread());
+        auto reason = error ? fromError(error) : failure(Code::Unavailable, QStringLiteral("The session bus disconnected"));
+        reason.code = Code::Unavailable;
+        state->unavailable(std::move(reason));
     }
 
     static void screenshotReady(GObject* source, GAsyncResult* result, gpointer data) {
@@ -460,6 +403,7 @@ void PortalCapture::initialize()
         return;
     }
     if (d->nameWatch) g_bus_unwatch_name(std::exchange(d->nameWatch, 0));
+    if (d->bus) g_clear_signal_handler(&d->busClosedHandler, d->bus);
     g_clear_object(&d->portal);
     g_clear_object(&d->bus);
     d->capabilities.screenshot = {};
