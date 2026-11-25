@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core"]
+members = ["core", "../../src/platform/rust"]
 
 [profile.dev]
 debug = "line-tables-only"

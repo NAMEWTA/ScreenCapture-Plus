@@ -109,6 +109,7 @@ async fn read_and_hash_from_file(
 
     let mut buffer = vec![0u8; HASH_BUFFER_SIZE];
     let mut hashed = 0_u64;
+    let result = async {
     loop {
         let read = tokio::select! {
             biased;
@@ -124,6 +125,12 @@ async fn read_and_hash_from_file(
         progress(hashed);
     }
     Ok(())
+    }.await;
+    // A cancelled async read may already have been submitted to the blocking
+    // pool. Join it before releasing a stable lease whose duplicated handle
+    // shares the file cursor; dropping File alone could race its next use.
+    drop(file.into_std().await);
+    result
 }
 
 pub(crate) fn to_hex(bytes: &[u8]) -> String {

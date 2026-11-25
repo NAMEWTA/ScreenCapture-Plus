@@ -104,6 +104,33 @@
           "--disable-stripping"
         ]
       }
+    },
+    "nativeRust": {
+      "package": "huhucapture-native",
+      "workspaceManifest": "third_party/localsend/Cargo.toml",
+      "bridgeManifest": "src/platform/rust/Cargo.toml",
+      "staticLibrary": "huhucapture_native",
+      "preserveCodecPackages": [
+        "imagequant",
+        "gif",
+        "gif-dispose",
+        "resize",
+        "rgb",
+        "imgref",
+        "loop9",
+        "ordered-channel",
+        "rayon",
+        "rayon-core",
+        "weezl"
+      ],
+      "windowsCrt": "MD",
+      "validationConfigurations": [
+        "Release",
+        "RelWithDebInfo"
+      ],
+      "cargoLockStatus": "aggregate-resolution-pending",
+      "buildPythonVersion": "3.13.17",
+      "setupPythonActionCommit": "ece7cb06caefa5fff74198d8649806c4678c61a1"
     }
   }
 }

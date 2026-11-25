@@ -25,10 +25,12 @@ cargo test -p localsend --features discovery --locked --no-fail-fast
 
 此目录的 `rust-toolchain.toml` 固定 Rust 1.97.1。工作目录在仓库根时，单独传递
 `--manifest-path` 不会让 rustup 自动采用这个子目录的工具链。
-当前 Cargo.lock 由真实 Windows/Linux Rust 1.97.1 CI 从上游锁文件生成，两平台
+core 阶段的 Cargo.lock 由真实 Windows/Linux Rust 1.97.1 CI 从上游锁文件生成，两平台
 输出逐字节一致：新增 `infer =0.22.0`，移除独立 workspace 不再需要的上游 App
 依赖，保留其余包的源与校验值。生成来源记录在 `upstream.json`；后续构建使用
-`--locked`。不得猜写 registry checksum。`infer` 关闭默认 feature，复用其 PNG/GIF/MP4
+`--locked`。新增 [Rust 聚合成员](rust-bridge.md) 后，须再次由真实 Cargo 解析
+gifski 依赖并回收双平台锁，再恢复 locked 构建；不能拿旧锁冒充聚合验证结果。
+不得猜写 registry checksum。`infer` 关闭默认 feature，复用其 PNG/GIF/MP4
 magic 检测；其 MIT 许可和 Bojan 的版权声明保留在 `infer.LICENSE`。
 
 ## 五类受控修改
@@ -70,8 +72,8 @@ rename，也不能将最终归档路径交给上游的截断式 Path 接收器�
 完整，不能用它替代 codec/probe，也不能凭“最后一块已收到”发送成功回执。
 
 所有接收事件进入服务工作队列，UI 不负责消费文件块、完成磁盘操作或返回提交结果。
-后续 bridge 必须继续保证关键事件可追踪、退出时清空旧事件并 join 所有任务；
-本次 core 接缝不能替代这一 C ABI/runtime 验收。
+bridge 保留可 drain 的终态事件并 join 所有任务；其接口和独立实际验证见
+[聚合库说明](rust-bridge.md)。core 接缝测试不能替代 C ABI/runtime 验收。
 
 严格服务器在接收会话前预留一个终态事件位置，另为监听故障预留一个位置。
 队列拥塞时拒绝新会话，不把完成任务无限排队，也不让注册通知挤掉终态结果。
@@ -97,7 +99,10 @@ rename，也不能将最终归档路径交给上游的截断式 Path 接收器�
 网络均实际执行。上游原测试保留并一同执行。
 
 测试源码存在不等于测试通过。实际 Rust 编译、执行结果和双平台环境应记录在
-对应 CI 证据中。本地编写环境未安装 Rust/Cargo，不能据此宣称这些 Rust 用例
-通过。真实双机、官方桌面互通、全格式验证、吞吐/资源基线、统一 gifski staticlib、
+对应 CI 证据中。本地编写环境未安装 Rust/Cargo，不能据此宣称新改动已经通过。
+新增的 Pending 取消处理和哈希取消后 join 文件 IO 仍需跟随聚合库再次执行回归。
+WebRTC signaling 的连接、回调和辅助发送函数只在原有 feature 启用时编译，
+保留其 DTO 测试；不压制整个 crate 的警告，也不为消除警告启用无关运行时。
+真实双机、官方桌面互通、全格式验证、吞吐/资源基线、统一 gifski staticlib、
 Qt 同进程、C ABI 压力和退出行为仍是 P00/P10 的必要门槛；这些完成前不能宣称
 LAN 功能完成或触发正式发布。

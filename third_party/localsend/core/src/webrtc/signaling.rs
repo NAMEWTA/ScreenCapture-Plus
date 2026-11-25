@@ -1,13 +1,22 @@
+// huhucapture modification; see docs/localsend-core.md and upstream.json.
 use crate::model::discovery::DeviceType;
+#[cfg(feature = "webrtc-signaling")]
 use crate::util::base64;
+#[cfg(feature = "webrtc-signaling")]
 use anyhow::Result;
+#[cfg(feature = "webrtc-signaling")]
 use futures_util::stream::StreamExt;
+#[cfg(feature = "webrtc-signaling")]
 use futures_util::SinkExt;
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
+#[cfg(feature = "webrtc-signaling")]
 use std::collections::HashMap;
+#[cfg(feature = "webrtc-signaling")]
 use std::sync::Arc;
+#[cfg(feature = "webrtc-signaling")]
 use tokio::sync::{mpsc, Mutex};
+#[cfg(feature = "webrtc-signaling")]
 use tokio::time::Duration;
 #[cfg(feature = "webrtc-signaling")]
 use tokio_tungstenite::connect_async;
@@ -174,6 +183,7 @@ pub struct WsClientSdpMessage {
     pub sdp: String,
 }
 
+#[cfg(feature = "webrtc-signaling")]
 pub struct SignalingConnection {
     /// The peer info received from the server of the client.
     pub client: ClientInfo,
@@ -331,8 +341,10 @@ impl SignalingConnection {
     }
 }
 
+#[cfg(feature = "webrtc-signaling")]
 type AnswerCallback = Box<dyn FnOnce(WsServerSdpMessage) + Send + Sync>;
 
+#[cfg(feature = "webrtc-signaling")]
 pub struct ManagedSignalingConnection {
     /// The peer info received from the server of the client.
     pub client: ClientInfo,
@@ -370,6 +382,7 @@ impl ManagedSignalingConnection {
     }
 }
 
+#[cfg(feature = "webrtc-signaling")]
 async fn send_update(tx: &mpsc::Sender<WsClientMessage>, info: ClientInfoWithoutId) -> Result<()> {
     tx.send(WsClientMessage::Update { info }).await?;
 
@@ -378,6 +391,7 @@ async fn send_update(tx: &mpsc::Sender<WsClientMessage>, info: ClientInfoWithout
     Ok(())
 }
 
+#[cfg(feature = "webrtc-signaling")]
 async fn send_offer(
     tx: &mpsc::Sender<WsClientMessage>,
     session_id: String,
@@ -396,6 +410,7 @@ async fn send_offer(
     Ok(())
 }
 
+#[cfg(feature = "webrtc-signaling")]
 async fn send_answer(
     tx: &mpsc::Sender<WsClientMessage>,
     session_id: String,

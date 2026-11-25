@@ -53,6 +53,14 @@ licenses apply independently of the root application license.
 | FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Software validation configured with GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The mux example retains Fabrice Bellard's MIT notice and recorded frame-duration / finalization-error fixes. |
 | x264 API build 164 | VideoLAN x264 commit `3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3`, fetched from `mirror/x264` | GPL-2.0-or-later, x264 project; [license text](ffmpeg-examples/COPYING.x264). Runtime use through FFmpeg's existing libx264 adapter. |
 
+The Qt migration aggregate in `src/platform/rust` links the same fixed gifski
+source with the controlled LocalSend core into one Rust static library. It does
+not copy or replace gifski's encoder or original C API. Exact header, license and
+upstream lock-file provenance are retained in [gifski/upstream.json](gifski/upstream.json).
+The independent upstream lock is reference material; the aggregate's actual
+production resolution belongs to `third_party/localsend/Cargo.lock`. Initial
+aggregate resolution and matching-CRT validation remain explicit CI gates.
+
 The software-codec probe also adapts the decode/drain API flow from FFmpeg's
 `doc/examples/demux_decode.c`, Copyright (c) 2012 Stefano Sabatini; the
 [full MIT notice](ffmpeg-examples/demux-decode-license.txt) and exact source blob

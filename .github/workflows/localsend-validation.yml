@@ -1,4 +1,4 @@
-name: LocalSend core validation
+name: Native aggregate validation
 
 on:
   pull_request:
@@ -11,14 +11,20 @@ permissions:
 
 concurrency:
   group: localsend-validation-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   native-core:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022]
+        include:
+          - os: ubuntu-24.04
+            host: linux
+            arch: linux_gcc_64
+          - os: windows-2022
+            host: windows
+            arch: win64_msvc2022_64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     env:
@@ -38,15 +44,54 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal
           rustc --version --verbose
           cargo --version
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+      - name: Resolve and build the first aggregate lock with preserved GIF dependencies
+        # Review-only bootstrap. The actual lock is retained on both platforms;
+        # remove --bootstrap-lock once that resolution is reviewed and committed.
+        run: python "$GITHUB_WORKSPACE/scripts/build-native-rust.py" --bootstrap-lock
       - name: Run real TLS, filesystem and bounded transfer tests
-        # The first standalone-workspace resolution must be done by Cargo.
-        # Its lock is retained below, reviewed, then committed for --locked use.
-        run: cargo test --locked -p localsend --features discovery --no-fail-fast
+        run: |
+          cargo test --locked -p localsend --features discovery --no-fail-fast
+          cargo test --locked -p huhucapture-native --no-fail-fast
+      - name: Restore matching Qt for same-process ABI validation
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
+        with:
+          version: '6.12.1'
+          host: ${{ matrix.host }}
+          target: desktop
+          arch: ${{ matrix.arch }}
+          archives: qtbase qtsvg
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4'
+          py7zrversion: '==1.1.3'
+          extra: ${{ runner.os == 'Windows' && '--external 7z' || '' }}
+          cache: false
+      - name: Configure Linux Qt and Rust in the same executable
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: cmake -S . -B artifacts/cmake/native-validation -G Ninja -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_RUST_VALIDATION=ON
+      - name: Configure Windows Qt and Rust with the matching release CRT
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: pwsh
+        run: cmake -S . -B artifacts/cmake/native-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_RUST_VALIDATION=ON
+      - name: Exercise real GIF, TLS, complete decode, durable commit and shutdown
+        working-directory: .
+        run: |
+          cmake --build artifacts/cmake/native-validation --config Release --target qt_rust_bridge --parallel 2
+          ctest --test-dir artifacts/cmake/native-validation -C Release --output-on-failure --no-tests=error -R '^qt_rust_bridge$'
       - name: Retain the actual workspace dependency resolution
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: localsend-cargo-lock-${{ runner.os }}
-          path: third_party/localsend/Cargo.lock
+          path: |
+            third_party/localsend/Cargo.lock
+            artifacts/native-rust/
+            artifacts/cmake/native-validation/CMakeCache.txt
+            artifacts/cmake/native-validation/CMakeFiles/CMakeConfigureLog.yaml
+            artifacts/cmake/native-validation/Testing/Temporary/
+            artifacts/cmake/native-validation/rust-bridge/
           if-no-files-found: error
           retention-days: 14

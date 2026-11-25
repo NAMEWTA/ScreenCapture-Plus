@@ -208,7 +208,7 @@ impl ServerHandle {
         }
     }
 
-    /// Cancels the active v2 upload session if it matches `session_id`,
+    /// Cancels the pending or active v2 upload session if it matches `session_id`,
     /// e.g. because the user aborted the transfer on the receiving side.
     ///
     /// Interrupts in-progress verified streams and rejects subsequent uploads.
@@ -223,6 +223,11 @@ impl ServerHandle {
         };
         let mut slot = v2.session.lock().unwrap();
         match slot.as_ref() {
+            Some(SessionStateV2::Pending(session)) if session.session_id == session_id => {
+                session.cancel.cancel();
+                *slot = None;
+                true
+            }
             Some(SessionStateV2::Active(session)) if session.session_id == session_id => {
                 session.cancel.cancel();
                 *slot = None;
