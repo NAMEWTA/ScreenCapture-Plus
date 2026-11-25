@@ -50,7 +50,7 @@ licenses apply independently of the root application license.
 | LocalSend core | `localsend/localsend` `44f48f18a5503c43873570ff489d27ff1983e198`, core crate 0.1.0 | Apache-2.0; original [LICENSE](localsend/LICENSE), [file provenance](localsend/upstream-files.json) and [adaptations](localsend/patches/native-core.patch) retained. |
 | infer 0.22.0 | `bojand/infer` `cb05400c5f43e07200fbc1c5753e15946e9b1de8` | MIT, Bojan; [license](localsend/infer.LICENSE). The crate checksum is in the resolved Cargo.lock. |
 | libportal 0.11.0 | `flatpak/libportal` `fc4d62cfe131e8494c82f597f92b2234d584c367` | LGPL-3.0-only; [COPYING](patches/libportal/COPYING) and [GPL text](patches/libportal/COPYING.GPL3) retained with the [reviewed patch](patches/libportal/0001-capture-request-lifetime-and-async-fd.patch). |
-| FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Software validation configured with GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The unmodified mux example separately retains Fabrice Bellard's MIT notice. |
+| FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Software validation configured with GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The mux example retains Fabrice Bellard's MIT notice and a recorded frame-duration fix. |
 | x264 API build 164 | VideoLAN x264 commit `3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3`, fetched from `mirror/x264` | GPL-2.0-or-later, x264 project; [license text](ffmpeg-examples/COPYING.x264). Runtime use through FFmpeg's existing libx264 adapter. |
 
 The software-codec probe also adapts the decode/drain API flow from FFmpeg's

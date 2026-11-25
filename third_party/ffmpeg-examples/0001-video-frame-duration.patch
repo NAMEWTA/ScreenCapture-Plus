@@ -1,0 +1,11 @@
+--- a/doc/examples/mux.c
++++ b/doc/examples/mux.c
+@@ -521,6 +521,8 @@
+     }
+ 
+     ost->frame->pts = ost->next_pts++;
++    /* Keep the final MP4 sample nonempty after encoder reordering. */
++    ost->frame->duration = 1;
+ 
+     return ost->frame;
+ }

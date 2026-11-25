@@ -1,6 +1,6 @@
 // Decode/drain API flow follows FFmpeg's MIT-licensed demux_decode.c:
 // Copyright (c) 2012 Stefano Sabatini. Exact source and full notice are recorded
-// in third_party/ffmpeg-examples. The encoder is the unmodified upstream mux.c.
+// in third_party/ffmpeg-examples. The encoder reuses upstream mux.c with its recorded frame-duration fix.
 #include "platform/FileCommitter.h"
 
 #include <QCoreApplication>
@@ -160,6 +160,8 @@ void validate(const QString& path, const QString& evidence)
     require(result == AVERROR_EOF, "Input ended with a real read error, not EOF");
     video.decode(nullptr);
     audio.decode(nullptr);
+    std::cout << "Decoded H.264 frames=" << video.frames << ", AAC samples/channel=" << audio.samples
+              << ", sample energy=" << audio.energy << '\n';
     // mux.c intentionally includes the frame at exactly 10 seconds: 0..250.
     require(video.frames == 251, "Encoder flush lost or duplicated video frames");
     require(audio.samples >= 441000 && audio.samples <= 441000 + 2048,
@@ -167,8 +169,6 @@ void validate(const QString& path, const QString& evidence)
     require(audio.energy > 1.0, "Decoded AAC is empty or falsely silent");
     require(video.cover.save(evidence + QStringLiteral("/software-cover.png"), "PNG"),
         "Write the actual Qt video cover");
-    std::cout << "Decoded H.264 frames=" << video.frames << ", AAC samples/channel=" << audio.samples
-              << ", sample energy=" << audio.energy << '\n';
 }
 
 } // namespace
@@ -182,6 +182,9 @@ int main(int argc, char** argv)
         require(QDir().mkpath(evidenceRoot), "Create validation evidence directory");
         QTemporaryDir evidenceDirectory(evidenceRoot + QStringLiteral("/run-XXXXXX"));
         require(evidenceDirectory.isValid(), "Create an exclusively owned evidence run directory");
+        // Preserve the real failed encode as well as successful output for
+        // diagnosis. This private directory contains only generated test data.
+        evidenceDirectory.setAutoRemove(false);
         const auto evidence = evidenceDirectory.path();
         require(avcodec_version() == LIBAVCODEC_VERSION_INT && avformat_version() == LIBAVFORMAT_VERSION_INT
             && avutil_version() == LIBAVUTIL_VERSION_INT && swscale_version() == LIBSWSCALE_VERSION_INT
@@ -198,6 +201,7 @@ int main(int argc, char** argv)
                   << "; Qt " << qVersion() << '\n';
         QTemporaryDir temporary(evidence + QStringLiteral("/音视频-XXXXXX"));
         require(temporary.isValid(), "Create private encoding workspace");
+        temporary.setAutoRemove(false);
         std::error_code error;
         const auto staging = HuhuCapture::Platform::createExclusiveTemporaryFile(nativePath(temporary.path()), error);
         require(!error && !staging.empty(), "Claim an owned staging file");
@@ -214,7 +218,6 @@ int main(int argc, char** argv)
         const auto archived = evidence + QStringLiteral("/software-codec.mp4");
         const auto committed = HuhuCapture::Platform::commitFileNoReplace(nativePath(mp4), nativePath(archived));
         require(committed.durable(), "Finalized and fully decoded MP4 could not be committed durably");
-        evidenceDirectory.setAutoRemove(false);
         std::cout << "PASS same-process Qt + software libx264/native AAC, full decode and archive commit\n"
                   << "This uses known generated test signals; desktop/system/microphone capture is not tested.\n";
         return 0;

@@ -521,6 +521,8 @@ static AVFrame *get_video_frame(OutputStream *ost)
     }
 
     ost->frame->pts = ost->next_pts++;
+    /* Keep the final MP4 sample nonempty after encoder reordering. */
+    ost->frame->duration = 1;
 
     return ost->frame;
 }

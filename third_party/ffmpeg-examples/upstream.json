@@ -10,7 +10,8 @@
       "sha256": "7ea79dc87031e872fb1f27e190f71da6e67ca78056a6957f1561af76aa8ee96d",
       "license": "MIT",
       "copyright": "Copyright (c) 2003 Fabrice Bellard",
-      "modifications": "None; validation target renames main at compile time."
+      "modifications": "Set the generated video frame duration to one codec time-base tick; the fixed libx264 adapter otherwise emits zero-duration packets. main is renamed only at compile time.",
+      "patchedSha256": "76faeaccb88a0275dbf9182742d0e12b672b5c290416792575ceadf64242431e"
     }
   ],
   "use": "Directly compile the upstream API example for P00 software-codec validation; not the product recording implementation.",
@@ -20,5 +21,6 @@
     "license": "MIT",
     "copyright": "Copyright (c) 2012 Stefano Sabatini",
     "use": "Decoder and drain API flow adapted in tests/qt/software_codec_probe.cpp; full original license retained."
-  }
+  },
+  "patch": "0001-video-frame-duration.patch"
 }
