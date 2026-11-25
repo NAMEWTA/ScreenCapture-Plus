@@ -7,6 +7,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QContextMenuEvent>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFontInfo>
@@ -14,6 +15,7 @@
 #include <QKeySequenceEdit>
 #include <QLabel>
 #include <QMessageBox>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QProgressBar>
@@ -72,6 +74,7 @@ QString translated(QStringView key)
         {u"setting.archiveTitle", u"Capture history"}, {u"setting.archiveDescription", u"Saved and copied captures stay in your history."},
         {u"setting.archiveNaming", u"Named YYYYMMDD-HHMMSS"}, {u"setting.openArchive", u"Open folder"},
         {u"setting.savedImmediately", u"Changes are saved automatically"}, {u"setting.saveFailed", u"The setting could not be saved."},
+        {u"lan.settings", u"LAN transfer"},
         {u"shortcut.cap", u"Start capture"}, {u"shortcut.description", u"Click a shortcut, then press new keys. Esc cancels."},
         {u"shortcut.pressKey", u"Press keys..."}, {u"shortcut.reset", u"Reset to F1"},
         {u"shortcut.invalid", u"Choose a supported shortcut combination."}, {u"shortcut.saved", u"Shortcut saved"},
@@ -138,6 +141,10 @@ void historyContracts(const QString& directory)
     require(window.loading() && window.entryCount() == 0, "stale listing ignored");
     window.completeReload(listing, entries); settle();
     require(!window.loading() && window.entryCount() == 25 && thumbnails.size() == 20, "first bounded page snapshot");
+    const auto* compactSend = child<QPushButton>(window, "historySend");
+    require(compactSend->size() == QSize(32, 32) && compactSend->text().isEmpty() && !compactSend->icon().isNull() &&
+        compactSend->toolTip() == translated(u"clipboard.send") && compactSend->accessibleName().contains(entries.entries[0].name),
+        "History Send is a 32-DIP native icon with complete localized accessibility");
     QImage cover(160, 80, QImage::Format_ARGB32); cover.fill(QColor(35, 132, 176));
     require(window.completeThumbnail(generation, thumbnails.front(), cover), "actual image accepted for the exact media snapshot");
     auto changed = thumbnails.front(); ++changed.snapshot.revision[0];
@@ -172,6 +179,15 @@ void historyContracts(const QString& directory)
     key(window, Qt::Key_Home); key(window, Qt::Key_Down);
     require(window.selectedEntry() == 1, "keyboard row selection");
     require(window.requestCommand(UIQ::HistoryCommand::Send) && commands.back().entry.copyAsFile(), "GIF is sent as the original file-valued entry");
+    window.completeCommand(commands.back().token, UIQ::DesktopResult::Cancelled);
+    auto* contextTarget = child<QPushButton>(window, "historySend");
+    QContextMenuEvent context(QContextMenuEvent::Mouse, contextTarget->rect().center(), contextTarget->mapToGlobal(contextTarget->rect().center()));
+    QApplication::sendEvent(contextTarget, &context); settle();
+    auto* sendMenu = child<QMenu>(window, "historyContextMenu");
+    require(sendMenu->actions().size() == 1 && sendMenu->actions().front()->isEnabled(), "Actual history row context menu exposes Send");
+    const auto beforeContext = commands.size(); sendMenu->actions().front()->trigger(); sendMenu->close(); settle();
+    require(commands.size() == beforeContext + 1 && commands.back().command == UIQ::HistoryCommand::Send &&
+        commands.back().entry.snapshot == entries.entries[0].snapshot, "Context Send dispatches the exact clicked media identity");
     window.completeCommand(commands.back().token, UIQ::DesktopResult::Cancelled);
     window.selectEntry(0); require(window.requestCommand(UIQ::HistoryCommand::Copy) && !commands.back().entry.copyAsFile(), "PNG copy keeps its image-kind contract");
     window.completeCommand(commands.back().token, UIQ::DesktopResult::Succeeded);
@@ -232,6 +248,11 @@ void settingsContracts(const QString& directory)
 {
     UIQ::SettingsWindow window; window.setTranslator(translated); auto effective = settingsSnapshot(); window.setSnapshot(effective);
     window.setApplicationVersion(QStringLiteral("1.2.3")); show(window);
+    auto* lan = child<QPushButton>(window, "settingsLan"); require(!lan->isVisible(), "Unconnected LAN settings entry is absent");
+    unsigned lanRequests{}; QObject::connect(&window, &UIQ::SettingsWindow::lanSettingsRequested, &window, [&] { ++lanRequests; });
+    effective.canOpenLanSettings = true; window.setSnapshot(effective); settle(); click(*lan);
+    require(lanRequests == 1 && lan->text() == translated(u"lan.settings"), "General settings opens the shared LAN view through its real host boundary");
+    effective.canOpenLanSettings = false; window.setSnapshot(effective); settle();
     struct Change { quint64 token; UIQ::SettingChange value; }; std::vector<Change> changes;
     QObject::connect(&window, &UIQ::SettingsWindow::changeRequested, &window,
         [&](quint64 token, const UIQ::SettingChange& value) { changes.push_back({token, value}); });

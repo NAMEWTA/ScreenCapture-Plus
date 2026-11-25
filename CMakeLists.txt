@@ -354,6 +354,20 @@ if(HUHUCAPTURE_QT_VALIDATION)
         target_link_libraries(huhucapture_receive_archive PUBLIC huhucapture_media_archive
             huhucapture_transfer PRIVATE huhucapture_rust Threads::Threads)
         set_target_properties(huhucapture_receive_archive PROPERTIES CXX_EXTENSIONS OFF)
+        add_library(huhucapture_transfer_ui STATIC
+            src/ui/qt/TransferPresentation.h
+            src/ui/qt/TransferWindow.h src/ui/qt/TransferWindow.cpp
+            src/ui/qt/ReceivePrompt.h src/ui/qt/ReceivePrompt.cpp
+            src/ui/qt/TransferSettingsPanel.h src/ui/qt/TransferSettingsPanel.cpp)
+        set_target_properties(huhucapture_transfer_ui PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+        target_link_libraries(huhucapture_transfer_ui PUBLIC huhucapture_transfer
+            huhucapture_desktop Qt6::Widgets Qt6::Network)
+        huhucapture_test(qt_transfer_ui tests/qt/transfer_ui_tests.cpp
+            "${PROJECT_BINARY_DIR}/transfer-render/$<CONFIG>")
+        target_link_libraries(qt_transfer_ui PRIVATE huhucapture_transfer_ui
+            huhucapture_receive_archive huhucapture_languages)
+        set_tests_properties(qt_transfer_ui PROPERTIES TIMEOUT 240
+            ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
         huhucapture_test(qt_rust_bridge tests/qt/rust_bridge_probe.cpp
             "${PROJECT_BINARY_DIR}/rust-bridge/$<CONFIG>")
         target_link_libraries(qt_rust_bridge PRIVATE huhucapture_gif_inspection)
@@ -365,6 +379,7 @@ if(HUHUCAPTURE_QT_VALIDATION)
         if(MSVC)
             target_link_options(qt_rust_bridge PRIVATE /WX)
             target_link_options(qt_transfer_service PRIVATE /WX)
+            target_link_options(qt_transfer_ui PRIVATE /WX)
         endif()
         set_tests_properties(qt_rust_bridge PROPERTIES TIMEOUT 180
             ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")

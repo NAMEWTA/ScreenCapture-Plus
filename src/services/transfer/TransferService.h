@@ -37,6 +37,15 @@ struct TransferLimits {
         (maximumNativeOperations + maximumReceiveProgress) * maximumSmallJsonBytes;
     static constexpr std::uint32_t nativePollMilliseconds = 20;
     static constexpr int notificationMilliseconds = 100;
+    // Reopening a view restores application-owned facts, not a second task
+    // controller. Completed activity is deliberately finite; media history is
+    // the durable record. No private key, PIN or media lease is retained here.
+    static constexpr std::size_t maximumViewSourceBytes = 128 * 1024;
+    static constexpr std::size_t maximumRecentTasks = 16;
+    static constexpr std::size_t maximumRecentTaskBytes = 8 * 1024 * 1024;
+    static constexpr std::size_t maximumRecentDiscoveries = 16;
+    static constexpr std::size_t maximumRecentDiscoveryBytes = 256 * 1024;
+    static constexpr std::int64_t recentTaskLifetimeMilliseconds = 30 * 60 * 1000;
 };
 
 class PreparedMedia;
@@ -59,12 +68,16 @@ public:
     PreparedMedia& operator=(const PreparedMedia&) = delete;
     const HuhuMediaLeaseInfo& info() const noexcept { return info_; }
     const HuhuMediaLease* nativeHandle() const noexcept { return native_; }
+    const QString& path() const noexcept { return path_; }
+    const Platform::FileSnapshot& snapshot() const noexcept { return snapshot_; }
 private:
     PreparedMedia(HuhuMediaLease* native, HuhuMediaLeaseInfo info,
-        std::shared_ptr<const void> historyLease);
+        std::shared_ptr<const void> historyLease, QString path, Platform::FileSnapshot snapshot);
     HuhuMediaLease* native_{};
     HuhuMediaLeaseInfo info_{};
     std::shared_ptr<const void> historyLease_;
+    QString path_;
+    Platform::FileSnapshot snapshot_;
 };
 
 using RequestId = std::uint64_t;
@@ -81,6 +94,16 @@ enum class EventKind : std::uint32_t {
     Disabled = 101,
     CommandFinished = 102,
     ReceiveProgress = 103,
+    // Only facade admission, never remote acceptance or completed transfer.
+    SendQueued = 104,
+    ReceiveDecisionQueued = 105,
+};
+
+struct SendFile {
+    QString path;
+    QString name;
+    Platform::FileSnapshot snapshot;
+    std::uint32_t mediaKind{};
 };
 
 struct Event {
@@ -94,6 +117,23 @@ struct Event {
     QJsonObject data;
     std::vector<ReceiveResult> receivedFiles;
     std::optional<ReceiveProgress> receiveProgress;
+    // Present only on SendQueued. These immutable values allow a retry to ask
+    // the host for a NEW validated lease; they do not retain an open source.
+    std::vector<SendFile> sendFiles;
+    // Monotonic order assigned by this facade when it publishes/cache-delivers
+    // an event. It orders a manual probe against a later discovery snapshot.
+    std::uint64_t sequence{};
+};
+
+struct ViewSnapshot {
+    ServiceState state{ServiceState::Disabled};
+    std::optional<Event> service;
+    std::optional<Event> devices;
+    // Each task is replayed in origin/decision/progress/terminal order. Device
+    // snapshots and progress are coalesced; the same Event contract is used by
+    // live subscribers. Expired completed tasks are absent, active tasks stay.
+    std::vector<Event> events;
+    std::size_t retainedBytes{};
 };
 
 struct Submission {
@@ -128,7 +168,8 @@ public:
     // identity is generated or silently replaced here. A cold service creates
     // no Rust runtime/listener/discovery until this explicit call succeeds.
     Submission enable(QByteArray configuration, std::unique_ptr<ReceiveSink> sink);
-    Submission send(QByteArray verifiedPeer, std::vector<std::shared_ptr<const PreparedMedia>> media);
+    Submission send(QByteArray verifiedPeer, std::vector<std::shared_ptr<const PreparedMedia>> media,
+        QString displayAlias = {});
     Submission discover(QString address, std::uint16_t port);
     Submission accept(QString sessionId, QStringList fileIds);
     Submission cancelSend(RequestId request);
@@ -140,6 +181,9 @@ public:
     int disable();
     ServiceState state() const;
     Statistics statistics() const;
+    // GUI-thread only. Returns nullopt on a foreign thread. Snapshot reads do
+    // not start networking and never wait for the actor or a file operation.
+    std::optional<ViewSnapshot> viewSnapshot() const;
 
     // Final lifetime barrier, also used by the destructor. Normal UI exit first
     // calls disable and waits for Disabled; only the final teardown joins here.
@@ -152,6 +196,7 @@ signals:
 private:
     struct Impl;
     void drainNotifications();
+    void remember(Event& event);
     std::unique_ptr<Impl> impl_;
     QTimer notifications_;
 };

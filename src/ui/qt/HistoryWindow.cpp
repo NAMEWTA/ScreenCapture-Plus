@@ -3,11 +3,13 @@
 #include "ui/qt/DesktopTheme.h"
 #include <QAbstractButton>
 #include <QCloseEvent>
+#include <QContextMenuEvent>
 #include <QDateTime>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLocale>
 #include <QMessageBox>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
@@ -112,6 +114,11 @@ public:
         text->setMinimumWidth(0); line->addWidget(text, 1);
         auto* actions = new QHBoxLayout; actions->setContentsMargins(0, 0, 0, 0); actions->setSpacing(8);
         copy = Theme::button(this, "historyCopy"); reveal = Theme::button(this, "historyReveal"); send = Theme::button(this, "historySend");
+        // Reuse the native Qt action icon and focus/keyboard behavior. A
+        // localized tooltip/accessibility name supplies the compact meaning.
+        send->setFixedSize(32, 32); send->setIconSize({18, 18});
+        send->setIcon(style()->standardIcon(QStyle::SP_ArrowForward));
+        send->setStyleSheet(QStringLiteral("QPushButton { padding: 0; } QPushButton:focus { padding: 0; }"));
         actions->addWidget(copy); actions->addWidget(reveal); actions->addWidget(send); line->addLayout(actions);
         for (auto* child : findChildren<QWidget*>()) child->setProperty("historyIndex", QVariant::fromValue(position));
         setProperty("historyIndex", QVariant::fromValue(position));
@@ -144,6 +151,7 @@ struct HistoryWindow::State {
     HistoryCommand command{HistoryCommand::OpenFolder};
     bool removing{}, closed{}, loadFailed{};
     QPointer<QMessageBox> confirmation;
+    QPointer<QMenu> contextMenu;
     QLabel *heading{}, *summary{}, *status{}, *shortcuts{}, *emptyHeading{}, *emptyHint{};
     Theme::ElidingLabel* path{};
     QPushButton *open{}, *refresh{}, *clear{}, *previous{}, *next{}, *close{};
@@ -243,7 +251,8 @@ void HistoryWindow::refreshRows()
     for (auto* row : state_->rows) {
         const auto& entry = state_->entries[static_cast<std::size_t>(row->index)];
         row->copy->setText(translated(u"clipboard.copy")); row->reveal->setText(translated(u"clipboard.reveal"));
-        row->send->setText(translated(u"clipboard.send"));
+        row->send->setText({}); row->send->setToolTip(translated(u"clipboard.send"));
+        row->send->setAccessibleName(translated(u"clipboard.send") + QStringLiteral(" · ") + entry.name);
         row->preview->setAccessibleName(translated(u"clipboard.preview") + QStringLiteral(" · ") + entry.name);
         row->preview->setToolTip(translated(u"clipboard.preview"));
         row->metadata->setFullText(translated(entry.copyAsFile() ? u"clipboard.video" : u"clipboard.image") +
@@ -492,6 +501,32 @@ bool HistoryWindow::eventFilter(QObject* watched, QEvent* event)
         if (value.isValid()) selectEntry(value.toLongLong());
     }
     if (event->type() == QEvent::KeyPress && handleKey(static_cast<QKeyEvent*>(event))) return true;
+    if (event->type() == QEvent::ContextMenu && state_->capabilities.send && !state_->closed) {
+        const auto value = watched->property("historyIndex");
+        if (value.isValid()) {
+            const auto index = value.toLongLong();
+            if (index < 0 || index >= entryCount()) return false;
+            selectEntry(index);
+            const auto selected = state_->entries[static_cast<std::size_t>(index)];
+            if (state_->contextMenu) state_->contextMenu->close();
+            auto* menu = new QMenu(this); menu->setObjectName(QStringLiteral("historyContextMenu"));
+            menu->setAttribute(::Qt::WA_DeleteOnClose); menu->setFont(Theme::font()); state_->contextMenu = menu;
+            auto* send = menu->addAction(translated(u"clipboard.send")); send->setObjectName(QStringLiteral("historyContextSend"));
+            send->setEnabled(!loading() && !commandPending() && !state_->confirmation);
+            connect(send, &QAction::triggered, this, [this, selected] {
+                const auto found = std::find_if(state_->entries.begin(), state_->entries.end(),
+                    [&](const auto& entry) { return sameEntry(entry, selected); });
+                if (found == state_->entries.end() || state_->closed) return;
+                selectEntry(static_cast<qsizetype>(std::distance(state_->entries.begin(), found)));
+                requestCommand(HistoryCommand::Send);
+            });
+            const auto* context = static_cast<QContextMenuEvent*>(event);
+            auto position = context->globalPos();
+            if (context->reason() == QContextMenuEvent::Keyboard)
+                if (auto* widget = qobject_cast<QWidget*>(watched)) position = widget->mapToGlobal(widget->rect().center());
+            menu->popup(position); event->accept(); return true;
+        }
+    }
     return QWidget::eventFilter(watched, event);
 }
 void HistoryWindow::keyPressEvent(QKeyEvent* event)
@@ -500,6 +535,7 @@ void HistoryWindow::closeEvent(QCloseEvent* event)
 {
     event->accept(); state_->closed = true;
     const QPointer<HistoryWindow> lifetime(this);
+    if (state_->contextMenu) state_->contextMenu->close();
     if (state_->confirmation) state_->confirmation->reject();
     if (!lifetime) return;
     state_->reloadToken = 0; state_->commandToken = 0; state_->removing = false;

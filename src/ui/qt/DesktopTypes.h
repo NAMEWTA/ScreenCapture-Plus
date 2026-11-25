@@ -21,6 +21,7 @@ struct SettingsSnapshot {
     bool canChangeLanguage{};
     bool canOpenArchive{};
     bool canOpenLinks{};
+    bool canOpenLanSettings{};
     QString autoStartUnavailableReason;
     QString languageCode;
     QString effectiveLanguageCode;

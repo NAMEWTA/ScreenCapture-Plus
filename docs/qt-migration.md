@@ -23,7 +23,7 @@
 | `src/services/localization/` | 六份原语言、同一 BOM 解析器、英语回退、目录优先级和缓存刷新 | 正式窗口语言切换、长译文与 IME 验收 |
 | `src/services/media/` | 共用受管文件命名、PNG 编码 / 完整解码、流式导入、身份租约与持久化结果 | 服务实际验证、完整 GIF / MP4 接入、缩略图缓存、回收及历史 UI 装配 |
 | `src/services/desktop/` | 共用剪贴板准备/发布、回收/第二次永久删除许可、异步文件定位；Windows 旧入口直接共用提取的原生实现 | 双平台新增真实检查、正式应用接线与桌面交互验收 |
-| `src/services/transfer/` | 有界 Qt actor 与独立接收 worker，接受前空间预留、完整校验后统一归档、持久化结果与已发布路径 | 真实服务集成测试、设备 / 确认 / 进度 UI、物理双端与性能门槛 |
+| `src/services/transfer/` 与 `src/ui/qt/Transfer*` / `ReceivePrompt` | 有界 Qt actor 与独立接收 worker，真实接收归档、完整校验、设备 / 证书确认 / 进度 UI、窗口重开所需有界结果快照 | 新增界面实际 CI、正式持久身份和网卡装配、物理双端与性能门槛 |
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
 | `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；KWindowSystem 异步父窗导出已通过指定 Sway 生命周期测试 | PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
@@ -62,7 +62,7 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 | P07 | 共享 Qt 编辑器组件进入验证，未验收 | 正式 Qt CLI / 单实例 / 托盘、设置 / 历史 / 关于及采集和输出服务接线 |
 | P08 | 未验收 | 共用长截图会话、平台帧源与实际滚动 |
 | P09 | Windows 错误和 finalize 边界已修复 | Qt 工具条、Linux MP4 / 音频、共享 GIF、长时同步与恢复 |
-| P10 | 上游 core、聚合 C ABI 及故障测试实施中 | 同进程验证、任务和设备 UI、接收归档与 P10a 双平台互传；P10b 独立记录 |
+| P10 | 上游 core、聚合 C ABI、真实 TLS 归档测试和共享任务 / 设备 UI 实施中 | 新增界面实际验证、正式身份 / 网卡装配与 P10a 双平台互传；P10b 独立记录 |
 | P11 | 未验收 | 旧版更新桥接、完整包下载及 Windows / Linux 安装格式 |
 | P12 | 未验收 | F01–F15、真实双屏 / IME / 音视频、性能、稳定性和干净机器升级卸载 |
 | P13 | 等待 P12 | 删除旧生产架构后从干净检出重新验证 |

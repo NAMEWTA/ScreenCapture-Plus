@@ -240,10 +240,10 @@ struct SettingsWindow::State {
     bool captureActive{};
     QVBoxLayout* contentLayout{};
     QStackedWidget *pages{}, *shortcutControls{};
-    QWidget *general{}, *shortcut{};
+    QWidget *general{}, *shortcut{}, *lanRow{};
     AboutPanel* about{};
     std::array<QPushButton*, 3> navigation{};
-    QPushButton *close{}, *archive{}, *shortcutButton{}, *reset{};
+    QPushButton *close{}, *archive{}, *shortcutButton{}, *reset{}, *lan{};
     ToggleSwitch* autoStart{};
     LanguageChoice* language{};
     ShortcutRecorder* recorder{};
@@ -329,6 +329,11 @@ void SettingsWindow::makeGeneral()
     state_->archivePath = new Theme::ElidingLabel(archive); state_->archivePath->setObjectName(QStringLiteral("settingsArchivePath"));
     state_->archivePath->setFont(Theme::font(12)); state_->archivePath->setProperty("secondary", true); archiveLayout->addWidget(state_->archivePath);
     archiveLayout->addWidget(localizedLabel(archive, u"setting.archiveNaming", 12, true)); layout->addWidget(archive); layout->addSpacing(12);
+    state_->lanRow = new QWidget(state_->general); auto* lanLayout = new QHBoxLayout(state_->lanRow);
+    lanLayout->setContentsMargins(0, 0, 0, 12); lanLayout->setSpacing(0);
+    state_->lan = Theme::button(state_->lanRow, "settingsLan");
+    state_->lan->setProperty("languageKey", QStringLiteral("lan.settings"));
+    lanLayout->addWidget(state_->lan); lanLayout->addStretch(); layout->addWidget(state_->lanRow);
     state_->footer = localizedLabel(state_->general, u"setting.savedImmediately", 12, true); layout->addWidget(state_->footer); layout->addStretch();
     state_->pages->addWidget(state_->general);
     connect(state_->autoStart, &QCheckBox::clicked, this, [this](bool enabled) {
@@ -348,6 +353,9 @@ void SettingsWindow::makeGeneral()
     });
     connect(state_->archive, &QPushButton::clicked, this, [this] {
         if (state_->snapshot.canOpenArchive && !state_->snapshot.archiveDirectory.isEmpty()) Q_EMIT openArchiveRequested();
+    });
+    connect(state_->lan, &QPushButton::clicked, this, [this] {
+        if (state_->snapshot.canOpenLanSettings) Q_EMIT lanSettingsRequested();
     });
 }
 
@@ -466,6 +474,7 @@ void SettingsWindow::updateActions()
     state_->autoStart->setEnabled(active && snapshot.canChangeAutoStart);
     state_->language->setEnabled(active && (snapshot.canChangeLanguage || snapshot.canOpenLinks) && state_->language->count() > 0);
     state_->archive->setEnabled(snapshot.canOpenArchive && !snapshot.archiveDirectory.isEmpty());
+    state_->lanRow->setVisible(snapshot.canOpenLanSettings); state_->lan->setEnabled(snapshot.canOpenLanSettings);
     state_->shortcutButton->setEnabled(active && snapshot.shortcutEditing != ShortcutEditing::Unavailable);
     state_->reset->setEnabled(active && snapshot.shortcutEditing == ShortcutEditing::LocalCapture);
 }

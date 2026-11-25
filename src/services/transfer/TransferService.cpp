@@ -3,11 +3,13 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QFileInfo>
 #include <QPointer>
 #include <QThread>
 #include <algorithm>
 #include <array>
 #include <condition_variable>
+#include <chrono>
 #include <deque>
 #include <limits>
 #include <map>
@@ -18,6 +20,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <utility>
 
 namespace HuhuCapture::Transfer {
@@ -67,7 +70,7 @@ Parsed takeBuffer(HuhuBuffer* raw, bool array = false)
 Event makeEvent(EventKind kind, int status, RequestId request, std::uint64_t generation,
     QJsonObject data = {})
 {
-    return {kind, status, request, generation, std::move(data), {}, {}};
+    return {kind, status, request, generation, std::move(data), {}, {}, {}, 0};
 }
 
 QJsonObject errorData(const char* message)
@@ -87,14 +90,16 @@ std::size_t eventBytes(const Event& event)
         count += sizeof(ReceiveProgress) + sizeof(QChar) * static_cast<std::size_t>(
             event.receiveProgress->sessionId.size() + event.receiveProgress->fileId.size());
     }
+    for (const auto& file : event.sendFiles)
+        count += sizeof(SendFile) + sizeof(QChar) * static_cast<std::size_t>(file.path.size() + file.name.size());
     return count;
 }
 
 } // namespace
 
 PreparedMedia::PreparedMedia(HuhuMediaLease* native, HuhuMediaLeaseInfo info,
-    std::shared_ptr<const void> historyLease)
-    : native_(native), info_(info), historyLease_(std::move(historyLease))
+    std::shared_ptr<const void> historyLease, QString path, Platform::FileSnapshot snapshot)
+    : native_(native), info_(info), historyLease_(std::move(historyLease)), path_(std::move(path)), snapshot_(snapshot)
 {
 }
 
@@ -117,11 +122,64 @@ PreparedMediaResult PreparedMedia::open(const QString& path, const Platform::Fil
         return {HUHU_INVALID_STATE, {}};
     if (info.bytes != expected.bytes) return {HUHU_LENGTH_MISMATCH, {}};
     if (info.media_kind != expectedMediaKind) return {HUHU_INVALID_MEDIA, {}};
-    return {HUHU_OK, std::shared_ptr<const PreparedMedia>(
-        new PreparedMedia(owner.release(), info, std::move(historyLease)))};
+    auto prepared = std::unique_ptr<PreparedMedia>(new PreparedMedia(owner.get(), info, std::move(historyLease), path, expected));
+    (void)owner.release();
+    return {HUHU_OK, std::shared_ptr<const PreparedMedia>(std::move(prepared))};
 }
 
 struct TransferService::Impl {
+    // GUI-owned read model of this same service. It never drives an operation
+    // and owns no workers, leases, certificates, PINs or callback recipients.
+    struct TaskView {
+        std::optional<Event> origin;
+        std::optional<Event> decision;
+        std::optional<Event> progress;
+        std::map<QString, Event> receiveProgress;
+        std::optional<Event> terminal;
+        std::chrono::steady_clock::time_point completed;
+        std::size_t retainedBytes{};
+        std::size_t bytes() const noexcept { return retainedBytes; }
+        void recount()
+        {
+            std::size_t value{};
+            for (const auto* item : {&origin, &decision, &progress, &terminal})
+                if (*item) value += eventBytes(**item);
+            for (const auto& [key, item] : receiveProgress) { (void)key; value += eventBytes(item); }
+            retainedBytes = value;
+        }
+    };
+    using ViewKey = std::tuple<std::uint64_t, int, RequestId, QString>;
+    mutable std::map<ViewKey, TaskView> views;
+    std::optional<Event> viewService;
+    std::optional<Event> viewDevices;
+
+    void pruneViews() const
+    {
+        const auto now = std::chrono::steady_clock::now();
+        std::array<std::size_t, 2> count{}, amount{};
+        for (auto it = views.begin(); it != views.end();) {
+            if (!it->second.terminal) { ++it; continue; }
+            if (now - it->second.completed >= std::chrono::milliseconds(TransferLimits::recentTaskLifetimeMilliseconds))
+                it = views.erase(it);
+            else {
+                const auto category = std::get<1>(it->first) == 3 ? std::size_t{1} : std::size_t{0};
+                ++count[category]; amount[category] += it->second.bytes(); ++it;
+            }
+        }
+        for (std::size_t category = 0; category < count.size(); ++category) {
+            const auto maximumCount = category == 0 ? TransferLimits::maximumRecentTasks : TransferLimits::maximumRecentDiscoveries;
+            const auto maximumBytes = category == 0 ? TransferLimits::maximumRecentTaskBytes : TransferLimits::maximumRecentDiscoveryBytes;
+            while (count[category] > maximumCount || amount[category] > maximumBytes) {
+                auto oldest = views.end();
+                for (auto it = views.begin(); it != views.end(); ++it)
+                    if (it->second.terminal && (std::get<1>(it->first) == 3) == (category == 1) &&
+                        (oldest == views.end() || it->second.completed < oldest->second.completed)) oldest = it;
+                if (oldest == views.end()) break;
+                amount[category] -= oldest->second.bytes(); --count[category]; views.erase(oldest);
+            }
+        }
+    }
+
     enum class CommandKind { Enable, Send, Discover, Accept, CancelSend, CancelReceive };
     struct Command {
         CommandKind kind{};
@@ -167,6 +225,7 @@ struct TransferService::Impl {
     ServiceState serviceState{ServiceState::Disabled};
     RequestId nextRequest{1};
     std::uint64_t nextGeneration{};
+    std::uint64_t observationSequence{};
     bool closing{};
     bool stopRequested{};
     bool nativeRunning{};
@@ -221,6 +280,7 @@ struct TransferService::Impl {
         std::lock_guard lock(mutex);
         if (reservedNotifications == 0 || reservedBytes < budget)
             throw std::logic_error("Transfer terminal has no reserved notification");
+        event.sequence = ++observationSequence;
         notifications.push_back({std::move(event), amount});
         --reservedNotifications;
         reservedBytes -= budget;
@@ -260,6 +320,7 @@ struct TransferService::Impl {
         const auto budget = deviceList ? TransferLimits::maximumControlJsonBytes : smallBudget;
         if (amount > budget) { fail(HUHU_LIMIT_EXCEEDED, "Transfer snapshot exceeds its byte budget"); return; }
         std::lock_guard lock(mutex);
+        event.sequence = ++observationSequence;
         if (deviceList) devices = Notice{std::move(event), amount};
         else if (event.receiveProgress) {
             const auto attempt = event.receiveProgress->attempt;
@@ -869,19 +930,45 @@ Submission TransferService::enable(QByteArray configuration, std::unique_ptr<Rec
     return result;
 }
 
-Submission TransferService::send(QByteArray verifiedPeer, std::vector<std::shared_ptr<const PreparedMedia>> media)
+Submission TransferService::send(QByteArray verifiedPeer, std::vector<std::shared_ptr<const PreparedMedia>> media,
+    QString displayAlias)
 {
     if (QThread::currentThread() != thread() || verifiedPeer.isEmpty() ||
         static_cast<std::size_t>(verifiedPeer.size()) > TransferLimits::maximumSmallJsonBytes ||
         media.empty() || media.size() > TransferLimits::maximumFiles ||
         std::any_of(media.begin(), media.end(), [](const auto& item) { return !item; }))
         return {HUHU_INVALID_ARGUMENT, 0};
+    if (!displayAlias.isEmpty() && !boundedText(displayAlias, 256)) return {HUHU_INVALID_ARGUMENT, 0};
+    const auto peerDocument = QJsonDocument::fromJson(verifiedPeer);
+    if (!peerDocument.isObject()) return {HUHU_INVALID_ARGUMENT, 0};
+    const auto peer = peerDocument.object();
+    // The optional protocol PIN must never enter a long-lived view snapshot.
+    QJsonObject visiblePeer{{QStringLiteral("address"), peer.value(QStringLiteral("address"))},
+        {QStringLiteral("port"), peer.value(QStringLiteral("port"))},
+        {QStringLiteral("fingerprint"), peer.value(QStringLiteral("fingerprint"))},
+        {QStringLiteral("alias"), std::move(displayAlias)}};
+    Event queued = makeEvent(EventKind::SendQueued, HUHU_OK, 0, 0,
+        {{QStringLiteral("peer"), visiblePeer}});
+    for (const auto& file : media) {
+        queued.sendFiles.push_back({file->path(), QFileInfo(file->path()).fileName(), file->snapshot(), file->info().media_kind});
+        if (eventBytes(queued) > TransferLimits::maximumViewSourceBytes) return {HUHU_LIMIT_EXCEEDED, 0};
+    }
     Impl::Command command;
     command.kind = Impl::CommandKind::Send;
     command.terminalBudget = Impl::terminalBudget;
     command.json = std::move(verifiedPeer);
     command.media = std::move(media);
-    return impl_->submit(std::move(command));
+    const auto result = impl_->submit(std::move(command));
+    if (result) {
+        queued.request = result.request;
+        {
+            std::lock_guard lock(impl_->mutex);
+            queued.generation = impl_->nextGeneration; queued.sequence = ++impl_->observationSequence;
+        }
+        remember(queued);
+        emit eventReady(queued);
+    }
+    return result;
 }
 
 Submission TransferService::discover(QString address, std::uint16_t port)
@@ -905,9 +992,22 @@ Submission TransferService::accept(QString sessionId, QStringList fileIds)
         return {HUHU_INVALID_ARGUMENT, 0};
     Impl::Command command;
     command.kind = Impl::CommandKind::Accept;
-    command.text = std::move(sessionId);
-    command.fileIds = std::move(fileIds);
-    return impl_->submit(std::move(command));
+    command.text = sessionId;
+    command.fileIds = fileIds;
+    const auto result = impl_->submit(std::move(command));
+    if (result) {
+        QJsonArray selected;
+        for (const auto& id : fileIds) selected.append(id);
+        auto queued = makeEvent(EventKind::ReceiveDecisionQueued, HUHU_OK, result.request, 0,
+            {{QStringLiteral("sessionId"), sessionId}, {QStringLiteral("fileIds"), selected}});
+        {
+            std::lock_guard lock(impl_->mutex);
+            queued.generation = impl_->nextGeneration; queued.sequence = ++impl_->observationSequence;
+        }
+        remember(queued);
+        emit eventReady(queued);
+    }
+    return result;
 }
 
 Submission TransferService::cancelSend(RequestId request)
@@ -960,6 +1060,85 @@ Statistics TransferService::statistics() const
         impl_->reservedNotifications, impl_->reservedBytes, impl_->nativeRunning};
 }
 
+std::optional<ViewSnapshot> TransferService::viewSnapshot() const
+{
+    if (QThread::currentThread() != thread()) return {};
+    impl_->pruneViews();
+    ViewSnapshot result;
+    result.state = state();
+    result.service = impl_->viewService;
+    result.devices = impl_->viewDevices;
+    auto append = [&result](const Event& event) { result.events.push_back(event); };
+    if (result.service) result.retainedBytes += eventBytes(*result.service);
+    if (result.devices) result.retainedBytes += eventBytes(*result.devices);
+    for (const auto& [key, task] : impl_->views) {
+        (void)key;
+        result.retainedBytes += task.bytes();
+        if (task.origin) append(*task.origin);
+        if (task.decision) append(*task.decision);
+        if (task.progress) append(*task.progress);
+        for (const auto& [file, event] : task.receiveProgress) { (void)file; append(event); }
+        if (task.terminal) append(*task.terminal);
+    }
+    return result;
+}
+
+void TransferService::remember(Event& event)
+{
+    if (event.kind == EventKind::Enabled || event.kind == EventKind::Disabled || event.kind == EventKind::ListenerFailed) {
+        impl_->viewService = event;
+        if (event.kind == EventKind::Disabled) impl_->viewDevices.reset();
+        impl_->pruneViews(); return;
+    }
+    if (event.kind == EventKind::DevicesChanged) { impl_->viewDevices = event; return; }
+    int direction{};
+    QString identity;
+    switch (event.kind) {
+    case EventKind::SendQueued: case EventKind::SendProgress: case EventKind::SendFinished:
+        direction = 1; identity = QString::number(static_cast<qulonglong>(event.request)); break;
+    case EventKind::ReceiveOffer: case EventKind::ReceiveFinished: case EventKind::ReceiveDecisionQueued:
+        direction = 2; identity = event.data.value(QStringLiteral("sessionId")).toString(); break;
+    case EventKind::ReceiveProgress:
+        if (!event.receiveProgress) return;
+        direction = 2; identity = event.receiveProgress->sessionId; break;
+    case EventKind::CommandFinished:
+        if (event.data.value(QStringLiteral("command")).toString() != QStringLiteral("accept")) return;
+        direction = 2; identity = event.data.value(QStringLiteral("sessionId")).toString(); break;
+    case EventKind::DiscoveryFinished:
+        direction = 3; identity = QString::number(static_cast<qulonglong>(event.request)); break;
+    default: return;
+    }
+    if (identity.isEmpty()) return;
+    const Impl::ViewKey key{event.generation, direction, direction == 2 ? RequestId{} : event.request, identity};
+    // Invalid/stale public accept calls can receive CommandFinished without
+    // ever belonging to an offered session. They must not create immortal
+    // nonterminal read-model entries as their command queue drains.
+    if (direction == 2 && event.kind != EventKind::ReceiveOffer && event.kind != EventKind::ReceiveFinished &&
+        !impl_->views.contains(key)) return;
+    auto& task = impl_->views[key];
+    if (event.kind == EventKind::SendQueued || event.kind == EventKind::ReceiveOffer) task.origin = event;
+    else if (event.kind == EventKind::ReceiveDecisionQueued) task.decision = event;
+    else if (event.kind == EventKind::CommandFinished) {
+        if (task.decision && task.decision->request == event.request) {
+            task.decision->kind = event.kind;
+            task.decision->status = event.status;
+            task.decision->data.insert(QStringLiteral("command"), QStringLiteral("accept"));
+        }
+    } else if (event.kind == EventKind::SendProgress && !task.terminal) task.progress = event;
+    else if (event.kind == EventKind::ReceiveProgress && !task.terminal) {
+        const auto& progress = *event.receiveProgress;
+        auto previous = task.receiveProgress.find(progress.fileId);
+        if (previous == task.receiveProgress.end() || previous->second.receiveProgress->attempt <= progress.attempt)
+            task.receiveProgress.insert_or_assign(progress.fileId, event);
+    } else if (event.kind == EventKind::SendFinished || event.kind == EventKind::ReceiveFinished || event.kind == EventKind::DiscoveryFinished) {
+        task.terminal = event;
+        task.progress.reset(); task.receiveProgress.clear();
+        task.completed = std::chrono::steady_clock::now();
+    }
+    task.recount();
+    impl_->pruneViews();
+}
+
 void TransferService::shutdownAndJoin() noexcept
 {
     // This method is a final barrier, not an ordinary UI stop button. It may
@@ -988,6 +1167,10 @@ void TransferService::drainNotifications()
     // Direct same-GUI-thread subscribers can delete their owner/service. No
     // actor ever dereferences QObject; stop this delivery if the facade dies.
     QPointer<TransferService> alive(this);
+    // Install the complete drained state before calling any subscriber. A view
+    // constructed from a callback sees a terminal already queued in this batch
+    // and cannot resurrect a receive offer which timed out while it was closed.
+    for (auto& event : pending) remember(event);
     for (const auto& event : pending) {
         emit eventReady(event);
         if (!alive) return;

@@ -32,6 +32,7 @@ Q_SIGNALS:
     void changeRequested(quint64 token, const SettingChange& change);
     void shortcutCaptureActive(bool active);
     void openArchiveRequested();
+    void lanSettingsRequested();
     void openLinkRequested(const QUrl& url);
     void downloadRequested();
     void openUpdateFolderRequested(const QString& file);
