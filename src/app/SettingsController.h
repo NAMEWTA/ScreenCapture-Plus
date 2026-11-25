@@ -30,6 +30,9 @@ public:
     void setStandardDialogLanguageAvailable(bool available);
     void setApplicationVersion(const QString& version);
     void setUpdateSnapshot(const UI::Qt::AboutUpdateSnapshot& update);
+    // Actual desktop registration, excluding a temporarily suspended key
+    // editor. A stored shortcut string alone is not an available stop action.
+    bool captureShortcutAvailable() const;
     bool busy() const;
     void shutdown();
 

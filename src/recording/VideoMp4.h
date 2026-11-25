@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/RecordingResult.h"
+#include "core/CaptureControls.h"
 #include <windows.h>
 #include <dxgi1_2.h>
 #include <mfapi.h>
@@ -50,6 +51,7 @@ struct DESKTOPCAPTUREPARAMS
     RECT GdiRegion{}; // physical virtual-desktop coordinates, never monitor-local
     std::uint64_t MaximumFrameBytes{256ull * 1024 * 1024};
     std::uint64_t MaximumQueuedAudioBytes{16ull * 1024 * 1024};
+    std::shared_ptr<HuhuCapture::Core::CaptureControls> Controls;
     unsigned long long FirstFrameTimeoutMS{5000};
     bool DurationLimitReached{}; // worker-owned, read after completion
 

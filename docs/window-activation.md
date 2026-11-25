@@ -39,19 +39,38 @@ replace another user's window state. Application hosts decide how to present
 that result without destroying captured pixels or an existing document.
 
 `tests/qt/window_activation_tests.cpp` exercises actual native focus on a desktop
-backend, queued cancellation and target destruction. Its offscreen mode only
-checks explicit refusal, not positive desktop behavior. The fixed Linux SDK has
-actually compiled the manager, generated protocol, service and tests, and run
-the offscreen refusal. Windows focus and externally supplied Wayland tokens still
-require their distinct real desktop/compositor runs; the existence of this
-adapter or a successful compile is not that evidence.
+backend, queued cancellation, target destruction and a window hidden during its
+focus notification. The target must first be exposed and have painted, as in
+the existing native screen-capture fixture. Merely returning from `show()` does
+not establish that precondition. The disappearing-window case also waits for
+exposure before requesting focus, and must not deliver stale success after the
+focus observer hides it.
 
-The Windows CI run `45599557690`, job `139154681846`, found a focus assertion
-failure after 0.15 seconds; its original log did not include native focus state,
-so its exact competing-window sequence cannot be inferred. The follow-up keeps
-the positive actual-focus assertion, adds native/Qt state and typed-error
-diagnostics, and checks an actual window hidden during its focus notification
-cannot publish a stale success. A denied focus request remains a real timeout.
+On Windows the positive test then receives a real `SendInput` click in a
+separate, visible, owned input window before asking the production service to
+activate the target. It reuses the guarded `ClientToScreen`, `SetCursorPos`,
+`WindowFromPoint`, mouse-down/up sequence in
+`tests/windows/MediaHistoryChecks.h`. The small input fixture alone is topmost
+so a runner console is not accidentally clicked; the activation target remains
+an ordinary window. Actual spontaneous Qt mouse events and native foreground
+focus must corroborate the click, and the target must not already own focus.
+No input-queue attachment, foreground-lock change or forced Qt activation policy
+is used. The original cursor position is restored on exit.
+
+This positive case proves activation while the user is already interacting with
+the application. It cannot promise unattended focus over a different application
+or override Windows' foreground restrictions. A refused request still fails the
+same exact Qt/native focus assertion. Diagnostics record exposure, Qt events,
+the foreground window's class, process image, and `GetGUIThreadInfo` for both
+GUI threads, so an external foreground takeover can be distinguished from an
+unexposed fixture or a transient thread-local focus notification. API inspection
+failures are recorded explicitly; inaccessible processes do not receive an
+invented identity.
+
+Offscreen and minimal modes only check explicit refusal, not positive desktop
+behavior. A Linux SDK compile or this negative test is not evidence that Windows
+input or an externally supplied Wayland activation token worked; those require
+their distinct real desktop/compositor runs.
 
 The fix was checked against fixed Qt 6.12.1 commit
 `5af1a37e31a869cd6eb8a73d82e2c71a450e6634`: `qwindowswindow.cpp`
@@ -65,3 +84,8 @@ copied. Microsoft documents the distinction between
 [thread-local focus](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setfocus),
 and an OS-permitted
 [foreground request](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow).
+The test observes native
+[GUI thread state](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getguithreadinfo)
+and checks the actual delivery of
+[injected input](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput),
+whose insertion alone does not prove that the intended window received it.

@@ -1,13 +1,13 @@
 #include "services/update/UpdateService.h"
 
 #include "core/ReleaseVersion.h"
+#include "core/UpdatePackageHeader.h"
 #include "platform/FileCommitter.h"
 #include "platform/FileIdentity.h"
 #include "services/files/QtPaths.h"
 #include "services/update/ReleaseManifest.h"
 
 #include <QCryptographicHash>
-#include <QByteArrayView>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -18,9 +18,7 @@
 #include <QPointer>
 #include <QThread>
 #include <QTimer>
-#include <QtEndian>
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <functional>
 #include <mutex>
@@ -33,44 +31,13 @@ using Files::nativePath;
 using Files::qtPath;
 bool working(Stage stage) { return stage == Stage::Checking || stage == Stage::Downloading; }
 
-// This is a type guard, not a second archive/deployment engine. The GitHub
-// release/build manifests bind the exact package hash to the recorded build tree;
-// package installation and full dependency inspection remain release gates.
 bool packageHeader(QFile& file, PackageKind kind)
 {
-    if (!file.seek(0)) return false;
-    const auto prefix = file.read(96);
-    switch (kind) {
-    case PackageKind::WindowsPortableZip:
-        return prefix.startsWith(QByteArray("PK\x03\x04", 4));
-    case PackageKind::LinuxDeb: {
-        if (prefix.size() < 72 || !prefix.startsWith("!<arch>\n") ||
-            prefix.mid(8, 16).trimmed() != "debian-binary" || prefix.mid(66, 2) != "`\n" ||
-            prefix.mid(68, 4) != "2.0\n") return false;
-        bool valid{}; const auto size = prefix.mid(56, 10).trimmed().toULongLong(&valid);
-        return valid && size == 4;
-    }
-    case PackageKind::LinuxAppImage:
-        return prefix.size() >= 64 && prefix.startsWith(QByteArray("\x7f" "ELF", 4)) &&
-            prefix[4] == 2 && prefix[5] == 1 && prefix.mid(8, 3) == QByteArray("AI\x02", 3) &&
-            qFromLittleEndian<quint16>(reinterpret_cast<const uchar*>(prefix.constData() + 18)) == 62;
-    case PackageKind::WindowsInstaller: {
-        if (prefix.size() < 64 || !prefix.startsWith("MZ")) return false;
-        const auto offset = qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(prefix.constData() + 60));
-        if (offset < 64 || offset > 1024 * 1024 || !file.seek(offset)) return false;
-        std::array<char, 26> header{};
-        if (file.read(header.data(), static_cast<qint64>(header.size())) != static_cast<qint64>(header.size()) ||
-            !QByteArrayView(header.data(), static_cast<qsizetype>(header.size())).startsWith(QByteArrayView("PE\0\0", 4))) return false;
-        const auto machine = qFromLittleEndian<quint16>(reinterpret_cast<const uchar*>(header.data() + 4));
-        const auto flags = qFromLittleEndian<quint16>(reinterpret_cast<const uchar*>(header.data() + 22));
-        const auto magic = qFromLittleEndian<quint16>(reinterpret_cast<const uchar*>(header.data() + 24));
-        // The mature NSIS installer stub may be x86 while its full payload is
-        // x64. Build-info binds that payload's architecture; do not reject NSIS.
-        return ((machine == 0x014c && magic == 0x010b) || (machine == 0x8664 && magic == 0x020b)) &&
-            (flags & 0x0002) && !(flags & 0x2000);
-    }
-    }
-    return false;
+    return Core::updatePackageHeader(kind, [&file](std::uint64_t offset, std::span<std::uint8_t> buffer) {
+        if (!file.seek(static_cast<qint64>(offset))) return std::size_t{};
+        const auto count = file.read(reinterpret_cast<char*>(buffer.data()), static_cast<qint64>(buffer.size()));
+        return count < 0 ? std::size_t{} : static_cast<std::size_t>(count);
+    });
 }
 
 class DownloadWorker final : public QObject {

@@ -7,6 +7,10 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
@@ -21,7 +25,16 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <iterator>
+#include <optional>
 #include <stdexcept>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#include <dwmapi.h>
+#endif
 
 namespace cap = HuhuCapture::Capture;
 namespace ui = HuhuCapture::UI::Qt;
@@ -99,7 +112,7 @@ void unavailableAndLifetime()
 class Page final : public QWidget {
 public:
     QImage pixels;
-    int offset{}, wheels{}, paints{};
+    int offset{}, wheels{}, paints{}, contentPaints{};
     bool nativeWheel{};
     qreal ratio{1};
     Page() { setWindowTitle(QStringLiteral("huhucapture real scrolling page")); resize(320, 240); }
@@ -113,7 +126,10 @@ public:
     }
 protected:
     void paintEvent(QPaintEvent*) override
-    { QPainter painter(this); painter.drawImage(QPointF(0, -offset), pixels); ++paints; }
+    {
+        QPainter painter(this); painter.drawImage(QPointF(0, -offset), pixels);
+        ++paints; if (!pixels.isNull()) ++contentPaints;
+    }
     void wheelEvent(QWheelEvent* event) override
     {
         if (event->angleDelta().y() < 0) offset += 24;
@@ -121,6 +137,122 @@ protected:
         nativeWheel = nativeWheel || event->spontaneous(); ++wheels; update(); event->accept();
     }
 };
+
+QJsonArray point(QPointF value) { return {value.x(), value.y()}; }
+QJsonArray rectangle(QRectF value) { return {value.x(), value.y(), value.width(), value.height()}; }
+QJsonObject imageInfo(const QImage& value)
+{
+    return {{QStringLiteral("size"), QJsonArray{value.width(), value.height()}},
+        {QStringLiteral("format"), static_cast<int>(value.format())},
+        {QStringLiteral("ratio"), value.devicePixelRatio()},
+        {QStringLiteral("dotsPerMeter"), QJsonArray{value.dotsPerMeterX(), value.dotsPerMeterY()}}};
+}
+#ifdef Q_OS_WIN
+QString handle(HWND value) { return QString::number(reinterpret_cast<quintptr>(value), 16); }
+QJsonArray nativeRectangle(const RECT& value)
+{ return {static_cast<int>(value.left), static_cast<int>(value.top), static_cast<int>(value.right - value.left), static_cast<int>(value.bottom - value.top)}; }
+QJsonObject nativeWindow(HWND value)
+{
+    DWORD process{}; const auto thread = GetWindowThreadProcessId(value, &process);
+    QJsonObject result{{QStringLiteral("handle"), handle(value)},
+        {QStringLiteral("process"), static_cast<qint64>(process)},
+        {QStringLiteral("thread"), static_cast<qint64>(thread)},
+        {QStringLiteral("visible"), bool(IsWindowVisible(value))},
+        {QStringLiteral("minimized"), bool(IsIconic(value))},
+        {QStringLiteral("dpi"), static_cast<int>(GetDpiForWindow(value))}};
+    RECT bounds{};
+    if (GetWindowRect(value, &bounds)) result.insert(QStringLiteral("window"), nativeRectangle(bounds));
+    if (GetClientRect(value, &bounds)) result.insert(QStringLiteral("client"), nativeRectangle(bounds));
+    POINT origin{};
+    if (ClientToScreen(value, &origin)) result.insert(QStringLiteral("clientOrigin"), QJsonArray{static_cast<int>(origin.x), static_cast<int>(origin.y)});
+    wchar_t className[256]{};
+    if (GetClassNameW(value, className, static_cast<int>(std::size(className))))
+        result.insert(QStringLiteral("class"), QString::fromWCharArray(className));
+    DWORD cloaked{};
+    if (SUCCEEDED(DwmGetWindowAttribute(value, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))))
+        result.insert(QStringLiteral("cloaked"), static_cast<qint64>(cloaked));
+    if (SUCCEEDED(DwmGetWindowAttribute(value, DWMWA_EXTENDED_FRAME_BOUNDS, &bounds, sizeof(bounds))))
+        result.insert(QStringLiteral("extendedFrame"), nativeRectangle(bounds));
+    return result;
+}
+#endif
+QJsonObject presentationState(Page& page, std::optional<QRect> selectedDesktop = {})
+{
+    const auto* window = page.windowHandle();
+    QJsonObject result{{QStringLiteral("paints"), page.paints}, {QStringLiteral("contentPaints"), page.contentPaints},
+        {QStringLiteral("offset"), page.offset}, {QStringLiteral("ratio"), page.ratio},
+        {QStringLiteral("visible"), page.isVisible()}, {QStringLiteral("exposed"), window && window->isExposed()},
+        {QStringLiteral("qtActive"), page.isActiveWindow()},
+        {QStringLiteral("qtFocusWindowMatches"), window == QGuiApplication::focusWindow()},
+        {QStringLiteral("widgetGeometry"), rectangle(page.geometry())},
+        {QStringLiteral("frameGeometry"), rectangle(page.frameGeometry())},
+        {QStringLiteral("globalOrigin"), point(page.mapToGlobal(QPoint()))},
+        {QStringLiteral("fixture"), imageInfo(page.pixels)}};
+#ifdef Q_OS_WIN
+    result.insert(QStringLiteral("nativePage"), nativeWindow(reinterpret_cast<HWND>(page.winId())));
+    result.insert(QStringLiteral("foreground"), nativeWindow(GetForegroundWindow()));
+    result.insert(QStringLiteral("threadFocus"), handle(GetFocus()));
+    DWM_TIMING_INFO timing{}; timing.cbSize = sizeof(timing);
+    const auto status = DwmGetCompositionTimingInfo(nullptr, &timing);
+    result.insert(QStringLiteral("dwmTimingStatus"), static_cast<qint64>(status));
+    if (SUCCEEDED(status)) {
+        result.insert(QStringLiteral("dwmFrame"), QString::number(timing.cFrame));
+        result.insert(QStringLiteral("dwmVBlank"), QString::number(timing.qpcVBlank));
+    }
+    if (selectedDesktop) {
+        QJsonArray owners;
+        for (const auto sample : {selectedDesktop->topLeft(), selectedDesktop->center(), selectedDesktop->bottomRight()}) {
+            const POINT actual{sample.x(), sample.y()};
+            owners.append(QJsonObject{{QStringLiteral("point"), point(sample)},
+                {QStringLiteral("window"), nativeWindow(WindowFromPoint(actual))}});
+        }
+        result.insert(QStringLiteral("selectedPointOwners"), owners);
+    }
+#else
+    Q_UNUSED(selectedDesktop);
+#endif
+    return result;
+}
+QJsonObject pixelComparison(const QImage& actual, const QImage& expected)
+{
+    qint64 mismatches{}; QPoint first(-1, -1); QRect bounds;
+    if (actual.size() == expected.size()) {
+        for (int y = 0; y < actual.height(); ++y) for (int x = 0; x < actual.width(); ++x)
+            if (actual.pixel(x, y) != expected.pixel(x, y)) {
+                if (!mismatches) { first = {x, y}; bounds = {first, QSize(1, 1)}; }
+                else bounds = bounds.united({QPoint(x, y), QSize(1, 1)});
+                ++mismatches;
+            }
+    } else mismatches = -1;
+    QJsonObject result{{QStringLiteral("equal"), actual == expected},
+        {QStringLiteral("mismatchedPixels"), mismatches}, {QStringLiteral("firstMismatch"), point(first)},
+        {QStringLiteral("mismatchBounds"), rectangle(bounds)},
+        {QStringLiteral("actual"), imageInfo(actual)}, {QStringLiteral("expected"), imageInfo(expected)}};
+    if (first.x() >= 0) {
+        result.insert(QStringLiteral("actualFirstRgba"), QString::number(actual.pixel(first), 16));
+        result.insert(QStringLiteral("expectedFirstRgba"), QString::number(expected.pixel(first), 16));
+    }
+    return result;
+}
+void saveReadback(const QString& directory, const QString& prefix, const cap::Snapshot& snapshot,
+    const QImage& actual, const QImage& expected)
+{
+    if (directory.isEmpty()) return;
+    require(QDir().mkpath(directory), "Create the actual native readback evidence directory");
+    require(snapshot.image.save(QDir(directory).filePath(prefix + QStringLiteral("-desktop.png"))) &&
+        actual.save(QDir(directory).filePath(prefix + QStringLiteral("-actual.png"))) &&
+        expected.save(QDir(directory).filePath(prefix + QStringLiteral("-expected.png"))),
+        "Preserve actual desktop, selected pixels and independent expectation before any pixel assertion");
+}
+void saveEvidence(const QString& directory, const QJsonObject& evidence)
+{
+    std::cout << "PRESENTATION " << QJsonDocument(evidence).toJson(QJsonDocument::Compact).toStdString() << '\n';
+    if (directory.isEmpty()) return;
+    QFile output(QDir(directory).filePath(QStringLiteral("scroll-initial-presentation.json")));
+    const auto bytes = QJsonDocument(evidence).toJson(QJsonDocument::Indented);
+    require(output.open(QIODevice::WriteOnly | QIODevice::Truncate) && output.write(bytes) == bytes.size() && output.flush(),
+        "Retain real presentation coordinates and native ownership evidence even on a mismatch");
+}
 void actualNative(const QString& artifacts)
 {
     require(QGuiApplication::platformName() == QStringLiteral("xcb") || QGuiApplication::platformName() == QStringLiteral("windows"),
@@ -130,7 +262,7 @@ void actualNative(const QString& artifacts)
     page.show(); page.raise(); page.activateWindow();
     waitFor([&] { return page.windowHandle() && page.windowHandle()->isExposed(); }, "Expose the real scrolling page");
     page.initializePixels();
-    waitFor([&] { return page.paints != 0; }, "Paint the actual page before native capture");
+    waitFor([&] { return page.contentPaints != 0; }, "Paint actual fixture content, excluding the initial empty-widget paint");
     cap::ScreenCaptureService source;
     bool initialized{}, stopped{}, moved{};
     cap::Snapshot snapshot; cap::Failure sourceFailure;
@@ -144,21 +276,59 @@ void actualNative(const QString& artifacts)
     source.initialize(); waitFor([&] { return initialized; }, "Initialize the actual screenshot/input backend");
     if (sourceFailure) std::cerr << "SOURCE " << sourceFailure.detail.toStdString() << '\n';
     require(!sourceFailure && source.capabilities().automaticScroll.canRequest(), "The actual desktop must advertise real automatic input");
-    require(source.request() != 0, "Request actual native desktop pixels");
-    waitFor([&] { return !snapshot.image.isNull() || sourceFailure; }, "Capture the actual visible page");
-    require(!sourceFailure && source.isCurrent(snapshot.sourceId, snapshot.generation), "The captured page keeps a verified current identity");
-    const cap::ScreenBinding* binding{};
-    for (const auto& candidate : snapshot.screens) if (candidate.screen == page.windowHandle()->screen()) { binding = &candidate; break; }
-    require(binding != nullptr, "Map through the page's actual QScreen binding");
-    require(std::abs(binding->pixelsPerDipX - page.ratio) < .01 && std::abs(binding->pixelsPerDipY - page.ratio) < .01,
-        "The native fixture uses the verified physical-pixel scale of its own screen");
-    const auto pageOrigin = cap::sourceFromScreenLocal(*binding, QPointF(page.mapToGlobal(QPoint())) - binding->logicalGeometry.topLeft());
     const QRect logical(20, 20, 220, 180);
-    const QPoint first(qRound(pageOrigin.x() + logical.x() * page.ratio), qRound(pageOrigin.y() + logical.y() * page.ratio));
-    const QRect selected(first, QSize(qRound(logical.width() * page.ratio), qRound(logical.height() * page.ratio)));
-    const QPoint contentOrigin(first.x() - qRound(pageOrigin.x()), first.y() - qRound(pageOrigin.y()));
-    auto expectedFirst = page.pixels.copy(QRect(contentOrigin, selected.size())); expectedFirst.setDevicePixelRatio(1);
-    require(snapshot.image.copy(selected).convertToFormat(QImage::Format_ARGB32) == expectedFirst,
+    QPoint contentOrigin; QRect selected; QImage actualFirst, expectedFirst;
+    QJsonObject firstEvidence, latestEvidence; QJsonArray attempts;
+    unsigned count{}; QElapsedTimer presentation; presentation.start();
+    // Reuse screen_capture_tests' real-readback presentation condition. Qt's
+    // paint/expose notification is not a compositor presentation receipt. A
+    // fixed delay or an arbitrary number of discarded frames cannot fix that.
+    do {
+        const auto before = presentationState(page);
+        snapshot = {}; sourceFailure = {};
+        require(source.request() != 0, "Request actual native desktop pixels");
+        waitFor([&] { return !snapshot.image.isNull() || sourceFailure; }, "Capture the actual visible page");
+        require(!sourceFailure && source.isCurrent(snapshot.sourceId, snapshot.generation), "The captured page keeps a verified current identity");
+        require(snapshot.coordinates == cap::CoordinateSpace::DesktopPixels && snapshot.desktopOrigin,
+            "The native fixture has a verified physical desktop origin");
+        const cap::ScreenBinding* binding{};
+        for (const auto& candidate : snapshot.screens) if (candidate.screen == page.windowHandle()->screen()) { binding = &candidate; break; }
+        require(binding != nullptr, "Map through the page's actual QScreen binding");
+        require(std::abs(binding->pixelsPerDipX - page.ratio) < .01 && std::abs(binding->pixelsPerDipY - page.ratio) < .01,
+            "The native fixture uses the verified physical-pixel scale of its own screen");
+        const auto pageOrigin = cap::sourceFromScreenLocal(*binding, QPointF(page.mapToGlobal(QPoint())) - binding->logicalGeometry.topLeft());
+        const QPoint first(qRound(pageOrigin.x() + logical.x() * page.ratio), qRound(pageOrigin.y() + logical.y() * page.ratio));
+        selected = {first, QSize(qRound(logical.width() * page.ratio), qRound(logical.height() * page.ratio))};
+        contentOrigin = {first.x() - qRound(pageOrigin.x()), first.y() - qRound(pageOrigin.y())};
+        expectedFirst = page.pixels.copy(QRect(contentOrigin, selected.size())); expectedFirst.setDevicePixelRatio(1);
+        actualFirst = snapshot.image.copy(selected).convertToFormat(QImage::Format_ARGB32);
+        const auto compared = pixelComparison(actualFirst, expectedFirst);
+        const auto after = presentationState(page, selected.translated(*snapshot.desktopOrigin));
+        latestEvidence = {{QStringLiteral("attempt"), static_cast<int>(++count)},
+            {QStringLiteral("elapsedMs"), presentation.elapsed()}, {QStringLiteral("beforeRequest"), before},
+            {QStringLiteral("afterReadback"), after}, {QStringLiteral("comparison"), compared},
+            {QStringLiteral("sourceId"), QString::number(snapshot.sourceId)}, {QStringLiteral("generation"), QString::number(snapshot.generation)},
+            {QStringLiteral("desktopOrigin"), point(*snapshot.desktopOrigin)}, {QStringLiteral("pageSourceOrigin"), point(pageOrigin)},
+            {QStringLiteral("selectedSourcePixels"), rectangle(selected)}, {QStringLiteral("fixtureOriginPixels"), point(contentOrigin)},
+            {QStringLiteral("bindingLogicalGeometry"), rectangle(binding->logicalGeometry)},
+            {QStringLiteral("bindingSourcePixels"), rectangle(binding->sourcePixels)},
+            {QStringLiteral("bindingScale"), QJsonArray{binding->pixelsPerDipX, binding->pixelsPerDipY}}};
+        const QJsonObject summary{{QStringLiteral("attempt"), static_cast<int>(count)}, {QStringLiteral("elapsedMs"), presentation.elapsed()},
+            {QStringLiteral("comparison"), compared}, {QStringLiteral("foreground"), after.value(QStringLiteral("foreground"))}};
+        if (attempts.size() < 64) attempts.append(summary);
+        else attempts.replace(attempts.size() - 1, summary); // bounded diagnostic history, with the actual last attempt
+        if (count == 1) {
+            firstEvidence = latestEvidence;
+            saveReadback(artifacts, QStringLiteral("scroll-initial-first"), snapshot, actualFirst, expectedFirst);
+        }
+        if (actualFirst == expectedFirst) break;
+        events();
+    } while (presentation.elapsed() < 5000);
+    saveReadback(artifacts, QStringLiteral("scroll-initial-final"), snapshot, actualFirst, expectedFirst);
+    saveEvidence(artifacts, {{QStringLiteral("qpa"), QGuiApplication::platformName()},
+        {QStringLiteral("attemptCount"), static_cast<int>(count)}, {QStringLiteral("retainedAttempts"), attempts},
+        {QStringLiteral("first"), firstEvidence}, {QStringLiteral("last"), latestEvidence}});
+    require(actualFirst == expectedFirst,
         "The native capture equals pixels actually painted by the independent page fixture");
     QObject::connect(&source, &cap::ScreenCaptureService::cursorMoved, &source,
         [&](quint64, quint64, QPoint requested, QPoint actual, const cap::Failure& error) {

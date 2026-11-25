@@ -6,6 +6,7 @@
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/error.h>
+#include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
 }
 
@@ -43,10 +44,29 @@ VideoThumbnailResult makeCover(const AVFrame& frame, unsigned edge, const Limits
     const QSize original(frame.width, frame.height);
     const auto dimensions = original.width() <= static_cast<int>(edge) && original.height() <= static_cast<int>(edge) ? original :
         original.scaled(static_cast<int>(edge), static_cast<int>(edge), Qt::KeepAspectRatio);
-    QImage image(dimensions, QImage::Format_RGB32);
-    if (image.isNull()) return {budget("Cannot allocate the video cover"), {}};
+    // Fixed FFmpeg's SIMD output kernels require their native aligned row and
+    // tail allocation. A tightly packed QImage is not that allocation: the
+    // actual 252x190 X11 recording wrote 16 bytes beyond its last RGB32 row.
+    // Reuse av_frame_get_buffer, then copy only complete logical image rows.
+    // The bound mirrors get_video_buffer's BGRA allocation in the locked
+    // libavutil/frame.c: 64-byte rows, height rounded to 32, plus native padding.
+    constexpr int alignment = 64;
+    const auto paddedHeight = (std::int64_t{dimensions.height()} + 31) / 32 * 32;
+    if (paddedHeight > INT_MAX) return {budget("Video cover padding exceeds the dimension budget"), {}};
+    const int paddedBytes = av_image_get_buffer_size(AV_PIX_FMT_BGRA, dimensions.width(),
+        static_cast<int>(paddedHeight), alignment);
+    constexpr std::uint64_t nativePadding = 8 * alignment;
+    if (paddedBytes < 0 || static_cast<std::uint64_t>(paddedBytes) + nativePadding > limits.maximumImageBytes)
+        return {budget("Video cover native storage exceeds the decoded-pixel budget"), {}};
+    DecodedFrame converted(av_frame_alloc());
+    if (!converted) return {budget("Cannot allocate the native video cover"), {}};
+    converted->format = AV_PIX_FMT_BGRA; converted->width = dimensions.width(); converted->height = dimensions.height();
+    const int allocated = av_frame_get_buffer(converted.get(), alignment);
+    if (allocated < 0) return {codecFailure(allocated, "Allocate native video cover storage"), {}};
+    if (!converted->buf[0] || converted->buf[0]->size > limits.maximumImageBytes)
+        return {budget("Native video cover allocation exceeded its checked budget"), {}};
     std::unique_ptr<SwsContext, ScaleDeleter> scaler(sws_getContext(frame.width, frame.height,
-        static_cast<AVPixelFormat>(frame.format), image.width(), image.height(), AV_PIX_FMT_BGRA,
+        static_cast<AVPixelFormat>(frame.format), dimensions.width(), dimensions.height(), AV_PIX_FMT_BGRA,
         SWS_BILINEAR, nullptr, nullptr, nullptr));
     if (!scaler) return {budget("Cannot allocate the video cover scaler"), {}};
     int colorspace = SWS_CS_DEFAULT;
@@ -63,11 +83,13 @@ VideoThumbnailResult makeCover(const AVFrame& frame, unsigned edge, const Limits
     const int colorResult = sws_setColorspaceDetails(scaler.get(), coefficients,
         frame.color_range == AVCOL_RANGE_JPEG ? 1 : 0, coefficients, 1, 0, 1 << 16, 1 << 16);
     if (colorResult < 0) return {codecFailure(colorResult, "Configure video cover color conversion"), {}};
-    std::uint8_t* planes[]{image.bits(), nullptr, nullptr, nullptr};
-    int strides[]{static_cast<int>(image.bytesPerLine()), 0, 0, 0};
-    const int rows = sws_scale(scaler.get(), frame.data, frame.linesize, 0, frame.height, planes, strides);
-    if (rows != image.height()) return {invalid("Video cover scaler returned an incomplete image"), {}};
+    const int rows = sws_scale(scaler.get(), frame.data, frame.linesize, 0, frame.height,
+        converted->data, converted->linesize);
+    if (rows != dimensions.height()) return {invalid("Video cover scaler returned an incomplete image"), {}};
     if (stop.stop_requested()) return {cancelled(), {}};
+    const QImage view(converted->data[0], dimensions.width(), dimensions.height(), converted->linesize[0], QImage::Format_RGB32);
+    QImage image = view.copy();
+    if (image.isNull()) return {budget("Cannot allocate the owned video cover"), {}};
     return {{}, std::move(image), ThumbnailDecoder::Ffmpeg};
 }
 

@@ -71,7 +71,7 @@ jobs:
       - name: Install actual desktop, compiler and packaging prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config nasm dbus libglib2.0-dev libglib2.0-dev-bin libwayland-dev libwayland-bin libxkbcommon-dev libxkbcommon-x11-dev libgl-dev libegl-dev libxcb1-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb-xtest0-dev libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0 fonts-noto-cjk xvfb xauth x11-utils patchelf zstd squashfs-tools libssl-dev ca-certificates
+          sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config nasm dbus libglib2.0-dev libglib2.0-dev-bin libwayland-dev libwayland-bin libxkbcommon-dev libxkbcommon-x11-dev libgl-dev libegl-dev libxcb1-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb-shape0-dev libxcb-xtest0-dev libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0 fonts-noto-cjk xvfb xauth x11-utils patchelf zstd squashfs-tools libssl-dev ca-certificates
       - uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
         with:
           version: '6.12.1'
@@ -164,6 +164,7 @@ jobs:
           name: qt-application-linux
           path: |
             artifacts/packages/linux/
+            !artifacts/packages/linux/_CPack_Packages/**
             artifacts/cmake/application-linux/CMakeCache.txt
             artifacts/cmake/application-linux/Testing/Temporary/
             artifacts/cmake/application-linux/native-capture/
@@ -171,6 +172,7 @@ jobs:
             artifacts/cmake/application-linux/scroll-render/
             artifacts/cmake/application-linux/pipewire-audio/
             artifacts/cmake/application-linux/settings-controller/
+            artifacts/cmake/application-linux/lan-controller-render/
             artifacts/cmake/application-linux/application-lifecycle/
             artifacts/cmake/application-linux/application-clipboard-owner/
             artifacts/cmake/application-linux/update-render/
@@ -291,6 +293,7 @@ jobs:
             artifacts/cmake/application-windows/Testing/Temporary/
             artifacts/cmake/application-windows/editor-render/
             artifacts/cmake/application-windows/settings-controller/
+            artifacts/cmake/application-windows/lan-controller-render/
             artifacts/cmake/application-windows/application-lifecycle/
             artifacts/cmake/application-windows/update-render/
             artifacts/cmake/application-windows/native-capture/

@@ -1,6 +1,7 @@
 #include "platform/windows/NativeGifRecording.h"
 #include "core/GifLimits.h"
 #include "platform/windows/GdiCapture.h"
+#include "platform/windows/RecordingControls.h"
 #include "services/media/GifEncoder.h"
 
 #include <algorithm>
@@ -64,8 +65,17 @@ BackendResult capture(const BackendRequest& request, FileHandle& writer,
             if (result.prepared && frameStarted - result.prepared->started >= request.maximumDuration) {
                 result.durationLimitReached = true; break;
             }
+            const auto controls = request.controls ? request.controls->snapshot.load(std::memory_order_acquire) : nullptr;
+            if (request.controls) {
+                const auto status = controls ? verifyRecordingControls(*controls) : HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
+                if (FAILED(status)) { result.media.fail(RecordingStage::Capture, status); break; }
+            }
             if (!source.capture(region.x, region.y, region.width, region.height, request.cursor)) {
                 result.media.fail(RecordingStage::Capture, HRESULT_FROM_WIN32(ERROR_GEN_FAILURE)); break;
+            }
+            if (request.controls && (request.controls->snapshot.load(std::memory_order_acquire) != controls ||
+                FAILED(verifyRecordingControls(*controls)))) {
+                result.media.fail(RecordingStage::Capture, HRESULT_FROM_WIN32(ERROR_INVALID_STATE)); break;
             }
             if (!result.prepared && Core::MediaClock::now() >= firstDeadline) {
                 result.media.fail(RecordingStage::Capture, HRESULT_FROM_WIN32(ERROR_TIMEOUT)); break;

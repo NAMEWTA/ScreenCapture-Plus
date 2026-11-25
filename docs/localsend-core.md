@@ -71,6 +71,17 @@ completion 队列是否为空不能建立这个约束。通道的 server half �
 真实归档来伪造“从未提交”。归档代码使用共享 FileCommitter，不能自行实现覆盖式
 rename，也不能将最终归档路径交给上游的截断式 Path 接收器。
 
+接收端拒绝未读完的 HTTP/1.1 正文后，不能立即销毁整条 TCP/TLS 连接；剩余上传
+字节可能触发 reset，令发送端丢失真实的 403 响应。依照
+[RFC 9112 §9.6](https://www.rfc-editor.org/rfc/rfc9112.html#name-tear-down)，
+服务器复用 Hyper `without_shutdown` 取回已经完成 HTTP 处理的连接，先由
+tokio-rustls 发送 close_notify 并关闭写侧，再以固定 16 KiB 缓冲丢弃剩余网络字节。
+单次收尾包含写关闭和全部读取，最多 2 秒、累计 4 MiB（包括 Hyper 已缓冲字节）；
+不解析后续请求，不向应用交付更多媒体，也不恢复验证或归档。既有连接许可和
+TaskTracker 保持拥有关系，监听停止仍能中断并 join 收尾，不另开后台任务。
+超出预算或真正断网仍可能无法送达响应；发送方保留真实网络失败，不能伪报取消。
+所查阅的固定 Hyper/tokio-rustls 文件及 Git blob 记录在 `upstream.json`。
+
 只有完整校验、flush/close 和无覆盖持久提交完成后，消费者才发送
 `CommittedMedia`。`DurabilityUnknown` 表示最终文件已经存在但持久性尚不确定，
 此时保留路径并返回失败，禁止再次归档制造重复副本。magic 检测本身不证明媒体
@@ -114,6 +125,9 @@ HTTP 连接 worker 的 TaskTracker 本身只跟踪退出、不返回 panic 结�
 测试图；此图由项目生成，无第三方图像版权。它不是通用媒体解码器。
 “持久化未知”和读取错误用例明确注入失败状态，用来验证失败路径；其余 IO 和
 网络均实际执行。上游原测试保留并一同执行。
+未结束的 chunked 上传取消必须收到明确 HTTP 403，而非仅检查任意错误。连接收尾
+另外使用真实 TCP socket 核对写侧关闭后读侧仍可排空、停滞对端的总时限和累计字节
+预算；桥接测试重复复用实际 TLS 引擎与同一文件租约，并保留失败终态 JSON。
 
 测试源码存在不等于测试通过。实际 Rust 编译、执行结果和双平台环境应记录在
 对应 CI 证据中。本地编写环境未安装 Rust/Cargo，不能据此宣称新改动已经通过。

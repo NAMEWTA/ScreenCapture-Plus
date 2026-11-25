@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/CaptureControls.h"
 #include "core/MediaClock.h"
 #include "core/FrameQueue.h"
 #include "core/LiveSource.h"
@@ -47,6 +48,7 @@ struct BackendRequest {
     std::uint64_t maximumQueuedAudioBytes{16ull * 1024 * 1024};
     CoordinateSpace coordinates{CoordinateSpace::DesktopPixels};
     std::uint64_t sourceId{}, generation{};
+    std::shared_ptr<Core::CaptureControls> controls;
 };
 
 struct PreparedRecording {

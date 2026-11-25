@@ -217,10 +217,11 @@ if(HUHUCAPTURE_QT_VALIDATION)
         add_library(huhucapture_media_workspace STATIC
             src/services/media/ArchiveExport.h src/services/media/ArchiveExport.cpp
             src/services/media/ThumbnailCache.h src/services/media/ThumbnailCache.cpp
+            src/app/EditorPreferences.h src/app/EditorPreferences.cpp
             src/app/MediaWorkspace.h src/app/MediaWorkspace.cpp)
         set_target_properties(huhucapture_media_workspace PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
         target_link_libraries(huhucapture_media_workspace PUBLIC huhucapture_desktop_services
-            huhucapture_desktop huhucapture_editor Qt6::Concurrent)
+            huhucapture_desktop huhucapture_editor huhucapture_settings Qt6::Concurrent)
     endif()
     if(HUHUCAPTURE_RUST_VALIDATION)
         set(HUHUCAPTURE_RUST_METADATA "${PROJECT_SOURCE_DIR}/artifacts/native-rust/build-info.json"
@@ -463,7 +464,7 @@ if(HUHUCAPTURE_QT_VALIDATION)
             target_sources(huhucapture_screen_capture PRIVATE src/platform/windows/ScreenCaptureBackend.cpp)
             target_link_libraries(huhucapture_screen_capture PRIVATE huhucapture_windows_capture)
         else()
-            pkg_check_modules(XCB_CAPTURE REQUIRED IMPORTED_TARGET xcb xcb-randr xcb-shm xcb-xfixes xcb-xtest)
+            pkg_check_modules(XCB_CAPTURE REQUIRED IMPORTED_TARGET xcb xcb-randr xcb-shm xcb-xfixes xcb-xtest xcb-shape)
             add_library(huhucapture_x11_capture STATIC src/platform/linux/X11Capture.cpp)
             set_target_properties(huhucapture_x11_capture PROPERTIES CXX_EXTENSIONS OFF)
             target_link_libraries(huhucapture_x11_capture PUBLIC huhucapture_core PRIVATE PkgConfig::XCB_CAPTURE)

@@ -7,6 +7,7 @@
 #include <memory>
 
 namespace HuhuCapture::Desktop { class SystemClipboard; class FileRevealer; }
+namespace HuhuCapture::Config { class SettingsStore; }
 namespace HuhuCapture::UI::Qt { class EditorWindow; class HistoryWindow; }
 class QWidget;
 
@@ -23,6 +24,10 @@ public:
         Media::VideoCoverReader videoCover = {}, QObject* parent = nullptr);
     ~MediaWorkspace() override;
     void setTranslator(UI::Qt::DesktopTranslator translator);
+    // Bind the QApplication's already-loaded store before opening any editor.
+    // The store must outlive this workspace; no second configuration owner is
+    // created. Rebinding to another store or after admission is rejected.
+    bool setEditorSettings(Config::SettingsStore& settings);
     void setSendAvailable(bool available);
     UI::Qt::EditorWindow* openEditor(const QImage& image, bool pinned = true);
     UI::Qt::HistoryWindow* openHistory();

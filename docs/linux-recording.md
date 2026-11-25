@@ -91,3 +91,9 @@ python scripts/test-pipewire-audio.py \
 ```
 
 每个 case 保留真实 registry、port 链接、daemon/信号/采集日志和 JSON 结果；失败不会中止其余独立 case 的诊断，整项工作仍以非零退出报告未通过。2026-11-25 两个 C++ probe 已用固定 251 SDK 实际严格编译/链接，Python 入口通过语法与参数检查。本地启动自己拥有的 PipeWire server 时，`protocol-native` 创建端点实际返回 `Operation not permitted`，进程退出 255 且未建立 socket；这不是正向测试通过。**六项实际图运行等待 CI，音频设备与发布门槛继续未验收。**
+
+### 原生图归属核对的实际 CI 修正
+
+首次完整应用 Linux CI 的六个图 case 都在连接前归属检查处失败，未执行到 PCM 验收。保留的真实 registry 显示：信号 Node 通过 `client.id` 指向 Client，PID 位于该 Client 的 `pipewire.sec.pid` / `application.process.id`，并不保证重复出现在 Node 上。wrapper 现在要求唯一对应 Client，核对由原生协议服务端确认的 `pipewire.sec.pid` 与自己启动的精确 `Popen.pid` 一致；Client 若同时给出 application PID，也必须一致。歧义、缺失 Client、错误 PID 都拒绝，没有以节点名称代替进程归属。
+
+固定 PipeWire 的 `keys.h` 和 `impl-client.c` 确认安全 PID 是服务端来源且不可由 Client 更新覆盖，源码定位已加入 `pipewire-audio/upstream.json`。本地用六份实际 CI registry 离线核对，通过 12 个真实 Node→Client 关系，以及错误 PID、缺失/重复 Client、伪造应用 PID 等 48 个拒绝断言；这些检查只验证 registry 结构和所有权逻辑。六个真实 PCM 图 case 必须在修正后的 CI 重新运行，仍不能宣称已经通过或代替实体音频设备验收。

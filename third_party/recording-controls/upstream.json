@@ -1,0 +1,38 @@
+{
+  "repository": "https://github.com/NAMEWTA/huhucapture.git",
+  "ref": "251bc0071278c6b711c840bf5188d16870bc7349",
+  "branch": "refactor/qt6-resume",
+  "pullRequest": 7,
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 NAMEWTA",
+  "licenseFile": "../../LICENSE",
+  "files": [
+    {
+      "path": "src/recording/PlatformRecording.h",
+      "blob": "b3a4e3fbaca9bd3dc192a846f2e0b085ad69710e",
+      "use": "Reviewed native control-surface request contract; this branch publishes one immutable shared value and uses its existing BackendRequest."
+    },
+    {
+      "path": "src/app/RecordingController.cpp",
+      "blob": "c46d9997c88f0d4b569323a9eb04585403e4464c",
+      "use": "Adapt four outside work-area candidates into the existing shared RecordingWorkspace; retain independently verified per-screen mapping and existing source/session/claim ownership."
+    },
+    {
+      "path": "src/ui/qt/RecordingWindow.cpp",
+      "blob": "de1c12cc5465b33d482a8dbe0be03a971f58fe94",
+      "use": "Reviewed toolbar sizing and movement. This branch retains its existing UI and adds continuous safe-area constraints rather than trusting only its initial position."
+    },
+    {
+      "path": "src/platform/linux/X11Capture.cpp",
+      "blob": "3f07c844cbfb4a2bd2cb2167de3a735397b2749c",
+      "use": "Reviewed real XCB geometry/translation readback. Extend this branch's sole X11Capture with checked native SHAPE and short atomic server-grab/readback; no second capture implementation."
+    }
+  ],
+  "notAdopted": [
+    "A control that cannot fit must not proceed only with an advisory warning.",
+    "A one-time geometry check does not cover later moves, resizes or native-ID replacement.",
+    "A new session or source owner is not introduced for the shared toolbar.",
+    "Wayland buffer freshness is not inferred from an X11 rectangle or an arbitrary delay."
+  ],
+  "verification": "Shared UI and native X11 probe compiled locally with fixed Qt 6.12.1; actual QWidget cases ran offscreen. Native Windows/X11 compositor and physical-desktop pixel acceptance remain separate tests."
+}

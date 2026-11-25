@@ -10,6 +10,7 @@
 | 完整包如何选择、校验、流式下载并保护现有安装？ | [Qt 更新服务](qt-updates.md) |
 | 同一 Qt 程序如何部署成 Windows 安装包/ZIP 和 Linux DEB/AppImage？ | [Qt 安装树与打包](qt-packaging.md) |
 | Qt 编辑器怎样保留九工具与原版焦点、参数和输出语义？ | [共享编辑器合同](qt-editor.md) |
+| 多个编辑或贴图窗口怎样恢复旧工具参数，保护未知配置与原文件？ | [编辑工具偏好](editor-preferences.md) |
 | 设置、历史、关于页怎样共用控件并等待真实服务结果？ | [共享桌面窗口](qt-desktop.md) |
 | 剪贴板如何确认发布，回收和文件定位如何保留真实结果？ | [桌面系统服务](desktop-integration.md) |
 | 编辑输出、历史预览和清理怎样由应用连接真实服务？ | [媒体工作区](media-workspace.md) |
@@ -22,12 +23,15 @@
 | 截图九宫格调整怎样复用同一源像素选择模型？ | [截图选择模型](capture-selection.md) |
 | 原生像素、源身份和屏幕坐标怎样进入共享截图、编辑与输出？ | [截图与录屏工作区](capture-workspaces.md)、[采集源](screen-capture.md) |
 | 长截图怎样复用原有匹配、节奏和内存保留规则？ | [共享长截图](scroll-capture.md) |
+| 长截图测试怎样区分控件 paint 与屏幕实际呈现？ | [原生读屏测试证据](scroll-test-evidence.md) |
 | Linux Portal 如何与 Qt 共用上下文，怎样验证取消与父窗？ | [Linux Portal 控制面](linux-portal.md) |
+| 怎样固定真实 Wayland 测试桌面的协议与库，又不打包进应用？ | [受控采流测试桌面](validation-desktop.md) |
 | PipeWire 帧如何归还、跨线程持有并验证实际采流？ | [Linux PipeWire 数据面](linux-pipewire.md) |
 | 已授权视频源怎样重选、交接消费者并排空？ | [共享实时采集源](live-capture-source.md) |
 | 裁剪、方向和 stride 怎样统一进入真实编码器？ | [帧规范化](frame-normalization.md) |
 | 软件 H.264 / AAC 如何固定构建，API 探针能证明什么？ | [软件编码依赖](software-codecs.md) |
 | Linux 编码器怎样完整保留视频与 AAC 尾样本并保护输出身份？ | [Linux 录制编码](linux-recording.md) |
+| 录制时如何验证控件不会进入选区，隐藏后怎样停止？ | [录制控件与采集排除](recording-controls.md) |
 | MP4 完整检查为何区别于首帧封面，坏样本怎样跨平台验证？ | [视频检查与封面](video-inspection.md) |
 | 怎样用固定源码生成实际 HEVC Main / Main10 回归输入？ | [HEVC 样本与复用记录](hevc-fixtures.md) |
 | 项目继承自哪里，如何保留上游归属与许可？ | [上游致谢](upstream.md) |

@@ -363,7 +363,9 @@ async fn reading_failure_is_distinct_from_eof_and_cancellation_interrupts_body()
     let upload = receiver.upload(session, localsend::reqwest::Body::wrap_stream(content.into_stream()));
     assert!(matches!(receiver.next().await, Observation::Started));
     assert!(receiver.handle.cancel_v2_session(&session_id).await);
-    assert!(upload.await.unwrap().is_err());
+    // Receiver cancellation must reach the sender as an actual protocol
+    // refusal, even though the chunked request body has not reached EOF.
+    expect_status(upload.await.unwrap(), 403);
     assert!(matches!(receiver.next().await, Observation::Rejected(UploadFailure::Cancelled)));
     assert!(!receiver.root.join("committed.png").exists());
     drop(source);

@@ -13,6 +13,7 @@ const INVALID_ARGUMENT: i32 = -1;
 const INVALID_STATE: i32 = -2;
 const IO: i32 = -3;
 const CANCELLED: i32 = -4;
+const PROTOCOL: i32 = -6;
 const CHECKSUM_MISMATCH: i32 = -7;
 const CLOSED: i32 = -11;
 const LIMIT_EXCEEDED: i32 = -13;
@@ -279,6 +280,63 @@ fn pending_receiver_cancel_then_verified_io_failure_keep_real_terminal_results()
 }
 
 #[test]
+fn immediate_receiver_cancel_preserves_http_refusal_across_reused_engines() {
+    let receiver = Engine::new();
+    let sender = Engine::new();
+    let lease = Lease::new();
+    // The original race required neither a large file nor a dropped receiver:
+    // a tiny real file can finish writing just as the receiver refuses it.
+    // Reuse both engines and the stable file to cover the actual scheduling
+    // boundary without sleeping, priming the connection, or retrying failures.
+    for attempt in 0..256 {
+        let operation = sender.send(&receiver, &lease);
+        let offer = receiver.next(1);
+        accept(&receiver, &offer);
+        let body = receiver.next(2);
+        let mut raw = ptr::null_mut();
+        unsafe { assert_eq!(huhu_event_take_receive(body.0, &mut raw), OK); }
+        let receive = Receive(raw);
+        let offer = offer.json();
+        let session = offer["sessionId"].as_str().unwrap();
+        unsafe {
+            assert_eq!(huhu_transfer_cancel_receive(receiver.0, session.as_ptr(), session.len()), OK);
+            let mut byte = 0;
+            let mut count = 0;
+            assert_eq!(huhu_receive_read(raw, &mut byte, 1, &mut count, 0), CANCELLED);
+            assert_eq!(count, 0);
+        }
+        assert_eq!(receiver.next(3).view().status, CANCELLED);
+        let ended = sender.next(5);
+        assert_eq!((ended.view().operation, ended.view().status), (operation, CANCELLED),
+            "Cancellation attempt {attempt}: {}", ended.json());
+        assert_eq!(ended.json()["httpStatus"], 403,
+            "Cancellation must be observed as a real HTTP refusal: {}", ended.json());
+        assert!(ended.json()["requestFailure"].is_null(), "{}", ended.json());
+        drop(receive);
+    }
+    assert_eq!(std::fs::read(&lease.1).unwrap(), PNG);
+    sender.stop();
+    receiver.stop();
+}
+
+#[test]
+fn a_real_connection_failure_is_not_relabelled_as_receiver_cancellation() {
+    let receiver = Engine::new();
+    let sender = Engine::new();
+    let lease = Lease::new();
+    // Close and join the real listener, then use its actual discovered/pinned
+    // endpoint. No fake response or injected cancellation token is involved.
+    receiver.stop();
+    let operation = sender.send(&receiver, &lease);
+    let ended = sender.next(5);
+    assert_eq!((ended.view().operation, ended.view().status), (operation, PROTOCOL),
+        "{}", ended.json());
+    assert!(ended.json()["httpStatus"].is_null(), "{}", ended.json());
+    assert_eq!(ended.json()["requestFailure"]["kind"], "connect", "{}", ended.json());
+    sender.stop();
+}
+
+#[test]
 fn stop_joins_pending_real_tls_operation_and_preserves_its_terminal_event() {
     let receiver = Engine::new();
     let sender = Engine::new();
@@ -467,8 +525,9 @@ fn strict_gif_cancel_and_decode_budget_failure_cross_real_tls_without_ack() {
         assert_eq!(huhu_gif_validate_file(source.as_ptr(), source.len(), &limits, cancelled.0, ptr::null(), &mut info), CANCELLED);
     }
     assert_eq!(receiver.next(3).view().status, CANCELLED);
-    let ended = sender.next(5).view();
-    assert_eq!((ended.operation, ended.status), (first, CANCELLED));
+    let ended = sender.next(5);
+    assert_eq!((ended.view().operation, ended.view().status), (first, CANCELLED), "{}", ended.json());
+    assert_eq!(ended.json()["httpStatus"], 403, "{}", ended.json());
     drop(cancelled);
 
     let second = sender.send(&receiver, &lease);

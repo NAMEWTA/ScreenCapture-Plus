@@ -13,9 +13,11 @@
 适配保留原异步网络、64 KiB 分块、单份进度邮箱及文件提交机制；修复所选包
 `contentRoot` 与文件清单的绑定，令跳转共享总时限，并以实际零超时 join 探测
 代替正常退出时的 GUI 阻塞等待。`src/core/UpdatePolicy.h` 提取规范版本、资产名、
-路径及预算规则，供 Qt 服务与后续旧 Windows 解析适配器共用。**这不表示 P11a
-旧版桥接已经实施**：现有 `src/services/Update.cpp` 的单 EXE 下载链仍是独立的
-待迁移与验收事项；不能把该头文件或本 Qt 测试记为旧版到 Qt 升级通过。
+路径及预算规则。`src/core/UpdateManifest.h` 进一步集中同一份发行、manifest、
+build-info 和所选目录验证；Qt QJson 与旧 Windows WinRT JSON 只提供只读字段、
+官方 URL 解析和 Unicode 路径比较适配。`UpdatePackageHeader.h` 共享有界类型
+检查。旧 [Windows 桥接](updates.md) 已接入这些规则和真实流式适配，但仍须
+单独完成 Windows、真实完整包与旧版到 Qt 升级门槛；本 Qt 测试不代替 P11a 验收。
 
 ## 应用拥有任务，页面订阅状态
 

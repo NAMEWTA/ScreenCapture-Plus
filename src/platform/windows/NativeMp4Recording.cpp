@@ -117,6 +117,7 @@ BackendResult capture(const BackendRequest& request, int descriptor,
     parameters.FirstFrameTimeoutMS = static_cast<unsigned long long>(request.firstFrameTimeout.count());
     parameters.MaximumFrameBytes = request.maximumFrameBytes;
     parameters.MaximumQueuedAudioBytes = request.maximumQueuedAudioBytes;
+    parameters.Controls = request.controls;
     std::stop_callback cancellation(stop, [&parameters] { parameters.MustEnd = true; });
     if (parameters.MustEnd) { result.stopRequested = true; return result; }
     if (!VideoMp4::setAudio(&parameters, request.systemAudio, request.microphone)) {

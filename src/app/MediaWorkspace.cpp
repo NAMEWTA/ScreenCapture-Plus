@@ -1,4 +1,5 @@
 #include "app/MediaWorkspace.h"
+#include "app/EditorPreferences.h"
 #include "services/desktop/DesktopFiles.h"
 #include "services/desktop/FileRevealer.h"
 #include "services/desktop/SystemClipboard.h"
@@ -20,6 +21,7 @@
 #include <QWindow>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <map>
 #include <new>
@@ -75,6 +77,9 @@ struct MediaWorkspace::State {
     Desktop::SystemClipboard& clipboard;
     Desktop::FileRevealer& revealer;
     ui::DesktopTranslator translator;
+    Config::SettingsStore* editorSettings{};
+    bool preferenceErrorQueued{};
+    QString preferenceFailure;
     QThreadPool pool;
     QPointer<ui::HistoryWindow> history;
     std::vector<QPointer<ui::EditorWindow>> editors;
@@ -142,8 +147,59 @@ struct MediaWorkspace::State {
 
     QString text(QStringView key) const
     { return translator ? translator(key) : key.toString(); }
+    void reportPreferenceFailure(const Config::SettingsResult& failure)
+    {
+        preferenceFailure = failure.detail;
+        if (preferenceErrorQueued) return;
+        preferenceErrorQueued = true;
+        notifyBusy();
+        // A style notification is inside a toolbar/text event. Delivering an
+        // arbitrary host error callback there could delete its active widget.
+        // Coalesce repeated slider failures until the next GUI turn as well.
+        QTimer::singleShot(0, owner, [this] {
+            preferenceErrorQueued = false;
+            const auto detail = std::exchange(preferenceFailure, {});
+            const QPointer<MediaWorkspace> alive(owner);
+            Q_EMIT owner->operationFailed(text(u"setting.saveFailed") + QChar(u'\n') + detail);
+            if (alive) notifyBusy();
+        });
+    }
+    void bindEditorPreferences(ui::EditorWindow* window)
+    {
+        if (!editorSettings) return;
+        struct Binding {
+            std::array<ui::EditorToolStyle, ui::editorTools.size() + 1> styles{};
+            bool restoring{};
+        };
+        const auto binding = std::make_shared<Binding>();
+        auto* canvas = window->canvas();
+        for (const auto tool : ui::editorTools) {
+            const auto style = readEditorPreference(*editorSettings, tool);
+            canvas->setToolStyle(tool, style);
+            binding->styles[static_cast<std::size_t>(tool)] = canvas->toolStyle(tool);
+        }
+        QObject::connect(canvas, &ui::EditorCanvas::toolStyleChanged, owner,
+            [this, binding](ui::EditorTool tool, ui::EditorToolStyle current) {
+                const auto index = static_cast<std::size_t>(tool);
+                if (index >= binding->styles.size()) return;
+                const auto previous = std::exchange(binding->styles[index], current);
+                if (binding->restoring || stopping) return;
+                const auto saved = writeEditorPreference(*editorSettings, tool, previous, current);
+                if (!saved.ok()) reportPreferenceFailure(saved);
+            });
+        QObject::connect(canvas, &ui::EditorCanvas::toolChanged, owner,
+            [this, binding, guarded = QPointer(canvas)](ui::EditorTool tool) {
+                if (stopping || !guarded) return;
+                // Native ToolSub reads the shared config whenever a tool is
+                // selected. Existing pinned windows observe another window's
+                // persisted preference then, without restyling its document.
+                binding->restoring = true;
+                guarded->setToolStyle(tool, readEditorPreference(*editorSettings, tool));
+                binding->restoring = false;
+            });
+    }
     bool busy() const
-    { return !jobs.empty() || !clipboardWaits.empty() || !revealWaits.empty() || !dialogs.empty() || !outputs.empty() || bool(removal); }
+    { return preferenceErrorQueued || !jobs.empty() || !clipboardWaits.empty() || !revealWaits.empty() || !dialogs.empty() || !outputs.empty() || bool(removal); }
     void notifyBusy()
     {
         // Admission cannot call arbitrary listeners before its state is fully
@@ -479,7 +535,8 @@ struct MediaWorkspace::State {
             if (result.failure) {
                 const QPointer<MediaWorkspace> alive(owner);
                 view->completeCommand(token, desktopResult(result.failure), result.failure.detail);
-                if (alive) afterCommand(); return;
+                if (alive) afterCommand();
+                return;
             }
             if (command == ui::HistoryCommand::Reveal) { reveal(std::move(result.lease), view, token, view->windowHandle(), completion); return; }
             if (command == ui::HistoryCommand::Copy) {
@@ -604,6 +661,15 @@ void MediaWorkspace::setTranslator(ui::DesktopTranslator translator)
     if (state_->history) state_->history->setTranslator(state_->translator);
     for (const auto& editor : state_->editors) if (editor) editor->setTranslator(state_->translator);
 }
+bool MediaWorkspace::setEditorSettings(Config::SettingsStore& settings)
+{
+    if (state_->stopping) return false;
+    if (state_->editorSettings) return state_->editorSettings == &settings;
+    if (std::any_of(state_->editors.begin(), state_->editors.end(), [](const auto& editor) { return !editor.isNull(); }))
+        return false;
+    state_->editorSettings = &settings;
+    return true;
+}
 void MediaWorkspace::setSendAvailable(bool available) { state_->sendAvailable = available; state_->capabilities(); }
 bool MediaWorkspace::busy() const noexcept { return state_->busy(); }
 void MediaWorkspace::shutdown()
@@ -653,11 +719,13 @@ void MediaWorkspace::cancelOutput(QObject* origin, quint64 token)
 ui::EditorWindow* MediaWorkspace::openEditor(const QImage& image, bool pinned)
 {
     if (state_->stopping || image.isNull() || !state_->archive) return nullptr;
-    auto* window = new ui::EditorWindow();
+    auto ownedWindow = std::make_unique<ui::EditorWindow>();
+    auto* window = ownedWindow.get();
     window->setAttribute(Qt::WA_DeleteOnClose);
     window->setWindowFlag(Qt::WindowStaysOnTopHint, pinned);
     window->setTranslator(state_->translator);
-    if (const auto error = window->loadImage(image)) { delete window; return nullptr; }
+    if (const auto error = window->loadImage(image)) return nullptr;
+    state_->bindEditorPreferences(window);
     window->setCloseOnSuccessfulOutput(!pinned);
     for (const auto intent : {ui::OutputIntent::Archive, ui::OutputIntent::SaveAs, ui::OutputIntent::Clipboard, ui::OutputIntent::Pin})
         window->setOutputEnabled(intent, true);
@@ -671,6 +739,7 @@ ui::EditorWindow* MediaWorkspace::openEditor(const QImage& image, bool pinned)
     });
     connect(window, &ui::EditorWindow::outputCancellationRequested, this, [this, window](quint64 token) { state_->cancel(window, token); });
     connect(window, &QObject::destroyed, this, [this, window] { state_->cancel(window); });
+    ownedWindow.release();
     const QPointer<ui::EditorWindow> view(window);
     Q_EMIT editorOpened(window);
     if (!view) return nullptr;

@@ -35,7 +35,7 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex as SyncMutex, atomic::{AtomicBool, Ordering}};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -790,7 +790,7 @@ async fn serve_http<I>(
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    hyper::server::conn::http1::Builder::new()
+    let parts = hyper::server::conn::http1::Builder::new()
         .timer(TokioTimer::new())
         .header_read_timeout(std::time::Duration::from_secs(10))
         .max_buf_size(HEADER_BYTES)
@@ -804,7 +804,48 @@ where
                 handle_request(req)
             }),
         )
-        .await
+        .without_shutdown()
+        .await?;
+
+    // Dropping an unread upload makes Hyper close its HTTP read side. Dropping
+    // the socket immediately afterwards can reset TCP while the sender is
+    // still writing, erasing the actual 403 response before it can be read.
+    // Reuse Hyper's completed/flushed connection and tokio-rustls shutdown:
+    // send close_notify/FIN first, then discard bounded residual wire bytes.
+    // No request parsing, application event, verification or commit resumes.
+    let mut io = parts.io.into_inner();
+    let closed = close_after_response(&mut io, parts.read_buf.len(), 4 * 1024 * 1024,
+        std::time::Duration::from_secs(2)).await;
+    if !matches!(closed, Ok(ConnectionClose::PeerClosed)) {
+        tracing::debug!("HTTP connection teardown: {closed:?}");
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ConnectionClose { PeerClosed, ByteLimit, Deadline }
+
+/// RFC 9112 section 9.6 staged teardown. One deadline covers write shutdown
+/// and all discarded bytes; stalled/hostile peers cannot extend it. The
+/// existing connection permit and TaskTracker still own this operation, so
+/// listener stop interrupts it and joins it like every other connection.
+async fn close_after_response<I>(io: &mut I, buffered: usize, byte_limit: usize,
+    grace: std::time::Duration) -> std::io::Result<ConnectionClose>
+where
+    I: AsyncRead + AsyncWrite + Unpin,
+{
+    tokio::time::timeout(grace, async {
+        io.shutdown().await?;
+        let mut remaining = byte_limit.saturating_sub(buffered);
+        let mut buffer = [0_u8; 16 * 1024];
+        while remaining != 0 {
+            let requested = remaining.min(buffer.len());
+            let received = io.read(&mut buffer[..requested]).await?;
+            if received == 0 { return Ok(ConnectionClose::PeerClosed); }
+            remaining -= received;
+        }
+        Ok(ConnectionClose::ByteLimit)
+    }).await.unwrap_or(Ok(ConnectionClose::Deadline))
 }
 
 fn create_tls_config(
@@ -967,5 +1008,73 @@ async fn handle_request_inner(mut req: Request<Incoming>) -> Result<Response<Box
             *res.status_mut() = StatusCode::NOT_FOUND;
             Ok(res)
         }
+    }
+}
+
+#[cfg(test)]
+mod teardown_tests {
+    use super::{close_after_response, ConnectionClose};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    async fn sockets() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        (server, client)
+    }
+
+    #[tokio::test]
+    async fn response_half_close_preserves_read_side_until_peer_fin() {
+        let (mut server, mut client) = sockets().await;
+        let task = tokio::spawn(async move {
+            server.write_all(b"rejected").await.unwrap();
+            close_after_response(&mut server, 0, 64 * 1024, Duration::from_secs(2)).await.unwrap()
+        });
+        client.write_all(&[1_u8; 1024]).await.unwrap();
+        let mut response = [0; 8];
+        client.read_exact(&mut response).await.unwrap();
+        assert_eq!(&response, b"rejected");
+        assert_eq!(client.read(&mut response).await.unwrap(), 0);
+        // The server has sent FIN, but must still consume this in-flight body
+        // rather than reset the connection and erase its response.
+        client.write_all(&[2_u8; 1024]).await.unwrap();
+        client.shutdown().await.unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(3), task).await.unwrap().unwrap(),
+            ConnectionClose::PeerClosed);
+    }
+
+    #[tokio::test]
+    async fn stalled_peer_cannot_extend_teardown_deadline() {
+        let (mut server, mut client) = sockets().await;
+        let task = tokio::spawn(async move {
+            server.write_all(b"rejected").await.unwrap();
+            close_after_response(&mut server, 0, 64 * 1024, Duration::from_millis(50)).await.unwrap()
+        });
+        let mut response = [0; 8];
+        client.read_exact(&mut response).await.unwrap();
+        assert_eq!(&response, b"rejected");
+        assert_eq!(client.read(&mut response).await.unwrap(), 0);
+        // Keep this real TCP write side open throughout the deadline.
+        assert_eq!(tokio::time::timeout(Duration::from_secs(3), task).await.unwrap().unwrap(),
+            ConnectionClose::Deadline);
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn residual_body_has_a_cumulative_byte_budget() {
+        let (mut server, mut client) = sockets().await;
+        let task = tokio::spawn(async move {
+            server.write_all(b"rejected").await.unwrap();
+            // Count bytes already buffered by Hyper against the same budget.
+            close_after_response(&mut server, 128, 256, Duration::from_secs(2)).await.unwrap()
+        });
+        let mut response = [0; 8];
+        client.read_exact(&mut response).await.unwrap();
+        assert_eq!(&response, b"rejected");
+        client.write_all(&[3_u8; 128]).await.unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(3), task).await.unwrap().unwrap(),
+            ConnectionClose::ByteLimit);
     }
 }

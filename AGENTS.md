@@ -28,6 +28,13 @@ consumer completion. Do not reopen a second Portal session, infer global pixels
 from a Wayland screenshot, invent silent PCM, or let GUI teardown precede worker
 drain. Qt views and application ownership remain shared across both platforms.
 
+The application's loaded SettingsStore is also the editor preference owner.
+Bind it to MediaWorkspace before opening any editor; preserve the existing
+ToolSub/toolPin fields and shared ToolSettings ranges instead of another store
+or defaults table. Native recording controls must remain excluded, unmapped or
+verified outside every real readback. Hiding controls requires an actually
+available stop route; a saved shortcut string is not native registration.
+
 Reuse existing production behavior first, pinned cited upstream second, then
 mature libraries. Keep pure editor models free of Qt/Win32 and use them in the
 existing adapters while migrating. Register shared targets and tests in CMake;
@@ -41,6 +48,10 @@ Portal fault tests use a real bus, while desktop authorization and PipeWire
 frames require separate real desktop evidence. Preserve unknown configuration
 fields and original migration bytes; a stale writer or failed backup must not
 overwrite user data. See the migration guide for atomicity and durability limits.
+The owned headless Portal probes use the separately locked Sway/Portal desktop
+in docs/validation-desktop.md. Keep its private libraries, system daemons and
+application clients in distinct loader environments; this test desktop is not
+an application runtime dependency or GNOME/Plasma acceptance.
 
 ## Shipping Windows baseline
 

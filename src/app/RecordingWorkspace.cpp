@@ -8,14 +8,18 @@
 #include "services/desktop/CaptureExclusion.h"
 #include "services/desktop/WindowActivation.h"
 
+#include <QApplication>
 #include <QGuiApplication>
 #include <QPainter>
 #include <QPlatformSurfaceEvent>
 #include <QPointer>
+#include <QRegion>
 #include <QScreen>
 #include <QTimer>
 #include <QWindow>
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -26,6 +30,38 @@ namespace cap = Capture;
 namespace rec = Recording;
 namespace ui = UI::Qt;
 
+// Four outside work-area candidates reuse this repository's PR #7 controller
+// (251bc0071278c6b711c840bf5188d16870bc7349), with the same verified per-screen
+// mapping. Never scale a virtual desktop or a Portal source by one global DPR.
+QVector<QRect> outsideAreas(const QVector<cap::ScreenBinding>& screens, QRect sourceSelection)
+{
+    QVector<QRect> result;
+    for (const auto& binding : screens) {
+        if (!binding.screen || binding.screen->name().compare(binding.nativeId, Qt::CaseInsensitive) != 0 ||
+            binding.logicalGeometry != QRectF(binding.screen->geometry()) ||
+            binding.logicalWorkArea != QRectF(binding.screen->availableGeometry()) || binding.sourcePixels.isEmpty() ||
+            !std::isfinite(binding.pixelsPerDipX) || binding.pixelsPerDipX <= 0 ||
+            !std::isfinite(binding.pixelsPerDipY) || binding.pixelsPerDipY <= 0) continue;
+        const auto work = binding.logicalWorkArea.adjusted(4, 4, -4, -4);
+        const auto first = cap::screenLocalFromSource(binding, sourceSelection.topLeft()) + binding.logicalGeometry.topLeft();
+        const auto end = cap::screenLocalFromSource(binding,
+            QPointF(sourceSelection.x() + sourceSelection.width(), sourceSelection.y() + sourceSelection.height())) + binding.logicalGeometry.topLeft();
+        const auto blocked = QRectF(first, end).adjusted(-8, -8, 8, 8).intersected(work);
+        const auto spaces = blocked.isEmpty() ? std::array<QRectF, 4>{work, {}, {}, {}} : std::array<QRectF, 4>{
+            QRectF(work.left(), work.top(), work.width(), blocked.top() - work.top()),
+            QRectF(work.left(), blocked.bottom(), work.width(), work.bottom() - blocked.bottom()),
+            QRectF(work.left(), work.top(), blocked.left() - work.left(), work.height()),
+            QRectF(blocked.right(), work.top(), work.right() - blocked.right(), work.height())};
+        for (const auto& area : spaces) {
+            const int left = static_cast<int>(std::ceil(area.left())), top = static_cast<int>(std::ceil(area.top()));
+            const QRect inward(left, top, static_cast<int>(std::floor(area.right())) - left,
+                static_cast<int>(std::floor(area.bottom())) - top);
+            if (!inward.isEmpty()) result.push_back(inward);
+        }
+    }
+    return result;
+}
+
 // One transparent, input-free outline per verified screen. Only the outer
 // selection edge is drawn; crossing a screen boundary adds no interior edge.
 // The stroke lies outside the selected pixels, including on desktops where
@@ -33,7 +69,8 @@ namespace ui = UI::Qt;
 class RecordingOutline final : public QWidget {
 public:
     RecordingOutline(const cap::ScreenBinding& binding, QRect selection)
-        : QWidget(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
+        : QWidget(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::BypassWindowManagerHint |
+              Qt::NoDropShadowWindowHint |
               Qt::WindowTransparentForInput | Qt::WindowDoesNotAcceptFocus), binding_(binding), selection_(selection)
     {
         setAttribute(Qt::WA_TranslucentBackground);
@@ -41,7 +78,18 @@ public:
         setAttribute(Qt::WA_ShowWithoutActivating);
         setObjectName(QStringLiteral("recordingOutline"));
         setScreen(binding.screen); setGeometry(binding.logicalGeometry.toAlignedRect());
+        const auto first = cap::screenLocalFromSource(binding_, selection_.topLeft());
+        const auto end = cap::screenLocalFromSource(binding_,
+            QPointF(selection_.x() + selection_.width(), selection_.y() + selection_.height()));
+        // A native bounding shape excludes the whole selection, even when no
+        // compositing WM exists. The additional outside margin is conservative
+        // for integer window/DIP rounding; capture never paints a black hole.
+        const auto inner = QRectF(first, end).adjusted(-1, -1, 1, 1).toAlignedRect();
+        const auto shape = (QRegion(inner.adjusted(-4, -4, 4, 4)) - QRegion(inner)) & QRegion(rect());
+        border_ = !shape.isEmpty();
+        if (border_) setMask(shape); // an empty QWidget mask would mean no mask
     }
+    bool hasBorder() const noexcept { return border_; }
 protected:
     void paintEvent(QPaintEvent*) override
     {
@@ -56,6 +104,7 @@ protected:
 private:
     cap::ScreenBinding binding_;
     QRect selection_;
+    bool border_{};
 };
 }
 
@@ -77,7 +126,12 @@ struct RecordingWorkspace::State {
     quint64 captureToken{}, recordingToken{}, sourceId{}, generation{}, outputToken{}, nextOutputToken{1};
     QString sourceFailure;
     std::stop_source producerStop{std::nostopstate};
+    std::shared_ptr<Core::CaptureControls> controls;
+    QVector<cap::ScreenBinding> screens;
+    QRect sourceRegion;
     bool hasBackend{}, fromLive{}, consumerClaimed{}, stopping{}, sessionStopped{}, shutdownReported{}, cancelled{};
+    bool externalStopAvailable{};
+    bool guardingControls{};
 
     State(RecordingWorkspace* q, std::shared_ptr<Media::MediaArchiveService> archive,
         MediaWorkspace& mediaWorkspace, CaptureWorkspace& captureWorkspace, rec::Backend backend,
@@ -120,8 +174,63 @@ struct RecordingWorkspace::State {
         // The adapter preserves unsupported capability. It never substitutes
         // a black rectangle or claims Linux has a universal exclusion API.
         const auto result = Desktop::excludeFromCapture(window);
+        window->setProperty("huhuCaptureExcluded", result.applied);
         if (this->window && window == this->window->windowHandle())
             this->window->setCaptureExcluded(result.applied);
+    }
+    bool publishControls()
+    {
+        if (!guardingControls || !controls || !window || !window->windowHandle()) return false;
+        auto snapshot = std::make_shared<Core::CaptureControlSnapshot>();
+        const auto add = [&](QWidget& widget, bool hidden) {
+            auto* native = widget.windowHandle();
+            if (!native || !native->handle()) return false;
+            snapshot->surfaces.push_back({static_cast<std::uintptr_t>(native->winId()), hidden ? Core::CaptureControlPlacement::Hidden :
+                native->property("huhuCaptureExcluded").toBool() ? Core::CaptureControlPlacement::Excluded : Core::CaptureControlPlacement::Outside});
+            return true;
+        };
+        if (!add(*window, window->hiddenForCapture())) return false;
+        for (const auto& outline : outlines)
+            if (outline->hasBorder() && !add(*outline, !outline->isVisible())) return false;
+        controls->snapshot.store(std::move(snapshot), std::memory_order_release);
+        return true;
+    }
+    bool prepareControls()
+    {
+        if (!window || !window->windowHandle()) return false;
+        // A tooltip is a separate native top-level, rather than a child of
+        // the toolbar's exclusion/shape. Unmap only this process's actual
+        // tooltips before publishing the capture surface contract.
+        for (auto* tooltip : QApplication::topLevelWidgets())
+            if (tooltip->windowType() == Qt::ToolTip) tooltip->hide();
+        protect(window->windowHandle());
+        const bool excluded = window->windowHandle()->property("huhuCaptureExcluded").toBool();
+        bool outside{};
+        if (!excluded && !fromLive && capabilities.guardedOutsideControls) {
+            auto areas = outsideAreas(screens, sourceRegion);
+            outside = !areas.isEmpty() && window->setCaptureSafeAreas(std::move(areas));
+            if (outside) window->show();
+        }
+        if (!excluded && !outside) {
+            window->setCaptureSafeAreas({});
+            if (!externalStopAvailable) {
+                showFailure(QStringLiteral("No recording control fits outside the selected pixels, and no tray or global stop action is currently available."));
+                return false;
+            }
+            window->setHiddenForCapture(true);
+        }
+        controls = std::make_shared<Core::CaptureControls>(); guardingControls = true;
+        if (!publishControls()) {
+            guardingControls = false; controls.reset();
+            window->setHiddenForCapture(false);
+            showFailure(QStringLiteral("The recording controls have no verifiable native surfaces")); return false;
+        }
+        return true;
+    }
+    void restoreControls()
+    {
+        guardingControls = false; controls.reset();
+        if (window) { window->setCaptureSafeAreas({}); window->setHiddenForCapture(false); }
     }
     void hideOutlines()
     { for (const auto& outline : outlines) outline->hide(); }
@@ -130,6 +239,7 @@ struct RecordingWorkspace::State {
         const auto completed = std::exchange(captureToken, 0);
         recordingToken = 0; archived.reset(); sourceFailure.clear();
         timer.stop(); outlines.clear();
+        guardingControls = false; controls.reset(); screens.clear(); sourceRegion = {};
         if (window) {
             auto* old = window.data(); window.clear();
             QObject::disconnect(old, nullptr, owner, nullptr);
@@ -153,6 +263,7 @@ struct RecordingWorkspace::State {
     void showFailure(const QString& detail, const QString& retainedPath = {}, bool retry = false)
     {
         hideOutlines(); timer.stop();
+        restoreControls();
         if (window) window->showFailure(detail, retainedPath, retry);
         else {
             QTimer::singleShot(0, owner, [target = owner, detail, retainedPath] {
@@ -204,6 +315,8 @@ struct RecordingWorkspace::State {
         request.maximumDuration = options.format == rec::Format::Gif ? std::chrono::minutes(6) : std::chrono::minutes(120);
         request.systemAudio = options.format == rec::Format::Mp4 && options.systemAudio;
         request.microphone = options.format == rec::Format::Mp4 && options.microphone;
+        if (!prepareControls()) return;
+        request.controls = controls;
         quint64 token{};
         const QPointer<RecordingWorkspace> alive(owner);
         if (fromLive) {
@@ -253,8 +366,10 @@ struct RecordingWorkspace::State {
         }
         captureToken = request.token; sourceId = request.sourceId; generation = request.generation;
         fromLive = authorized; region = authorized ? request.sourceRect : *request.desktopRect;
+        sourceRegion = request.sourceRect; screens = snapshot.screens;
         cancelled = false; archived.reset(); sourceFailure.clear();
         window = new ui::RecordingWindow;
+        window->installEventFilter(owner);
         window->setTranslator(translator); window->setCapabilities(capabilities);
         const cap::ScreenBinding* placement{}; qint64 largest{};
         for (const auto& binding : snapshot.screens) {
@@ -275,7 +390,16 @@ struct RecordingWorkspace::State {
         }
         QObject::connect(window, &ui::RecordingWindow::startRequested, owner, [this](const auto& selected) { start(selected); });
         QObject::connect(window, &ui::RecordingWindow::stopRequested, owner, [this](rec::StopIntent choice) {
-            if (session.requestStop(choice)) { intent = choice; hideOutlines(); changed(); }
+            owner->stopActive(choice);
+        });
+        QObject::connect(window, &ui::RecordingWindow::capturePlacementLost, owner, [this] {
+            if (!window || !guardingControls) return;
+            // The widget already unmapped itself before reporting that its
+            // new size cannot fit. Keep it hidden until native capture ends.
+            window->setHiddenForCapture(true);
+            publishControls();
+            if (!externalStopAvailable) owner->stopActive(rec::StopIntent::Save);
+            changed();
         });
         QObject::connect(window, &ui::RecordingWindow::retryOutputRequested, owner, [this] { output(); });
         QObject::connect(window, &ui::RecordingWindow::cancelRequested, owner, [this] {
@@ -289,7 +413,9 @@ struct RecordingWorkspace::State {
             else if (outputToken) media.cancelOutput(owner, outputToken);
             else finishJourney();
         });
-        for (const auto& outline : outlines) { outline->show(); protect(outline->windowHandle()); }
+        for (const auto& outline : outlines) if (outline->hasBorder()) {
+            outline->installEventFilter(owner); outline->show(); protect(outline->windowHandle());
+        }
         window->show(); protect(window->windowHandle());
         activation.request(window->windowHandle()); changed();
     }
@@ -308,7 +434,7 @@ RecordingWorkspace::RecordingWorkspace(std::shared_ptr<Media::MediaArchiveServic
     connect(&capture, &CaptureWorkspace::liveActionRequested, this,
         [this](const cap::ActionRequest& request, QWidget*) { state_->open(request); });
     connect(&capture, &CaptureWorkspace::liveActionActivationRequested, this, [this](quint64 token, const QString& activationToken) {
-        if (token == state_->captureToken && state_->window)
+        if (token == state_->captureToken && state_->window && !state_->window->hiddenForCapture())
             state_->activation.request(state_->window->windowHandle(), activationToken);
     });
     connect(&capture, &CaptureWorkspace::liveActionCancelled, this, [this](quint64 token) {
@@ -332,6 +458,9 @@ RecordingWorkspace::RecordingWorkspace(std::shared_ptr<Media::MediaArchiveServic
         if (state_->window) state_->window->setState(state);
         if (state == rec::SessionState::Finalizing || state == rec::SessionState::Archiving) {
             state_->timer.stop(); state_->hideOutlines();
+            // Every backend reports Finalizing only after its actual source
+            // stopped; it is now safe to restore a hidden output/status view.
+            if (!state_->stopping && !state_->cancelled) state_->restoreControls();
             if (state_->window) state_->window->setElapsed(state_->session.elapsed());
         }
         state_->changed();
@@ -349,7 +478,21 @@ RecordingWorkspace::RecordingWorkspace(std::shared_ptr<Media::MediaArchiveServic
         const QPointer<RecordingWorkspace> alive(this);
         if (!result.archive.path.isEmpty()) state_->media.notifyArchiveChanged();
         if (!alive) return;
-        if (state_->stopping) return; // shutdownFinished owns the final drain.
+        if (state_->stopping) {
+            // shutdownFinished still owns the final drain, but closing the
+            // application cannot swallow a failed writer/finalizer or the
+            // location of an unpublished recording retained for recovery.
+            const auto retained = result.archive.path.isEmpty() ? result.recoveryPath : result.archive.path;
+            if (result.backend.media.firstError || result.backend.media.finalizationError ||
+                (!retained.isEmpty() && result.state == rec::SessionState::RecoverableFailure) ||
+                (result.failure && result.failure.code != Media::Error::Cancelled)) {
+                auto detail = result.failure.detail;
+                if (detail.isEmpty()) detail = QStringLiteral("The recording could not finish cleanly while the application was closing.");
+                if (!retained.isEmpty()) detail += QChar(u'\n') + retained;
+                Q_EMIT operationFailed(detail);
+            }
+            return;
+        }
         state_->intent = result.intent; state_->archived = result.archivedEntry;
         if (state_->cancelled) { state_->finishJourney(); return; }
         if (result.state == rec::SessionState::Completed && state_->archived) {
@@ -377,6 +520,27 @@ RecordingWorkspace::~RecordingWorkspace()
 void RecordingWorkspace::setTranslator(ui::DesktopTranslator translator)
 { state_->translator = std::move(translator); if (state_->window) state_->window->setTranslator(state_->translator); }
 bool RecordingWorkspace::busy() const noexcept { return state_->busy(); }
+void RecordingWorkspace::setExternalStopAvailable(bool available)
+{
+    if (state_->externalStopAvailable == available) return;
+    state_->externalStopAvailable = available;
+    if (!available && controlsHiddenForCapture() && state_->session.busy())
+        stopActive(rec::StopIntent::Save);
+    state_->changed();
+}
+bool RecordingWorkspace::canStop() const noexcept
+{
+    const auto phase = state_->session.state();
+    return !state_->stopping && state_->session.busy() &&
+        (phase == rec::SessionState::Preparing || phase == rec::SessionState::Recording);
+}
+bool RecordingWorkspace::stopActive(rec::StopIntent intent)
+{
+    if (!canStop() || !state_->session.requestStop(intent)) return false;
+    state_->intent = intent; state_->hideOutlines(); state_->changed(); return true;
+}
+bool RecordingWorkspace::controlsHiddenForCapture() const noexcept
+{ return state_->window && state_->window->hiddenForCapture(); }
 void RecordingWorkspace::shutdown()
 {
     if (state_->stopping) return;
@@ -391,10 +555,19 @@ void RecordingWorkspace::shutdown()
 }
 bool RecordingWorkspace::eventFilter(QObject* watched, QEvent* event)
 {
-    if (event->type() == QEvent::PlatformSurface &&
-        static_cast<QPlatformSurfaceEvent*>(event)->surfaceEventType() == QPlatformSurfaceEvent::SurfaceCreated) {
-        const QPointer<QWindow> window(qobject_cast<QWindow*>(watched));
-        QTimer::singleShot(0, this, [this, window] { if (window) state_->protect(window); });
+    if (event->type() == QEvent::PlatformSurface) {
+        const auto phase = static_cast<QPlatformSurfaceEvent*>(event)->surfaceEventType();
+        if (phase == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed && state_->guardingControls) {
+            if (state_->controls) state_->controls->snapshot.store({}, std::memory_order_release);
+            stopActive(rec::StopIntent::Save);
+        } else if (phase == QPlatformSurfaceEvent::SurfaceCreated) {
+            // Set the actual Windows affinity before this native surface can
+            // be mapped. A queued setter leaves an unprotected visible frame.
+            if (auto* window = qobject_cast<QWindow*>(watched)) state_->protect(window);
+        }
+    } else if (event->type() == QEvent::WinIdChange && state_->guardingControls) {
+        if (state_->controls) state_->controls->snapshot.store({}, std::memory_order_release);
+        stopActive(rec::StopIntent::Save);
     }
     return QObject::eventFilter(watched, event);
 }

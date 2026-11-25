@@ -31,7 +31,8 @@ impl HuhuEvent {
 
     pub fn error(kind: u32, operation: u64, error: Error) -> Self {
         Self::new(kind, error.status, operation, serde_json::json!({
-            "error": error.message, "httpStatus": error.http_status
+            "error": error.message, "httpStatus": error.http_status,
+            "requestFailure": error.request_failure
         }))
     }
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/CaptureControls.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -44,6 +45,11 @@ public:
     bool supportsAutomaticScroll() const noexcept;
     bool desktop(X11Desktop& result, bool includeWindows = true);
     bool capture(int x, int y, int width, int height, bool includeCursor = false);
+    // Same pixel implementation, with real owned-window visibility/shape and
+    // geometry checked atomically with readback on this worker's connection.
+    // A short server grab never spans encoding, GUI callbacks or frame waits.
+    bool captureGuarded(int x, int y, int width, int height, bool includeCursor,
+        std::span<const Core::CaptureControlSurface> controls);
     bool moveCursor(int x, int y, int& actualX, int& actualY);
     // Positive steps scroll down; negative steps scroll up.
     bool scroll(int x, int y, int steps);

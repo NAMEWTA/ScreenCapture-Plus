@@ -136,6 +136,12 @@ CANCELLED；无效错误码不消耗待决确认。这里复用标准 v2 错误�
 协议字段，也不让磁盘不足退化为“对方主动拒绝”。接收终态的决策所有权在唤醒
 HTTP worker 前移出共享 slot，避免并发 abort 覆盖应用已经确定的拒绝原因。
 
+没有 HTTP 响应的请求失败仍保留原来的失败分类，不会因为接收端可能取消而改成
+`CANCELLED`。错误事件的可选 `requestFailure` 仅携带 reqwest 的类型标记
+（timeout/connect/body/decode/request/other）、可获取的底层 IO 类型和 OS 错误码；
+不输出 URL、认证 token、证书私钥或任意底层错误链文本。`httpStatus` 只记录实际
+收到的 HTTP 状态。该诊断供定位连接层故障，UI 不解析英文消息推导业务结果。
+
 接收顺序是：消费 `RECEIVE_FILE` → caller 写排他暂存 → read 到 `END` →
 `verify` 返回实际长度、SHA 和取消许可 → 完整 codec/probe 检查 → 发布前检查
 取消 → 共享 FileCommitter 无覆盖持久提交 → `complete(OK, kind)`。

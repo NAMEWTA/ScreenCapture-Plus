@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture actual Portal-wlr/PipeWire frames in an owned headless Sway session.
 
-The system daemon/backend and the pinned application client use separate library
+The system daemon, pinned desktop and application client use separate library
 environments. A painted Wayland surface, native SHM transport, output resize and
 loss of this script's own daemon supply the evidence. No frames or Portal replies
 are replaced. This does not prove GNOME/Plasma authorization or physical devices.
@@ -95,7 +95,7 @@ def wait_bus_name(name: str, env: dict[str, str], children: list[tuple[str, subp
 
 def run_probe(probe_path: Path, mode: str, env: dict[str, str], service_env: dict[str, str],
               children: list[tuple[str, subprocess.Popen]], daemon: subprocess.Popen,
-              artifacts: Path, child_guard) -> None:
+              artifacts: Path, swaymsg: str, child_guard) -> None:
     records: list[dict] = []
     result = None
     ready = False
@@ -138,7 +138,7 @@ def run_probe(probe_path: Path, mode: str, env: dict[str, str], service_env: dic
                                     raise RuntimeError("Probe emitted streamReady twice")
                                 ready = True
                                 if mode == "resize":
-                                    response = subprocess.run([host_binary("swaymsg"), "--socket", service_env["SWAYSOCK"],
+                                    response = subprocess.run([swaymsg, "--socket", service_env["SWAYSOCK"],
                                         "output", "HEADLESS-1", "mode", "1024x768"], env=service_env,
                                         check=True, text=True, capture_output=True, timeout=5)
                                     outcomes = json.loads(response.stdout)
@@ -177,7 +177,8 @@ def run_probe(probe_path: Path, mode: str, env: dict[str, str], service_env: dic
             (artifacts / "result.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n")
 
 
-def run_case(probe: Path, prefix: Path, mode: str, artifacts: Path, programs: dict[str, str], child_guard) -> None:
+def run_case(probe: Path, prefix: Path, desktop: Path, mode: str, artifacts: Path,
+             programs: dict[str, str], child_guard) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
     children: list[tuple[str, subprocess.Popen]] = []
     logs = []
@@ -216,7 +217,12 @@ def run_case(probe: Path, prefix: Path, mode: str, artifacts: Path, programs: di
         def start(name: str, command: list[str], pipe_output=False) -> subprocess.Popen:
             log = (artifacts / f"{name}.log").open("wb")
             logs.append(log)
-            child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE if pipe_output else log,
+            # Only the explicitly verified compositor/backend loads its private
+            # libraries. PipeWire, policy, portals and bus keep host libraries.
+            child_env = env.copy()
+            if name in ("sway", "portal-wlr"):
+                child_env["LD_LIBRARY_PATH"] = str(desktop / "lib")
+            child = subprocess.Popen(command, env=child_env, stdout=subprocess.PIPE if pipe_output else log,
                 stderr=log, start_new_session=True, preexec_fn=child_guard, bufsize=0)
             children.append((name, child))
             return child
@@ -260,7 +266,9 @@ def run_case(probe: Path, prefix: Path, mode: str, artifacts: Path, programs: di
             for key in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH"):
                 if key in os.environ:
                     client_env[key] = os.environ[key]
-            run_probe(probe, mode, client_env, env, children, daemon, artifacts, child_guard)
+            desktop_env = env.copy()
+            desktop_env["LD_LIBRARY_PATH"] = str(desktop / "lib")
+            run_probe(probe, mode, client_env, desktop_env, children, daemon, artifacts, programs["swaymsg"], child_guard)
         finally:
             cleanup_errors = []
             for name, child in reversed(children):
@@ -296,17 +304,45 @@ def main() -> int:
     build_info = json.loads(parsed.backend_build_info.read_text(encoding="utf-8"))
     if not os.access(backend, os.X_OK) or hashlib.sha256(backend.read_bytes()).hexdigest() != build_info["binarySha256"]:
         raise RuntimeError("The real Portal backend differs from its actual build evidence")
+    root = Path(__file__).resolve().parents[1]
+    locked = json.loads((root / "build/dependencies.lock.json").read_text(encoding="utf-8"))["qtMigration"]["headlessPortalValidation"]
+    if build_info.get("schema") != 2 or build_info.get("sources") != locked:
+        raise RuntimeError("Rebuild the owned validation desktop from the current exact source lock")
+    desktop = (parsed.backend_build_info.resolve(strict=True).parent / "install").resolve(strict=True)
+    if desktop != Path(build_info["prefix"]).resolve(strict=True):
+        raise RuntimeError("Validation desktop prefix does not match its build receipt")
+    desktop_binaries = {}
+    for name in ("sway", "swaymsg", "xdg-desktop-portal-wlr"):
+        record = build_info["binaries"][name]
+        path = (desktop / record["relativePath"]).resolve(strict=True)
+        if not path.is_relative_to(desktop) or not os.access(path, os.X_OK) or \
+                hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]:
+            raise RuntimeError(f"Validation desktop binary differs from its build receipt: {name}")
+        desktop_binaries[name] = str(path)
+    if backend != Path(desktop_binaries["xdg-desktop-portal-wlr"]):
+        raise RuntimeError("The backend must belong to this verified desktop prefix")
+    recorded = set()
+    for record in build_info["runtimeFiles"]:
+        path = desktop / record["relativePath"]
+        if not path.resolve(strict=True).is_relative_to(desktop) or \
+                (os.readlink(path) if path.is_symlink() else None) != record["symlink"] or \
+                hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]:
+            raise RuntimeError(f"Validation desktop library differs from its build receipt: {path.name}")
+        recorded.add(path.relative_to(desktop).as_posix())
+    actual = {path.relative_to(desktop).as_posix() for path in (desktop / "lib").glob("*.so*")}
+    if not recorded or actual != recorded:
+        raise RuntimeError("The private validation loader directory has changed")
     artifacts = parsed.artifacts.resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
-    programs = {name: host_binary(name) for name in ("dbus-daemon", "sway", "swaymsg", "pipewire", "wireplumber", "gdbus")}
+    programs = {name: host_binary(name) for name in ("dbus-daemon", "pipewire", "wireplumber", "gdbus")}
     for name in ("xdg-desktop-portal", "xdg-document-portal", "xdg-permission-store"):
         programs[name] = host_binary(name)
-    programs["xdg-desktop-portal-wlr"] = str(backend)
+    programs.update(desktop_binaries)
     versions = subprocess.run([host_binary("dpkg-query"), "--show", "--showformat=${Package} ${Version}\n",
         "sway", "pipewire", "wireplumber", "xdg-desktop-portal", "xdg-desktop-portal-wlr"],
         check=True, text=True, capture_output=True).stdout.splitlines()
     (artifacts / "environment.json").write_text(json.dumps({"systemPackages": versions,
-        "clientPrefix": str(prefix), "modes": MODES, "backend": "headless", "renderer": "pixman",
+        "clientPrefix": str(prefix), "desktopPrefix": str(desktop), "modes": MODES, "backend": "headless", "renderer": "pixman",
         "portalBackendBuild": build_info,
         "portalSelection": "owned output_name=HEADLESS-1, chooser_type=none",
         "physicalDisplay": False, "gnomeAuthorization": False, "plasmaAuthorization": False,
@@ -323,7 +359,7 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, interrupted)
     for mode in MODES:
-        run_case(probe, prefix, mode, artifacts / mode, programs, child_guard)
+        run_case(probe, prefix, desktop, mode, artifacts / mode, programs, child_guard)
     print("Real Portal-wlr/PipeWire MemFd frames, format changes and owned-daemon loss passed", flush=True)
     return 0
 

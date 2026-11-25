@@ -245,6 +245,7 @@ struct QtApplication::State {
     QString promptedUpdateVersion;
     quint64 activationRequest{};
     bool checkQueued{}, journeyFinished{}, trayAvailable{};
+    bool entryAfterRecording{}, entryAfterRecordingActivation{};
     bool settingsStopped{true}, lanStopped{true}, recordingStopped{true}, scrollStopped{true}, captureStopped{true}, mediaStopping{};
     bool updatesStopped{true};
     bool clipboardStopping{}, clipboardStopped{true};
@@ -327,6 +328,13 @@ struct QtApplication::State {
     void startCapture(const QString& token = {})
     {
         if (phase != ApplicationPhase::Running || !capture) return;
+        if (recording && recording->busy()) {
+            // The existing desktop-global capture action is an actual stop
+            // route while recording. It must not open another selection or
+            // a busy dialog over a source whose controls have been hidden.
+            recording->stopActive(Recording::StopIntent::Save);
+            return;
+        }
         if (!startJourney(Core::CaptureEntry::Capture, token)) report(text(u"app.captureBusy"));
     }
     void openHistory()
@@ -374,6 +382,7 @@ struct QtApplication::State {
             for (std::size_t index = 0; index < keys.size(); ++index) menuActions[index]->setText(text(keys[index]));
         }
         if (updatePrompt && updates) updatePrompt->setText(updatePromptText());
+        refreshRecordingEntryPoints();
         refreshEntry();
     }
 
@@ -491,6 +500,14 @@ struct QtApplication::State {
     }
     void showEntry(bool requestActivation = true)
     {
+        // A disappearing tray must not put our fallback window into the
+        // recording. Loss of the last stop route first stops the worker;
+        // check() presents this entry after that journey has drained.
+        if (phase == ApplicationPhase::Running && recording && recording->busy()) {
+            entryAfterRecording = true;
+            entryAfterRecordingActivation = entryAfterRecordingActivation || requestActivation;
+            return;
+        }
         if (!entry) {
             entry = std::make_unique<EntryWindow>();
             QObject::connect(entry->buttons[EntryWindow::Capture], &QPushButton::clicked, owner, [this] { startCapture(); });
@@ -514,8 +531,25 @@ struct QtApplication::State {
     {
         const bool available = QSystemTrayIcon::isSystemTrayAvailable();
         if (available == trayAvailable) return;
-        trayAvailable = available; refreshEntry();
+        trayAvailable = available; refreshRecordingEntryPoints(); refreshEntry();
         if (!available && phase == ApplicationPhase::Running) showEntry();
+    }
+    void refreshRecordingEntryPoints()
+    {
+        if (!recording) return;
+        const bool journey = recording->busy();
+        if (tray) {
+            // Menus and tooltips are native surfaces of their own. A direct
+            // icon click stops without mapping either over a full-screen
+            // capture. Restore the ordinary menu after the journey ends.
+            tray->setContextMenu(journey ? nullptr : trayMenu.get());
+            tray->setToolTip(journey ? QString() : brand());
+        }
+        const bool nativeTray = tray && tray->isVisible() && trayAvailable &&
+            QSystemTrayIcon::isSystemTrayAvailable();
+        const bool nativeShortcut = settings && settings->captureShortcutAvailable();
+        recording->setExternalStopAvailable(phase == ApplicationPhase::Running &&
+            (nativeTray || nativeShortcut));
     }
     void setupTray()
     {
@@ -529,10 +563,17 @@ struct QtApplication::State {
         tray = std::make_unique<QSystemTrayIcon>(QApplication::windowIcon(), owner);
         tray->setToolTip(brand()); tray->setContextMenu(trayMenu.get());
         QObject::connect(tray.get(), &QSystemTrayIcon::activated, owner, [this](QSystemTrayIcon::ActivationReason reason) {
+            if (recording && recording->busy()) {
+                if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick ||
+                    reason == QSystemTrayIcon::MiddleClick || reason == QSystemTrayIcon::Context)
+                    recording->stopActive(Recording::StopIntent::Save);
+                return;
+            }
             if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) startCapture();
         });
         trayAvailable = QSystemTrayIcon::isSystemTrayAvailable();
         tray->show();
+        refreshRecordingEntryPoints();
         QObject::connect(&trayWatch, &QTimer::timeout, owner, [this] { inspectTray(); scheduleCheck(); });
         trayWatch.start();
         if (!trayAvailable) showEntry();
@@ -579,6 +620,10 @@ struct QtApplication::State {
         QObject::connect(catalog.get(), &Localization::LanguageCatalog::changed, owner, [this] { refreshLanguage(); });
         QObject::connect(media.get(), &MediaWorkspace::operationFailed, owner, [this](const QString& message) { report(message); });
         QObject::connect(media.get(), &MediaWorkspace::busyChanged, owner, [this] { scheduleCheck(); });
+        if (!media->setEditorSettings(*store)) {
+            fatal(QStringLiteral("The editor could not bind the application's loaded settings"));
+            return false;
+        }
         capture = std::make_unique<CaptureWorkspace>(*media, *clipboard, owner);
         QObject::connect(capture.get(), &CaptureWorkspace::operationFailed, owner, [this](const QString& message) { report(message); });
         QObject::connect(capture.get(), &CaptureWorkspace::busyChanged, owner, [this] { scheduleCheck(); });
@@ -591,7 +636,9 @@ struct QtApplication::State {
         recording = std::make_unique<RecordingWorkspace>(archive, *media, *capture,
             std::move(options.recordingBackend), options.recordingCapabilities,
             std::move(options.liveRecordingBackend), owner);
-        QObject::connect(recording.get(), &RecordingWorkspace::busyChanged, owner, [this] { scheduleCheck(); });
+        QObject::connect(recording.get(), &RecordingWorkspace::busyChanged, owner, [this] {
+            refreshRecordingEntryPoints(); scheduleCheck();
+        });
         QObject::connect(recording.get(), &RecordingWorkspace::operationFailed, owner,
             [this](const QString& message) { report(message); });
         QObject::connect(recording.get(), &RecordingWorkspace::shutdownFinished, owner, [this] {
@@ -622,6 +669,9 @@ struct QtApplication::State {
             QObject::connect(settings.get(), &SettingsController::operationFailed, owner, [this](const QString& message) { report(message); });
             QObject::connect(settings.get(), &SettingsController::shutdownFinished, owner, [this] { settingsStopped = true; scheduleCheck(); });
             QObject::connect(settings.get(), &SettingsController::busyChanged, owner, [this] { scheduleCheck(); });
+            QObject::connect(settings.get(), &SettingsController::stateChanged, owner, [this] {
+                refreshRecordingEntryPoints(); scheduleCheck();
+            });
             lan = std::make_unique<LanController>(archive, *store, QFileInfo(store->path()).absolutePath(), owner);
             QObject::connect(lan.get(), &LanController::operationFailed, owner, [this](const QString& message) { report(message); });
             QObject::connect(lan.get(), &LanController::availabilityChanged, owner, [this](bool available) { media->setSendAvailable(available); });
@@ -681,6 +731,11 @@ struct QtApplication::State {
     void check()
     {
         if (phase == ApplicationPhase::Running) {
+            if (entryAfterRecording && (!recording || !recording->busy())) {
+                entryAfterRecording = false;
+                const bool activateEntry = std::exchange(entryAfterRecordingActivation, false);
+                if (!initial.oneShot) showEntry(activateEntry);
+            }
             if (!initial.oneShot) considerAutomaticUpdate();
             if (initial.oneShot && journeyFinished && capture && !capture->busy() &&
                 (!recording || !recording->busy()) && (!scroll || !scroll->busy()) && media && !media->busy() &&

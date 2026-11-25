@@ -155,6 +155,9 @@
     <ClCompile Include="..\..\src\services\MediaHistory.cpp" />
     <ClCompile Include="..\..\src\services\Setting.cpp" />
     <ClCompile Include="..\..\src\services\Update.cpp" />
+    <ClCompile Include="..\..\src\platform\windows\LegacyUpdateTask.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\ui\AnnotationPanel.cpp" />
     <ClCompile Include="..\..\src\ui\Tip.cpp" />
     <ClCompile Include="..\..\src\ui\Tray.cpp" />
@@ -276,6 +279,10 @@
     <ClInclude Include="..\..\src\services\MediaHistory.h" />
     <ClInclude Include="..\..\src\services\Setting.h" />
     <ClInclude Include="..\..\src\services\Update.h" />
+    <ClInclude Include="..\..\src\core\UpdatePolicy.h" />
+    <ClInclude Include="..\..\src\core\UpdateManifest.h" />
+    <ClInclude Include="..\..\src\core\UpdatePackageHeader.h" />
+    <ClInclude Include="..\..\src\platform\windows\LegacyUpdateTask.h" />
     <ClInclude Include="..\..\src\ui\AnnotationPanel.h" />
     <ClInclude Include="..\..\src\ui\AnnotationPanelLayout.h" />
     <ClInclude Include="..\..\src\ui\Tip.h" />

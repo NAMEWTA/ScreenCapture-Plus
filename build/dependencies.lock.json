@@ -212,8 +212,8 @@
         "version": "0.8.1",
         "commit": "e1d5d16f0e064a0b788c5d70c11461b15ee7a4af",
         "license": "MIT",
+        "licenseFiles": ["LICENSE"],
         "mesonOptions": [
-          "--buildtype=release",
           "-Dsd-bus-provider=libsystemd",
           "-Dsystemd=disabled",
           "-Dman-pages=disabled"
@@ -228,10 +228,64 @@
       "waylandProtocols": {
         "repository": "https://github.com/wayland-mirror/wayland-protocols.git",
         "upstreamRepository": "https://gitlab.freedesktop.org/wayland/wayland-protocols.git",
-        "version": "1.40",
-        "commit": "c7b582cb71ec145026a547dcd8abb9dfeba40541",
+        "version": "1.41",
+        "commit": "71da8bd7f9fd3ea7c5d87ad19ca087eeca137673",
         "license": "MIT",
+        "licenseFiles": ["COPYING"],
+        "pkgConfig": "wayland-protocols",
+        "mesonOptions": ["-Dtests=false"],
         "scope": "Protocol XML build input, with per-protocol copyright notices retained"
+      },
+      "wayland": {
+        "repository": "https://github.com/wayland-mirror/wayland.git",
+        "upstreamRepository": "https://gitlab.freedesktop.org/wayland/wayland.git",
+        "version": "1.23.1",
+        "commit": "a9fec8dd65977c57f4039ced34327204d9b9d779",
+        "license": "MIT",
+        "licenseFiles": ["COPYING"],
+        "pkgConfig": "wayland-server",
+        "mesonOptions": ["-Dtests=false", "-Ddocumentation=false"]
+      },
+      "libdrm": {
+        "repository": "https://github.com/deepin-community/libdrm.git",
+        "upstreamRepository": "https://gitlab.freedesktop.org/mesa/drm.git",
+        "sourceKind": "Deepin source import, not an upstream Git commit; no Debian packaging scripts or patches applied",
+        "version": "2.4.124",
+        "commit": "2c5b3b1dd9c5ba09900dc36f5ad7f921ac9ac732",
+        "license": "MIT with per-file kernel-header notices",
+        "licenseFiles": ["debian/copyright"],
+        "pkgConfig": "libdrm",
+        "mesonOptions": ["-Dauto_features=disabled", "-Dtests=false", "-Dinstall-test-programs=false"]
+      },
+      "pixman": {
+        "repository": "https://github.com/deepin-community/pixman.git",
+        "upstreamRepository": "https://gitlab.freedesktop.org/pixman/pixman.git",
+        "sourceKind": "Deepin source import, not an upstream Git commit; no Debian packaging scripts or patches applied",
+        "version": "0.44.0",
+        "commit": "02227c183c4e2f35501544d0dd1fa456e36837eb",
+        "license": "MIT",
+        "licenseFiles": ["COPYING"],
+        "pkgConfig": "pixman-1",
+        "mesonOptions": ["-Dtests=disabled", "-Ddemos=disabled", "-Dgtk=disabled", "-Dlibpng=disabled"]
+      },
+      "wlroots": {
+        "repository": "https://github.com/deepin-community/wlroots.git",
+        "upstreamRepository": "https://gitlab.freedesktop.org/wlroots/wlroots.git",
+        "sourceKind": "Deepin source import, not an upstream Git commit; no Debian packaging scripts or patches applied",
+        "version": "0.19.0",
+        "commit": "826be6494c201ca887cddd8deb07d70c13595dd2",
+        "license": "MIT",
+        "licenseFiles": ["LICENSE"],
+        "pkgConfig": "wlroots-0.19",
+        "mesonOptions": ["-Dauto_features=disabled", "-Dexamples=false", "-Dbackends=[]", "-Drenderers=[]", "-Dallocators=[]", "-Dsession=disabled", "-Dxwayland=disabled"]
+      },
+      "sway": {
+        "repository": "https://github.com/swaywm/sway.git",
+        "version": "1.11",
+        "commit": "990b23c0e584114c3694447344d6bbf44b2d748f",
+        "license": "MIT",
+        "licenseFiles": ["LICENSE"],
+        "mesonOptions": ["-Ddefault-wallpaper=false", "-Dswaybar=false", "-Dswaynag=false", "-Dtray=disabled", "-Dgdk-pixbuf=disabled", "-Dman-pages=disabled", "-Dsd-bus-provider=libsystemd"]
       }
     },
     "videoInspectionWindows": {

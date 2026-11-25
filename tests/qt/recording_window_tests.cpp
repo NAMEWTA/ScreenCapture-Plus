@@ -143,6 +143,39 @@ void capabilitiesAndLanguage(HuhuCapture::Localization::LanguageCatalog& languag
     window.close();
     std::cout << "PASS unavailable capability reasons and all real language catalogs without repositioning\n";
 }
+void captureSafePlacement(HuhuCapture::Localization::LanguageCatalog& language)
+{
+    ui::RecordingWindow window;
+    window.setTranslator([&](QStringView key) { return language.text(key); });
+    window.setCapabilities(available()); window.setCaptureExcluded(false);
+    window.setState(rec::SessionState::Recording); window.show(); events();
+    const QVector<QRect> outside{QRect(0, 0, 800, 180), QRect(0, 430, 800, 170)};
+    const auto safe = [&] {
+        return std::any_of(outside.begin(), outside.end(), [&](const auto& area) { return area.contains(window.geometry()); });
+    };
+    require(window.setCaptureSafeAreas(outside) && safe(), "The real recording widget moves into one verified outside area");
+    window.move(200, 240); events();
+    require(safe() && !child<QLabel>(window, "recordingCaptureNotice")->isVisible(),
+        "Programmatic/native move events cannot leave the shared control in the selected gap");
+    require(child<QToolButton>(window, "video.stopFile")->toolTip().isEmpty() &&
+        child<QLabel>(window, "recordingTimer")->toolTip().isEmpty(),
+        "An active toolbar does not spawn unguarded native tooltip surfaces");
+    for (const auto& entry : language.available()) {
+        require(language.load(entry.code).usable, "Load actual catalogs for protected layout");
+        window.setTranslator([&](QStringView key) { return language.text(key); }); events();
+        require(safe(), "Real translation reflow keeps the complete control outside the recording region");
+    }
+    unsigned lost{};
+    QObject::connect(&window, &ui::RecordingWindow::capturePlacementLost, &window, [&] { ++lost; });
+    require(!window.setCaptureSafeAreas({QRect(0, 0, 80, 20)}), "Refuse an area that cannot contain the actual toolbar");
+    events();
+    require(!window.isVisible() && lost, "Loss of safe geometry unmaps the widget before notifying its owner");
+    window.setHiddenForCapture(true); window.show(); events();
+    require(window.hiddenForCapture() && !window.isVisible(), "A hidden recording control cannot be exposed by activation/show");
+    window.setState(rec::SessionState::Finalizing); window.setCaptureSafeAreas({}); window.setHiddenForCapture(false); events();
+    require(!window.hiddenForCapture() && window.isVisible(), "The stopped-source finalization view can return for output and failure details");
+    std::cout << "PASS real QWidget outside placement, move/reflow constraint, hidden visibility and finalization restore; no native capture claim\n";
+}
 }
 
 int main(int argc, char** argv)
@@ -154,6 +187,7 @@ int main(int argc, char** argv)
         HuhuCapture::Localization::LanguageCatalog language({HuhuCapture::Localization::ResourcePolicy::LinuxUserResources, {}, {}});
         require(language.load(QStringLiteral("en-US")).usable, "Load actual shared English catalog");
         controlsAndIntent(language, artifacts); capabilitiesAndLanguage(language, artifacts);
+        captureSafePlacement(language);
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

@@ -25,6 +25,49 @@ pub struct Error {
     pub status: i32,
     pub message: String,
     pub http_status: Option<u16>,
+    pub request_failure: Option<RequestFailure>,
+}
+
+/// Bounded diagnostics from typed transport APIs. Never format the underlying
+/// source chain: reqwest URLs contain file/session authentication tokens.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestFailure {
+    kind: &'static str,
+    io_kind: Option<&'static str>,
+    native_code: Option<i32>,
+}
+
+impl RequestFailure {
+    fn from_reqwest(error: &localsend::reqwest::Error) -> Self {
+        let kind = if error.is_timeout() { "timeout" }
+            else if error.is_connect() { "connect" }
+            else if error.is_body() { "body" }
+            else if error.is_decode() { "decode" }
+            else if error.is_request() { "request" }
+            else { "other" };
+        let mut failure = Self { kind, io_kind: None, native_code: None };
+        let mut source = Some(error as &(dyn std::error::Error + 'static));
+        for _ in 0..16 {
+            let Some(current) = source else { break; };
+            if let Some(io) = current.downcast_ref::<std::io::Error>() {
+                failure.io_kind = Some(match io.kind() {
+                    std::io::ErrorKind::ConnectionReset => "connectionReset",
+                    std::io::ErrorKind::ConnectionAborted => "connectionAborted",
+                    std::io::ErrorKind::ConnectionRefused => "connectionRefused",
+                    std::io::ErrorKind::BrokenPipe => "brokenPipe",
+                    std::io::ErrorKind::UnexpectedEof => "unexpectedEof",
+                    std::io::ErrorKind::TimedOut => "timedOut",
+                    std::io::ErrorKind::NotConnected => "notConnected",
+                    _ => "other",
+                });
+                failure.native_code = io.raw_os_error();
+                break;
+            }
+            source = current.source();
+        }
+        failure
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -37,7 +80,7 @@ impl Error {
             while !message.is_char_boundary(end) { end -= 1; }
             message.truncate(end);
         }
-        Self { status, message, http_status: None }
+        Self { status, message, http_status: None, request_failure: None }
     }
 }
 
@@ -81,6 +124,9 @@ impl From<ClientError> for Error {
         };
         let mut result = Self::new(status, message);
         result.http_status = http_status;
+        if let ClientError::Reqwest(value) = &error {
+            result.request_failure = Some(RequestFailure::from_reqwest(value));
+        }
         result
     }
 }

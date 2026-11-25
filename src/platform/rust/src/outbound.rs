@@ -196,12 +196,13 @@ async fn run_send(shared: Arc<Shared>, operation: u64, peer: Peer,
             }
         }
     }
-    let (code, error, http_status) = match transferred {
-        Ok(()) => (if results.iter().all(|file| file.accepted) { status::OK } else { status::PARTIAL }, None, None),
-        Err(error) => (error.status, Some(error.message), error.http_status),
+    let (code, error, http_status, request_failure) = match transferred {
+        Ok(()) => (if results.iter().all(|file| file.accepted) { status::OK } else { status::PARTIAL }, None, None, None),
+        Err(error) => (error.status, Some(error.message), error.http_status, error.request_failure),
     };
     HuhuEvent::new(event::SEND_END, code, operation, json!({
-        "files": results, "error": error, "httpStatus": http_status, "cleanupError": cleanup_error
+        "files": results, "error": error, "httpStatus": http_status,
+        "requestFailure": request_failure, "cleanupError": cleanup_error
     }))
 }
 

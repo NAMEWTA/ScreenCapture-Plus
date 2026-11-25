@@ -35,6 +35,7 @@ if(BUILD_TESTING)
     huhucapture_test(capture_selection tests/capture_selection_tests.cpp)
     huhucapture_test(media_file_names tests/media_file_name_tests.cpp)
     huhucapture_test(release_versions tests/release_version_tests.cpp)
+    huhucapture_test(update_package_policy tests/update_package_policy_tests.cpp)
     huhucapture_test(shortcut_keys tests/shortcut_keys_tests.cpp)
     huhucapture_test(startup tests/startup_tests.cpp)
     huhucapture_test(annotation_model tests/annotation_model_tests.cpp)
@@ -136,6 +137,10 @@ if(HUHUCAPTURE_QT_VALIDATION)
         huhucapture_test(qt_media_workspace tests/qt/media_workspace_tests.cpp)
         target_link_libraries(qt_media_workspace PRIVATE huhucapture_media_workspace huhucapture_languages)
         set_tests_properties(qt_media_workspace PROPERTIES TIMEOUT 180
+            ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
+        huhucapture_test(qt_editor_preferences tests/qt/editor_preferences_tests.cpp)
+        target_link_libraries(qt_editor_preferences PRIVATE huhucapture_media_workspace huhucapture_languages)
+        set_tests_properties(qt_editor_preferences PROPERTIES TIMEOUT 180
             ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
         huhucapture_test(system_clipboard_shutdown_tests tests/qt/system_clipboard_shutdown_tests.cpp)
         target_link_libraries(system_clipboard_shutdown_tests PRIVATE huhucapture_desktop_services
@@ -320,6 +325,13 @@ if(HUHUCAPTURE_QT_VALIDATION)
             add_test(NAME screen_capture_native COMMAND "${XVFB_RUN}" -a
                 "${CMAKE_COMMAND}" -E env "QT_QPA_PLATFORM=xcb" $<TARGET_FILE:screen_capture_tests>
                 --artifacts "${PROJECT_BINARY_DIR}/native-capture/$<CONFIG>")
+            add_executable(x11_controls_probe tests/platform/x11_controls_probe.cpp)
+            target_link_libraries(x11_controls_probe PRIVATE huhucapture_x11_capture
+                Qt6::Widgets Qt6::Concurrent PkgConfig::XCB_CAPTURE)
+            set_target_properties(x11_controls_probe PROPERTIES CXX_EXTENSIONS OFF)
+            add_test(NAME x11_controls_native COMMAND "${XVFB_RUN}" -a
+                "${CMAKE_COMMAND}" -E env "QT_QPA_PLATFORM=xcb" $<TARGET_FILE:x11_controls_probe>)
+            set_tests_properties(x11_controls_native PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
         endif()
         set_tests_properties(screen_capture_native PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
         if(TARGET huhucapture_capture_workspace)

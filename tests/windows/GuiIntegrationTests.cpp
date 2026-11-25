@@ -610,8 +610,14 @@ int wmain(int argc, wchar_t** argv)
         App::init();
         const bool verifyUpdate = std::any_of(argv + 2, argv + argc,
             [](const wchar_t* argument) { return std::wstring_view(argument) == L"--verify-update"; });
-        if (verifyUpdate) {
-            HuhuCapture::Tests::runUpdateDownloadChecks(directory, [](DWORD milliseconds) { pump(milliseconds); });
+        std::wstring bridgeOrigin;
+        constexpr std::wstring_view bridgeArgument{L"--verify-update-bridge="};
+        for (int index = 2; index < argc; ++index) {
+            const std::wstring_view argument(argv[index]);
+            if (argument.starts_with(bridgeArgument)) bridgeOrigin = argument.substr(bridgeArgument.size());
+        }
+        if (verifyUpdate || !bridgeOrigin.empty()) {
+            HuhuCapture::Tests::runUpdateDownloadChecks(directory, [](DWORD milliseconds) { pump(milliseconds); }, bridgeOrigin);
             std::cout << "Real native Downloads update integration check passed.\n";
             return 0;
         }

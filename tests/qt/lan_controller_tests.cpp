@@ -184,6 +184,22 @@ void privateIdentityContracts(const QString& root)
     const auto location = QDir(root).filePath(QStringLiteral("private identity"));
     transfer::IdentityStore store(location);
     auto first = worker([&] { return store.loadOrCreate(); });
+    if (!first.ok() || !first.created || first.fingerprint.size() != 64) {
+        std::error_code directoryError, fileError;
+        const bool directoryPrivate = HuhuCapture::Platform::isPrivateStorage(
+            files::nativePath(QFileInfo(store.identityPath()).absolutePath()), true, directoryError);
+        const bool filePrivate = HuhuCapture::Platform::isPrivateStorage(
+            files::nativePath(store.identityPath()), false, fileError);
+        // Numeric state and native error codes are sufficient to locate this
+        // boundary. Never print the identity JSON, key, SID or user directory.
+        std::cerr << "Identity persistence: error=" << static_cast<int>(first.error)
+                  << " native=" << first.nativeStatus << " created=" << first.created
+                  << " fingerprintLength=" << first.fingerprint.size()
+                  << " directoryPrivate=" << directoryPrivate
+                  << " directoryError=" << directoryError.value()
+                  << " filePrivate=" << filePrivate << " fileError=" << fileError.value()
+                  << " fileExists=" << QFileInfo::exists(store.identityPath()) << '\n';
+    }
     require(first.ok() && first.created && first.fingerprint.size() == 64, "Persist official native RSA identity");
     std::error_code error;
     require(HuhuCapture::Platform::isPrivateStorage(files::nativePath(store.identityPath()), false, error),

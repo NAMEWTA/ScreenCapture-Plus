@@ -360,6 +360,48 @@ void ioAndIdentity(media::MediaArchiveService& archive)
     }
     std::cout << "PASS actual read-only fd error, extent limit, descriptor-only seek and renamed-file identity protection\n";
 }
+void thumbnailAlignment(media::MediaArchiveService& archive)
+{
+    // c71's actual X11 252x190 recording exposed a native SIMD store beyond a
+    // tightly packed QImage. Exercise that geometry and smaller non-32-byte
+    // row cases through the real encoder, decoder and production cover API.
+    for (const auto dimensions : {QSize(252, 190), QSize(20, 18), QSize(36, 34), QSize(4, 2)}) {
+        auto file = staging(archive);
+        const auto rowBytes = static_cast<std::size_t>(dimensions.width()) * 4;
+        std::vector<std::uint8_t> pixels(rowBytes * static_cast<unsigned>(dimensions.height()));
+        {
+            media::Mp4Encoder encoder({dimensions.width(), dimensions.height()}, writer(file));
+            for (unsigned frame = 0; frame < 5; ++frame) {
+                for (std::size_t offset = 0; offset < pixels.size(); offset += 4) {
+                    pixels[offset] = 160; pixels[offset + 1] = static_cast<std::uint8_t>(100 + frame * 3);
+                    pixels[offset + 2] = 45; pixels[offset + 3] = 255;
+                }
+                require(encoder.addBgra(pixels, rowBytes, pts(frame), duration(frame)),
+                    "Encode actual non-SIMD-width video pixels");
+            }
+            require(encoder.finish().canArchive(), "Drain the actual small and non-aligned video encoder");
+        }
+        const auto inspection = media::inspectVideo(file.path());
+        require(!inspection.failure && inspection.frames == 5 && inspection.dimensions == dimensions,
+            "The alignment regression keeps all actual video frames and dimensions");
+        for (const unsigned edge : {512u, 127u, 63u}) {
+            const auto expectedSize = dimensions.width() <= static_cast<int>(edge) && dimensions.height() <= static_cast<int>(edge) ? dimensions :
+                dimensions.scaled(static_cast<int>(edge), static_cast<int>(edge), Qt::KeepAspectRatio);
+            for (int repeat = 0; repeat < 3; ++repeat) {
+                const auto cover = media::videoThumbnail(file.path(), edge);
+                require(!cover.failure && cover.image.size() == expectedSize,
+                    "The production cover must preserve logical pixels while using padded native storage");
+                for (int y = 0; y < cover.image.height(); ++y) for (int x = 0; x < cover.image.width(); ++x) {
+                    const auto pixel = cover.image.pixelColor(x, y);
+                    require(std::abs(pixel.red() - 45) <= 8 && std::abs(pixel.green() - 100) <= 8 &&
+                        std::abs(pixel.blue() - 160) <= 8 && pixel.alpha() == 255,
+                        "Every returned owned cover pixel must survive native scaler/frame destruction");
+                }
+            }
+        }
+    }
+    std::cout << "PASS actual SIMD-tail thumbnail geometries, downscale, complete owned pixel rows and native allocation release\n";
+}
 }
 int main(int argc, char** argv)
 {
@@ -384,6 +426,7 @@ int main(int argc, char** argv)
         negativeStride(archive);
         rejection(archive);
         ioAndIdentity(archive);
+        thumbnailAlignment(archive);
         std::cout << "PASS real fixed software MP4 encoder; generated codec inputs do not prove desktop/audio-device capture\n";
         return 0;
     } catch (const std::exception& error) {

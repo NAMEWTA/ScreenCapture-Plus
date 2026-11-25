@@ -10,6 +10,7 @@
 #include <xcb/xcb.h>
 #include <xcb/randr.h>
 #include <xcb/shm.h>
+#include <xcb/shape.h>
 #include <xcb/xfixes.h>
 #include <xcb/xtest.h>
 #include <sys/shm.h>
@@ -46,7 +47,7 @@ struct X11Capture::State {
     xcb_screen_t* screen{}; // owned by connection setup
     int screenNumber{};
     unsigned randrMajor{}, randrMinor{};
-    bool wayland{}, shmAvailable{}, xfixesAvailable{}, xtestAvailable{};
+    bool wayland{}, shmAvailable{}, xfixesAvailable{}, xtestAvailable{}, serverGrabbed{};
     std::uint8_t bitsPerPixel{}, scanlinePad{}, byteOrder{};
     std::uint32_t red{}, green{}, blue{};
     xcb_shm_seg_t segment{};
@@ -66,6 +67,12 @@ struct X11Capture::State {
     {
         const auto error = reply(xcb_request_check(connection, cookie));
         return error ? fail(std::string(detail) + " (X11 error " + std::to_string(error->error_code) + ")") : true;
+    }
+    void releaseGrab() noexcept
+    {
+        if (std::exchange(serverGrabbed, false) && connection) {
+            xcb_ungrab_server(connection); xcb_flush(connection);
+        }
     }
     void releaseShared(bool notifyServer = true) noexcept
     {
@@ -211,6 +218,66 @@ struct X11Capture::State {
         }
         return true;
     }
+    bool controlOutside(const Core::CaptureControlSurface& control, const X11Rectangle& selected)
+    {
+        // Native geometry/frame-extents checking reuses this repository's
+        // PR #7 X11Capture::windowRectangle (251bc0071278c6b711c840bf5188d16870bc7349).
+        // Shape validation additionally checks the real hollow outline, rather
+        // than assuming a transparent ARGB window is invisible without a WM.
+        if (!control.nativeId || control.nativeId > (std::numeric_limits<xcb_window_t>::max)() ||
+            control.placement == Core::CaptureControlPlacement::Excluded)
+            return fail("The X11 capture-control surface has no verifiable native placement");
+        const auto window = static_cast<xcb_window_t>(control.nativeId);
+        const auto attributes = reply(xcb_get_window_attributes_reply(connection,
+            xcb_get_window_attributes(connection, window), nullptr));
+        if (!attributes) return fail("The X11 capture-control surface was destroyed or replaced");
+        if (attributes->map_state != XCB_MAP_STATE_VIEWABLE || attributes->_class == XCB_WINDOW_CLASS_INPUT_ONLY) return true;
+        if (control.placement == Core::CaptureControlPlacement::Hidden)
+            return fail("A hidden recording control became visible during capture");
+        const auto geometryCookie = xcb_get_geometry(connection, window);
+        const auto originCookie = xcb_translate_coordinates(connection, window, screen->root, 0, 0);
+        const auto geometry = reply(xcb_get_geometry_reply(connection, geometryCookie, nullptr));
+        const auto origin = reply(xcb_translate_coordinates_reply(connection, originCookie, nullptr));
+        if (!geometry || !origin || !origin->same_screen || !geometry->width || !geometry->height)
+            return fail("The actual X11 recording control bounds are unavailable");
+        const auto intersects = [&](std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t height) {
+            return width > 0 && height > 0 && x < std::int64_t(selected.x) + selected.width &&
+                y < std::int64_t(selected.y) + selected.height && x + width > selected.x && y + height > selected.y;
+        };
+        const auto frameExtents = atom("_NET_FRAME_EXTENTS");
+        if (frameExtents) {
+            const auto extents = reply(xcb_get_property_reply(connection,
+                xcb_get_property(connection, 0, window, frameExtents, XCB_ATOM_CARDINAL, 0, 4), nullptr));
+            if (!extents) return fail("The actual X11 control decorations are unavailable");
+            if (extents->type != XCB_ATOM_NONE) {
+                if (extents->type != XCB_ATOM_CARDINAL || extents->format != 32 || extents->value_len != 4 || extents->bytes_after)
+                    return fail("The X11 control has invalid frame-extents metadata");
+                const auto* values = static_cast<const std::uint32_t*>(xcb_get_property_value(extents.get()));
+                if (!std::all_of(values, values + 4, [](auto value) { return value <= 65535; }))
+                    return fail("The X11 control decorations exceed the native coordinate budget");
+                if ((values[0] || values[1] || values[2] || values[3]) &&
+                    intersects(std::int64_t(origin->dst_x) - values[0], std::int64_t(origin->dst_y) - values[2],
+                        std::int64_t(geometry->width) + values[0] + values[1], std::int64_t(geometry->height) + values[2] + values[3]))
+                    return fail("The actual recording-control decorations overlap the captured pixels");
+            }
+        }
+        const auto* shape = xcb_get_extension_data(connection, &xcb_shape_id);
+        if (!shape || !shape->present)
+            return !intersects(origin->dst_x - geometry->border_width, origin->dst_y - geometry->border_width,
+                       geometry->width + 2 * geometry->border_width, geometry->height + 2 * geometry->border_width) ||
+                fail("The X11 server cannot verify the recording control's hollow shape");
+        const auto bounds = reply(xcb_shape_get_rectangles_reply(connection,
+            xcb_shape_get_rectangles(connection, window, XCB_SHAPE_SK_BOUNDING), nullptr));
+        if (!bounds || bounds->rectangles_len > 256)
+            return fail("The actual X11 recording-control shape is unavailable or exceeds its rectangle budget");
+        for (auto it = xcb_shape_get_rectangles_rectangles_iterator(bounds.get()); it.rem; xcb_rectangle_next(&it)) {
+            const auto& rectangle = *it.data;
+            if (intersects(std::int64_t(origin->dst_x) + rectangle.x, std::int64_t(origin->dst_y) + rectangle.y,
+                    rectangle.width, rectangle.height))
+                return fail("The actual recording control moved or resized into the captured pixels");
+        }
+        return true;
+    }
     void convert(std::span<const std::uint8_t> source, std::size_t sourceStride, int width, int height)
     {
         const auto layout = *Core::pixelLayout(width, height, 4);
@@ -287,6 +354,7 @@ X11Capture::~X11Capture() { reset(); }
 void X11Capture::reset() noexcept
 {
     const X11SignalMask signals;
+    state_->releaseGrab();
     state_->releaseShared(signals.valid());
     state_->interrupt.reset(); // waits for any shutdown callback before close
     if (state_->connection) xcb_disconnect(std::exchange(state_->connection, nullptr));
@@ -386,6 +454,7 @@ bool X11Capture::capture(int x, int y, int width, int height, bool includeCursor
             static_cast<std::uint16_t>(width), static_cast<std::uint16_t>(height), ~0u, XCB_IMAGE_FORMAT_Z_PIXMAP, state_->segment, 0), &nativeError));
         const auto error = reply(nativeError);
         if (value && !error && value->size == bytes && value->depth == state_->screen->root_depth) {
+            state_->releaseGrab(); // the real server readback is complete
             state_->convert({state_->shared, bytes}, sourceStride, width, height); copied = true;
         } else { state_->releaseShared(); state_->shmAvailable = false; }
     }
@@ -399,10 +468,32 @@ bool X11Capture::capture(int x, int y, int width, int height, bool includeCursor
         const auto length = xcb_get_image_data_length(value.get());
         if (length < 0 || static_cast<std::size_t>(length) < bytes || value->depth != state_->screen->root_depth)
             return state_->fail("The X11 image reply has an incomplete pixel layout");
+        state_->releaseGrab(); // never keep a server grab across CPU conversion
         state_->convert({xcb_get_image_data(value.get()), bytes}, sourceStride, width, height);
     }
     if (includeCursor && !state_->drawCursor(x, y)) return false;
     state_->failure.clear(); return true;
+}
+bool X11Capture::captureGuarded(int x, int y, int width, int height, bool includeCursor,
+    std::span<const Core::CaptureControlSurface> controls)
+{
+    const X11SignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    if (!state_->connected() || !state_->screen || controls.empty() || controls.size() > 64)
+        return state_->fail("The recording has no bounded native control-surface guard");
+    // Geometry validation and root readback must not race another client's
+    // MoveWindow, resize, map or shape requests. Release on every path, before
+    // copying into a frame lease or calling an encoder. Cancellation shuts down
+    // only this worker-owned connection, which also releases any server grab.
+    if (!state_->checked(xcb_grab_server_checked(state_->connection), "Protect native control geometry during readback")) return false;
+    state_->serverGrabbed = true;
+    struct Ungrab {
+        State* state;
+        ~Ungrab() { state->releaseGrab(); }
+    } ungrab{state_.get()};
+    const X11Rectangle selected{x, y, width, height};
+    for (const auto& control : controls) if (!state_->controlOutside(control, selected)) return false;
+    return capture(x, y, width, height, includeCursor);
 }
 bool X11Capture::moveCursor(int x, int y, int& actualX, int& actualY)
 {

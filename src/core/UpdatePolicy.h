@@ -10,8 +10,8 @@
 namespace HuhuCapture::Core {
 
 // Common package naming and limits for the Qt updater and the retained Windows
-// bridge adapter. The Qt service uses this policy; bridge integration remains a
-// separate migration gate. JSON/HTTP adapters must not redefine package identity.
+// bridge adapter. Both consume this policy and Core::UpdateManifest; release
+// acceptance remains a separate gate. JSON/HTTP adapters must not redefine package identity.
 // Extracted from the project's reviewed Qt updater in PR #7, 251bc007.
 enum class UpdatePackageKind { WindowsInstaller, WindowsPortableZip, LinuxDeb, LinuxAppImage };
 struct UpdatePackagePolicy {

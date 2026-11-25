@@ -333,6 +333,12 @@ void SettingsController::setApplicationVersion(const QString& version)
 void SettingsController::setUpdateSnapshot(const UI::AboutUpdateSnapshot& update)
 { state_->update = update; for (const auto& window : state_->views) if (window) window->setUpdateSnapshot(update); }
 bool SettingsController::busy() const { return state_->busy(); }
+bool SettingsController::captureShortcutAvailable() const
+{
+    const auto binding = state_->shortcut.snapshot();
+    return state_->ready && !state_->stopping && !state_->captureActive &&
+        binding.registered && !binding.suspended;
+}
 void SettingsController::finishShutdown()
 {
     if (!state_->stopping || busy() || state_->shutdownNotified) return;

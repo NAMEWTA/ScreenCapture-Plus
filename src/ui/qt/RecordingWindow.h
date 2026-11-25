@@ -5,7 +5,9 @@
 #include "ui/qt/DesktopTypes.h"
 
 #include <QWidget>
+#include <QVector>
 #include <memory>
+#include <optional>
 
 namespace HuhuCapture::UI::Qt {
 
@@ -16,6 +18,9 @@ struct RecordingOptions {
 };
 struct RecordingCapabilities {
     Capture::Capability mp4, gif, systemAudio, microphone;
+    // Supplied only by a backend that verifies native control geometry/shape
+    // on every readback. It is not inferred from a Qt platform name by the UI.
+    bool guardedOutsideControls{};
 };
 
 // Shared recording toolbar. It presents only actual service state: a click is
@@ -36,6 +41,12 @@ public:
     // An explicit, already converted screen binding. No global DPR conversion.
     // Used only for first placement; language/scale refresh never recenters.
     void setPlacement(QScreen* screen, QRectF selection, QRectF workArea);
+    // Verified desktop DIP areas outside the selected physical pixels. While
+    // enabled, dragging/reflow stays inside one of these areas. Empty areas
+    // clear the constraint; native readback still enforces actual geometry.
+    bool setCaptureSafeAreas(QVector<QRect> areas);
+    void setHiddenForCapture(bool hidden);
+    bool hiddenForCapture() const noexcept;
     RecordingOptions options() const;
 
 Q_SIGNALS:
@@ -43,12 +54,14 @@ Q_SIGNALS:
     void stopRequested(HuhuCapture::Recording::StopIntent intent);
     void cancelRequested();
     void retryOutputRequested();
+    void capturePlacementLost();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
@@ -57,6 +70,7 @@ private:
     void refresh();
     void stop(Recording::StopIntent intent);
     void reflow();
+    std::optional<QRect> safeGeometry(QSize size, QPoint preferred) const;
 };
 
 } // namespace HuhuCapture::UI::Qt

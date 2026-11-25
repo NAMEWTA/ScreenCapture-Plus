@@ -129,6 +129,18 @@
         "path": "src/modules/module-adapter/adapter.c",
         "blob": "e049ccc4d5aec11208df7f197819f269fcd0fadd",
         "use": "Read native audio adapter loading and media class/direction handling."
+      },
+      {
+        "path": "src/pipewire/keys.h",
+        "blob": "13694bc29712020e5b016ed5b25e99cf095c9d70",
+        "license": "MIT",
+        "use": "Follow Node client.id to the real Client, then verify the native protocol server-observed pipewire.sec.pid against the exact owned Popen PID. A Node name or advertised application.process.id alone does not establish ownership."
+      },
+      {
+        "path": "src/pipewire/impl-client.c",
+        "blob": "a13a40a5ae6cb8ff10c5f277afaf3b57844cf02a",
+        "license": "MIT",
+        "use": "Verify that native client security PID/UID/GID properties are protected from client-side updates before using the trusted peer PID in the isolated graph test wrapper."
       }
     ],
     "cases": [

@@ -167,6 +167,8 @@ pwsh ./scripts/package.ps1
 | 文档 | 内容 |
 | --- | --- |
 | [文档地图](docs/readme.md) | 按问题查找设计、工程和验证约定 |
+| [迁移状态](docs/qt-migration.md) | 同一 Qt 应用、开发包与 P00–P14 的实际验收边界 |
+| [编辑工具偏好](docs/editor-preferences.md) | Qt 编辑/贴图如何复用旧参数并保护配置数据 |
 | [上游致谢](docs/upstream.md) | ScreenCapture 与 Ling 来源、继承起点和维护归属 |
 | [工程约定](docs/conventions.md) | 目录、编码、资源、错误处理与文档规范 |
 | [媒体历史](docs/media-history.md) | 归档目录、命名、保存失败和清理边界 |

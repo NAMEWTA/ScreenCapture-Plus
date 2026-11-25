@@ -30,7 +30,13 @@ def main():
             environment.pop(name)
     environment['QT_PLUGIN_PATH']=str(prefix/'plugins')
     if windows:
-        system=Path(environment['SystemRoot'])
+        # os.environ performs Windows' case-insensitive lookup, but copy()
+        # returns a plain dict whose keys CPython normalizes to uppercase.
+        system_value=os.environ.get('SystemRoot')
+        if not system_value:raise ValueError('Windows did not supply its actual system directory')
+        system=Path(system_value)
+        if not system.is_absolute() or not (system/'System32').is_dir():
+            raise ValueError('Windows system directory is not available')
         environment['PATH']=os.pathsep.join(map(str,(prefix,system/'System32',system)))
     else:
         environment['LD_LIBRARY_PATH']=str(prefix/'lib')

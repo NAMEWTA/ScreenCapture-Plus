@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build the locked CPU-capable Portal-wlr backend for owned CI desktops only.
+"""Build the locked CPU Sway/Portal-wlr desktop for owned CI sessions only.
 
 This is a test desktop service, never an application-bundled Portal daemon. Its
-PipeWire/Wayland dependencies are the runner's system libraries, independently
-of the fixed client library used by huhucapture.
+PipeWire daemon and policy remain the runner's system services. Only this
+private compositor/backend prefix receives the fixed Wayland/wlroots stack;
+it is independent of the client libraries used by huhucapture.
 """
 
 from __future__ import annotations
@@ -58,53 +59,80 @@ def main() -> None:
             env.pop(key, None)
     env["PATH"] = "/usr/bin:/bin"
     prefix = workspace / "install"
-    protocols = specification["waylandProtocols"]
-    protocol_source = workspace / "wayland-protocols-source"
-    protocol_build = workspace / "wayland-protocols-build"
-    checkout(protocols, protocol_source, env)
-    run("meson", "setup", str(protocol_build), str(protocol_source), "--wrap-mode=nodownload",
-        "--prefix=" + str(prefix), "-Dtests=false", env=env)
-    run("meson", "install", "-C", str(protocol_build), env=env)
-    env["PKG_CONFIG_PATH"] = str(prefix / "share/pkgconfig")
-    actual_protocols = subprocess.check_output(["pkg-config", "--modversion", "wayland-protocols"],
-        env=env, text=True).strip()
-    if actual_protocols != protocols["version"]:
-        raise RuntimeError(f"Unexpected protocol definitions: {actual_protocols}")
-
-    backend = specification["backend"]
-    source = workspace / "portal-wlr-source"
-    build = workspace / "portal-wlr-build"
-    checkout(backend, source, env)
-    for patch in backend.get("patches", []):
-        path = root / patch["path"]
-        if hashlib.sha256(path.read_bytes()).hexdigest() != patch["sha256"]:
-            raise RuntimeError(f"Validation backend patch checksum mismatch: {path.name}")
-        run("git", "apply", "--check", str(path), cwd=source, env=env)
-        run("git", "apply", str(path), cwd=source, env=env)
-    run("meson", "setup", str(build), str(source), "--wrap-mode=nodownload",
-        "--prefix=" + str(prefix), "--libexecdir=libexec", *backend["mesonOptions"], env=env)
-    run("meson", "compile", "-C", str(build), "-j", str(args.jobs), env=env)
-    run("meson", "install", "-C", str(build), env=env)
-    binary = prefix / "libexec/xdg-desktop-portal-wlr"
-    if not binary.is_file() or not os.access(binary, os.X_OK):
-        raise RuntimeError("The built validation backend is missing")
-    linkage = subprocess.check_output(["ldd", str(binary)], env=env, text=True)
-    if "not found" in linkage or ".deps/" in linkage:
-        raise RuntimeError("Validation backend did not link exclusively to available host libraries")
-    versions = {}
-    for package in ("libpipewire-0.3", "wayland-client", "wayland-protocols", "inih", "gbm", "libdrm", "libsystemd"):
-        versions[package] = subprocess.check_output(["pkg-config", "--modversion", package],
-            env=env, text=True).strip()
+    env["PKG_CONFIG_PATH"] = os.pathsep.join(str(prefix / path) for path in ("lib/pkgconfig", "share/pkgconfig"))
+    env["LD_LIBRARY_PATH"] = str(prefix / "lib")
+    env["PATH"] = str(prefix / "bin") + ":/usr/bin:/bin"
     notices = prefix / "share/licenses/validation-desktop"
     notices.mkdir(parents=True)
-    shutil.copyfile(source / "LICENSE", notices / "portal-wlr-LICENSE")
-    shutil.copyfile(protocol_source / "COPYING", notices / "wayland-protocols-COPYING")
+
+    def build_component(name: str, spec: dict) -> None:
+        source = workspace / f"{name}-source"
+        build = workspace / f"{name}-build"
+        checkout(spec, source, env)
+        for patch in spec.get("patches", []):
+            path = root / patch["path"]
+            if hashlib.sha256(path.read_bytes()).hexdigest() != patch["sha256"]:
+                raise RuntimeError(f"Validation desktop patch checksum mismatch: {path.name}")
+            run("git", "apply", "--check", str(path), cwd=source, env=env)
+            run("git", "apply", str(path), cwd=source, env=env)
+        run("meson", "setup", str(build), str(source), "--wrap-mode=nodownload",
+            "--prefix=" + str(prefix), "--libdir=lib", "--libexecdir=libexec", "--buildtype=release",
+            *spec["mesonOptions"], env=env)
+        run("meson", "compile", "-C", str(build), "-j", str(args.jobs), env=env)
+        run("meson", "install", "-C", str(build), env=env)
+        if "pkgConfig" in spec:
+            actual = subprocess.check_output(["pkg-config", "--modversion", spec["pkgConfig"]],
+                env=env, text=True).strip()
+            if actual != spec["version"]:
+                raise RuntimeError(f"Unexpected {name} version: {actual}")
+        for relative in spec["licenseFiles"]:
+            shutil.copyfile(source / relative, notices / (name + "-" + relative.replace("/", "-")))
+
+    # Portal-wlr's software SHM path uses ext-image-copy-capture. Sway 1.9's
+    # wlr-screencopy plus pixman supplies no linux-dmabuf global and cannot
+    # drive that path. Build compatible upstream code instead of modifying
+    # the protocol implementation or treating failed capture as a pass.
+    for name, key in (("wayland", "wayland"), ("wayland-protocols", "waylandProtocols"),
+                      ("libdrm", "libdrm"), ("pixman", "pixman"), ("wlroots", "wlroots"), ("sway", "sway")):
+        build_component(name, specification[key])
+    backend = specification["backend"]
+    build_component("portal-wlr", backend)
+    binary = prefix / "libexec/xdg-desktop-portal-wlr"
+    binaries = {}
+    for name, relative in (("sway", "bin/sway"), ("swaymsg", "bin/swaymsg"),
+                           ("xdg-desktop-portal-wlr", "libexec/xdg-desktop-portal-wlr")):
+        path = prefix / relative
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise RuntimeError(f"The built validation desktop binary is missing: {name}")
+        linkage = subprocess.check_output(["ldd", str(path)], env=env, text=True)
+        if "not found" in linkage:
+            raise RuntimeError(f"Unavailable validation desktop runtime dependency: {name}")
+        for line in linkage.splitlines():
+            if "=> /" not in line:
+                continue
+            library = Path(line.split("=> ", 1)[1].split(" (", 1)[0]).resolve()
+            if not any(library.is_relative_to(base) for base in (prefix, Path("/usr/lib"), Path("/lib"))):
+                raise RuntimeError(f"Validation desktop imported a non-host/application library: {library}")
+        binaries[name] = {"relativePath": relative, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                          "linkage": linkage.splitlines()}
+    runtime_files = []
+    for path in sorted((prefix / "lib").glob("*.so*")):
+        if not path.resolve(strict=True).is_relative_to(prefix):
+            raise RuntimeError(f"A validation library escapes its private prefix: {path.name}")
+        runtime_files.append({"relativePath": path.relative_to(prefix).as_posix(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "symlink": os.readlink(path) if path.is_symlink() else None})
+    versions = {}
+    for package in ("libpipewire-0.3", "wayland-client", "wayland-protocols", "wlroots-0.19", "pixman-1", "inih", "gbm", "libdrm", "libsystemd"):
+        versions[package] = subprocess.check_output(["pkg-config", "--modversion", package],
+            env=env, text=True).strip()
     metadata = {
-        "purpose": "Owned CI desktop backend; not distributed with the application",
-        "backend": backend, "waylandProtocols": protocols, "hostDependencies": versions,
+        "purpose": "Owned CI desktop; not distributed with the application",
+        "schema": 2, "sources": specification, "dependencies": versions,
+        "backend": backend, "waylandProtocols": specification["waylandProtocols"],
         "binaryRelativePath": "install/libexec/xdg-desktop-portal-wlr",
         "binarySha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-        "linkage": linkage.splitlines(), "prefix": str(prefix),
+        "binaries": binaries, "runtimeFiles": runtime_files, "prefix": str(prefix),
     }
     (workspace / "build-info.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     print(f"Validation-only Portal-wlr backend: {binary}")

@@ -109,9 +109,18 @@ struct Source final {
                     }
                     auto target = pool.tryAcquire();
                     if (!target) { fail(Core::FrameSourceEnd::BudgetExceeded, ENOBUFS, "The X11 recording consumer retained too many native frames"); return; }
-                    if (!capture.capture(region.x, region.y, region.width, region.height, request.cursor)) {
+                    const auto controls = request.controls ? request.controls->snapshot.load(std::memory_order_acquire) : nullptr;
+                    if (request.controls && !controls) {
+                        fail(Core::FrameSourceEnd::SourceClosed, EAGAIN, "The recording-control native surface is changing"); return;
+                    }
+                    const bool captured = controls ? capture.captureGuarded(region.x, region.y, region.width, region.height,
+                        request.cursor, controls->surfaces) : capture.capture(region.x, region.y, region.width, region.height, request.cursor);
+                    if (!captured) {
                         if (!stop.stop_requested()) fail(Core::FrameSourceEnd::PlatformFailure, EIO, capture.error());
                         return;
+                    }
+                    if (request.controls && request.controls->snapshot.load(std::memory_order_acquire) != controls) {
+                        fail(Core::FrameSourceEnd::SourceClosed, EAGAIN, "The recording-control native surface changed during readback"); return;
                     }
                     const auto pixels = capture.pixels();
                     const auto stride = capture.stride();

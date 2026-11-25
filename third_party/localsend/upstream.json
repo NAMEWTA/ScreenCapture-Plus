@@ -62,5 +62,42 @@
       "license": "project test code license"
     }
   ],
-  "maintenance_document": "../../docs/localsend-core.md"
+  "maintenance_document": "../../docs/localsend-core.md",
+  "transport_teardown_basis": {
+    "standard": "https://www.rfc-editor.org/rfc/rfc9112.html#name-tear-down",
+    "purpose": "Retain the real HTTP refusal during cancellation of an unread upload; bounded staged TCP/TLS close after HTTP processing",
+    "code_copied": false,
+    "sources_reviewed": [
+      {
+        "repository": "https://github.com/hyperium/hyper",
+        "ref": "v1.11.0",
+        "path": "src/server/conn/http1.rs",
+        "git_blob_sha": "7bd3d72e2f68f8bd4810fce072d69a27b013a087"
+      },
+      {
+        "repository": "https://github.com/hyperium/hyper",
+        "ref": "v1.11.0",
+        "path": "src/proto/h1/conn.rs",
+        "git_blob_sha": "dfcadcee56587a49321bfc268402d2db03617240"
+      },
+      {
+        "repository": "https://github.com/hyperium/hyper",
+        "ref": "v1.11.0",
+        "path": "src/proto/h1/dispatch.rs",
+        "git_blob_sha": "3a9b536ea43cad50c5fd84801a9fa0525913fe02"
+      },
+      {
+        "repository": "https://github.com/rustls/tokio-rustls",
+        "ref": "v/0.26.4",
+        "path": "src/server.rs",
+        "git_blob_sha": "e8cada38ee7e26049f47478ce6366590afffaa3c"
+      },
+      {
+        "repository": "https://github.com/rustls/tokio-rustls",
+        "ref": "v/0.26.4",
+        "path": "src/common/mod.rs",
+        "git_blob_sha": "07e173b51bb8b29edd06327a5c6ffc5ce9c3b0f5"
+      }
+    ]
+  }
 }

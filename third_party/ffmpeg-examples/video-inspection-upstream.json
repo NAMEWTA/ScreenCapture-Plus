@@ -64,6 +64,24 @@
       "blob": "fe56c60566eaf162d56bca0fc4c5e4a58512c21a",
       "license": "LGPL-2.1-or-later",
       "focus": "Fixed 10.1.102 header/runtime ABI checked before software thumbnail conversion."
+    },
+    {
+      "path": "libavutil/frame.c",
+      "blob": "be30eb09d2a827892f9269ff1b9ae4dd10df4643",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Reuse av_frame_get_buffer for aligned/padded swscale destination storage; derive the pre-allocation BGRA byte budget from fixed get_video_buffer (64-byte lines, 32-row alignment and native plane padding). No allocator or scaler implementation is copied."
+    },
+    {
+      "path": "libavutil/frame.h",
+      "blob": "52adbc628894ca5d7563fb1c0a4fd7231031fd04",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Read AVFrame plane allocation/alignment and extended accesses; return only an independent Qt-owned copy of logical rows after native scaling."
+    },
+    {
+      "path": "libswscale/x86/yuv2rgb.c",
+      "blob": "2291c84e53b6b6e77612607f2ce6096f3efddaca",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Review fixed optimized output row rounding after the genuine 252x190 CI MP4 reproduced a 16-byte write beyond a tightly packed destination. Keep native optimized kernels; satisfy their storage contract with AVFrame allocation."
     }
   ],
   "generatedSignals": "The real H.264/AAC fixture encoder directly compiles the pinned mux.c and its documented duration/trailer fix from upstream.json; no decoder result or media packet is mocked.",

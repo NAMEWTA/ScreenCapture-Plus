@@ -24,6 +24,12 @@ public:
     ~RecordingWorkspace() override;
     void setTranslator(UI::Qt::DesktopTranslator translator);
     bool busy() const noexcept;
+    // The host publishes this only while an actual tray/global-stop action is
+    // reachable. Losing it requests safe stop before hidden controls return.
+    void setExternalStopAvailable(bool available);
+    bool canStop() const noexcept;
+    bool stopActive(Recording::StopIntent intent);
+    bool controlsHiddenForCapture() const noexcept;
     void shutdown();
 
 Q_SIGNALS:

@@ -42,11 +42,16 @@ HuhuCapture::Application::ApplicationOptions applicationOptions(const QString& p
 #elif defined(Q_OS_LINUX)
     const auto platform = QGuiApplication::platformName();
     if (platform == QStringLiteral("xcb") || platform.startsWith(QStringLiteral("wayland"))) {
-        if (platform == QStringLiteral("xcb"))
+        if (platform == QStringLiteral("xcb")) {
             options.recordingBackend = Platform::Linux::makeX11RecordingBackend();
+            options.recordingCapabilities.guardedOutsideControls = true;
+        }
         options.liveRecordingBackend = Platform::Linux::makeLiveRecordingBackend;
         const Capture::Capability usable{Capture::CapabilityState::Available, {}};
-        options.recordingCapabilities = {usable, usable, usable, usable};
+        options.recordingCapabilities.mp4 = usable;
+        options.recordingCapabilities.gif = usable;
+        options.recordingCapabilities.systemAudio = usable;
+        options.recordingCapabilities.microphone = usable;
         // LiveSource supplies actual Portal admission/permission state before
         // exposing capture actions. A recording worker then verifies its exact
         // claimed pixels, codec and requested real audio devices on preparation.

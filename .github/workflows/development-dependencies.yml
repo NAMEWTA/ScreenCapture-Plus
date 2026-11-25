@@ -27,7 +27,7 @@ jobs:
       - name: Install official runner build prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config nasm dbus libglib2.0-dev libglib2.0-dev-bin libwayland-dev libwayland-bin libxkbcommon-dev libgl-dev libegl-dev libxcb1-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb-xtest0-dev libssl-dev
+          sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config nasm dbus libglib2.0-dev libglib2.0-dev-bin libwayland-dev libwayland-bin libxkbcommon-dev libgl-dev libegl-dev libxcb1-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb-shape0-dev libxcb-xtest0-dev libssl-dev
       - name: Restore the fixed official Qt SDK archives
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
         with:
@@ -75,7 +75,7 @@ jobs:
           test "$(qmake -query QT_INSTALL_PREFIX)" = "$QT_ROOT_DIR"
           cmake --version
           ninja --version
-          pkg-config --modversion libportal libportal-qt6 libpipewire-0.3 gio-2.0 wayland-client xcb-shm xcb-xfixes xcb-xtest
+          pkg-config --modversion libportal libportal-qt6 libpipewire-0.3 gio-2.0 wayland-client xcb-shm xcb-xfixes xcb-xtest xcb-shape
           test "$(pkg-config --variable=prefix gio-2.0)" = "$(pwd)/artifacts/relocated-development/sdk/system/usr"
           test "$(pkg-config --variable=prefix libportal)" = "$(pwd)/artifacts/relocated-development/sdk/portal"
           cmake -S . -B artifacts/cmake/relocated-development -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON

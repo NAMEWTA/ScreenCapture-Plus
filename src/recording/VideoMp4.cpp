@@ -1,4 +1,5 @@
 #include "recording/VideoMp4.h"
+#include "platform/windows/RecordingControls.h"
 #include "core/MediaClock.h"
 #include "core/PixelBuffer.h"
 #include "platform/windows/AudioFormat.h"
@@ -2256,6 +2257,12 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
         if (dp.Pause)
             continue;
 
+        const auto controls = dp.Controls ? dp.Controls->snapshot.load(std::memory_order_acquire) : nullptr;
+        if (dp.Controls) {
+            hr = controls ? HuhuCapture::Platform::Windows::verifyRecordingControls(*controls) : HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
+            if (FAILED(hr)) { failureStage = RecordingStage::Capture; break; }
+        }
+
         CComPtr<IDXGIResource> lDesktopResource;
         DXGI_OUTDUPL_FRAME_INFO lFrameInfo;
 
@@ -2321,6 +2328,11 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             if (dp.UseGdiCapture && !gdi.capture(dp.GdiRegion.left, dp.GdiRegion.top, wi, he, dp.Cursor)) {
                 hr = E_FAIL;
                 break;
+            }
+            if (dp.Controls && (dp.Controls->snapshot.load(std::memory_order_acquire) != controls ||
+                FAILED(HuhuCapture::Platform::Windows::verifyRecordingControls(*controls)))) {
+                failureStage = RecordingStage::Capture;
+                hr = HRESULT_FROM_WIN32(ERROR_INVALID_STATE); break;
             }
 
             if (isFirstFrame)

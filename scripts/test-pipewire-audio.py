@@ -62,8 +62,22 @@ def node(values: list[dict], key: str, value: str, pid: int | None = None) -> in
         props = item.get("info", {}).get("props", {})
         if props.get(key) != value:
             continue
-        if pid is not None and str(props.get("application.process.id")) != str(pid):
-            raise RuntimeError("A named test node is not owned by the process this wrapper launched")
+        if pid is not None:
+            # A stream Node identifies its owning Client through client.id.
+            # The actual process credentials belong to that Client, not to
+            # the Node's optional application properties. Require the native
+            # protocol's server-observed peer PID; a matching node name or a
+            # self-advertised application.process.id is not ownership proof.
+            client_id = props.get("client.id")
+            clients = [entry for entry in values
+                if entry.get("type") == "PipeWire:Interface:Client" and
+                client_id is not None and str(entry.get("id")) == str(client_id)]
+            if len(clients) != 1:
+                raise RuntimeError("A named test node has no unique owning native Client")
+            client = clients[0].get("info", {}).get("props", {})
+            if str(client.get("pipewire.sec.pid")) != str(pid) or (
+                    "application.process.id" in client and str(client["application.process.id"]) != str(pid)):
+                raise RuntimeError("A named test node is not owned by the process this wrapper launched")
         found.append(item["id"])
     if len(found) > 1:
         raise RuntimeError(f"The isolated native graph has ambiguous nodes for {value}")

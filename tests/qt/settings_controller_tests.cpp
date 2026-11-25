@@ -424,10 +424,12 @@ void controllerContracts(const QString& root, const QString& executable, const Q
     require(controller.initialize(), "Initialize the production controller with shared loaded services");
     waitFor([&] { return !controller.busy(); }, "Application-owned original shortcut registers");
     require(controller.snapshot().captureShortcut == QStringLiteral("Ctrl+Shift+F8"), "UI reflects actual registered shortcut");
+    require(controller.captureShortcutAvailable(), "Only the actual registered desktop action can serve as an external recording stop");
     require(!controller.snapshot().autoStart && startupBytes().isNull() && read(path) == original,
         "Initialization reports actual disabled OS state and neither applies saved autoStart=true nor rewrites config");
     QPointer<ui::SettingsWindow> window(controller.openSettings(ui::SettingsWindow::Page::Shortcut)); require(window, "Open the production shared settings window"); settle();
     child<QPushButton>(*window, "settingsCaptureShortcut")->click(); settle(); require(window->capturingShortcut(), "Actual shortcut recorder enters capture state");
+    require(!controller.captureShortcutAvailable(), "A suspended shortcut cannot keep hidden recording controls admissible");
     {
         desktop::GlobalShortcut competitor; Bindings events(competitor); initializeNative(competitor);
         require(!events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F8"))), "UI capture signal actually releases the OS hotkey"); competitor.shutdown();
@@ -436,6 +438,7 @@ void controllerContracts(const QString& root, const QString& executable, const Q
     waitFor([&] { return !controller.busy() && !window->changePending(); }, "Actual settings shortcut request completes");
     require(store.value({"shortcutKey", "cap"}).toString() == QStringLiteral("Ctrl+Shift+F10") &&
         controller.snapshot().captureShortcut == QStringLiteral("Ctrl+Shift+F10"), "UI chord flows through native registration and real persistence");
+    require(controller.captureShortcutAvailable(), "The replacement becomes a stop route only after actual native registration");
     desktop::GlobalShortcut competitor; Bindings events(competitor); initializeNative(competitor);
     require(events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F10"))).code == desktop::ShortcutError::Conflict,
         "Controller's new binding is genuinely owned at the OS");
@@ -458,6 +461,7 @@ void controllerContracts(const QString& root, const QString& executable, const Q
         "Closing the view leaves the application shortcut registered");
     bool stopped{}; QObject::connect(&controller, &app::SettingsController::shutdownFinished, &controller, [&] { stopped = true; });
     controller.shutdown(); waitFor([&] { return stopped; }, "Settings controller shutdown reaches completion");
+    require(!controller.captureShortcutAvailable(), "Shutdown removes the external stop capability with its native binding");
     require(!events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F10"))), "Controller shutdown unregisters the shortcut"); competitor.shutdown();
 
     require(store.load().ok(), "Explicit fixture reload acknowledges newer settings");
@@ -486,6 +490,7 @@ void unavailableContracts(const QString& root, const QString& executable, const 
     localization::LanguageCatalog catalog(languagePaths(root)); require(catalog.load(QStringLiteral("en-US")).usable, "Load actual language");
     app::SettingsController controller(store, catalog, executable); require(controller.initialize(), "Settings remain usable without a native shortcut backend");
     waitFor([&] { return !controller.busy(); }, "Unavailable actual backend completes");
+    require(!controller.captureShortcutAvailable(), "Saved keys without a supported desktop backend never advertise an external stop action");
     auto* window = controller.openSettings(ui::SettingsWindow::Page::Shortcut); settle();
     require(controller.snapshot().shortcutEditing == ui::ShortcutEditing::Unavailable && !child<QPushButton>(*window, "settingsCaptureShortcut")->isEnabled(),
         "No desktop backend never presents a local recorder as a global shortcut");

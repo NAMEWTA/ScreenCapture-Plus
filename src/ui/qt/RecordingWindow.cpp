@@ -7,6 +7,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QMoveEvent>
 #include <QPointer>
 #include <QScreen>
 #include <QShowEvent>
@@ -45,7 +46,10 @@ struct RecordingWindow::State {
     QString failure, retainedPath;
     QPointer<QScreen> placementScreen;
     QRectF selection, workArea;
+    QVector<QRect> safeAreas;
+    QPoint dragStart, dragOrigin;
     bool outputPending{}, stopAdmitted{}, retryAvailable{}, initialPlacement{}, layoutPending{}, captureExcluded{true};
+    bool captureHidden{}, safePlacement{}, dragging{}, correctingPosition{};
 
     QString text(QStringView key) const
     { return translator ? translator(key) : key.toString(); }
@@ -187,6 +191,37 @@ void RecordingWindow::setPlacement(QScreen* screen, QRectF selection, QRectF wor
     state_->initialPlacement = true; setScreen(screen);
 }
 RecordingOptions RecordingWindow::options() const { return state_->options; }
+bool RecordingWindow::setCaptureSafeAreas(QVector<QRect> areas)
+{
+    state_->safeAreas = std::move(areas); state_->safePlacement = !state_->safeAreas.isEmpty();
+    state_->dragging = false;
+    refresh();
+    return !state_->safePlacement || safeGeometry(size(), pos()).has_value();
+}
+void RecordingWindow::setHiddenForCapture(bool hidden)
+{
+    if (state_->captureHidden == hidden) return;
+    state_->captureHidden = hidden; state_->dragging = false;
+    if (hidden) hide();
+    else show();
+}
+bool RecordingWindow::hiddenForCapture() const noexcept { return state_->captureHidden; }
+
+std::optional<QRect> RecordingWindow::safeGeometry(QSize size, QPoint preferred) const
+{
+    std::optional<QRect> closest;
+    double distance{};
+    for (const auto& area : state_->safeAreas) {
+        if (size.width() > area.width() || size.height() > area.height()) continue;
+        const QPoint position((std::clamp)(preferred.x(), area.left(), area.x() + area.width() - size.width()),
+            (std::clamp)(preferred.y(), area.top(), area.y() + area.height() - size.height()));
+        const auto dx = static_cast<double>(position.x()) - preferred.x();
+        const auto dy = static_cast<double>(position.y()) - preferred.y();
+        const auto candidate = dx * dx + dy * dy;
+        if (!closest || candidate < distance) { closest = QRect(position, size); distance = candidate; }
+    }
+    return closest;
+}
 
 void RecordingWindow::refresh()
 {
@@ -211,7 +246,11 @@ void RecordingWindow::refresh()
         for (auto* button : strip->findChildren<QToolButton*>()) {
             const auto key = button->property("languageKey").toString();
             if (key.isEmpty()) continue;
-            const auto text = state_->text(key); button->setToolTip(text); button->setAccessibleName(text);
+            const auto text = state_->text(key);
+            // A tooltip is a separate native surface. During recording the
+            // button keeps its accessible name without creating an unguarded
+            // popup that could overlap pixels even when its toolbar is outside.
+            button->setToolTip(working(state_->phase) ? QString() : text); button->setAccessibleName(text);
             if (button->icon().isNull()) button->setText(text);
         }
         strip->refreshTextWidths();
@@ -231,13 +270,14 @@ void RecordingWindow::refresh()
     }
     state_->status->setText(status); state_->status->setProperty("error", !state_->failure.isEmpty());
     DesktopTheme::repolish(state_->status); state_->status->setVisible(!status.isEmpty());
-    const bool showCaptureNotice = !state_->captureExcluded && (setup || working(state_->phase));
+    const bool showCaptureNotice = !state_->captureExcluded && !state_->safePlacement && !state_->captureHidden &&
+        (setup || working(state_->phase));
     state_->captureNotice->setText(state_->text(u"video.controlsVisible"));
     state_->captureNotice->setVisible(showCaptureNotice);
     state_->statusPanel->setVisible(!status.isEmpty() || showCaptureNotice);
     const auto moveText = state_->text(u"video.moveControls");
-    state_->grip->setToolTip(moveText); state_->grip->setAccessibleName(moveText);
-    state_->timer->setToolTip(moveText); state_->timer->setAccessibleName(moveText);
+    state_->grip->setToolTip(working(state_->phase) ? QString() : moveText); state_->grip->setAccessibleName(moveText);
+    state_->timer->setToolTip(working(state_->phase) ? QString() : moveText); state_->timer->setAccessibleName(moveText);
     setElapsed(state_->elapsed);
     reflow();
 }
@@ -250,11 +290,22 @@ void RecordingWindow::reflow()
     const int natural = state_->statusPanel->isHidden() ? strip->sizeHint().width() :
         (std::max)(strip->sizeHint().width(), 360);
     const auto desired = (std::max)(controls::buttonSize + 2, (std::min)(natural, available));
-    if (width() != desired) resize(desired, height());
     state_->layout->activate();
-    const auto height = state_->layout->totalHeightForWidth(width());
+    const auto height = state_->layout->totalHeightForWidth(desired);
     const auto wanted = height >= 0 ? height : state_->layout->sizeHint().height();
-    if (wanted > 0 && this->height() != wanted) resize(width(), wanted);
+    if (wanted <= 0) return;
+    const auto bounds = state_->safePlacement ? safeGeometry(QSize(desired, wanted), pos()) :
+        std::optional<QRect>{QRect(pos(), QSize(desired, wanted))};
+    if (!bounds) {
+        hide();
+        QTimer::singleShot(0, this, [this] { if (state_->safePlacement && !state_->captureHidden) Q_EMIT capturePlacementLost(); });
+        return;
+    }
+    // One native ConfigureWindow applies both position and size. Resizing into
+    // the selection and moving outside afterwards would expose one bad frame.
+    if (geometry() != *bounds) {
+        state_->correctingPosition = true; setGeometry(*bounds); state_->correctingPosition = false;
+    }
 }
 void RecordingWindow::stop(Recording::StopIntent intent)
 {
@@ -278,6 +329,7 @@ void RecordingWindow::keyPressEvent(QKeyEvent* event)
 }
 void RecordingWindow::showEvent(QShowEvent* event)
 {
+    if (state_->captureHidden) { hide(); return; }
     QWidget::showEvent(event); reflow();
     if (state_->initialPlacement && state_->placementScreen) {
         state_->initialPlacement = false;
@@ -290,6 +342,11 @@ void RecordingWindow::showEvent(QShowEvent* event)
         move(qRound(left), qRound(top));
     }
 }
+void RecordingWindow::moveEvent(QMoveEvent* event)
+{
+    QWidget::moveEvent(event);
+    if (state_->safePlacement && !state_->correctingPosition) reflow();
+}
 void RecordingWindow::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
@@ -299,9 +356,22 @@ void RecordingWindow::resizeEvent(QResizeEvent* event)
 }
 bool RecordingWindow::eventFilter(QObject* watched, QEvent* event)
 {
-    if ((watched == state_->timer || watched == state_->grip) && event->type() == QEvent::MouseButtonPress) {
-        const auto* mouse = static_cast<QMouseEvent*>(event);
-        if (mouse->button() == ::Qt::LeftButton && windowHandle() && windowHandle()->startSystemMove()) return true;
+    if (watched == state_->timer || watched == state_->grip) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            const auto* mouse = static_cast<QMouseEvent*>(event);
+            if (mouse->button() == ::Qt::LeftButton && state_->safePlacement) {
+                state_->dragging = true; state_->dragStart = mouse->globalPosition().toPoint(); state_->dragOrigin = pos();
+                return true;
+            }
+            if (mouse->button() == ::Qt::LeftButton && windowHandle() && windowHandle()->startSystemMove()) return true;
+        } else if (event->type() == QEvent::MouseMove && state_->dragging) {
+            const auto* mouse = static_cast<QMouseEvent*>(event);
+            if (const auto bounds = safeGeometry(size(), state_->dragOrigin + mouse->globalPosition().toPoint() - state_->dragStart))
+                setGeometry(*bounds);
+            return true;
+        } else if (event->type() == QEvent::MouseButtonRelease && state_->dragging) {
+            state_->dragging = false; return true;
+        }
     }
     return QWidget::eventFilter(watched, event);
 }
