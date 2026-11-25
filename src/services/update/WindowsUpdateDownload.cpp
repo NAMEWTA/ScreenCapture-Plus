@@ -16,6 +16,7 @@
 #include <io.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Security.Cryptography.h>
 #include <winrt/Windows.Security.Cryptography.Core.h>
 #include <winrt/Windows.Storage.Streams.h>
@@ -415,9 +416,12 @@ struct Download::State {
             const auto status = static_cast<unsigned>(response.StatusCode());
             if (status < 300 || status >= 400) break;
             require(redirects < 5 && (status == 301 || status == 302 || status == 303 || status == 307 || status == 308), Error::Network);
-            const auto location = response.Headers().Location();
-            require(static_cast<bool>(location), Error::Network);
-            const Uri next{uri.AbsoluteUri(), location.OriginalString()};
+            // Read the actual header before constructing an absolute WinRT Uri;
+            // a valid HTTP Location may be relative to this response's URL.
+            require(response.Headers().HasKey(L"Location"), Error::Network);
+            const auto location = response.Headers().Lookup(L"Location");
+            require(!location.empty() && location.size() <= 8192, Error::Network);
+            const Uri next{uri.AbsoluteUri(), location};
             require(allowedRedirect(next, canonical, fixture), Error::Network);
             response.Close(); uri = next;
         }
