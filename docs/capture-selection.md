@@ -3,7 +3,7 @@
 The shared `capture/SelectionModel.h` extracts the existing `CutMask` behavior
 from the fixed Windows baseline. The retained Windows `CutMask` calls it for
 every hover, creation, hit test, move and resize; its Direct2D rectangle is a
-presentation snapshot. The Qt capture migration must use the same model. This extraction does not
+presentation snapshot. The Qt `CaptureSession` uses the same model. This extraction does not
 establish desktop capture, mixed-DPI input or a complete Qt capture workflow.
 
 ## Source pixels and gestures
@@ -49,12 +49,36 @@ greater-than-six-pixel candidate filter remain in the Windows adapter.
 
 ## Evidence and remaining integration
 
+`CaptureSession` owns one immutable source, one selection and one outstanding
+action. Window views use explicit per-screen source rectangles and X/Y scale
+values; the logical virtual desktop is never multiplied by one DPR. A normal
+authorized-image source has neither a desktop origin nor native window
+candidates. It initially selects the complete authorized image so a click can
+accept that source, while dragging performs an application crop. Position copy
+uses `source(x,y)` unless a verified desktop origin exists.
+
+Native color sampling and the Qt session share `PixelSample.h` for the original
+CMYK percentage rounding. HEX, RGB and CMYK copy strings retain the old format.
+One queued worker creates an independent selection image before dispatching
+the real host action. Preparation and host output have distinct lifetimes;
+failed output and cancelled Save As retain the selected source. Request tokens
+remain unique when a closed session loads a new source, so cancelled worker
+results cannot complete a later selection. An explicit CLI entry takes
+precedence over Ctrl-release pinning. Dismissing a QR result closes capture,
+matching the old QR dialog journey.
+
 `tests/capture_selection_tests.cpp` checks candidate order/clipping, exact edge
 hits, unchanged hover, click acceptance, four drag directions, one-pixel regions,
 all nine hit regions, immediate snapping, press-based movement, crossed edges
 and minimum sizes at every source edge. It has been compiled and executed with
 g++ 14, C++20, `-O2 -Wall -Wextra -Wpedantic -Werror` on the local Linux executor.
 The retained Windows adapter still needs its actual Windows regression build.
+`tests/qt/capture_session_tests.cpp` exercises real QImage worker crops/alpha,
+output completion/cancellation, CLI/Ctrl behavior, text and source-coordinate
+formatting, per-screen conversion unit data and synchronous host deletion. These
+new Qt tests have not yet been compiled or run in the local executor; that source
+review is not a desktop or CI pass. The pure test additionally covers shared
+CMYK rounding and has been executed with the same strict C++20 flags.
 
 The model does not infer a desktop origin, screen identity, display scale or
 Portal authorization. The capture service/UI must explicitly carry and verify

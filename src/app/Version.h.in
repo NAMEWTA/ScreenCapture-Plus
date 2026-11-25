@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-// Generated from the repository VERSION. Do not edit the generated header.
+// Generated from build/version.json. Do not edit the generated header.
 namespace HuhuCapture::Version {
 inline constexpr std::string_view text{"@PROJECT_VERSION@"};
 inline constexpr unsigned major{@PROJECT_VERSION_MAJOR@};

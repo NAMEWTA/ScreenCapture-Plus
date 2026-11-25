@@ -9,9 +9,9 @@ struct AVFrame;
 namespace HuhuCapture::Media::Detail {
 
 // Private codec-service ownership. A reference-counted CPU AVFrame stays valid
-// after the decoder/input close. Linux turns this first frame into a QImage;
-// Windows keeps the existing MF cover path and uses FFmpeg only for the shared
-// complete-file inspection. No codec object crosses into the UI or core model.
+// after the decoder/input close. The common software thumbnail service turns
+// this into a QImage on Linux and when a native Windows decoder is unavailable.
+// No codec object crosses into the UI or core model.
 struct AvFrameDeleter {
     void operator()(AVFrame* frame) const noexcept;
 };
@@ -21,5 +21,7 @@ struct FirstVideoFrame {
     DecodedFrame frame;
 };
 FirstVideoFrame decodeFirstVideoFrame(const QString& path, const Limits& limits, std::stop_token stop);
+VideoThumbnailResult softwareVideoThumbnail(const QString& path, unsigned edge,
+    const Limits& limits, std::stop_token stop);
 
 } // namespace HuhuCapture::Media::Detail

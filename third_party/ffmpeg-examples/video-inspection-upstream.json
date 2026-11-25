@@ -46,6 +46,24 @@
       "blob": "6bce0d388d809e981d8247a25397843824769616",
       "license": "LGPL-2.1-or-later",
       "focus": "Decoder error recognition, pixel/sample limits and send/receive semantics."
+    },
+    {
+      "path": "libswscale/swscale.h",
+      "blob": "c913e76985b7fcf656f266498905cfcd689b8454",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Official sws_getContext/sws_scale/sws_setColorspaceDetails APIs reused by the shared SDR thumbnail conversion; the implementation is moved from the already validated Linux adapter, not a copied second color converter."
+    },
+    {
+      "path": "libswscale/version_major.h",
+      "blob": "5666f1775100f011d605aa3893d024c3849d7e5b",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Pinned Windows swscale-10 DLL/import library naming."
+    },
+    {
+      "path": "libswscale/version.h",
+      "blob": "fe56c60566eaf162d56bca0fc4c5e4a58512c21a",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Fixed 10.1.102 header/runtime ABI checked before software thumbnail conversion."
     }
   ],
   "generatedSignals": "The real H.264/AAC fixture encoder directly compiles the pinned mux.c and its documented duration/trailer fix from upstream.json; no decoder result or media packet is mocked.",

@@ -202,7 +202,7 @@ def main():
                           shlex.join((posix(make), "install")) + "\n", encoding="utf-8", newline="\n")
         run(str(bash), "--noprofile", "--norc", posix(script), env=environment)
         files = []
-        for name, major in (("avcodec", 63), ("avformat", 63), ("avutil", 61)):
+        for name, major in (("avcodec", 63), ("avformat", 63), ("avutil", 61), ("swscale", 10)):
             for filename in (f"{name}-{major}.dll", f"{name}.lib"):
                 binary = prefix / "bin" / filename
                 if not binary.is_file():
@@ -221,7 +221,7 @@ def main():
         metadata["configurations"][configuration] = {"prefix": str(prefix), "crt": crt,
             "configure": arguments, "actualCflags": cflags, "files": files}
     (workspace / "build-info.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-    print("Built pinned MSVC AVCodec/AVFormat/AVUtil inspection DLLs with per-configuration dynamic CRTs.")
+    print("Built pinned MSVC AVCodec/AVFormat/AVUtil/swscale inspection and cover DLLs with per-configuration dynamic CRTs.")
     print("These dependencies contain no FFmpeg recording encoder, x264, network protocol or GUI runtime.")
 
 

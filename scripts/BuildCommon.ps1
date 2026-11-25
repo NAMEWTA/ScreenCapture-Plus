@@ -27,13 +27,37 @@ function Initialize-WindowsToolchain {
 }
 
 function Get-ProductVersion {
-    $value = (Get-Content (Join-Path $RepoRoot 'VERSION') -Raw -Encoding utf8).Trim()
+    $path = Join-Path $RepoRoot 'build/version.json'
+    if ((Get-Item $path).Length -gt 4096) { throw 'build/version.json exceeds its metadata budget.' }
+    $document = Get-Content $path -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
+    if ($document -isnot [Collections.IDictionary] -or $document.Count -ne 2 -or
+        ($document.schemaVersion -isnot [long] -and $document.schemaVersion -isnot [int]) -or
+        $document.schemaVersion -ne 1 -or $document.version -isnot [string]) {
+        throw 'build/version.json must use schemaVersion 1 and a version string.'
+    }
+    $value = $document.version
     if ($value -cnotmatch '^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$') {
-        throw 'VERSION must contain one canonical MAJOR.MINOR.PATCH value.'
+        throw 'build/version.json must contain one canonical MAJOR.MINOR.PATCH value.'
     }
     $parts = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
-    if ($parts.Where({ $_ -gt 65535 }).Count) { throw 'VERSION components must be between 0 and 65535.' }
+    if ($parts.Where({ $_ -gt 65535 }).Count) { throw 'build/version.json components must be between 0 and 65535.' }
     return $value
+}
+
+function Write-ProductVersionProps {
+    $value = Get-ProductVersion
+    $parts = $value.Split('.')
+    $source = Join-Path $RepoRoot 'build/version.json'
+    $sha256 = (Get-FileHash $source -Algorithm SHA256).Hash
+    $template = Get-Content (Join-Path $RepoRoot 'build/windows/Version.props.in') -Raw -Encoding utf8
+    $content = $template.Replace('@PRODUCT_VERSION@', $value).Replace('@SOURCE_SHA256@', $sha256)
+    $content = $content.Replace('@VERSION_MAJOR@', $parts[0]).Replace('@VERSION_MINOR@', $parts[1]).Replace('@VERSION_PATCH@', $parts[2])
+    $directory = Join-Path $ArtifactsRoot 'generated'
+    New-Item $directory -ItemType Directory -Force | Out-Null
+    $path = Join-Path $directory 'Version.props'
+    if (-not (Test-Path $path) -or [IO.File]::ReadAllText($path) -cne $content) {
+        [IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
+    }
 }
 
 function Get-ReleaseVersion([string] $Value) {

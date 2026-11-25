@@ -1,7 +1,7 @@
 # MP4 完整检查与历史封面
 
 本页对应 Issue #5 的 P06 媒体归档接缝。接口位于
-[`VideoInspection.h`](../src/services/media/VideoInspection.h)。完整文件检查现在由两平台共用的严格 FFmpeg 服务执行；Windows 保留原生 MF 录制与封面。首轮真实反例已证实默认 MF 检查不可作为完整归档门槛，严格共享实现仍需通过同一批全部坏样本后才能登记验收完成。
+[`VideoInspection.h`](../src/services/media/VideoInspection.h)。完整文件检查现在由两平台共用的严格 FFmpeg 服务执行；Windows 保留原生 MF 录制，封面优先 MF，系统缺少解码器时使用同一软件封面服务。首轮真实反例已证实默认 MF 检查不可作为完整归档门槛，严格共享实现仍需通过同一批全部坏样本后才能登记验收完成。
 
 ## 两种操作的不同责任
 
@@ -18,7 +18,11 @@
 [`platform/windows/VideoInspection.cpp`](../src/platform/windows/VideoInspection.cpp)
 复用当前生产版 [`MediaHistory.cpp`](../src/services/MediaHistory.cpp) 的 Media Foundation SourceReader、RGB32 媒体类型、CPU 像素复制流程。录制后端仍为现有 MF / WASAPI 路径，没有添加第二个 Windows 录制器。
 
-封面调用以 MTA 初始化当前工作线程的 COM，以平衡的 MFStartup/MFShutdown 管理媒体运行期。文件由只读、拒绝并发写入的 IStream 持有，再包装为 IMFByteStream。只选择第一条视频轨道，检查实际 RGB32 尺寸和 sample 长度；首帧即能返回，不再保留已经被反例证伪的原生全轨完整性实现。
+原生封面调用以 MTA 初始化当前工作线程的 COM，以平衡的 MFStartup/MFShutdown 管理媒体运行期。文件由只读、拒绝并发写入的 IStream 持有，再包装为 IMFByteStream。只选择第一条视频轨道，检查实际 RGB32 尺寸和 sample 长度；首帧即能返回，不再保留已经被反例证伪的原生全轨完整性实现。
+
+当原生路径明确返回 `Unsupported` 时，先释放 SourceReader、byte stream、文件与 COM/MF 运行期，再调用共用的 [`FfmpegVideoThumbnail.cpp`](../src/services/media/FfmpegVideoThumbnail.cpp)。该实现直接提取自已经通过 Linux H.264/HEVC 真实文件测试的封面适配，继续复用固定解码器和 swscale，不另写 YUV/RGB 转换。读取错误、取消、资源预算和已报告的损坏错误不会触发回退。返回的 `ThumbnailDecoder` 记录实际产出像素的 MF 或 FFmpeg 路径，测试 JSON 同步记录；失败的两条路径均保留诊断。
+
+选择这一最窄回退的实际依据是 [Windows job 139097475283](https://github.com/NAMEWTA/huhucapture/actions/runs/45581491082/job/139097475283)：严格共同检查已正确接受正常 HEVC、拒绝全部 HEVC 坏样本，但 8 个本应有首帧的文件均在 MF 的 `SetCurrentMediaType(RGB32)` 返回 `0xc00d5212`（`MF_E_TOPO_CODEC_NOT_FOUND`）。相同 runner 的 H.264 15 个测试通过。原始 JSON 来自 artifact `15008720480`，ZIP SHA-256 为 `44c09fbef44d785e0f4f1fbfd2e2666645130b1893facac917bb2fbb745007f5`。这说明依赖可选系统 HEVC codec 会使有效历史缺封面；它不是放宽预览断言或安装系统扩展的理由。回退修复仍须实际重跑两配置、同一 25 个样本，不把源码搬移当作 Windows 通过。
 
 封面优先采用 `IMF2DBuffer2::Lock2DSize`，用它返回的实际 buffer 起点、长度、scanline 和带符号 stride 检查全部行是否位于持有的分配内；不能获得该接口时，才使用普通 IMFMediaBuffer 锁定和当前媒体类型的默认 stride。成功与所有失败路径均释放锁。负 stride 的首行定位复用纯核心 `validFramePlane` 规则；不会因步幅符号不同就越界访问。
 
@@ -44,7 +48,7 @@ MOV 已从 sample description 给出 codec parameters，因此本路径不在安
 
 完整检查要求每个被索引的样本范围位于已打开文件内；分片过程中增长的索引继续检查，EOF 后重新核对最终索引，并确认实际提交的包数量。空轨道、读取失败、解码失败、提前 EOF、结束排空后仍请求更多输入均失败。支持范围取决于锁定构建中实际存在的解码器；缺失返回 Unsupported，而不是把未检查的轨道当作成功。
 
-Linux 的薄适配层 [`platform/linux/VideoInspection.cpp`](../src/platform/linux/VideoInspection.cpp) 使用同一解码服务保留的首个 CPU AVFrame；其 AVBuffer 引用在 decoder/input 关闭后仍持有像素，然后通过 swscale 缩放到受限 QImage，保留 SDR 的颜色矩阵和 full/limited range。未经验证的 PQ / HLG 色调映射明确 Unsupported。旋转元数据、非方形像素、HDR 显示一致性尚没有本批实测证据，不能作为已经完成的 UI 验收项。
+Linux 的薄适配层 [`platform/linux/VideoInspection.cpp`](../src/platform/linux/VideoInspection.cpp) 和 Windows 缺少系统 codec 的回退共用一个软件封面实现。它使用同一解码服务保留的首个 CPU AVFrame；其 AVBuffer 引用在 decoder/input 关闭后仍持有像素，然后通过 swscale 缩放到受限 QImage，保留 SDR 的颜色矩阵和 full/limited range。未经验证的 PQ / HLG 色调映射明确 Unsupported。旋转元数据、非方形像素、HDR 显示一致性尚没有本批实测证据，不能作为已经完成的 UI 验收项。
 
 ## 共用的物理容器前置检查
 
@@ -109,9 +113,9 @@ Linux 的薄适配层 [`platform/linux/VideoInspection.cpp`](../src/platform/lin
 
 ## 构建接线与来源
 
-共同服务源是 `Mp4Envelope.cpp` 与 `FfmpegVideoInspection.cpp`，再加一个平台的 `VideoInspection.cpp` 封面适配。共同代码需要 core、Qt6::Gui、固定 AVCodec/AVFormat/AVUtil。Linux 封面另需现有固定 swscale；Windows 封面另需 `huhucapture_media_frames` 及 MF、COM、SHCreateStream 库。
+共同服务源是 `Mp4Envelope.cpp`、`FfmpegVideoInspection.cpp` 与 `FfmpegVideoThumbnail.cpp`，再加一个平台的 `VideoInspection.cpp` 封面适配。共同代码需要 core、Qt6::Gui、固定 AVCodec/AVFormat/AVUtil/swscale。Windows 原生封面另需 `huhucapture_media_frames` 及 MF、COM、SHCreateStream 库。
 
-Windows 使用 [`build-windows-video-inspection.py`](../scripts/build-windows-video-inspection.py) 从同一固定 FFmpeg commit 与同一严格补丁构建，只有 H.264/AAC 软件解码器、MOV demuxer 与所需 AVUtil；不加入 x264、录制编码器、swscale、网络协议或新 GUI 运行时。脚本采用官方 MSVC `configure --toolchain=msvc` 路径，保留 x64 NASM 优化，明确构建 `install/Debug` 的 `/MDd` 和 `install/Release` 的 `/MD`，各自对应相同 Qt/应用配置。不得把两个配置的 DLL 混入同一测试 PATH。原生 `.lib` 导入库与带 major 的 DLL 均由固定上游安装到各配置的 `bin/`；链接 PDB 保存在 `symbols/`。
+Windows 使用 [`build-windows-video-inspection.py`](../scripts/build-windows-video-inspection.py) 从同一固定 FFmpeg commit 与同一严格补丁构建，包含 H.264/HEVC/AAC 软件解码器、MOV demuxer、所需 AVUtil 和封面转换所需 swscale 10.1.102；不加入 x264、录制编码器、网络协议或新 GUI 运行时。脚本采用官方 MSVC `configure --toolchain=msvc` 路径，保留 x64 NASM 优化，明确构建 `install/Debug` 的 `/MDd` 和 `install/Release` 的 `/MD`，各自对应相同 Qt/应用配置。不得把两个配置的 DLL 混入同一测试 PATH。四个原生 `.lib` 导入库与带 major 的 DLL（含 `swscale-10.dll`）均由固定上游安装到各配置的 `bin/`，CMake 逐个核对这八个文件的真实 SHA-256；链接 PDB 保存在 `symbols/`。
 
 只读取真实 VSDevCmd 的编译环境，不把 MinGW 库混入 MSVC。NASM 3.01 与 GNU Make 4.4.1-3 从官方固定 URL 下载并逐个核对 Microsoft vcpkg 源码记录的 SHA-512，在私有 workspace 解压；Bash/coreutils 使用 Windows runner 已有 MSYS2，记录其实际 runtime。不会安装或覆盖系统文件。构建元数据保留源 commit、补丁 SHA、实际 CFLAGS、工具来源、DLL/导入库 SHA；缺少文件、PDB 或实际 CRT 不符均失败。
 

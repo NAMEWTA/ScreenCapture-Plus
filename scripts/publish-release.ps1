@@ -27,7 +27,7 @@ if ($tag -isnot [string] -or $tag -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)
 }
 $expectedVersion = (Get-ReleaseVersion $tag) -join '.'
 if ($expectedVersion -cne "$(Get-ProductVersion).0") {
-    throw 'The declared release does not match the repository VERSION.'
+    throw 'The declared release does not match build/version.json.'
 }
 if ($declaration.notes -isnot [string] -or $declaration.notes -cne "releases/$tag.md") {
     throw 'The declared notes must be the matching releases/<tag>.md file.'

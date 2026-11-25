@@ -236,7 +236,7 @@
     },
     "videoInspectionWindows": {
       "source": "qtMigration.softwareMedia.ffmpeg",
-      "purpose": "Shared strict local-MP4 inspection only; Windows capture, encoding and covers retain MF",
+      "purpose": "Shared strict local-MP4 inspection and bounded software cover fallback when the native decoder is unavailable; Windows capture and encoding retain MF",
       "configurations": {
         "Debug": "MDd",
         "Release": "MD"
@@ -254,7 +254,7 @@
         "--disable-everything",
         "--disable-avdevice",
         "--disable-avfilter",
-        "--disable-swscale",
+        "--enable-swscale",
         "--disable-swresample",
         "--enable-avcodec",
         "--enable-avformat",

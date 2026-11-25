@@ -1,7 +1,8 @@
 // Native SourceReader, media-type and RGB-buffer flow reused from the shipping
 // services/MediaHistory.cpp videoThumbnail. Keep recording on the existing MF
 // backend; complete inspection uses the common strict FFmpeg service. This
-// platform adapter only produces Qt-owned covers from the native first frame.
+// platform adapter prefers native first-frame covers. Missing native codecs
+// fall back to the same software cover service already used on Linux.
 #define NOMINMAX
 #include <Windows.h>
 #include <mfapi.h>
@@ -11,7 +12,7 @@
 #include <shlwapi.h>
 #include <wrl/client.h>
 
-#include "services/media/VideoInspection.h"
+#include "services/media/FfmpegVideoInspection.h"
 #include "services/media/Mp4Envelope.h"
 #include "core/MediaFrame.h"
 #include "core/PixelBuffer.h"
@@ -239,12 +240,11 @@ VideoThumbnailResult copyCover(IMFSample* sample, const VideoDescription& descri
         image.scaled(target, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     if (result.image.isNull()) result.failure = budget("Cannot scale the video cover");
     if (stop.stop_requested()) { result.image = {}; result.failure = cancelled(); }
+    if (!result.failure) result.decoder = ThumbnailDecoder::MediaFoundation;
     return result;
 }
 
-} // namespace
-
-VideoThumbnailResult videoThumbnail(const QString& path, unsigned edge, const Limits& limits, std::stop_token stop)
+VideoThumbnailResult nativeVideoThumbnail(const QString& path, unsigned edge, const Limits& limits, std::stop_token stop)
 {
     try {
         if (stop.stop_requested()) return {cancelled(), {}};
@@ -275,6 +275,23 @@ VideoThumbnailResult videoThumbnail(const QString& path, unsigned edge, const Li
         }
         return {invalid("Video contains no usable decoded cover"), {}};
     } catch (const std::bad_alloc&) { return {budget("Cannot allocate video thumbnail state"), {}}; }
+}
+
+} // namespace
+
+VideoThumbnailResult videoThumbnail(const QString& path, unsigned edge, const Limits& limits, std::stop_token stop)
+{
+    auto native = nativeVideoThumbnail(path, edge, limits, stop);
+    if (native.failure.code != Error::Unsupported) return native;
+    if (stop.stop_requested()) return {cancelled(), {}};
+    // A missing OS codec is a capability gap. Reuse the already pinned software
+    // decoder/scaler rather than install optional system components or abandon
+    // valid history. Read, malformed-data, budget and cancellation failures from
+    // the native path are not silently reclassified as missing capabilities.
+    auto software = Detail::softwareVideoThumbnail(path, edge, limits, stop);
+    if (software.failure && !native.failure.detail.isEmpty())
+        software.failure.detail = native.failure.detail + QStringLiteral("; software fallback: ") + software.failure.detail;
+    return software;
 }
 
 } // namespace HuhuCapture::Media
