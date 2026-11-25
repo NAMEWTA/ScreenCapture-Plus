@@ -150,6 +150,7 @@ jobs:
           cmake -S . -B artifacts/cmake/application-runtime -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DHUHUCAPTURE_BUILD_APP=ON -DBUILD_TESTING=OFF -DCMAKE_DISABLE_FIND_PACKAGE_Python3=ON -DHUHUCAPTURE_RUNTIME_LICENSES="$GITHUB_WORKSPACE/artifacts/runtime-licenses" -DHUHUCAPTURE_OPENSSL_RUNTIME_DIR=/usr/lib/x86_64-linux-gnu
           cmake --build artifacts/cmake/application-runtime --parallel 2
       - name: Deploy the linked runtime and verify actual development packages
+        id: packages
         if: ${{ !cancelled() && steps.application_build.outcome == 'success' }}
         run: |
           cmake --install artifacts/cmake/application-linux --config RelWithDebInfo --prefix "$GITHUB_WORKSPACE/artifacts/install/linux"
@@ -157,6 +158,10 @@ jobs:
           python scripts/restore-packaging-tools.py --platform linux --output artifacts/packaging-tools
           python tests/package_metadata_tests.py
           python scripts/package-qt.py package --installed artifacts/install/linux --output artifacts/packages/linux --minimum-system 'Ubuntu 24.04 amd64; desktop acceptance pending' --tools artifacts/packaging-tools --qmake "$QT_ROOT_DIR/bin/qmake" --development
+      - name: Install, run, reinstall and remove the real Linux package pair
+        if: ${{ !cancelled() && steps.packages.outcome == 'success' }}
+        run: |
+          dbus-run-session -- xvfb-run -a env QT_QPA_PLATFORM=xcb python scripts/test-qt-installation.py --packages artifacts/packages/linux --probe artifacts/cmake/application-linux/installation_gui_probe --video artifacts/video-fixtures/valid.mp4 --artifacts artifacts/cmake/application-linux/installation
       - name: Preserve actual evidence and clearly marked development artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -183,6 +188,7 @@ jobs:
             artifacts/cmake/application-linux/editor-render/
             artifacts/cmake/application-linux/package/
             artifacts/cmake/application-linux/package-runtime.json
+            artifacts/cmake/application-linux/installation/
             artifacts/native-rust/build-info.json
             .deps/portal-validation/build-info.json
             .deps/pipewire-validation/build-info.json
@@ -267,6 +273,7 @@ jobs:
           cmake --build artifacts/cmake/application-runtime --config RelWithDebInfo --parallel 2
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Install and verify complete portable and per-user setup packages
+        id: packages
         if: ${{ !cancelled() && steps.application_build.outcome == 'success' }}
         shell: pwsh
         run: |
@@ -281,6 +288,12 @@ jobs:
           python tests/package_metadata_tests.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python scripts/package-qt.py package --installed artifacts/install/windows --output artifacts/packages/windows --minimum-system 'Windows 10 1809 x64; desktop acceptance pending' --symbols artifacts/install/windows-symbols/symbols --nsis-installer artifacts/packaging-tools/nsis/nsis-3.11-setup.exe --development
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install, run, reinstall and uninstall the real Windows package pair
+        if: ${{ !cancelled() && steps.packages.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python scripts/test-qt-installation.py --packages artifacts/packages/windows --probe artifacts/cmake/application-windows/RelWithDebInfo/installation_gui_probe.exe --video artifacts/video-fixtures/valid.mp4 --artifacts artifacts/cmake/application-windows/installation
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Preserve actual Windows results and development artifacts
         if: always()
@@ -305,6 +318,7 @@ jobs:
             artifacts/legacy-mp3-fixtures/
             artifacts/cmake/application-windows/package/
             artifacts/cmake/application-windows/package-runtime.json
+            artifacts/cmake/application-windows/installation/
             artifacts/native-rust/build-info.json
             .deps/video-inspection-windows/build-info.json
           if-no-files-found: warn

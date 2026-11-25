@@ -21,14 +21,14 @@
 | `src/services/rendering/` | Qt 字体测量、完整备注排版和离屏合图，保留原图像素与失败时旧输出；共享编辑器使用同一导出路径 | 真实桌面字体 / IME 与大图资源验收 |
 | `src/services/config/` 与 `SettingsController` | UTF-8 / UTF-16 JSON 读取、未知字段保留、首次迁移备份、路径选择与原子替换；同一设置页接入真实自启、快捷键和运行时状态 | X11 映射、Portal 实际授权、自启和配置迁移的完整桌面验收 |
 | `src/services/localization/` | 六份原语言、同一 BOM 解析器、英语回退、目录优先级和缓存刷新 | 正式窗口语言切换、长译文与 IME 验收 |
-| `src/services/media/` | 共用受管命名、PNG / GIF / MP4 完整检查、流式导入、身份租约、缩略图、历史装配及持久化结果；固定 FFmpeg / x264 / AAC 软件编码器已完成真实输出检查 | Linux 实际音视频来源接线、长时同步、现有 Windows 音频格式的跨端兼容 |
+| `src/services/media/` | 共用受管命名、PNG / GIF / MP4 完整检查、流式导入、身份租约、缩略图、历史装配及持久化结果；真实 X11 / PipeWire 来源与固定 FFmpeg / x264 / AAC 编码已接入；Windows MP3 容器样本与解析帧分开核对 | 真实音源四组合、长时同步、新增严格 MP3 库补丁的双端完整回归 |
 | `src/services/desktop/` | 共用剪贴板准备/发布及排空、回收/第二次永久删除许可、异步定位；宿主和 Windows 旧入口复用同一实现 | Linux 真实剪贴板接管、桌面文件管理器、退出持有和物理交互验收 |
 | `src/services/transfer/`、`LanController` 与 `src/ui/qt/Transfer*` / `ReceivePrompt` | 有界 Qt actor、真实持久身份和网卡装配、独立接收 worker、完整校验与归档、设备 / 证书确认 / 进度 UI及窗口重开快照 | 物理双端、完整产品操作旅程与性能门槛 |
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
 | `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；KWindowSystem 异步父窗导出已通过指定 Sway 生命周期测试 | PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
-| `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease 与 CPU / MemFd 数据面，固定客户端和受控失败路径补丁 | 实际采流 CI、X11 / GNOME / Plasma、音频及完整录制接线 |
-| `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭 | Qt 设备和任务服务、完整 MP4 解码及两端互传；聚合 ABI 和一致锁已通过指定双平台 CI |
+| `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease 与 CPU / MemFd 数据面，固定客户端和受控失败路径补丁，授权源与实际录制消费者已接线 | Wayland 刷新像素时序、实际采流 CI、GNOME / Plasma 和物理音源验收 |
+| `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭；共享 Qt 设备 / 任务服务及完整媒体检查已装配 | 聚合 ABI、真实取消和同进程 Qt 控制层已通过指定双平台 CI；物理双端和完整产品旅程尚未验收 |
 
 同一工具的交互规则不能因为平台迁移而被“统一”成不同语义。例如普通矩形越过对边时可以翻转，批注范围则限制在原图内；普通序号按活动最大值加一，批注高水位编号永不复用。移动、文字与样式修改仍遵循现有历史语义，不借模型抽取改变撤销行为。
 
@@ -62,13 +62,15 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 | P07 | 同一 Qt 宿主、CLI / 单实例 / 托盘、设置 / 历史 / 关于、截图 / 编辑输出与完整包更新已装配，未验收 | 真实双平台完整旅程、字体 / IME / DPI |
 | P08 | 旧产品和共享滚动会话共用长截图模型；原生持续帧源、授权源和控制窗口已装配 | 真实滚动、窗体遮挡、Wayland 手动滚动与完整输出验收 |
 | P09 | 共用录制会话 / 工具条、Windows 原生后端、X11 / 授权 PipeWire 消费者及真实音频适配已接入并分层验证 | 控件排除、真实音源四组合、长时同步、完整原生时间线与恢复 |
-| P10 | 上游 core、聚合 C ABI、真实 TLS 归档测试和共享任务 / 设备 UI 实施中 | 新增界面实际验证、正式身份 / 网卡装配与 P10a 双平台互传；P10b 独立记录 |
-| P11 | 完整包更新、旧 Windows 流式桥接、实际安装树与四种开发包流水线已接入，未验收 | 桥接 Windows 原生检查与真实完整包契约、同源实际包、干净机器安装升级卸载和对应源码审核 |
+| P10 | 上游 core、聚合 C ABI、真实 TLS 归档和取消、共享任务 / 设备 UI 与应用身份 / 网卡装配已接入；聚合验证双端通过 | 完整应用身份与界面回归、P10a 物理双平台互传；P10b 独立记录 |
+| P11 | 完整包更新、旧 Windows 流式桥接、实际安装树与四种开发包流水线已接入；旧桥接 Debug / Release 原生受控检查通过，安装生命周期检查已接入 | 真实完整 Qt 包升级契约、四包安装生命周期执行、干净机器跨版本升级卸载和对应源码审核 |
 | P12 | 未验收 | F01–F15、真实双屏 / IME / 音视频、性能、稳定性和干净机器升级卸载 |
 | P13 | 等待 P12 | 删除旧生产架构后从干净检出重新验证 |
 | P14 | 文档随实现更新，未进入发布 | 许可证 / 对应源码与同 SHA 全部发行资产、必要验收 |
 
-应用所有权、启动和退出屏障见 [共享 Qt 宿主](qt-application.md)。截图与录屏的接线见 [共享工作区](capture-workspaces.md)，来源与坐标约束见 [采集服务](screen-capture.md) 和 [授权实时源](live-capture-source.md)，长截图的保留规则见 [共享长截图模型](scroll-capture.md)，软件编码和 AAC 尾样本合同见 [Linux 录制](linux-recording.md)。[完整包更新](qt-updates.md) 与 [同源打包](qt-packaging.md) 分别记录下载和安装边界。这些实现尚不代表整个工作包已经验收。
+应用所有权、启动和退出屏障见 [共享 Qt 宿主](qt-application.md)。截图与录屏的接线见 [共享工作区](capture-workspaces.md)，来源与坐标约束见 [采集服务](screen-capture.md) 和 [授权实时源](live-capture-source.md)，长截图的保留规则见 [共享长截图模型](scroll-capture.md)，软件编码和 AAC 尾样本合同见 [Linux 录制](linux-recording.md)。[完整包更新](qt-updates.md)、[同源打包](qt-packaging.md) 和 [实际安装生命周期](installation-validation.md) 分别记录下载、部署与运行验证边界。这些实现尚不代表整个工作包已经验收。
+
+上述聚合与桥接结果对应提交 `1f516bf5799551af1776839f56a21a16e652a4c1` 的 [Windows / Linux 聚合运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45620326677) 和 [旧 Windows 回归](https://github.com/NAMEWTA/huhucapture/actions/runs/45620326937)。桥接受控文件流验证不是实际完整 Qt 安装包升级；全量应用与原生截图的同轮失败仍保留，不由这两项通过替代。
 
 ## 平台支持与验证口径
 

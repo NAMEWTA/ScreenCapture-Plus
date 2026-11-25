@@ -61,6 +61,14 @@ protected:
 struct Journey {
     QTemporaryDir directory;
     std::shared_ptr<media::MediaArchiveService> archive;
+    // Observers and their catalog must outlive the workspaces. On an actual
+    // native assertion failure, stack unwinding still closes active windows;
+    // RecordingWorkspace::shutdown updates capture capabilities synchronously
+    // and those views still invoke this translator while refreshing.
+    HuhuCapture::Localization::LanguageCatalog language;
+    unsigned completed{}, failed{};
+    bool captureStopped{}, recordingStopped{}, clipboardStopped{};
+    std::vector<QPointer<ui::EditorWindow>> editors;
     desktop::SystemClipboard clipboard;
     desktop::FileRevealer revealer;
     app::MediaWorkspace media;
@@ -68,15 +76,11 @@ struct Journey {
     // Empty means the actual recording capability is unavailable. No fake
     // recorder or successful synthetic capture is installed for these checks.
     app::RecordingWorkspace recording;
-    HuhuCapture::Localization::LanguageCatalog language;
-    unsigned completed{}, failed{};
-    bool captureStopped{}, recordingStopped{}, clipboardStopped{};
-    std::vector<QPointer<ui::EditorWindow>> editors;
 
     Journey() : archive(std::make_shared<media::MediaArchiveService>(directory.path() + QStringLiteral("/archive"))),
+        language({HuhuCapture::Localization::ResourcePolicy::LinuxUserResources, {}, {}}),
         media(archive, clipboard, revealer), capture(media, clipboard),
-        recording(archive, media, capture, {}, {}),
-        language({HuhuCapture::Localization::ResourcePolicy::LinuxUserResources, {}, {}})
+        recording(archive, media, capture, {}, {})
     {
         require(directory.isValid(), "Create an isolated actual media directory");
         require(language.load(QStringLiteral("en-US")).usable, "Load the real shared language catalog");

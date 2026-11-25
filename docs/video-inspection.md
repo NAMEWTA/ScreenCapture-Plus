@@ -137,3 +137,23 @@ fixture generator 仍只在 Linux 使用固定完整软件编码链与 `ffmpeg_m
 封面现在先调用官方 `av_frame_get_buffer(..., 64)` 获取原生对齐和尾部存储，继续使用同一 swscale 转换，最后只把完整逻辑图像复制到独立的 `QImage`。预分配预算包含固定 `libavutil/frame.c` 的 64 字节行对齐、32 行高度对齐及原生 padding，分配后再核对真实 buffer 大小；没有关闭 SIMD、改变视频尺寸或容忍越界。精确来源见 `video-inspection-upstream.json`。
 
 修复后同一实际 CI 文件在本地连续执行 20 轮严格检查、封面生成与释放通过。`mp4_encoder_tests` 新增真实编码的 252×190、20×18、36×34、4×2 四种尺寸，对原尺寸和两种缩放分别反复验证完整像素、所有权与释放；原有真实 H.264/AAC 尾帧、样本数量和文件身份测试同时通过。预编译 FFmpeg 的汇编不受本项目 C++ ASan 插桩覆盖，因此未以此前 ASan 没有报警推翻实际哨兵和 glibc 反例。整个 X11 采集旅程仍需由修复后的 CI 重新执行，物理显示器和发行验收不由这项文件级复现替代。
+
+## Windows MP3 的容器样本与 codec 帧
+
+保留的 Windows MF 录制器可以把多个 MP3 帧放入同一个 MP4 sample。实际 CI 文件 `windows-h264-mp3.mp4`（SHA-256 `f973e77db41997d020538094ec4a2e0e7ebf5133843e64db867f98401298c9b2`）包含 51 个 H.264 容器样本与 51 个双声道 44.1 kHz MP3 容器样本，官方 parser 将音频拆为 80 帧，其中 29 帧的 `pos` 合法地为 `-1`。旧检查器把这些解析帧当作物理样本，在第 9 个视频帧后误拒绝；测试用解析帧定位物理位置也发生相同错误。
+
+共同检查器保留原有官方 MOV demux、自动 parser、时间戳和 skip/discard side-data 路径。H.264/HEVC/AAC 的物理位置与数量检查保持原合同。MP3 则通过官方完整 sample index 建立物理字节游标，把每个实际 parser 输出帧逐字节与原始容器样本的连续切片比较。只有一个原始 sample 的全部字节都被准确覆盖，才增加其样本计数；输出可以跨 sample，但不能跳字节、重排、替换或添加内容。所有物理边界、预算、最终索引复查、样本数量与真正 decoder EOF 要求继续保留，末尾部分样本或未消费完整索引均失败。只有这条已核对原始字节的 MP3 路径允许 parser 的未知位置，其他 codec 不放宽位置规则。
+
+readback 使用原来已经拥有的同一个 `QFile`，没有按路径重新打开另一个可被替换的文件。比较期间保存并以 RAII 恢复真实 `QFile::pos()`，而非 AVIO 的逻辑位置；恢复失败向上传播，不能让后续原生读取在错误位置继续。额外比较缓冲区固定为 32 KiB，取消在分块读取中检查；不建立第二份无界媒体缓存。
+
+未采用把原始 sample 的属性复制给每个拆分帧的方案。固定 `demux.c` 在 parser 之后为具体帧生成 skip/discard，简单复制可能改变音频语义。实际只读对照使用生产解码源码加观察计数，分别关闭和开启新增的 indexed readback：两条路径都得到 51 个视频帧、80 个音频帧、92,155 个采样点，完整 PCM SHA-256 同为 `5307b313b5f1ab1fa17b661336416bdb0f0e192ff564fd3a8c69acf002942376`。两者均只有末帧（PTS 90,504、duration 1,152）携带同一个 5-sample discard，输入文件 hash 前后不变。
+
+官方 decoder 还有一处字节覆盖本身不能观测的恢复：parser 会把零前缀保留在输出中，decoder 随后直接跳零并裁减输入长度。原始字节比较在这条路径仍会相等，而音频缺失不能因此获得归档资格。受控补丁 `0002-strict-mpeg-audio-frame-extents.patch` 仅在 `AV_EF_EXPLODE` 时要求没有前导跳字节且输入长度等于原生 header 已计算的 frame size；没有实现第二套 header 解析，也没有改变默认播放恢复。精确源码、作者、许可证、当前上游核对和补丁 hash 见 [`patches/ffmpeg/upstream.json`](../third_party/patches/ffmpeg/upstream.json)。
+
+2026-11-25，本地固定 SDK 上的新应用代码已严格编译，实际 Windows 原文件通过完整检查，51 视频帧保留，文件 hash 前后不变。恢复自既有 CI artifact 的 15 个 H.264/AAC 与 10 个 HEVC 正反例全部符合原断言；真实 MP4/AAC 编码尾样本、非对齐封面和共享录制回归也通过。没有为本次诊断创建新的损坏样本。**新增库补丁尚待 CI 从固定源码重新构建，Windows 已有 valid/corrupt MP3 生成与两端检查尚须重跑；本地恢复的 SDK 没有被修改，也不作为补丁已执行的证据。**
+
+现有测试增加只读入口，允许直接复验保留的原始 Windows 录制，不要求生成 manifest 或更改输入：
+
+```sh
+legacy_mp3_recording_tests --inspect-recording path/to/windows-h264-mp3.mp4
+```

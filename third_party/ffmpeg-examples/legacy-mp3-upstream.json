@@ -5,6 +5,71 @@
   "blob": "1e5034233165996a361c811bf2667a82fc4738eb",
   "license": "MIT",
   "copyright": "Copyright (c) 2026 NAMEWTA",
-  "use": "Reuse the same-project native MF H.264+MP3 fixture generator and late-MP3 corruption test. Unmodified actual codec/data tests; both platforms must inspect the exact Windows-generated manifest hashes.",
-  "scope": "No physical audio/desktop acquisition or timing drift evidence. The pinned FFmpeg dependency must include the native MP3 decoder and mpegaudio parser. Actual validation in this branch remains pending."
+  "use": "Reuse the same-project native MF H.264+MP3 fixture generator and strict full-track compatibility assertions. Locate compressed container samples through the mature MOV index API; parsed MPEG audio frame positions are not physical MP4 sample positions. Both platforms still inspect the exact Windows-generated manifest hashes.",
+  "scope": "No physical audio/desktop acquisition or timing drift evidence. The pinned FFmpeg dependency includes the native MP3 decoder and mpegaudio parser. The new shared adapter passed the original Windows file plus all 25 existing H.264/AAC/HEVC fixtures; native CI must still compile and validate controlled strict MPEG audio patch 0002 with the existing Windows fixture generator. --inspect-recording provides read-only revalidation of a preserved original native recording.",
+  "formatLocationReview": {
+    "repository": "https://github.com/FFmpeg/FFmpeg.git",
+    "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+    "sources": [
+      {
+        "path": "libavformat/demux.c",
+        "blob": "99029d422142850b1fec9d3779c7c5d4bfb18344",
+        "license": "LGPL-2.1-or-later",
+        "use": "Read parse_packet: after a container sample yields its first codec frame, pkt.pos is reset to -1; split-frame positions do not form a physical sample index."
+      },
+      {
+        "path": "libavformat/avformat.h",
+        "blob": "ef2b08c4f3fc2ea73712b20c4a0e391adabc6fa7",
+        "license": "LGPL-2.1-or-later",
+        "use": "Use avformat_index_get_entries_count / avformat_index_get_entry to locate bounded complete MOV samples without reimplementing the MP4 box or MP3 bitstream parser."
+      },
+      {
+        "path": "libavcodec/parser.c",
+        "blob": "cf5d65ee1699eb6a81f4da8df41edc6a503c5241",
+        "license": "LGPL-2.1-or-later",
+        "use": "Verify unknown position semantics for later parsed frames from the same container sample."
+      },
+      {
+        "path": "libavcodec/mpegaudio_parser.c",
+        "blob": "8c33d36dfefa29a38c54a003fed85bd5968fa7b6",
+        "license": "LGPL-2.1-or-later",
+        "use": "Read actual MPEG audio framing and buffering to distinguish codec frames from original MOV samples; no parser implementation is copied."
+      }
+    ]
+  },
+  "actualReadOnlyEvidence": {
+    "date": "2026-11-25",
+    "ciJob": 139203834690,
+    "file": "windows-h264-mp3.mp4",
+    "sha256": "f973e77db41997d020538094ec4a2e0e7ebf5133843e64db867f98401298c9b2",
+    "container": "mov/mp4",
+    "video": {
+      "codec": "h264",
+      "width": 352,
+      "height": 288,
+      "containerSamples": 51
+    },
+    "audio": {
+      "codec": "mp3",
+      "sampleRate": 44100,
+      "channels": 2,
+      "containerSamples": 51,
+      "parsedFrames": 80,
+      "parsedFramesWithoutPhysicalPosition": 29
+    },
+    "physicalLateSample": {
+      "position": 308834,
+      "bytes": 1252
+    },
+    "checks": "Fixed SDK strict compilation and read-only real-file index inspection passed; original SHA256 unchanged. The revised production inspector retains official MOV/parser/side-data behavior and compares every MP3 parser output byte to its original indexed file range. Both original and readback-enabled decode paths yielded 51 video frames, 80 audio frames and 92155 samples with identical PCM SHA256 and one identical final 5-sample discard side datum. No new damaged file was generated. The additional strict MPEG audio library patch and Windows valid/corrupt fixture workflow still require rebuilt CI libraries.",
+    "decodedAudio": {
+      "frames": 80,
+      "samples": 92155,
+      "pcmSha256": "5307b313b5f1ab1fa17b661336416bdb0f0e192ff564fd3a8c69acf002942376",
+      "lastFrameDiscard": 5,
+      "sideDataPts": 90504,
+      "sideDataDuration": 1152,
+      "indexedReadbackChangedPcmOrSideData": false
+    }
+  }
 }

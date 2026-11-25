@@ -9,10 +9,12 @@
 | 主程序如何装配服务、处理无托盘桌面并等待真实退出？ | [Qt 应用生命周期](qt-application.md) |
 | 完整包如何选择、校验、流式下载并保护现有安装？ | [Qt 更新服务](qt-updates.md) |
 | 同一 Qt 程序如何部署成 Windows 安装包/ZIP 和 Linux DEB/AppImage？ | [Qt 安装树与打包](qt-packaging.md) |
+| 怎样实际安装、启动、重装和卸载四种包并核对用户数据保留？ | [安装生命周期验证](installation-validation.md) |
 | Qt 编辑器怎样保留九工具与原版焦点、参数和输出语义？ | [共享编辑器合同](qt-editor.md) |
 | 多个编辑或贴图窗口怎样恢复旧工具参数，保护未知配置与原文件？ | [编辑工具偏好](editor-preferences.md) |
 | 设置、历史、关于页怎样共用控件并等待真实服务结果？ | [共享桌面窗口](qt-desktop.md) |
 | 剪贴板如何确认发布，回收和文件定位如何保留真实结果？ | [桌面系统服务](desktop-integration.md) |
+| 文件定位测试怎样等待真实 Explorer 完成，避免目录删除后的窗口遮挡？ | [Shell 生命周期证据](file-revealer-test-evidence.md) |
 | 编辑输出、历史预览和清理怎样由应用连接真实服务？ | [媒体工作区](media-workspace.md) |
 | 二维码怎样共享原解码器、字符转换和像素预算？ | [二维码识别](qr-recognition.md) |
 | 如何构建固定 LocalSend core，验证真实 TLS 与文件提交？ | [LocalSend core 适配](localsend-core.md) |

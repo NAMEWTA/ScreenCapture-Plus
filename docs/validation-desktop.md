@@ -30,6 +30,7 @@ Portal-wlr 0.8.1 的 CPU/SHM 路径使用 `ext-image-copy-capture-v1` 与
 | wayland-protocols | 1.41 | Wayland GitHub 镜像；固定生成协议的 XML 和版权声明 |
 | libdrm | 2.4.124 | Deepin 源码导入；满足实际源码的格式、修饰符与 API 要求 |
 | pixman | 0.44.0 | Deepin 源码导入；实际软件渲染，满足 wlroots 的版本要求 |
+| libinput | 1.26.0 | Deepin 源码导入；Sway 公共配置与命令使用的完整输入类型，硬件 backend 仍关闭 |
 | Portal-wlr | 0.8.1 | 官方仓库；真实 ScreenCast 与 PipeWire producer |
 
 完整 commit、Meson 选项、canonical upstream 地址和许可证路径均在
@@ -46,6 +47,12 @@ SHA256 核对后应用。版权文本复制到私有安装树的
 关闭 DRM/libinput/X11 硬件 backend、GPU renderer、Xwayland、session 和无关
 桌面组件；wlroots 的 headless/Wayland backend、pixman renderer 与 SHM allocator
 仍是上游真实实现。此配置不能证明 GPU、输入设备或物理显示器支持。
+
+Sway 即使关闭 libinput backend，仍会在公共配置和输入命令中无条件包含
+`libinput.h`，其中 clickfinger 映射枚举从 libinput 1.26 才存在。不能只补一个
+旧系统头文件或伪造这些声明。私有前缀先由固定完整 libinput 源码构建并安装，
+Sway 的 Meson 功能探测和编译都从该前缀取头文件；宿主只提供其 libudev、
+mtdev、libevdev 构建依赖。此库及工具也只属于测试桌面，不随产品分发。
 
 `build-info.json` 记录所有固定来源、实际版本、Sway/swaymsg/Portal-wlr 的
 SHA256 与 `ldd`、私有动态库及符号链接。运行 wrapper 先核对当前 lock、

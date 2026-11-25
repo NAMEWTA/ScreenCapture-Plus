@@ -82,6 +82,24 @@
       "blob": "2291c84e53b6b6e77612607f2ce6096f3efddaca",
       "license": "LGPL-2.1-or-later",
       "focus": "Review fixed optimized output row rounding after the genuine 252x190 CI MP4 reproduced a 16-byte write beyond a tightly packed destination. Keep native optimized kernels; satisfy their storage contract with AVFrame allocation."
+    },
+    {
+      "path": "libavcodec/parser.c",
+      "blob": "cf5d65ee1699eb6a81f4da8df41edc6a503c5241",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Read original input/frame-offset handling and ff_combine_frame buffering before separating physical sample coverage from codec frame count; retain the mature internal demux/parser pipeline unchanged."
+    },
+    {
+      "path": "libavcodec/mpegaudio_parser.c",
+      "blob": "8c33d36dfefa29a38c54a003fed85bd5968fa7b6",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Read frame splitting, cross-packet accumulation and resynchronization. Each actual parser output is compared byte-for-byte against concatenated original MOV indexed sample ranges using the same owned QFile, with its underlying native position restored before AVIO resumes. No parser or side-data distribution is reimplemented."
+    },
+    {
+      "path": "libavcodec/mpegaudiodec_template.c",
+      "blob": "1aa124c0ac0a0318336a200e581c35197a3827a0",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Existing decoder silently skips leading zeros and clamps extra frame bytes even under AV_EF_EXPLODE. Controlled 0002 makes exact framed decoding strict without changing default playback recovery; see patches/ffmpeg/upstream.json."
     }
   ],
   "generatedSignals": "The real H.264/AAC fixture encoder directly compiles the pinned mux.c and its documented duration/trailer fix from upstream.json; no decoder result or media packet is mocked.",

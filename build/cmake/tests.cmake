@@ -161,7 +161,7 @@ if(HUHUCAPTURE_QT_VALIDATION)
             set_tests_properties(desktop_clipboard_windows PROPERTIES TIMEOUT 120
                 ENVIRONMENT "QT_QPA_PLATFORM=windows")
             add_test(NAME file_revealer_windows_desktop COMMAND file_revealer_tests --real-desktop)
-            set_tests_properties(file_revealer_windows_desktop PROPERTIES TIMEOUT 60
+            set_tests_properties(file_revealer_windows_desktop PROPERTIES TIMEOUT 120
                 ENVIRONMENT "QT_QPA_PLATFORM=windows")
         else()
             find_program(XVFB_RUN xvfb-run)
@@ -483,6 +483,17 @@ endif()
 
 
 if(HUHUCAPTURE_BUILD_APP)
+    # This external driver launches the unchanged installed product and reads
+    # its actual desktop and loaded modules. It is never linked or installed
+    # into the application; native package lifecycle runs after packaging.
+    add_executable(installation_gui_probe tests/qt/installation_gui_probe.cpp)
+    target_link_libraries(installation_gui_probe PRIVATE huhucapture_screen_capture Qt6::Widgets)
+    set_target_properties(installation_gui_probe PROPERTIES CXX_EXTENSIONS OFF)
+    if(WIN32)
+        target_link_libraries(installation_gui_probe PRIVATE user32 psapi ole32 shell32 uuid)
+    else()
+        target_link_libraries(installation_gui_probe PRIVATE PkgConfig::XCB_CAPTURE)
+    endif()
     add_executable(package_runtime_probe tests/qt/package_runtime_probe.cpp)
     target_link_libraries(package_runtime_probe PRIVATE huhucapture_core Qt6::Network)
     if(WIN32)

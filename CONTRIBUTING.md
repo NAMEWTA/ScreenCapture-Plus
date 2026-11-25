@@ -43,6 +43,11 @@ huhucapture 在 `main` 维护。修改围绕一个可观察的问题，说明改
 
 完整 Qt 应用使用 `qt-application-linux` / `qt-application-windows` 预设和相同的 `HUHUCAPTURE_BUILD_APP=ON` 生产目标。固定依赖恢复完成后，构建、测试、安装按 [Qt 打包](docs/qt-packaging.md) 执行。关闭 `BUILD_TESTING` 必须仍能构建、安装全部生产服务；只在测试模块发现 Python、Xvfb 和 D-Bus 测试启动器。跨平台正式产物须来自同一源提交，依次通过组件、完整应用、安装树、包内运行库、实际安装升级和 Issue 必要验收。
 
+已生成的四种包继续按 [安装生命周期验证](docs/installation-validation.md) 执行
+真实系统安装/移除和产品 GUI 旅程，并逐阶段核对配置、媒体和未知文件。
+保持包的原始构建身份；开发包用于取得实际证据，同版本重装与跨版本升级
+分别记录。独立测试程序不随产品安装，也不给产品增加跳过真实初始化的入口。
+
 仍在维护的 Windows 回归入口为：
 
 ```powershell

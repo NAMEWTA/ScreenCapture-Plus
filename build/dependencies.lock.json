@@ -111,6 +111,10 @@
           {
             "path": "third_party/patches/ffmpeg/0001-strict-mov-validation.patch",
             "sha256": "8d459a15f6659b16ebd6d81dab8f177623fc5096eb6307704f82ffce8b803a6f"
+          },
+          {
+            "path": "third_party/patches/ffmpeg/0002-strict-mpeg-audio-frame-extents.patch",
+            "sha256": "d4de3d723dc9f454e3189b58def7e7fac5f16c8bc03da6d5bafbe7c8edbebd92"
           }
         ]
       }
@@ -267,6 +271,18 @@
         "licenseFiles": ["COPYING"],
         "pkgConfig": "pixman-1",
         "mesonOptions": ["-Dtests=disabled", "-Ddemos=disabled", "-Dgtk=disabled", "-Dlibpng=disabled"]
+      },
+      "libinput": {
+        "repository": "https://github.com/deepin-community/libinput.git",
+        "upstreamRepository": "https://gitlab.freedesktop.org/libinput/libinput.git",
+        "sourceKind": "Deepin source import, not an upstream Git commit; no Debian packaging scripts or patches applied",
+        "version": "1.26.0",
+        "commit": "87f1dabb26a8c7b0a2b3d5043235c004c3ca26c7",
+        "license": "MIT with retained per-file Linux input-header notices",
+        "licenseFiles": ["COPYING"],
+        "pkgConfig": "libinput",
+        "mesonOptions": ["-Dtests=false", "-Dinstall-tests=false", "-Ddocumentation=false", "-Ddebug-gui=false", "-Dlibwacom=false", "-Dzshcompletiondir=no"],
+        "scope": "Sway 1.11 unconditionally includes libinput public types even with the wlroots input backend disabled; clickfinger enums require 1.26"
       },
       "wlroots": {
         "repository": "https://github.com/deepin-community/wlroots.git",

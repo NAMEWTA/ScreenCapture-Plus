@@ -108,7 +108,7 @@ struct Input {
             avformat_find_stream_info(context, nullptr) >= 0, "Read actual MP4 stream descriptions");
     }
 };
-std::pair<qint64, int> lateMp3Packet(const QString& path)
+std::pair<qint64, int> lateMp3Sample(const QString& path)
 {
     Input input; input.open(path);
     unsigned audio{}, video{}; int audioIndex = -1;
@@ -123,17 +123,24 @@ std::pair<qint64, int> lateMp3Packet(const QString& path)
         }
     }
     require(audio == 1 && video == 1, "The legacy fixture has one real video and one real MP3 track");
-    std::vector<std::pair<qint64, int>> packets;
-    int status{};
-    while ((status = av_read_frame(input.context, input.packet)) >= 0) {
-        if (input.packet->stream_index == audioIndex) {
-            require(input.packet->pos >= 0 && input.packet->size > 4, "Locate actual compressed MP3 samples in the container");
-            packets.emplace_back(input.packet->pos, input.packet->size);
-        }
-        av_packet_unref(input.packet);
+    // MP4 container samples and MPEG audio frames are different units. The
+    // actual Windows encoder packs up to three MP3 frames in one MOV sample;
+    // libavformat's mature parser gives later split frames pos == -1. Use the
+    // demuxer's official physical sample index, not parsed-frame positions.
+    auto* audioTrack = input.context->streams[audioIndex];
+    const auto count = avformat_index_get_entries_count(audioTrack);
+    require(count > 32 && count <= input.size / 5,
+        "The real MP3 encoder produced a bounded container sample sequence suitable for late corruption");
+    std::pair<qint64, int> selected;
+    for (int index = 0; index < count; ++index) {
+        const auto* entry = avformat_index_get_entry(audioTrack, index);
+        require(entry && entry->pos >= 0 && entry->size > 4 && entry->pos <= input.size &&
+            entry->size <= input.size - entry->pos, "Locate each actual compressed MP3 container sample within the physical file");
+        if (index == count * 3 / 4) selected = {entry->pos, entry->size};
     }
-    require(status == AVERROR_EOF && packets.size() > 32, "The real MP3 encoder produced a sequence suitable for late corruption");
-    return packets[packets.size() * 3 / 4];
+    require(input.file.seek(selected.first) && input.file.read(selected.second).size() == selected.second,
+        "Read the entire selected actual MP3 container sample before using its physical range");
+    return selected;
 }
 
 #ifdef _WIN32
@@ -230,12 +237,12 @@ void generate(const QString& directory)
     checked(writer->Finalize(), "Drain actual Windows H.264/MP3 codecs and write the MP4 trailer"); writer.Release();
     checked(bytes->Flush(), "Flush completed native recording"); checked(bytes->Close(), "Close completed native recording");
     bytes.Release(); stream.Release(); require(descriptor.close(error), "Close the final native file handle");
-    const auto position = lateMp3Packet(file);
+    const auto position = lateMp3Sample(file);
     const auto corrupted = directory + QStringLiteral("/windows-corrupt-late-mp3.mp4");
     require(QFile::copy(file, corrupted), "Preserve the valid native recording before corrupting another owned copy");
     QFile output(corrupted); const QByteArray invalid(position.second, '\0');
     require(output.open(QIODevice::ReadWrite) && output.seek(position.first) && output.write(invalid) == invalid.size() && output.flush(),
-        "Corrupt a physically located late compressed MP3 packet, leaving the video and early audio intact"); output.close();
+        "Corrupt a physically located late compressed MP3 container sample, leaving the video and early audio intact"); output.close();
     QJsonArray cases;
     for (const auto& name : {QStringLiteral("windows-h264-mp3.mp4"), QStringLiteral("windows-corrupt-late-mp3.mp4")})
         cases.append(QJsonObject{{QStringLiteral("file"), name}, {QStringLiteral("accept"), name == QStringLiteral("windows-h264-mp3.mp4")},
@@ -247,12 +254,16 @@ void generate(const QString& directory)
         {QStringLiteral("audioCodec"), QStringLiteral("mp3")}, {QStringLiteral("cases"), cases}});
 }
 #endif
-void inspect(const QString& directory)
+void requireDecoderProfile()
 {
     require(avcodec_version() == LIBAVCODEC_VERSION_INT && LIBAVCODEC_VERSION_INT == AV_VERSION_INT(63, 1, 102),
         "Use the actual pinned FFmpeg 9.0.2 decoder ABI");
     require(avcodec_find_decoder(AV_CODEC_ID_MP3) != nullptr, "The actual production dependency includes its legacy MP3 decoder");
     auto* parser = av_parser_init(AV_CODEC_ID_MP3); require(parser != nullptr, "The actual dependency includes the MPEG audio parser"); av_parser_close(parser);
+}
+void inspect(const QString& directory)
+{
+    requireDecoderProfile();
     QFile file(directory + QStringLiteral("/legacy-mp3-manifest.json"));
     require(file.open(QIODevice::ReadOnly), "Load the actual Windows-generated legacy-audio manifest");
     const auto manifest = QJsonDocument::fromJson(file.readAll()).object();
@@ -272,7 +283,7 @@ void inspect(const QString& directory)
         if (accepted && result.failure) throw std::runtime_error("Native legacy MP3 recording was rejected: " + result.failure.detail.toStdString());
         require(!result.failure == accepted, "The complete decoder must reject late corrupt audio even when video preview succeeds");
         if (accepted) {
-            lateMp3Packet(path);
+            lateMp3Sample(path);
             require(result.frames == videoFrames && result.dimensions == QSize(width, height), "Every encoded native video frame survives full-track validation");
         }
         std::cout << "PASS " << name.toStdString() << ": accepted=" << !result.failure << ", frames=" << result.frames << '\n';
@@ -285,6 +296,23 @@ int main(int argc, char** argv)
 {
     QCoreApplication application(argc, argv);
     try {
+        if (argc == 3 && std::string(argv[1]) == "--inspect-recording") {
+            // Recheck a preserved CI recording without a generated manifest,
+            // creating an altered file or invoking the Windows generator.
+            requireDecoderProfile();
+            const auto path = QDir::cleanPath(QString::fromLocal8Bit(argv[2]));
+            const auto before = sha256(path);
+            const auto result = media::inspectVideo(path);
+            if (result.failure) throw std::runtime_error("Native legacy MP3 recording was rejected: " + result.failure.detail.toStdString());
+            require(result.frames == videoFrames && result.dimensions == QSize(width, height),
+                "Every preserved native video frame survives complete H.264/MP3 validation");
+            const auto sample = lateMp3Sample(path);
+            require(sha256(path) == before, "Read-only validation must preserve the complete original recording");
+            std::cout << "PASS read-only native H.264/MP3 recording: frames=" << result.frames
+                      << ", physicalSample=" << sample.first << "+" << sample.second
+                      << ", sha256=" << before.toStdString() << '\n';
+            return 0;
+        }
 #ifdef _WIN32
         if (argc == 3 && std::string(argv[1]) == "--generate") {
             const auto directory = QDir(QString::fromLocal8Bit(argv[2])).absolutePath();

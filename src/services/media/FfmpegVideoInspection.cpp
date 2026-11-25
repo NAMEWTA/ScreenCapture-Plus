@@ -18,6 +18,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <climits>
 #include <cmath>
@@ -99,6 +100,49 @@ struct Input {
         return static_cast<Input*>(opaque)->stop.stop_requested() ? 1 : 0;
     }
 
+    Failure compareOriginal(std::int64_t offset, std::span<const std::uint8_t> expected)
+    {
+        if (offset < 0 || offset > size || expected.size() > static_cast<std::uint64_t>(size - offset))
+            return invalid("Parsed audio exceeds its indexed physical sample range");
+        // Only this worker uses the owned QFile. Native AVIO can retain buffered
+        // bytes while the underlying QFile points ahead of them, so restore the
+        // actual QFile position, not avio_tell or an inferred packet position.
+        const auto saved = file.pos();
+        if (saved < 0) return {Error::Read, QStringLiteral("Cannot preserve the native input position")};
+        struct Position {
+            Input& owner;
+            qint64 saved;
+            bool attempted{};
+            bool restore()
+            {
+                attempted = true;
+                if (owner.file.seek(saved)) return true;
+                owner.readFailed = true;
+                return false;
+            }
+            ~Position() { if (!attempted) restore(); }
+        } position{*this, saved};
+        Failure failure;
+        if (!file.seek(offset)) failure = {Error::Read, file.errorString()};
+        else {
+            std::array<std::uint8_t, 32768> original;
+            while (!expected.empty()) {
+                if (stop.stop_requested()) { failure = cancelled(); break; }
+                const auto count = std::min(original.size(), expected.size());
+                const auto read = file.read(reinterpret_cast<char*>(original.data()), static_cast<qint64>(count));
+                if (read < 0) { failure = {Error::Read, file.errorString()}; break; }
+                if (read != static_cast<qint64>(count)) { failure = invalid("Indexed audio bytes ended before the parsed codec frame"); break; }
+                if (std::memcmp(original.data(), expected.data(), count)) {
+                    failure = invalid("MPEG audio parser skipped, reordered or replaced original sample bytes"); break;
+                }
+                expected = expected.subspan(count);
+            }
+        }
+        if (!position.restore() && !failure)
+            failure = {Error::Read, QStringLiteral("Cannot restore the native input position after sample verification")};
+        return failure;
+    }
+
     static int denyExternal(AVFormatContext*, AVIOContext**, const char*, int, AVDictionary**)
     {
         return AVERROR(EPERM);
@@ -166,7 +210,9 @@ struct Input {
 struct Track {
     AVStream* stream{};
     Codec codec;
-    std::uint64_t packets{};
+    std::uint64_t containerSamples{};
+    int sampleBytesRead{};
+    bool parsedMpegAudio{};
     std::uint64_t frames{};
     int checkedEntries{};
     bool video{};
@@ -188,6 +234,34 @@ Failure checkIndex(Input& input, Track& track, const Limits& limits)
             return invalid("Declared MP4 sample extends outside the physical file");
     }
     track.checkedEntries = count;
+    return {};
+}
+
+Failure consumeIndexedAudio(Input& input, Track& track, const AVPacket& packet)
+{
+    // The MOV index counts original samples, while the mature MPEG parser can
+    // split one sample into several frames with pos == -1. Compare each frame
+    // against the concatenation of real indexed ranges, without changing the
+    // official parser, timestamps, skip/discard distribution or decoder input.
+    std::span<const std::uint8_t> remaining(packet.data, static_cast<std::size_t>(packet.size));
+    while (!remaining.empty()) {
+        if (input.stop.stop_requested()) return cancelled();
+        if (track.containerSamples >= static_cast<std::uint64_t>(track.checkedEntries))
+            return invalid("MPEG audio parser returned bytes beyond the complete MOV sample index");
+        const auto* entry = avformat_index_get_entry(track.stream, static_cast<int>(track.containerSamples));
+        if (!entry || entry->pos < 0 || entry->size <= track.sampleBytesRead)
+            return invalid("MPEG audio physical sample cursor became invalid");
+        const auto count = std::min(remaining.size(), static_cast<std::size_t>(entry->size - track.sampleBytesRead));
+        if (entry->pos > input.size || track.sampleBytesRead > input.size - entry->pos)
+            return invalid("MPEG audio physical sample cursor exceeds the input file");
+        if (auto failure = input.compareOriginal(entry->pos + track.sampleBytesRead, remaining.first(count))) return failure;
+        remaining = remaining.subspan(count);
+        track.sampleBytesRead += static_cast<int>(count);
+        if (track.sampleBytesRead == entry->size) {
+            ++track.containerSamples;
+            track.sampleBytesRead = 0;
+        }
+    }
     return {};
 }
 
@@ -221,6 +295,7 @@ Failure openTracks(Input& input, const Limits& limits, std::vector<Track>& track
         Track track;
         track.stream = stream;
         track.video = video;
+        track.parsedMpegAudio = parameters->codec_id == AV_CODEC_ID_MP3;
         track.codec.reset(avcodec_alloc_context3(decoder));
         if (!track.codec) return budget("Cannot allocate the track decoder");
         int code = avcodec_parameters_to_context(track.codec.get(), parameters);
@@ -368,15 +443,21 @@ DecodeResult decode(const QString& path, const Limits& limits, std::stop_token s
         const auto found = std::ranges::find_if(tracks, [&](const Track& track) { return track.stream->index == packet->stream_index; });
         if (found != tracks.end()) {
             auto& track = *found;
-            if (packet->flags & AV_PKT_FLAG_CORRUPT || packet->size <= 0 || packet->pos < 0 || packet->pos > input.size ||
-                packet->size > input.size - packet->pos) {
+            if (packet->flags & AV_PKT_FLAG_CORRUPT || !packet->data || packet->size <= 0 || packet->pos < -1 ||
+                packet->pos > input.size ||
+                (!track.parsedMpegAudio && (packet->pos < 0 || packet->pos > input.size || packet->size > input.size - packet->pos))) {
                 result.inspection.failure = invalid("Demuxer returned an incomplete or corrupt MP4 packet"); return result;
             }
             if (static_cast<std::uint64_t>(packet->size) > limits.maximumImageBytes) {
                 result.inspection.failure = budget("Compressed packet exceeds the byte budget"); return result;
             }
             if (!firstOnly && (result.inspection.failure = checkIndex(input, track, limits))) return result;
-            ++track.packets;
+            if (track.parsedMpegAudio) {
+                if (track.stream->codecpar->codec_id != AV_CODEC_ID_MP3) {
+                    result.inspection.failure = invalid("The declared MPEG audio codec changed during parsing"); return result;
+                }
+                if ((result.inspection.failure = consumeIndexedAudio(input, track, *packet))) return result;
+            } else ++track.containerSamples;
             if ((result.inspection.failure = send(track, packet.get()))) return result;
             if (static_cast<bool>(result.firstFrame)) return result;
         }
@@ -396,7 +477,8 @@ DecodeResult decode(const QString& path, const Limits& limits, std::stop_token s
             // the final complete index again instead of trusting only its tail.
             track.checkedEntries = 0;
             if ((result.inspection.failure = checkIndex(input, track, limits))) return result;
-            if (!track.checkedEntries || track.packets != static_cast<std::uint64_t>(track.checkedEntries)) {
+            if (!track.checkedEntries || track.sampleBytesRead ||
+                track.containerSamples != static_cast<std::uint64_t>(track.checkedEntries)) {
                 result.inspection.failure = invalid("MP4 ended before every declared sample was read"); return result;
             }
         }

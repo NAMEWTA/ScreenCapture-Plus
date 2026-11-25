@@ -68,6 +68,13 @@ def main() -> None:
     def build_component(name: str, spec: dict) -> None:
         source = workspace / f"{name}-source"
         build = workspace / f"{name}-build"
+        component_env = env.copy()
+        if name == "sway":
+            # With the headless-only wlroots build Sway does not request the
+            # libinput pkg-config dependency, but its shared configuration and
+            # command sources still include >=1.26 types unconditionally. The
+            # same fixed public header must reach feature probes and compile.
+            component_env["C_INCLUDE_PATH"] = str(prefix / "include")
         checkout(spec, source, env)
         for patch in spec.get("patches", []):
             path = root / patch["path"]
@@ -77,9 +84,9 @@ def main() -> None:
             run("git", "apply", str(path), cwd=source, env=env)
         run("meson", "setup", str(build), str(source), "--wrap-mode=nodownload",
             "--prefix=" + str(prefix), "--libdir=lib", "--libexecdir=libexec", "--buildtype=release",
-            *spec["mesonOptions"], env=env)
-        run("meson", "compile", "-C", str(build), "-j", str(args.jobs), env=env)
-        run("meson", "install", "-C", str(build), env=env)
+            *spec["mesonOptions"], env=component_env)
+        run("meson", "compile", "-C", str(build), "-j", str(args.jobs), env=component_env)
+        run("meson", "install", "-C", str(build), env=component_env)
         if "pkgConfig" in spec:
             actual = subprocess.check_output(["pkg-config", "--modversion", spec["pkgConfig"]],
                 env=env, text=True).strip()
@@ -93,7 +100,8 @@ def main() -> None:
     # drive that path. Build compatible upstream code instead of modifying
     # the protocol implementation or treating failed capture as a pass.
     for name, key in (("wayland", "wayland"), ("wayland-protocols", "waylandProtocols"),
-                      ("libdrm", "libdrm"), ("pixman", "pixman"), ("wlroots", "wlroots"), ("sway", "sway")):
+                      ("libdrm", "libdrm"), ("pixman", "pixman"), ("libinput", "libinput"),
+                      ("wlroots", "wlroots"), ("sway", "sway")):
         build_component(name, specification[key])
     backend = specification["backend"]
     build_component("portal-wlr", backend)
@@ -123,7 +131,7 @@ def main() -> None:
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "symlink": os.readlink(path) if path.is_symlink() else None})
     versions = {}
-    for package in ("libpipewire-0.3", "wayland-client", "wayland-protocols", "wlroots-0.19", "pixman-1", "inih", "gbm", "libdrm", "libsystemd"):
+    for package in ("libpipewire-0.3", "wayland-client", "wayland-protocols", "wlroots-0.19", "pixman-1", "inih", "gbm", "libdrm", "libsystemd", "libinput"):
         versions[package] = subprocess.check_output(["pkg-config", "--modversion", package],
             env=env, text=True).strip()
     metadata = {

@@ -132,6 +132,13 @@ python3 scripts/package-qt.py aggregate \
 
 ## 已有自动化和仍需完成的验收
 
+完整包生成后，`qt-application.yml` 继续调用独立的
+[`实际安装生命周期验证`](installation-validation.md)：Windows 执行真实 NSIS
+安装/重装/卸载，Linux 执行 apt/dpkg 安装/重装/移除，ZIP/AppImage 分别执行
+文件式替换与移除。独立原生 GUI 探针运行未修改的产品、实际拖选并读回像素，
+核对包内运行库和正常退出；每阶段保留配置与媒体 hash。实现和入口已接入，
+通过与否以实际同提交流水线结果为准；同版本重装不计为跨版本升级。
+
 `python3 tests/package_metadata_tests.py` 使用真实文件、真实 ZIP、真实编译器生成的 ELF 元数据探针，验证改动检测、越界符号链接、资产身份、传输头、排他写入、嵌入身份与旁置记录不一致，以及脏源码的正式模式拒绝。这些测试不伪造可安装产品，也不把 metadata probe 计为应用安装证据。
 
 安装目录的 TLS 实测使用单独编译的 `package_runtime_probe`，然后运行：

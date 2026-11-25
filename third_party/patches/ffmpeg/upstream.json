@@ -20,6 +20,22 @@
         "linuxJob": 139051576055,
         "finding": "Unpatched strict-input FFmpeg accepted the real stsz-extra-entry.mp4 as 251 decoded frames; every other case matched. Shared MF full validation independently accepted four damaged audio/video cases on Windows job 139053165531."
       }
+    },
+    {
+      "path": "0002-strict-mpeg-audio-frame-extents.patch",
+      "sha256": "d4de3d723dc9f454e3189b58def7e7fac5f16c8bc03da6d5bafbe7c8edbebd92",
+      "source": "libavcodec/mpegaudiodec_template.c",
+      "sourceBlob": "1aa124c0ac0a0318336a200e581c35197a3827a0",
+      "copyright": "Copyright (c) 2001, 2002 Fabrice Bellard",
+      "scope": "Only AV_EF_EXPLODE callers: reject skipped leading bytes and an input frame extent different from the size computed by the existing MPEG audio decoder. The inspector supplies one frame from the existing official parser, after exact original-byte coverage checks.",
+      "compatibility": "Default playback recovery is unchanged. Strict callers must supply complete individually framed MPEG audio packets; the application uses the existing parser rather than calculating codec frame headers itself.",
+      "necessity": "mpegaudio_parser.c / ff_combine_frame may output a zero prefix and subsequent valid frame as unchanged original bytes. An exact parser byte ledger therefore cannot observe decode_frame silently skipping those zeros and shrinking the buffer. The public send/receive API does not expose the decoder consumed prefix or original header frame size. The narrow strict check uses those existing native values.",
+      "localVerification": "Forward and reverse git apply --check passed against the exact verified original source Git blob. Native compilation/runtime of this additional library patch is pending CI; the restored SDK is not modified or presented as a patched binary.",
+      "upstreamReview": {
+        "date": "2026-11-25",
+        "masterSourceBlob": "88748342a70f0a64f55f22aaad2827103b41f617",
+        "finding": "The reviewed master decode_frame still skips leading zero bytes and clamps a larger input to the native frame extent without an AV_EF_EXPLODE check. No corresponding implementation fix is present in that source."
+      }
     }
   ],
   "upstreamReview": {
