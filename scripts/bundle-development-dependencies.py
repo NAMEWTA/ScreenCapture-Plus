@@ -19,7 +19,7 @@ HOST_LIBRARIES = re.compile(r"^(ld-linux.*|lib(c|m|pthread|dl|rt|util|resolv|anl
 HOST_PACKAGES = {"libc6", "libc6-dev", "libc-dev-bin", "linux-libc-dev", "libstdc++6", "libgcc-s1"}
 MODULES = ("gio-2.0", "gio-unix-2.0", "gobject-2.0", "gthread-2.0", "glib-2.0",
            "wayland-client", "wayland-cursor", "wayland-egl", "xkbcommon", "gl", "egl",
-           "xcb", "xcb-keysyms", "xcb-randr")
+           "xcb", "xcb-keysyms", "xcb-randr", "xcb-shm", "xcb-xfixes", "xcb-xtest")
 
 
 def output(*arguments, env=None):
@@ -462,7 +462,10 @@ def restore_bundle(options):
             # Include direct -I/usr and -L/usr flags, while avoiding a partial
             # match in another absolute path. /lib is the runner's /usr merge.
             system = str(bundle / "system/usr")
-            after = re.sub(r"(?:(?<=-I)|(?<=-L)|(?<![A-Za-z0-9_/]))/(usr|lib)(?=/|\s|$)",
+            # A path after ${prefix} is already relative to the relocated
+            # prefix. Match only standalone absolute paths, not the /lib in
+            # ${prefix}/lib (which used to duplicate the complete SDK path).
+            after = re.sub(r"(?:(?<=-I)|(?<=-L)|(?<==)|(?<=[\s\"'])|^)/(usr|lib)(?=/|\s|$)",
                            lambda match: system + ("/lib" if match.group(1) == "lib" else ""), after)
         if after != before:
             before_hash = digest(path)
