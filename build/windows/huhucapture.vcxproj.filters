@@ -138,6 +138,15 @@
     <ClCompile Include="..\..\src\services\ImageExport.cpp">
       <Filter>src\services</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\core\QrRecognition.cpp">
+      <Filter>src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\QrText.cpp">
+      <Filter>src\platform</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\QrText.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\services\ImageRecognition.cpp">
       <Filter>src\services</Filter>
     </ClCompile>
@@ -331,6 +340,12 @@
     </ClInclude>
     <ClInclude Include="..\..\src\services\ImageExport.h">
       <Filter>src\services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\QrRecognition.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\QrText.h">
+      <Filter>src\platform</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\services\ImageRecognition.h">
       <Filter>src\services</Filter>

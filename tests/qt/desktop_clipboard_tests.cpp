@@ -12,6 +12,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QWidget>
+#include <QWindow>
 #include <functional>
 #include <future>
 #include <iostream>
@@ -175,6 +176,13 @@ public:
     {
         quint64 token{};
         if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
+            // show() only submits the initial surface/configure work. The real
+            // compositor must expose it before the harness may send input.
+            // The headless seat has no keyboard until wtype connects, so Qt's
+            // keyboard focus cannot be a prerequisite for creating that device;
+            // the harness verifies the compositor's actual focused view instead.
+            waitFor([&] { return origin.isVisible() && origin.windowHandle() && origin.windowHandle()->isExposed(); },
+                "the real compositor exposes the clipboard origin before requesting input");
             origin.action = [&] { token = clipboard.publish(content, origin.windowHandle()); };
             std::cout << "NEED_INPUT\n" << std::flush;
             waitFor([&] { return token != 0; }, "the owned compositor delivers a real F8 input serial");

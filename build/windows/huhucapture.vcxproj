@@ -111,6 +111,18 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\..\src\services\ImageExport.cpp" />
+    <ClCompile Include="..\..\src\core\QrRecognition.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>QUIRC_MAX_REGIONS=65534;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\QrText.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ObjectFileName>$(IntDir)platform_qr_text.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\QrText.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ObjectFileName>$(IntDir)windows_qr_text.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\..\src\services\ImageRecognition.cpp" />
     <ClCompile Include="..\..\src\services\Lang.cpp" />
     <ClCompile Include="..\..\src\services\MediaHistory.cpp" />
@@ -216,6 +228,8 @@
     <ClInclude Include="..\..\src\recording\VideoMp4.h" />
     <ClInclude Include="..\..\src\services\AnnotationRenderer.h" />
     <ClInclude Include="..\..\src\services\ImageExport.h" />
+    <ClInclude Include="..\..\src\core\QrRecognition.h" />
+    <ClInclude Include="..\..\src\platform\QrText.h" />
     <ClInclude Include="..\..\src\services\ImageRecognition.h" />
     <ClInclude Include="..\..\src\services\Lang.h" />
     <ClInclude Include="..\..\src\services\MediaHistory.h" />

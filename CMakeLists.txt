@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 include(build/cmake/version.cmake)
-project(huhucapture VERSION "${HUHUCAPTURE_VERSION}" LANGUAGES CXX)
+project(huhucapture VERSION "${HUHUCAPTURE_VERSION}" LANGUAGES C CXX)
 
 configure_file(src/app/Version.h.in generated/app/Version.h @ONLY)
 add_library(huhucapture_version INTERFACE)
@@ -61,6 +61,25 @@ add_library(huhucapture_media_frames STATIC src/core/MediaFrame.cpp)
 target_link_libraries(huhucapture_media_frames PUBLIC huhucapture_core Threads::Threads)
 set_target_properties(huhucapture_media_frames PROPERTIES CXX_EXTENSIONS OFF)
 
+# Reuse the production decoder and exactly its 16-bit region configuration in
+# both the existing native product and the shared Qt recognition service.
+add_library(huhucapture_quirc STATIC third_party/quirc/quirc.c third_party/quirc/identify.c
+    third_party/quirc/decode.c third_party/quirc/version_db.c)
+target_include_directories(huhucapture_quirc PUBLIC "${PROJECT_SOURCE_DIR}/third_party")
+target_compile_definitions(huhucapture_quirc PUBLIC QUIRC_MAX_REGIONS=65534)
+set_target_properties(huhucapture_quirc PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_library(huhucapture_qr_core STATIC src/core/QrRecognition.cpp src/platform/QrText.cpp)
+target_link_libraries(huhucapture_qr_core PUBLIC huhucapture_core huhucapture_quirc)
+set_target_properties(huhucapture_qr_core PROPERTIES CXX_EXTENSIONS OFF)
+if(WIN32)
+    target_sources(huhucapture_qr_core PRIVATE src/platform/windows/QrText.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(huhucapture_qr_core PRIVATE src/platform/linux/QrText.cpp)
+    target_link_libraries(huhucapture_quirc PUBLIC m)
+else()
+    message(FATAL_ERROR "The supported QR text adapters are Windows x64 and Linux amd64")
+endif()
+
 # Filesystem publication is an OS seam; the archive naming/ownership rules stay
 # shared. This target never depends on Qt or the presentation layer.
 if(WIN32)
@@ -90,6 +109,9 @@ function(huhucapture_test name source)
 endfunction()
 
 if(BUILD_TESTING)
+    huhucapture_test(qr_recognition_tests tests/qr_recognition_tests.cpp)
+    target_include_directories(qr_recognition_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+    target_link_libraries(qr_recognition_tests PRIVATE huhucapture_qr_core)
     huhucapture_test(media_frame_tests tests/media_frame_tests.cpp)
     target_link_libraries(media_frame_tests PRIVATE huhucapture_media_frames)
     huhucapture_test(pixel_buffer tests/PixelBufferTests.cpp)
@@ -129,6 +151,12 @@ if(HUHUCAPTURE_QT_VALIDATION)
     endif()
     # No fallback to a distribution Qt with a different private ABI.
     find_package(Qt6 6.12.1 EXACT REQUIRED COMPONENTS Core Gui Widgets Network Svg)
+    add_library(huhucapture_qr_service STATIC src/services/recognition/QrService.cpp)
+    target_link_libraries(huhucapture_qr_service PUBLIC huhucapture_qr_core Qt6::Core Qt6::Gui)
+    set_target_properties(huhucapture_qr_service PROPERTIES CXX_EXTENSIONS OFF)
+    huhucapture_test(qt_qr_service tests/qt/qr_service_tests.cpp)
+    target_include_directories(qt_qr_service PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+    target_link_libraries(qt_qr_service PRIVATE huhucapture_qr_service Threads::Threads)
     if(WIN32)
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
         # The offscreen Windows plugin supplies a placeholder font engine.
@@ -244,6 +272,17 @@ if(HUHUCAPTURE_QT_VALIDATION)
         else()
             message(FATAL_ERROR "Desktop integration targets Windows x64 and Linux amd64")
         endif()
+        add_library(huhucapture_media_workspace STATIC
+            src/services/media/ArchiveExport.h src/services/media/ArchiveExport.cpp
+            src/services/media/ThumbnailCache.h src/services/media/ThumbnailCache.cpp
+            src/app/MediaWorkspace.h src/app/MediaWorkspace.cpp)
+        set_target_properties(huhucapture_media_workspace PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+        target_link_libraries(huhucapture_media_workspace PUBLIC huhucapture_desktop_services
+            huhucapture_desktop huhucapture_editor Qt6::Concurrent)
+        huhucapture_test(qt_media_workspace tests/qt/media_workspace_tests.cpp)
+        target_link_libraries(qt_media_workspace PRIVATE huhucapture_media_workspace huhucapture_languages)
+        set_tests_properties(qt_media_workspace PROPERTIES TIMEOUT 180
+            ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
         huhucapture_test(desktop_files_tests tests/qt/desktop_files_tests.cpp)
         target_link_libraries(desktop_files_tests PRIVATE huhucapture_desktop_services)
         huhucapture_test(file_revealer_tests tests/qt/file_revealer_tests.cpp)
@@ -528,9 +567,11 @@ if(HUHUCAPTURE_QT_VALIDATION)
         huhucapture_test(qt_video_inspection tests/qt/video_inspection_tests.cpp
             "${HUHUCAPTURE_VIDEO_FIXTURES}" "${PROJECT_BINARY_DIR}/video-inspection/$<CONFIG>")
         target_link_libraries(qt_video_inspection PRIVATE huhucapture_video_inspection Threads::Threads)
-        set_tests_properties(qt_video_inspection PROPERTIES TIMEOUT 240)
+        add_test(NAME qt_hevc_inspection COMMAND qt_video_inspection
+            "${HUHUCAPTURE_VIDEO_FIXTURES}" "${PROJECT_BINARY_DIR}/hevc-inspection/$<CONFIG>" --hevc)
+        set_tests_properties(qt_video_inspection qt_hevc_inspection PROPERTIES TIMEOUT 240)
         if(WIN32)
-            set_tests_properties(qt_video_inspection PROPERTIES ENVIRONMENT_MODIFICATION
+            set_tests_properties(qt_video_inspection qt_hevc_inspection PROPERTIES ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:huhucapture_ffmpeg_avformat>")
         endif()
     endif()

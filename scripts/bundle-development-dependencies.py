@@ -130,6 +130,22 @@ def make_bundle(options):
         if name != "qt":
             information = prefix.parent / "build-info.json"
             metadata["dependencyBuilds"][name] = json.loads(information.read_text())
+    # huhucapture does not use QtSql. The official qtbase archive also ships
+    # optional Oracle/Mimer/etc. drivers whose proprietary client runtimes are
+    # deliberately absent from our build and product. Omit that unused module,
+    # its driver binaries and import metadata together instead of treating an
+    # unresolved optional database driver as an application runtime dependency.
+    # Every retained ELF still has to satisfy the strict closure check below.
+    metadata["excludedQtModule"] = {"name": "QtSql", "reason": "Not linked by huhucapture; external database clients are outside this development SDK", "paths": []}
+    for pattern in ("plugins/sqldrivers", "include/QtSql", "lib/cmake/Qt6Sql*",
+                    "lib/libQt6Sql*", "lib/pkgconfig/Qt6Sql.pc", "modules/Sql.json",
+                    "mkspecs/modules/qt_lib_sql*.pri", "metatypes/qt6sql_*.json"):
+        for path in sorted((bundle / "qt").glob(pattern)):
+            metadata["excludedQtModule"]["paths"].append(str(path.relative_to(bundle / "qt")))
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
     if metadata["dependencyBuilds"]["portal"]["commit"] != lock["qtMigration"]["libportal"]["commit"] or \
        metadata["dependencyBuilds"]["pipewire"]["commit"] != lock["qtMigration"]["pipewire"]["commit"]:
         raise RuntimeError("Installed Portal/PipeWire metadata differ from the lock")
@@ -200,6 +216,15 @@ def make_bundle(options):
     header_packages = tuple(packages)
     packages.update(tool_packages)
     copied_system = {}
+    package_owners = {}
+    package_files = {}
+    for package in header_packages:
+        files = output("dpkg-query", "-L", package).splitlines()
+        package_files[package] = files
+        for filename in files:
+            path = Path(filename)
+            if path.is_file() or path.is_symlink():
+                package_owners[str(path.parent.resolve() / path.name)] = package
 
     def copy_system(path):
         path = Path(path)
@@ -207,7 +232,9 @@ def make_bundle(options):
             return
         if HOST_LIBRARIES.match(path.name):
             return
-        package = owner(path)
+        package = package_owners.get(str(path.parent.resolve() / path.name))
+        if package is None:
+            package = owner(path)
         if package.split(":", 1)[0] in HOST_PACKAGES:
             return
         packages.add(package)
@@ -230,7 +257,7 @@ def make_bundle(options):
             shutil.copy2(normalized, target)
 
     for package in header_packages:
-        files = output("dpkg-query", "-L", package).splitlines()
+        files = package_files[package]
         for filename in files:
             path = Path(filename)
             selected = (filename.startswith("/usr/include/") or "/include/" in filename or

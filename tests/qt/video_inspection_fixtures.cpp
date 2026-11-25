@@ -11,8 +11,10 @@
 #include <QtEndian>
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/error.h>
+#include <libavutil/pixdesc.h>
 int huhucapture_ffmpeg_mux_example_main(int argc, char** argv);
 }
 
@@ -207,17 +209,110 @@ QString digest(const QString& path)
     require(hash.addData(&file), "Read every generated fixture byte for SHA-256");
     return QString::fromLatin1(hash.result().toHex());
 }
+
+void appendCase(QJsonArray& cases, const QString& root, const char* file,
+    bool accepted, int frames, int preview)
+{
+    QJsonObject item;
+    item[QStringLiteral("file")] = QString::fromLatin1(file);
+    item[QStringLiteral("sha256")] = digest(root + QChar(u'/') + QString::fromLatin1(file));
+    item[QStringLiteral("accept")] = accepted;
+    item[QStringLiteral("videoFrames")] = frames;
+    // -1: malformed container may reject preview too; 0: no video;
+    // 1: the undamaged first frame must remain independently usable.
+    item[QStringLiteral("preview")] = preview;
+    cases.append(item);
+}
+
+void writeManifest(const QString& path, const QJsonObject& manifest)
+{
+    QFile output(path);
+    const auto json = QJsonDocument(manifest).toJson();
+    require(output.open(QIODevice::WriteOnly | QIODevice::NewOnly) && output.write(json) == json.size() && output.flush(),
+        "Persist the shared cross-platform fixture manifest without overwriting a previous result");
+}
+
+void generateHevcCases(const QString& root, const QString& source)
+{
+    require(QFile::exists(root + QStringLiteral("/manifest.json")), "Preserve the original real fixture suite");
+    QFile information(source + QStringLiteral("/hevc-source.json"));
+    require(information.open(QIODevice::ReadOnly), "Read real x265 and remux build/encoding evidence");
+    const auto provenance = QJsonDocument::fromJson(information.readAll()).object();
+    const auto encoder = provenance.value(QStringLiteral("x265")).toObject();
+    require(encoder.value(QStringLiteral("version")).toString() == QStringLiteral("4.1") &&
+        encoder.value(QStringLiteral("archiveSha512")).toString() == QStringLiteral(
+            "5af5b958ff507f96a52813a6b72847c9fbc555bf95af287ae7f011055338266fb647dfea3b7789730c7f5c746f7e6cb7d9395ba10cbe43eb5034d3ed99730c3f"),
+        "HEVC fixtures must come from the reviewed fixed x265 source");
+    require(provenance.value(QStringLiteral("ffmpeg")).toObject().value(QStringLiteral("commit")).toString() ==
+        QStringLiteral("946fcce07b6dcd0331c8cc609192aeff5e1924f8"), "HEVC remux must use the fixed FFmpeg source");
+    for (const int depth : {8, 10}) {
+        const auto filename = QStringLiteral("valid-hevc-%1bit.mp4").arg(depth);
+        const auto path = source + QChar(u'/') + filename;
+        const auto recorded = provenance.value(QStringLiteral("fixtures")).toObject().value(filename).toObject();
+        require(digest(path) == recorded.value(QStringLiteral("sha256")).toString(), "The completed HEVC encoder bytes changed");
+        Input input;
+        input.open(path);
+        require(input.format->nb_streams == 2, "HEVC fixture must contain a real video and audio track");
+        const auto* video = input.format->streams[0]->codecpar;
+        const auto* pixels = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(video->format));
+        require(video->codec_type == AVMEDIA_TYPE_VIDEO && video->codec_id == AV_CODEC_ID_HEVC &&
+            video->width == 352 && video->height == 288 &&
+            pixels && pixels->nb_components == 3 && pixels->log2_chroma_w == 1 && pixels->log2_chroma_h == 1 &&
+            !(pixels->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_HWACCEL | AV_PIX_FMT_FLAG_PAL)) &&
+            pixels->comp[0].depth == depth && pixels->comp[1].depth == depth && pixels->comp[2].depth == depth &&
+            video->profile == (depth == 8 ? AV_PROFILE_HEVC_MAIN : AV_PROFILE_HEVC_MAIN_10),
+            "Inspect the real HEVC Main/Main10 metadata instead of relabelling an H.264 file");
+        require(input.format->streams[1]->codecpar->codec_id == AV_CODEC_ID_AAC, "Preserve the actual AAC audio track");
+        require(QFile::copy(path, root + QChar(u'/') + filename), "Claim a new immutable real HEVC fixture");
+    }
+    const auto main = root + QStringLiteral("/valid-hevc-8bit.mp4");
+    const auto main10 = root + QStringLiteral("/valid-hevc-10bit.mp4");
+    const auto fast = root + QStringLiteral("/valid-hevc-faststart.mp4");
+    const auto multi = root + QStringLiteral("/two-hevc-av-tracks.mp4");
+    remux(main, fast, true, true, false, true);
+    remux(main, multi, true, true, true, false);
+    corruptLater(main, root + QStringLiteral("/corrupt-late-hevc8.mp4"), 0);
+    corruptLater(main10, root + QStringLiteral("/corrupt-late-hevc10.mp4"), 0);
+    corruptLater(multi, root + QStringLiteral("/corrupt-second-hevc.mp4"), 2);
+    corruptLater(multi, root + QStringLiteral("/corrupt-hevc-second-audio.mp4"), 3);
+    truncatedCopy(fast, root + QStringLiteral("/truncated-hevc-final-sample.mp4"), 1);
+    truncatedCopy(main, root + QStringLiteral("/truncated-hevc-footer.mp4"), 1);
+    QJsonArray cases;
+    appendCase(cases, root, "valid-hevc-8bit.mp4", true, 251, 1);
+    appendCase(cases, root, "valid-hevc-10bit.mp4", true, 251, 1);
+    appendCase(cases, root, "valid-hevc-faststart.mp4", true, 251, 1);
+    appendCase(cases, root, "two-hevc-av-tracks.mp4", true, 502, 1);
+    appendCase(cases, root, "corrupt-late-hevc8.mp4", false, 0, 1);
+    appendCase(cases, root, "corrupt-late-hevc10.mp4", false, 0, 1);
+    appendCase(cases, root, "corrupt-second-hevc.mp4", false, 0, 1);
+    appendCase(cases, root, "corrupt-hevc-second-audio.mp4", false, 0, 1);
+    appendCase(cases, root, "truncated-hevc-final-sample.mp4", false, 0, -1);
+    appendCase(cases, root, "truncated-hevc-footer.mp4", false, 0, -1);
+    QJsonObject manifest;
+    manifest[QStringLiteral("schema")] = 1;
+    manifest[QStringLiteral("ffmpegCommit")] = QStringLiteral("946fcce07b6dcd0331c8cc609192aeff5e1924f8");
+    manifest[QStringLiteral("generator")] = QStringLiteral("Pinned x265 4.1 CLI Main/Main10 plus FFmpeg 9.0.2 stream-copy mux and remux");
+    manifest[QStringLiteral("hevcSource")] = provenance;
+    manifest[QStringLiteral("cases")] = cases;
+    writeManifest(root + QStringLiteral("/hevc-manifest.json"), manifest);
+    std::cout << "PASS generated " << cases.size() << " additional actual HEVC inspection fixtures\n";
+}
 } // namespace
 
 int main(int argc, char** argv)
 {
     QCoreApplication application(argc, argv);
     try {
+        require(avformat_version() == LIBAVFORMAT_VERSION_INT && LIBAVFORMAT_VERSION_INT == AV_VERSION_INT(63, 1, 102),
+            "Fixture generator must use the pinned FFmpeg 9.0.2 ABI");
+        if (argc == 4 && std::string(argv[1]) == "--hevc") {
+            generateHevcCases(QDir(QString::fromLocal8Bit(argv[2])).absolutePath(),
+                QDir(QString::fromLocal8Bit(argv[3])).absolutePath());
+            return 0;
+        }
         require(argc == 2, "Provide a new private fixture directory");
         const auto root = QDir(QString::fromLocal8Bit(argv[1])).absolutePath();
         require(!QFile::exists(root) && QDir().mkpath(root), "Create an exclusively new fixture directory");
-        require(avformat_version() == LIBAVFORMAT_VERSION_INT && LIBAVFORMAT_VERSION_INT == AV_VERSION_INT(63, 1, 102),
-            "Fixture generator must use the pinned FFmpeg 9.0.2 ABI");
         const auto original = root + QStringLiteral("/valid.mp4");
         claim(original);
         auto name = QByteArray("huhucapture-video-fixtures");
@@ -251,15 +346,7 @@ int main(int argc, char** argv)
 
         QJsonArray cases;
         const auto add = [&](const char* file, bool accepted, int frames, int preview) {
-            QJsonObject item;
-            item[QStringLiteral("file")] = QString::fromLatin1(file);
-            item[QStringLiteral("sha256")] = digest(root + QChar(u'/') + QString::fromLatin1(file));
-            item[QStringLiteral("accept")] = accepted;
-            item[QStringLiteral("videoFrames")] = frames;
-            // -1: malformed container may reject preview too; 0: no video;
-            // 1: the undamaged first frame must remain independently usable.
-            item[QStringLiteral("preview")] = preview;
-            cases.append(item);
+            appendCase(cases, root, file, accepted, frames, preview);
         };
         add("valid.mp4", true, 251, 1);
         add("valid-faststart.mp4", true, 251, 1);
@@ -281,10 +368,7 @@ int main(int argc, char** argv)
         manifest[QStringLiteral("ffmpegCommit")] = QStringLiteral("946fcce07b6dcd0331c8cc609192aeff5e1924f8");
         manifest[QStringLiteral("generator")] = QStringLiteral("Pinned upstream mux.c plus real libavformat remux; faults modify actual encoded file bytes");
         manifest[QStringLiteral("cases")] = cases;
-        QFile output(root + QStringLiteral("/manifest.json"));
-        const auto json = QJsonDocument(manifest).toJson();
-        require(output.open(QIODevice::WriteOnly | QIODevice::NewOnly) && output.write(json) == json.size() && output.flush(),
-            "Persist the shared cross-platform fixture manifest");
+        writeManifest(root + QStringLiteral("/manifest.json"), manifest);
         std::cout << "PASS generated " << cases.size() << " actual MP4 inspection fixtures in " << root.toStdString() << '\n';
         return 0;
     } catch (const std::exception& error) {

@@ -262,7 +262,7 @@
         "--enable-decoder=h264,hevc,aac",
         "--enable-parser=h264,hevc,aac",
         "--enable-demuxer=mov",
-        "--enable-debug=3",
+        "--enable-debug",
         "--disable-stripping"
       ],
       "nasm": {
@@ -284,6 +284,106 @@
         "source": "microsoft/vcpkg scripts/cmake/vcpkg_acquire_msys.cmake blob 81b027d78e3c5c19c8573ab8b1f80a8706a606eb"
       },
       "configuredLicense": "LGPL-2.1-or-later"
+    },
+    "hevcFixtureTools": {
+      "purpose": "CI-only real HEVC Main/Main10 fixture encoders and elementary-stream remuxer; never linked or packaged with the product",
+      "x265": {
+        "version": "4.1",
+        "urls": [
+          "https://downloads.videolan.org/pub/videolan/x265/x265_4.1.tar.gz",
+          "https://downloads.videolan.org/pub/contrib/x265/x265_4.1.tar.gz"
+        ],
+        "sha512": "5af5b958ff507f96a52813a6b72847c9fbc555bf95af287ae7f011055338266fb647dfea3b7789730c7f5c746f7e6cb7d9395ba10cbe43eb5034d3ed99730c3f",
+        "license": "GPL-2.0-or-later",
+        "archiveHashSource": "videolan/vlc contrib/src/x265/SHA512SUMS blob ecd0a04f6a72de0c607390d73e5e850468bf2cea",
+        "reviewMirror": "https://github.com/ShiftMediaProject/x265",
+        "reviewCommit": "5c2b6b749e5bb386fe7ff1a395dfdb72999bb7d0",
+        "reviewedFiles": [
+          {
+            "path": "source/CMakeLists.txt",
+            "blob": "5c6dda9e8cfa9f2aff43b516f74237b04d0952c5"
+          },
+          {
+            "path": "source/x265.cpp",
+            "blob": "d1a362070f4fde07357d9a3de2e6f16572bd0733"
+          },
+          {
+            "path": "source/input/yuv.cpp",
+            "blob": "65d696c4874dafd7c09c5d4b24a063633de05c98"
+          },
+          {
+            "path": "source/output/raw.cpp",
+            "blob": "7894e22fc6b987bf58d5956baa827ffc5d824206"
+          },
+          {
+            "path": "source/x265cli.cpp",
+            "blob": "6ca6fb495205f7e72a75c2093f2ae097d5c90a59"
+          },
+          {
+            "path": "source/abrEncApp.cpp",
+            "blob": "f4cf7b108dcfab3cb4dfd82ed2f7b50d48c56af1"
+          },
+          {
+            "path": "source/x265.h",
+            "blob": "7241beda203f9e8526fce6ad79058224f9e55002"
+          },
+          {
+            "path": "COPYING",
+            "blob": "d5457c93678be27ffeeef24195cfea5d201549e2"
+          }
+        ],
+        "cmake": [
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DENABLE_SHARED=OFF",
+          "-DENABLE_CLI=ON",
+          "-DENABLE_LIBNUMA=OFF",
+          "-DENABLE_HDR10_PLUS=OFF",
+          "-DENABLE_SVT_HEVC=OFF",
+          "-DENABLE_MULTIVIEW=OFF",
+          "-DENABLE_ALPHA=OFF"
+        ],
+        "hostCmake": "Ubuntu official /usr/bin/cmake 3.x; actual dpkg version and executable SHA256 recorded"
+      },
+      "ffmpeg": {
+        "source": "qtMigration.softwareMedia.ffmpeg",
+        "configure": [
+          "--enable-static",
+          "--disable-shared",
+          "--disable-doc",
+          "--disable-autodetect",
+          "--disable-network",
+          "--disable-everything",
+          "--disable-avdevice",
+          "--enable-ffmpeg",
+          "--disable-ffplay",
+          "--disable-ffprobe",
+          "--enable-avfilter",
+          "--enable-avcodec",
+          "--enable-avformat",
+          "--enable-avutil",
+          "--enable-decoder=hevc,aac",
+          "--enable-parser=hevc,aac",
+          "--enable-demuxer=hevc,mov",
+          "--enable-muxer=mp4",
+          "--enable-protocol=file",
+          "--enable-bsf=extract_extradata,setts"
+        ],
+        "purpose": "Stream copy only: upstream HEVC demux/parser -> MP4 mux, plus copied existing AAC; no encoder or external x265 library",
+        "reviewedSourceFiles": [
+          {
+            "path": "libavformat/rawdec.c",
+            "blob": "d0c829dc42911d4b5ff3c0064395eae4b7a58bb6"
+          },
+          {
+            "path": "libavcodec/bsf/setts.c",
+            "blob": "4106eb950e755a9ef570ca04e9c1e49a9155ac87"
+          },
+          {
+            "path": "configure",
+            "blob": "374bd5c1512943439480825f32e448e7871eb61c"
+          }
+        ]
+      }
     }
   }
 }

@@ -27,9 +27,13 @@ these text files at runtime.
 | quirc | https://github.com/dlbeer/quirc; sources inherited from ScreenCapture commit `5e4713e2fbe333873abff911424a212923489ccd` | ISC | QR-code recognition |
 | cgif | https://github.com/dloebl/cgif; sources inherited from the same ScreenCapture commit | MIT | Existing alternate GIF encoder |
 
-The `cgif` and `quirc` C sources have only moved directories. Their original
-upstream revision was not recorded by the inherited project, so the table names
-the exact inherited snapshot rather than inventing an upstream version.
+The inherited upstream revisions of `cgif` and `quirc` were not recorded, so the
+table names the exact inherited snapshot rather than inventing a version.
+`cgif` remains unchanged. The retained `quirc` decoder has two narrowly replayable
+upstream fixes and one local coordinate-arithmetic fix, recorded with hashes and
+author attribution in [quirc/upstream.json](quirc/upstream.json). Its ISC notices
+remain intact. Real QR fixtures are generated with pinned Segno 1.6.6, a
+development-only BSD-3-Clause dependency; see [segno/upstream.json](segno/upstream.json).
 
 gifski has Rust dependencies recorded in its pinned `Cargo.lock`; restoring and
 building with `--locked` preserves that dependency graph. Its AGPL license is
@@ -58,6 +62,7 @@ licenses apply independently of the root application license.
 | FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Linux software validation enables GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The Windows inspection-only profile disables encoders, x264 and network and retains LGPL-2.1-or-later. Both apply the recorded [strict MOV patch](patches/ffmpeg/upstream.json); the mux example retains Fabrice Bellard's MIT notice and frame-duration / finalization-error fixes. |
 | FFmpeg MOV box traversal | Same FFmpeg 9.0.2 commit, `libavformat/mov.c` | LGPL-2.1-or-later, Fabrice Bellard, Baptiste Coudurier and the named original contributors; [exact source and adaptation](ffmpeg-mov/upstream.json), [full LGPL text](ffmpeg-mov/COPYING.LGPLv2.1). Only top-level physical bounds are reused in the shared MP4 preflight. |
 | x264 API build 164 | VideoLAN x264 commit `3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3`, fetched from `mirror/x264` | GPL-2.0-or-later, x264 project; [license text](ffmpeg-examples/COPYING.x264). Runtime use through FFmpeg's existing libx264 adapter. |
+| x265 4.1, validation fixtures only | Official VideoLAN archive with the recorded SHA-512 and reviewed source blobs in [hevc-fixtures/upstream.json](hevc-fixtures/upstream.json) | GPL-2.0-or-later; [original COPYING](hevc-fixtures/COPYING.x265). Two independent upstream CLI builds produce real Main / Main10 inputs; x265 is not linked into or distributed with the product. |
 | KWindowSystem 6.32.0 | `KDE/kwindowsystem` `870fed584663656db8b5e3d4ec1a7048b5eff25f` | LGPL-2.0-or-later, Kai Uwe Broulik; only the two asynchronous xdg-foreign export classes are adapted. [Exact source blobs and changes](kwayland-parent/upstream.md), [license](kwayland-parent/LICENSES/LGPL-2.0-or-later.txt). |
 | xdg-foreign unstable v2 protocol | QtBase `5af1a37e31a869cd6eb8a73d82e2c71a450e6634`, source blob `cc3271dca4d6211bf6d04c34c0ca973c52f9b552` | MIT, Red Hat Inc. 2015–2016; the complete notice is retained in the unmodified [protocol XML](wayland-protocols/xdg-foreign-unstable-v2.xml). |
 

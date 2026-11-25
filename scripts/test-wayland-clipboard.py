@@ -20,6 +20,67 @@ import tempfile
 import time
 
 
+def wait_for_owned_focus(swaymsg: str, env: dict[str, str], sender: subprocess.Popen,
+                         compositor: subprocess.Popen, terminate, child_guard) -> dict:
+    """Wait on real IPC events, then verify this sender's visible focused view.
+
+    Sway IPC's initial tick proves that the window subscription is installed
+    before get_tree. This avoids losing a map/focus event between the snapshot
+    and subscription. No delay or repeated key press substitutes for readiness.
+    See sway/sway-ipc.7.scd and swaymsg/main.c at upstream sway 1.9.
+    """
+    watcher = subprocess.Popen([swaymsg, "--socket", env["SWAYSOCK"], "--monitor", "--raw",
+        "--type", "subscribe", '["window", "tick"]'], env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, start_new_session=True, preexec_fn=child_guard, bufsize=0)
+    assert watcher.stdout is not None
+    pending = bytearray()
+    deadline = time.monotonic() + 6
+    subscribed = False
+
+    def focused(node: dict) -> dict | None:
+        if node.get("pid") == sender.pid and node.get("visible") is True and node.get("focused") is True:
+            return node
+        for child in node.get("nodes", []) + node.get("floating_nodes", []):
+            found = focused(child)
+            if found is not None:
+                return found
+        return None
+
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(watcher.stdout, selectors.EVENT_READ)
+            while time.monotonic() < deadline:
+                if sender.poll() is not None or compositor.poll() is not None:
+                    raise RuntimeError("The owned clipboard sender/compositor exited before receiving focus")
+                ready = selector.select(timeout=max(0, deadline - time.monotonic()))
+                if not ready:
+                    break
+                chunk = os.read(watcher.stdout.fileno(), 65536)
+                if not chunk:
+                    raise RuntimeError("The owned Sway IPC subscription ended before the sender received focus")
+                pending.extend(chunk)
+                while b"\n" in pending:
+                    line, _, remaining = pending.partition(b"\n")
+                    pending[:] = remaining
+                    event = json.loads(line)
+                    if event.get("first") is True:
+                        subscribed = True
+                    if not subscribed:
+                        continue
+                    tree = subprocess.run([swaymsg, "--socket", env["SWAYSOCK"], "--raw", "--type", "get_tree"],
+                        env=env, check=True, capture_output=True, text=True,
+                        timeout=max(0.001, deadline - time.monotonic()))
+                    node = focused(json.loads(tree.stdout))
+                    if node is not None:
+                        return node
+        raise TimeoutError("The real compositor never made the exposed clipboard sender visible and focused")
+    finally:
+        terminate(watcher)
+        watcher.stdout.close()
+        if watcher.stderr is not None:
+            watcher.stderr.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("probe", type=Path)
@@ -31,7 +92,7 @@ def main() -> int:
     helper = runpy.run_path(str(Path(__file__).with_name("test-pipewire-capture.py")))
     terminate = helper["terminate"]
     host_binary = helper["host_binary"]
-    sway, wtype = host_binary("sway"), host_binary("wtype")
+    sway, wtype, swaymsg = host_binary("sway"), host_binary("wtype"), host_binary("swaymsg")
     host_base = os.environ.copy()
     for key in list(host_base):
         if key.startswith(("PIPEWIRE_", "SPA_", "WIREPLUMBER_", "WP_", "WLR_")) or key in (
@@ -81,17 +142,23 @@ def main() -> int:
             try:
                 deadline = time.monotonic() + 10
                 socket = None
+                ipc_socket = None
                 while time.monotonic() < deadline:
                     if compositor.poll() is not None:
                         raise RuntimeError("The owned Sway failed before creating a Wayland socket")
                     sockets = [path for path in runtime.glob("wayland-*") if stat.S_ISSOCK(path.stat().st_mode)]
+                    ipc_sockets = [path for path in runtime.glob("sway-ipc.*.sock") if stat.S_ISSOCK(path.stat().st_mode)]
                     if sockets:
                         socket = sockets[0]
+                    if ipc_sockets:
+                        ipc_socket = ipc_sockets[0]
+                    if socket is not None and ipc_socket is not None:
                         break
                     time.sleep(0.02)
-                if socket is None:
-                    raise TimeoutError("The owned compositor never produced a real socket")
+                if socket is None or ipc_socket is None:
+                    raise TimeoutError("The owned compositor never produced its real Wayland and IPC sockets")
                 host_env["WAYLAND_DISPLAY"] = socket.name
+                host_env["SWAYSOCK"] = str(ipc_socket)
                 client_env["WAYLAND_DISPLAY"] = socket.name
                 with (artifacts / "probe.stderr.log").open("wb") as errors, (artifacts / "probe.stdout.log").open("wb") as output:
                     process = subprocess.Popen([str(probe)], env=client_env, stdout=subprocess.PIPE,
@@ -120,6 +187,8 @@ def main() -> int:
                                     pending[:] = rest
                                     print(line.decode("utf-8", errors="replace"), flush=True)
                                     if line == b"NEED_INPUT":
+                                        focused = wait_for_owned_focus(swaymsg, host_env, process, compositor, terminate, child_guard)
+                                        (artifacts / f"input-focus-{inputs + 1}.json").write_text(json.dumps(focused, indent=2) + "\n")
                                         # The real compositor creates the serial
                                         # from input received by Qt's window.
                                         subprocess.run([wtype, "-k", "F8"], env=host_env, check=True, timeout=5)

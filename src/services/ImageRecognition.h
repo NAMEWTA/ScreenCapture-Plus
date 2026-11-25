@@ -1,9 +1,9 @@
 #pragma once
-#include <windows.h>
+#include <cstdint>
 #include <string>
 
-// QR decoding uses quirc with UTF-8 / Shift-JIS payload conversion.
+// The retained Windows command delegates to the shared QR and text services.
 class ImageRecognition final {
 public:
-    static std::wstring decodeQrCode(int width, int height, BYTE* data);
+    static std::wstring decodeQrCode(int width, int height, std::uint8_t* data);
 };

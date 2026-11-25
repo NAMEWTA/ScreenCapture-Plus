@@ -52,21 +52,29 @@ int main(int argc, char** argv)
 {
     QCoreApplication application(argc, argv);
     try {
-        require(argc == 3, "Provide shared real-fixture and evidence directories");
+        const bool hevc = argc == 4 && std::string(argv[3]) == "--hevc";
+        require(argc == 3 || hevc, "Provide shared real-fixture and evidence directories, optionally followed by --hevc");
         const auto root = QDir(QString::fromLocal8Bit(argv[1])).absolutePath();
         const auto evidenceRoot = QDir(QString::fromLocal8Bit(argv[2])).absolutePath();
         require(QDir().mkpath(evidenceRoot), "Create the video inspection evidence directory");
         QTemporaryDir run(evidenceRoot + QStringLiteral("/run-XXXXXX"));
         require(run.isValid(), "Create an exclusively owned inspection evidence directory");
         run.setAutoRemove(false);
-        QFile manifestFile(root + QStringLiteral("/manifest.json"));
+        QFile manifestFile(root + (hevc ? QStringLiteral("/hevc-manifest.json") : QStringLiteral("/manifest.json")));
         require(manifestFile.open(QIODevice::ReadOnly), "Read the actual generated fixture manifest");
         const auto manifest = QJsonDocument::fromJson(manifestFile.readAll()).object();
         require(manifest.value(QStringLiteral("schema")).toInt() == 1 &&
             manifest.value(QStringLiteral("ffmpegCommit")).toString() == QStringLiteral("946fcce07b6dcd0331c8cc609192aeff5e1924f8"),
             "Fixtures must come from the pinned real encoder");
         const auto cases = manifest.value(QStringLiteral("cases")).toArray();
-        require(cases.size() == 15, "Do not silently omit malformed or additional-track fixtures");
+        require(cases.size() == (hevc ? 10 : 15), "Do not silently omit malformed, bit-depth or additional-track fixtures");
+        if (hevc) {
+            const auto x265 = manifest.value(QStringLiteral("hevcSource")).toObject().value(QStringLiteral("x265")).toObject();
+            require(x265.value(QStringLiteral("version")).toString() == QStringLiteral("4.1") &&
+                x265.value(QStringLiteral("archiveSha512")).toString() == QStringLiteral(
+                    "5af5b958ff507f96a52813a6b72847c9fbc555bf95af287ae7f011055338266fb647dfea3b7789730c7f5c746f7e6cb7d9395ba10cbe43eb5034d3ed99730c3f"),
+                "HEVC test data must retain actual pinned encoder source and binary provenance");
+        }
         QJsonArray outcomes;
         unsigned failures{};
         for (const auto& entry : cases) {
@@ -115,8 +123,9 @@ int main(int argc, char** argv)
 #ifdef _WIN32
         report[QStringLiteral("backend")] = QStringLiteral("Pinned strict FFmpeg 9.0.2 full inspection; Windows Media Foundation cover");
 #else
-        report[QStringLiteral("backend")] = QStringLiteral("Pinned FFmpeg 9.0.2 MOV + H.264/AAC software decoders");
+        report[QStringLiteral("backend")] = QStringLiteral("Pinned FFmpeg 9.0.2 MOV + H.264/HEVC/AAC software decoders");
 #endif
+        report[QStringLiteral("suite")] = hevc ? QStringLiteral("HEVC Main/Main10") : QStringLiteral("H.264/AAC and malformed MOV metadata");
         report[QStringLiteral("cases")] = outcomes;
         report[QStringLiteral("fixtureFailures")] = static_cast<int>(failures);
         report[QStringLiteral("auxiliaryChecks")] = QStringLiteral("not completed");

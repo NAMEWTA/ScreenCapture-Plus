@@ -103,6 +103,13 @@ def main():
         raise SystemExit("Review the inspection API and bad-file suite before changing the FFmpeg source")
     if not package.get("patches"):
         raise SystemExit("Strict MOV validation must have a recorded controlled patch")
+    # FFmpeg's fixed msvc_common_flags translates only the exact -g spelling to
+    # -Z7. Numeric --enable-debug levels produce GCC-only -gN unchanged, which
+    # MSVC rejects. Both configurations retain native symbols; the dynamic CRT
+    # remains independently selected below.
+    if "--enable-debug" not in profile["configure"] or any(
+            flag.startswith("--enable-debug=") for flag in profile["configure"]):
+        raise SystemExit("The fixed MSVC profile requires --enable-debug without a numeric level")
     workspace = options.workspace.resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     if any(workspace.iterdir()):
@@ -175,18 +182,25 @@ def main():
         arguments = [posix(source / "configure"), "--prefix=" + posix(prefix), *profile["configure"],
                      "--extra-cflags=-" + crt, "--extra-cxxflags=-" + crt,
                      "--extra-ldflags=-debug -opt:ref -opt:icf", "--x86asmexe=" + posix(nasms[0])]
-        script = build / "build-fixed.sh"
+        script = build / "configure-fixed.sh"
         script.write_text("set -eu\n" + "cd " + shlex.quote(posix(build)) + "\n" +
-                          shlex.join(arguments) + "\n" + shlex.join((posix(make), "-j" + str(options.jobs))) + "\n" +
-                          shlex.join((posix(make), "install")) + "\n", encoding="utf-8", newline="\n")
+                          shlex.join(arguments) + "\n", encoding="utf-8", newline="\n")
         run(str(bash), "--noprofile", "--norc", posix(script), env=environment)
         configuration_text = (build / "ffbuild/config.mak").read_text(encoding="utf-8", errors="replace")
         cflags = next((line for line in configuration_text.splitlines() if line.startswith("CFLAGS=")), "")
         if "-" + crt not in cflags or "-MT" in cflags or (crt == "MD" and "-MDd" in cflags):
             raise SystemExit(f"Actual {configuration} compiler flags do not use the requested dynamic CRT")
+        if not re.search(r"(?:^|\s)-Z7(?:\s|$)", cflags.removeprefix("CFLAGS=")) or re.search(
+                r"(?:^|\s)-g\d*(?:\s|$)", cflags.removeprefix("CFLAGS=")):
+            raise SystemExit(f"Actual {configuration} compiler flags must contain native -Z7, not a GCC debug level")
         components = (build / "config_components.h").read_text(encoding="utf-8")
         if re.search(r"^#define CONFIG_\w+_(ENCODER|HWACCEL) 1$", components, re.MULTILINE):
             raise SystemExit("The inspection-only profile unexpectedly enabled an encoder or hardware backend")
+        script = build / "build-fixed.sh"
+        script.write_text("set -eu\n" + "cd " + shlex.quote(posix(build)) + "\n" +
+                          shlex.join((posix(make), "-j" + str(options.jobs))) + "\n" +
+                          shlex.join((posix(make), "install")) + "\n", encoding="utf-8", newline="\n")
+        run(str(bash), "--noprofile", "--norc", posix(script), env=environment)
         files = []
         for name, major in (("avcodec", 63), ("avformat", 63), ("avutil", 61)):
             for filename in (f"{name}-{major}.dll", f"{name}.lib"):
