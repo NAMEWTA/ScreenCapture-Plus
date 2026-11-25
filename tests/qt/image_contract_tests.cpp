@@ -10,6 +10,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#ifdef _WIN32
+#include "platform/windows/GdiCapture.h"
+#include "recording/VideoMp4.h"
+#endif
 
 namespace {
 void require(bool condition, const char* message)
@@ -25,6 +29,17 @@ int main(int argc, char** argv)
 {
     QApplication application(argc, argv);
     require(QByteArray(qVersion()) == "6.12.1", "runtime Qt must match the pinned headers");
+#ifdef _WIN32
+    // Link the actual retained backend into this Qt process. An invalid frame
+    // rate must fail before creating capture/audio/codec resources. Device and
+    // recording checks remain separate real-desktop release gates.
+    HuhuCapture::Platform::GdiCapture capture;
+    require(capture.pixels().empty(), "an idle capture owns no pixel buffer");
+    VideoMp4::DESKTOPCAPTUREPARAMS recording;
+    recording.fps = 0;
+    require(VideoMp4::DesktopCapture(recording) != 0 && recording.result.firstError &&
+        !recording.result.canArchive(), "native preparation failure must survive the Qt/CRT boundary");
+#endif
     const std::array<QRgb, 12> pixels{
         qRgba(1, 2, 3, 0), qRgba(240, 120, 60, 1), qRgba(7, 11, 19, 127),
         qRgba(17, 23, 31, 128), qRgba(41, 43, 47, 254), qRgba(53, 59, 61, 255),

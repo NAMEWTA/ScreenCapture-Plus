@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/RecordingResult.h"
 #include <windows.h>
 #include <dxgi1_2.h>
 #include <mfapi.h>
@@ -44,9 +45,8 @@ struct DESKTOPCAPTUREPARAMS
     std::atomic<bool> MustEnd{ false };
     std::atomic<bool> Pause{ false };
 
-    // 真正 WriteSample 成功的视频帧数。一帧都没写就不是有效视频，函数末尾据此报错 ——
-    // 循环里所有失败都是 break，跟"用户点停止"走同一个出口，光看返回值分不出这两种情况
-    unsigned long long framesWritten = 0;
+    // Worker-owned completion facts; read only after the worker has joined.
+    HuhuCapture::Core::RecordingResult result;
 };
 
 void setAudio(DESKTOPCAPTUREPARAMS* params, bool useSpeaker, bool useMic);

@@ -383,6 +383,15 @@
     <ClInclude Include="..\..\src\core\MediaFileName.h">
       <Filter>src\core</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\core\MediaClock.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\RecordingResult.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\AnnotationModel.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\services\MediaHistory.h">
       <Filter>src\services</Filter>
     </ClInclude>

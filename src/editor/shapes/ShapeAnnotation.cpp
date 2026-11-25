@@ -8,21 +8,29 @@
 
 namespace Core = HuhuCapture::Core;
 
+namespace {
+HuhuCapture::Editor::AnnotationModel makeModel(WinPin* window)
+{
+    const auto size = window->screenImg ? window->screenImg->GetPixelSize() : D2D1::SizeU(0, 0);
+    return {window->allocateAnnotationId(), size.width, size.height,
+        window->dpi / (std::max)(0.01f, window->scale)};
+}
+}
+
 ShapeAnnotation::ShapeAnnotation(WinPin* window)
-    : ShapeBase(window), number_(window->allocateAnnotationId())
+    : ShapeBase(window), model_(makeModel(window))
 {
     // Opening the rail may fit a large screenshot into a small viewport. Keep
     // newly created badges readable on screen, then retain that original-image
     // size during later zooming and export rather than changing existing ones.
-    markerScale_ = win->dpi / (std::max)(0.01f, win->scale);
-    const float dpi = markerScale_;
+    const float dpi = model_.creationScale();
     radius_ = 12.0f * dpi;
-    const auto palette = Core::annotationColor(number_);
+    const auto palette = model_.color();
     auto* d2d = Ling::D2D::get();
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(palette.backgroundRgb), fill_.GetAddressOf());
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(palette.textRgb), text_.GetAddressOf());
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0xFFFFFF), border_.GetAddressOf());
-    const auto label = std::to_wstring(number_);
+    const auto label = std::to_wstring(number());
     const auto length = static_cast<UINT32>(label.size());
     HRESULT result = d2d->dwriteFactory->CreateTextLayout(label.data(), length,
         d2d->baseTextFormat.Get(), 1024.0f * dpi, 128.0f * dpi, numberLayout_.GetAddressOf());
@@ -50,12 +58,12 @@ ShapeAnnotation::ShapeAnnotation(WinPin* window)
 
 void ShapeAnnotation::setNote(std::wstring note)
 {
-    note_ = std::move(note);
+    model_.setNote(std::move(note));
 }
 
 D2D1_COLOR_F ShapeAnnotation::color() const noexcept
 {
-    return D2D1::ColorF(Core::annotationColor(number_).backgroundRgb);
+    return D2D1::ColorF(model_.color().backgroundRgb);
 }
 
 D2D1_SIZE_U ShapeAnnotation::imageSize() const noexcept
@@ -65,21 +73,19 @@ D2D1_SIZE_U ShapeAnnotation::imageSize() const noexcept
 
 D2D1_RECT_F ShapeAnnotation::bounds() const noexcept
 {
-    return D2D1::RectF(region_.left, region_.top, region_.right, region_.bottom);
+    const auto& region = model_.bounds();
+    return D2D1::RectF(region.left, region.top, region.right, region.bottom);
 }
 
 D2D1_POINT_2F ShapeAnnotation::center() const noexcept
 {
-    const auto size = imageSize();
-    const auto point = Core::annotationBadgeCenter(region_, radius_,
-        static_cast<float>(size.width), static_cast<float>(size.height));
+    const auto point = model_.badgeCenter(radius_);
     return D2D1::Point2F(point.x, point.y);
 }
 
 bool ShapeAnnotation::hasValidRegion() const noexcept
 {
-    return placed_ && Core::validAnnotationRegion(region_,
-        Core::annotationRegionMinimumExtent(markerScale_));
+    return model_.hasValidRegion();
 }
 
 float ShapeAnnotation::handleTolerance() const noexcept
@@ -91,21 +97,22 @@ float ShapeAnnotation::handleTolerance() const noexcept
 
 void ShapeAnnotation::paint(ID2D1DeviceContext* context)
 {
-    if (!placed_ || !fill_ || !text_ || !border_ || !numberLayout_) return;
-    const float width = region_.right - region_.left, height = region_.bottom - region_.top;
+    if (!model_.placed() || !fill_ || !text_ || !border_ || !numberLayout_) return;
+    const auto& region = model_.bounds();
+    const float width = region.right - region.left, height = region.bottom - region.top;
     if (width <= 0.0f || height <= 0.0f) return;
     // Draw wholly inside the selected bounds, including at image edges. The
     // exact same brush paints the region and its automatic-color badge.
-    const float stroke = (std::min)(2.0f * markerScale_, (std::min)(width, height));
+    const float stroke = (std::min)(2.0f * model_.creationScale(), (std::min)(width, height));
     const float inset = stroke / 2.0f;
-    context->DrawRectangle(D2D1::RectF(region_.left + inset, region_.top + inset,
-        region_.right - inset, region_.bottom - inset), fill_.Get(), stroke);
+    context->DrawRectangle(D2D1::RectF(region.left + inset, region.top + inset,
+        region.right - inset, region.bottom - inset), fill_.Get(), stroke);
     if (!hasValidRegion()) return;
     const auto badge = center();
     const auto ellipse = D2D1::Ellipse(badge, radius_, radius_);
     // The outline lies inside the badge so an image-edge badge is not clipped.
     context->FillEllipse(ellipse, fill_.Get());
-    const float outline = (std::min)(markerScale_, radius_ / 3.0f);
+    const float outline = (std::min)(model_.creationScale(), radius_ / 3.0f);
     context->DrawEllipse(D2D1::Ellipse(badge, radius_ - outline / 2.0f,
         radius_ - outline / 2.0f), border_.Get(), outline);
     context->DrawTextLayout({badge.x - radius_, badge.y - radius_}, numberLayout_.Get(), text_.Get());
@@ -113,10 +120,10 @@ void ShapeAnnotation::paint(ID2D1DeviceContext* context)
 
 void ShapeAnnotation::paintDragger(ID2D1DeviceContext* context)
 {
-    if (!hasValidRegion() || creating_ || !fill_ || !border_) return;
+    if (!hasValidRegion() || model_.creating() || !fill_ || !border_) return;
     const float unit = handleTolerance() / 4.0f;
     const float half = 3.0f * unit;
-    for (const auto point : Core::annotationRegionHandles(region_)) {
+    for (const auto point : Core::annotationRegionHandles(model_.bounds())) {
         const auto handle = D2D1::RectF(point.x - half, point.y - half, point.x + half, point.y + half);
         context->FillRectangle(handle, border_.Get());
         context->DrawRectangle(handle, fill_.Get(), unit);
@@ -125,55 +132,25 @@ void ShapeAnnotation::paintDragger(ID2D1DeviceContext* context)
 
 void ShapeAnnotation::mouseMove(float x, float y)
 {
-    hoverDraggerIndex = -1;
-    if (!hasValidRegion()) return;
-    const auto hit = Core::hitAnnotationRegion(region_, {x, y}, handleTolerance());
-    hoverDraggerIndex = static_cast<int>(hit);
-    const auto badge = center();
-    const float dx = x - badge.x, dy = y - badge.y;
-    const float hitRadius = radius_ + handleTolerance() / 2.0f;
-    const bool corner = hit == Core::AnnotationRegionHandle::TopLeft
-        || hit == Core::AnnotationRegionHandle::TopRight
-        || hit == Core::AnnotationRegionHandle::BottomLeft
-        || hit == Core::AnnotationRegionHandle::BottomRight;
-    if (!corner && dx * dx + dy * dy <= hitRadius * hitRadius)
-        hoverDraggerIndex = static_cast<int>(Core::AnnotationRegionHandle::Move);
+    hoverDraggerIndex = static_cast<int>(model_.hitTest({x, y}, handleTolerance(), radius_));
 }
 
 void ShapeAnnotation::mouseDown(float x, float y)
 {
-    if (!placed_) {
-        const auto size = imageSize();
-        region_ = Core::annotationRegionFromDrag({x, y}, {x, y},
-            static_cast<float>(size.width), static_cast<float>(size.height));
-        placed_ = true;
-        creating_ = true;
-        hoverDraggerIndex = static_cast<int>(Core::AnnotationRegionHandle::BottomRight);
-    }
-    press_ = {x, y};
-    dragOrigin_ = region_;
-    win->selectAnnotation(number_, false);
+    hoverDraggerIndex = static_cast<int>(model_.beginGesture({x, y},
+        static_cast<Core::AnnotationRegionHandle>(hoverDraggerIndex)));
+    win->selectAnnotation(number(), false);
     win->refresh();
 }
 
 void ShapeAnnotation::mouseDrag(float x, float y)
 {
-    if (!placed_ || hoverDraggerIndex < 0) return;
-    const auto size = imageSize();
-    const float width = static_cast<float>(size.width), height = static_cast<float>(size.height);
-    const auto handle = static_cast<Core::AnnotationRegionHandle>(hoverDraggerIndex);
-    if (creating_)
-        region_ = Core::annotationRegionFromDrag(press_, {x, y}, width, height);
-    else if (handle == Core::AnnotationRegionHandle::Move)
-        region_ = Core::moveAnnotationRegion(dragOrigin_, {x - press_.x, y - press_.y}, width, height);
-    else
-        region_ = Core::resizeAnnotationRegion(dragOrigin_, handle, {x, y},
-            width, height, Core::annotationRegionMinimumExtent(markerScale_));
+    model_.drag({x, y});
 }
 
 void ShapeAnnotation::mouseUp(float, float)
 {
-    creating_ = false;
+    model_.finishGesture();
 }
 
 void ShapeAnnotation::setCursor()

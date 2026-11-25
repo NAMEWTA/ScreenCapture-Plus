@@ -88,10 +88,16 @@
     <ClCompile Include="..\..\src\pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp" />
+    <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\recording\CapVideo.cpp" />
-    <ClCompile Include="..\..\src\recording\VideoGif.cpp" />
-    <ClCompile Include="..\..\src\recording\VideoMp4.cpp" />
+    <ClCompile Include="..\..\src\recording\VideoGif.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\recording\VideoMp4.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\services\AnnotationRenderer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -160,9 +166,12 @@
     <ClInclude Include="..\..\src\core\ImagePreview.h" />
     <ClInclude Include="..\..\src\core\PixelBuffer.h" />
     <ClInclude Include="..\..\src\core\MediaFileName.h" />
+    <ClInclude Include="..\..\src\core\MediaClock.h" />
+    <ClInclude Include="..\..\src\core\RecordingResult.h" />
     <ClInclude Include="..\..\src\core\ReleaseVersion.h" />
     <ClInclude Include="..\..\src\core\ScrollStitch.h" />
     <ClInclude Include="..\..\src\editor\History.h" />
+    <ClInclude Include="..\..\src\editor\AnnotationModel.h" />
     <ClInclude Include="..\..\src\editor\ShapeFactory.h" />
     <ClInclude Include="..\..\src\editor\WinPin.h" />
     <ClInclude Include="..\..\src\editor\shapes\ShapeAnnotation.h" />

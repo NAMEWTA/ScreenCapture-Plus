@@ -1,7 +1,13 @@
-#include "pch.h"
 #include "recording/VideoMp4.h"
+#include "core/MediaClock.h"
 #include "core/PixelBuffer.h"
 #include "platform/windows/ComApartment.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <map>
+#include <new>
+#include <wrl/client.h>
 #include <wininet.h>
 #include <process.h>
 #include <commctrl.h>
@@ -1292,8 +1298,10 @@ void setAudio(DESKTOPCAPTUREPARAMS* dp,bool useSpeaker, bool useMic)
     }
 }
 
-int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
+static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 {
+    using HuhuCapture::Core::RecordingStage;
+    if (dp.fps <= 0 || dp.SR <= 0 || dp.NCH <= 0) return -17;
     HRESULT hr = S_OK;
     struct AUDIOIN
     {
@@ -1897,8 +1905,9 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
     unsigned long long rtA = 0;
     unsigned long long rtV = 0;
-    std::chrono::system_clock::time_point last_frame_time_point;
+    HuhuCapture::Core::MediaClock::time_point last_frame_time_point;
     bool isFirstFrame = true;
+    auto failureStage = RecordingStage::Capture;
 
     [[maybe_unused]] unsigned long long msloop = 1000 / dp.fps;
 
@@ -1913,6 +1922,7 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 #endif
     for (;;)
     {
+        failureStage = RecordingStage::Capture;
         if (!dp.HasAudio && !dp.Framer)
             Sleep((DWORD)msloop);
         if (dp.MustEnd)
@@ -1935,7 +1945,12 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                     waitResult = WaitForMultipleObjects(static_cast<DWORD>(AudioEvents.size()),
                                                         AudioEvents.data(), TRUE, 100);
                 } while (waitResult == WAIT_TIMEOUT && !dp.MustEnd);
-                if (dp.MustEnd || waitResult == WAIT_FAILED) break;
+                if (dp.MustEnd) break;
+                if (waitResult == WAIT_FAILED) {
+                    hr = HRESULT_FROM_WIN32(GetLastError());
+                    if (SUCCEEDED(hr)) hr = E_FAIL;
+                    break;
+                }
             }
             if (DirectAudioCopy)
             {
@@ -2156,27 +2171,30 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
             // take a time stamp here
             // Get the current time point
-            if (lDesktopResource && !cap.Get(lDesktopResource, dp.Cursor, dp.rx.right && dp.rx.bottom ? &dp.rx : 0))
+            if (lDesktopResource && !cap.Get(lDesktopResource, dp.Cursor, dp.rx.right && dp.rx.bottom ? &dp.rx : 0)) {
+                hr = E_FAIL;
                 break;
+            }
 
             if (isFirstFrame)
             {
                 isFirstFrame = false;
                 rtV = 0;
-                last_frame_time_point = std::chrono::system_clock::now();
+                last_frame_time_point = HuhuCapture::Core::MediaClock::now();
             }
             else
             {
                 // Time stamp of current frame.
                 // Calculate the dt with last frame. and set to the frame property.
-                auto current_frameTimePoint = std::chrono::system_clock::now();
+                auto current_frameTimePoint = HuhuCapture::Core::MediaClock::now();
                 auto frameDuration = current_frameTimePoint - last_frame_time_point;
                 last_frame_time_point = current_frameTimePoint;
-                ThisDurV = frameDuration.count();
+                ThisDurV = static_cast<unsigned long long>((std::max)(std::int64_t{1},
+                    HuhuCapture::Core::mediaTicks(frameDuration)));
                 rtV += ThisDurV;
             }
 
-
+            failureStage = RecordingStage::Encode;
             std::vector<DWORD> hdrout;
 
 
@@ -2185,8 +2203,10 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 // This is a 16-bit 4xfloat sample
                 void* fld = cap.buf.data();
                 auto hr2 = cap.Convert(fld, wi, he, hdrout, GUID_WICPixelFormat128bppPRGBAFloat);
-                if (FAILED(hr2))
+                if (FAILED(hr2)) {
+                    hr = hr2;
                     break;
+                }
                 VideoBufferSize = (DWORD)(hdrout.size() * 4);
             }
             if (cap.InHDR == DXGI_FORMAT_R16G16B16A16_FLOAT && cap.ConvertHDR)
@@ -2194,8 +2214,10 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 // 64-bit float 16 bit each float, convert
                 void* fld = cap.buf.data();
                 auto hr2 = cap.Convert(fld, wi, he, hdrout, GUID_WICPixelFormat64bppRGBAHalf);
-                if (FAILED(hr2))
+                if (FAILED(hr2)) {
+                    hr = hr2;
                     break;
+                }
                 VideoBufferSize = (DWORD)(hdrout.size() * 4);
                 // Up down
 
@@ -2240,6 +2262,7 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
             hr = pVideoBuffer->Unlock();
             if (FAILED(hr)) break;
+            if (FAILED(hrf)) { hr = hrf; break; }
 
             hr = pVideoBuffer->SetCurrentLength(VideoBufferSize);
             if (FAILED(hr)) break;
@@ -2274,7 +2297,8 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
             if (VideoTransformMFT)
             {
                 CComPtr<IMFSample> s2;
-                MFTrs(0, 0, 0, VideoTransformMFT, pVideoSample, &s2);
+                hr = MFTrs(0, 0, 0, VideoTransformMFT, pVideoSample, &s2);
+                if (FAILED(hr)) break;
                 if (s2)
                     pVideoSample = s2;
             }
@@ -2289,11 +2313,12 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 hr = pSinkWriter->WriteSample(OutVideoStreamIndex, pVideoSample);
                 if (FAILED(hr))
                     break;
-                dp.framesWritten++;
+                dp.result.framesWritten++;
             }
         }
 
         // Audio
+        failureStage = RecordingStage::Encode;
         CComPtr<IMFMediaBuffer> pAudioBuffer = NULL;
         if (dp.HasAudio && FinalAudioBytes)
         {
@@ -2359,18 +2384,42 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
     // Audio off
     for (auto& audio : ains) audio->Stop();
 
-    if (pSinkWriter)
-        hr = pSinkWriter->Finalize();
-    if (FAILED(hr))
-        return -14;
+    if (FAILED(hr)) dp.result.fail(failureStage, static_cast<std::int64_t>(hr));
+    if (pSinkWriter) {
+        const auto finalizeResult = pSinkWriter->Finalize();
+        dp.result.finish(SUCCEEDED(finalizeResult), static_cast<std::int64_t>(finalizeResult));
+    }
+    if (dp.result.firstError)
+        return dp.result.firstError->stage == RecordingStage::Finalize ? -14 : -16;
     // 循环里每一处失败都是 break，跟"用户点了停止"走同一个出口，之后照样 Finalize ——
     // 而 Finalize 一个没写过样本的 MP4 是会成功的，于是调用方拿到 0 却得到个 0 字节文件，
     // 一句报错都没有。既然一帧都没写就不可能是有效视频，这里明确报错。
     // 但"刚开录就点了停止"同样是一帧都没有，那是用户自己清楚的操作，不该拿报错去打扰他 ——
     // 那种情况 MustEnd 已经立起来了，交给调用方照 framesWritten 静静收场
-    if (dp.HasVideo && !dp.Framer && dp.framesWritten == 0 && !dp.MustEnd)
+    if (dp.HasVideo && !dp.Framer && dp.result.framesWritten == 0 && !dp.MustEnd) {
+        dp.result.fail(RecordingStage::Capture, -15);
         return -15;
+    }
 	return 0;
+}
+
+int DesktopCapture(DESKTOPCAPTUREPARAMS& params)
+{
+    using HuhuCapture::Core::RecordingStage;
+    params.result = {};
+    try {
+        const auto status = desktopCapture(params);
+        if (status != 0 && !params.result.firstError)
+            params.result.fail(RecordingStage::Prepare, status);
+        return status;
+    }
+    catch (const std::bad_alloc&) {
+        params.result.fail(RecordingStage::Encode, E_OUTOFMEMORY);
+    }
+    catch (...) {
+        params.result.fail(RecordingStage::Encode, E_FAIL);
+    }
+    return -16;
 }
 
 }

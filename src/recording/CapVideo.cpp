@@ -170,11 +170,13 @@ void CapVideo::startMp4(bool useSpeaker, bool useMic)
         try {
             HuhuCapture::Platform::ComApartment apartment(COINIT_APARTMENTTHREADED);
             if (FAILED(apartment.result())) {
+                mp4Param->result.fail(HuhuCapture::Core::RecordingStage::Prepare, apartment.result());
                 showRecordError(errText, errTitle);
                 return;
             }
             MediaFoundationSession media;
             if (FAILED(media.result())) {
+                mp4Param->result.fail(HuhuCapture::Core::RecordingStage::Prepare, media.result());
                 showRecordError(errText, errTitle);
                 return;
             }
@@ -207,12 +209,13 @@ void CapVideo::startMp4(bool useSpeaker, bool useMic)
                 // 只有这两个码是"这台机器认不了这个编码器"，换编码器才有意义
                 if (code != -5 && code != -10) break;
             }
-            if (code != 0) showRecordError(errText, errTitle);
+            if (code != 0) showRecordError(errText + L"\n\n" + mp4Param->f, errTitle);
         }
         catch (...) {
             // Never unwind out of a worker: release its COM/MF/encoder resources
             // first, then report through the existing recording error message.
-            showRecordError(errText, errTitle);
+            mp4Param->result.fail(HuhuCapture::Core::RecordingStage::Encode, E_FAIL);
+            showRecordError(errText + L"\n\n" + mp4Param->f, errTitle);
         }
     });
 
@@ -231,13 +234,18 @@ void CapVideo::startGif()
     gifParam->w = (int)(cutMask->maskRect.right - cutMask->maskRect.left);
     gifParam->h = (int)(cutMask->maskRect.bottom - cutMask->maskRect.top);
     gifParam->path = videoTempPath;
-    captureThread = std::jthread([this](std::stop_token) {
+    const auto errText = Lang::get(L"video.recordFailed");
+    const auto errTitle = Lang::get(L"about.sysTip");
+    captureThread = std::jthread([this, errText, errTitle](std::stop_token) {
         try {
             VideoGif::createGif(gifParam.get());
+            if (gifParam->result.firstError)
+                showRecordError(errText + L"\n\n" + gifParam->path, errTitle);
         }
         catch (...) {
             // The GIF encoder and DIB own their resources even on allocation failure.
-            OutputDebugStringW(L"huhucapture: GIF capture failed.\n");
+            gifParam->result.fail(HuhuCapture::Core::RecordingStage::Encode, E_FAIL);
+            showRecordError(errText + L"\n\n" + gifParam->path, errTitle);
         }
     });
 }
@@ -262,12 +270,13 @@ std::wstring CapVideo::stop()
         filePath = gifParam->path;
     }
     stopWorker();
-    // 刚开录就点了停止，一帧都没采到 —— 这时 Finalize 出来的是个 0 字节的空壳。
-    // 别拿它去走存盘流程（那会白弹一次保存框，存出来还是个打不开的文件），
-    // 直接删掉、回空路径，让整个流程无声收场
-    if ((mp4Param && mp4Param->framesWritten == 0) ||
-        (gifParam && gifParam->framesWritten == 0)) {
-        DeleteFile(filePath.data());
+    const auto& result = mp4Param ? mp4Param->result : gifParam->result;
+    if (!result.canArchive()) {
+        // A clean immediate stop has no media to keep. On any capture, encode
+        // or finalize failure retain this unique session path for recovery,
+        // but never hand it to archiveFile as a completed recording.
+        if (result.completion(true) == HuhuCapture::Core::RecordingCompletion::Cancelled)
+            DeleteFileW(filePath.c_str());
         filePath.clear();
     }
     // 参数置空即"已停止"，stopIfRecording / dispose 再进来时不会重复 join

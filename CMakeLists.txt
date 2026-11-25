@@ -34,6 +34,8 @@ if(BUILD_TESTING)
     huhucapture_test(toolbar_layout tests/toolbar_layout_tests.cpp)
     huhucapture_test(media_file_names tests/media_file_name_tests.cpp)
     huhucapture_test(release_versions tests/release_version_tests.cpp)
+    huhucapture_test(annotation_model tests/annotation_model_tests.cpp)
+    huhucapture_test(recording_results tests/recording_result_tests.cpp)
 endif()
 
 if(HUHUCAPTURE_QT_VALIDATION)
@@ -48,4 +50,19 @@ if(HUHUCAPTURE_QT_VALIDATION)
     huhucapture_test(qt_image_contract tests/qt/image_contract_tests.cpp)
     target_link_libraries(qt_image_contract PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Svg)
     set_tests_properties(qt_image_contract PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    if(WIN32)
+        # Compile the retained native backends without Ling, its PCH, or /MT.
+        # This verifies the Qt/native link boundary, not hardware capture.
+        add_library(huhucapture_native_media STATIC
+            src/platform/windows/GdiCapture.cpp
+            src/recording/VideoMp4.cpp)
+        target_link_libraries(huhucapture_native_media PUBLIC huhucapture_core
+            gdi32 user32 ole32 oleaut32 uuid shell32 shlwapi
+            d3d11 dxgi windowscodecs mf mfplat mfreadwrite mfuuid
+            wininet comctl32)
+        target_compile_definitions(huhucapture_native_media PUBLIC
+            UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00)
+        target_compile_options(huhucapture_native_media PRIVATE /W4 /utf-8 /permissive-)
+        target_link_libraries(qt_image_contract PRIVATE huhucapture_native_media)
+    endif()
 endif()

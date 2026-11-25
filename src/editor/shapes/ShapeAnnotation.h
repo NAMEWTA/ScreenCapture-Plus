@@ -1,7 +1,6 @@
 #pragma once
 
-#include "core/Annotation.h"
-#include "core/AnnotationRegion.h"
+#include "editor/AnnotationModel.h"
 #include "editor/shapes/ShapeBase.h"
 #include <cstdint>
 #include <string>
@@ -14,8 +13,8 @@ class ShapeAnnotation final : public ShapeBase {
 public:
     explicit ShapeAnnotation(WinPin* win);
 
-    std::uint64_t number() const noexcept { return number_; }
-    const std::wstring& note() const noexcept { return note_; }
+    std::uint64_t number() const noexcept { return model_.number(); }
+    const std::wstring& note() const noexcept { return model_.note(); }
     void setNote(std::wstring note);
     D2D1_COLOR_F color() const noexcept;
     D2D1_POINT_2F center() const noexcept;
@@ -35,14 +34,8 @@ public:
 private:
     D2D1_SIZE_U imageSize() const noexcept;
     float handleTolerance() const noexcept;
-    std::uint64_t number_;
-    std::wstring note_;
-    HuhuCapture::Core::AnnotationRegionBounds region_{}, dragOrigin_{};
-    HuhuCapture::Core::AnnotationRegionPoint press_{};
+    HuhuCapture::Editor::AnnotationModel model_;
     float radius_{12.0f};
-    float markerScale_{1.0f}; // creation-time logical pixels -> original image pixels
-    bool placed_{false};
-    bool creating_{false};
     Microsoft::WRL::ComPtr<IDWriteTextLayout> numberLayout_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> fill_, text_, border_;
 };

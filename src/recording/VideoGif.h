@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/RecordingResult.h"
 #include <atomic>
 #include <cstdint>
 #include <string>
@@ -15,7 +16,7 @@ struct GifParam {
     int y{};
     std::uint32_t fps{ 16 };
     // Written on the capture thread; inspected only after joining it.
-    std::uint32_t framesWritten{};
+    HuhuCapture::Core::RecordingResult result;
 };
 
 void createGif(GifParam* params);

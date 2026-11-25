@@ -36,7 +36,7 @@ jobs:
           - os: ubuntu-24.04
             host: linux
             arch: linux_gcc_64
-          - os: windows-2025
+          - os: windows-2022
             host: windows
             arch: win64_msvc2022_64
     runs-on: ${{ matrix.os }}
@@ -52,7 +52,7 @@ jobs:
           host: ${{ matrix.host }}
           target: desktop
           arch: ${{ matrix.arch }}
-          modules: qtsvg
+          # QtSvg is part of the desktop base archives, not an add-on module.
           aqtversion: '==3.3.0'
           py7zrversion: '==1.1.0'
           cache: false
