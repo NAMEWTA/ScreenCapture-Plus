@@ -22,9 +22,11 @@ jobs:
           - os: ubuntu-24.04
             host: linux
             arch: linux_gcc_64
+            archives: qtbase qtsvg icu
           - os: windows-2022
             host: windows
             arch: win64_msvc2022_64
+            archives: qtbase qtsvg
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     env:
@@ -62,7 +64,7 @@ jobs:
           host: ${{ matrix.host }}
           target: desktop
           arch: ${{ matrix.arch }}
-          archives: qtbase qtsvg
+          archives: ${{ matrix.archives }}
           aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4'
           py7zrversion: '==1.1.3'
           extra: ${{ runner.os == 'Windows' && '--external 7z' || '' }}

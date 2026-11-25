@@ -65,6 +65,28 @@ g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/annotation_region
 
 这类结果只能证明核心逻辑，不包含 Windows 编译、字体、窗口和设备行为。
 
+## 共享 Qt 组件与 Wayland 边界
+
+`qt_editor_components` 使用正式 `EditorWindow` / `EditorCanvas`，复用同一
+`EditorDocument`、九工具模型、工具默认值与马赛克算法。测试直接发送 Qt 输入事件，
+检查文字和批注归属、焦点转移、撤销 / 重做、44 逻辑像素点击区域、异步输出令牌、
+失败或取消时保留编辑，以及实际 PNG 中的完整备注和原图像素。生成证据位于
+`artifacts/cmake/qt-validation/editor-render`。生成图像是明确的测试输入，
+这些断言不替代采集入口、系统剪贴板、物理键鼠、中文 IME 或混合 DPI 验收。
+
+`scripts/test-wayland-parent.py` 为每个场景启动私有 headless / pixman Sway，
+使用真实 xdg-foreign v2 协议验证父窗导出、取消、窗口销毁、协议失效及超时。
+暂停的只会是本脚本拥有的合成器子进程，独立 watchdog 负责恢复与回收。
+测试检查暂停期间的 Qt 事件循环心跳，恢复后用异步 Wayland roundtrip 屏障排空
+晚到事件；日志位于 `artifacts/cmake/qt-validation/wayland-parent`。
+它证明指定协议与生命周期场景，不代表 GNOME / Plasma 授权、实际屏幕采集或
+PipeWire 帧传输已通过。是否执行和通过，以对应提交的运行报告为准。
+
+Rust 聚合验证使用真实 gifski 编码、Qt GIF 解码、loopback TLS 传输与
+`FileCommitter` 持久化，再检查协议终态及停止后的事件排空。完整边界和匹配
+CRT 要求见 [Rust 桥接](rust-bridge.md)。本机 loopback 不能充当两台设备的
+发现、防火墙、证书确认、局域网吞吐和互传用户流程验收。
+
 ## Windows 原生导出
 
 `test-windows.ps1` 编译独立 `AnnotationRenderTests.exe`，直接使用正式 `src/services/AnnotationRenderer.cpp`，通过 D3D11 WARP 软件设备执行 Direct2D / DirectWrite，再用 WIC 编码和解码 PNG。

@@ -50,6 +50,10 @@
         {
           "path": "third_party/patches/libportal/0002-globalshortcuts-lifetime-and-qt-parent.patch",
           "sha256": "c7236263f0c21dd925cc55356fc89a66fa4a2271c7f8fdae39871f6b5cf068f9"
+        },
+        {
+          "path": "third_party/patches/libportal/0003-preexported-parent-handle.patch",
+          "sha256": "db06a93fedd42dc950532560b39d059addb2dbe1b705057414d31d415b6f7021"
         }
       ]
     },
@@ -131,6 +135,15 @@
       "cargoLockStatus": "aggregate-resolution-pending",
       "buildPythonVersion": "3.13.17",
       "setupPythonActionCommit": "ece7cb06caefa5fff74198d8649806c4678c61a1"
+    },
+    "waylandParent": {
+      "repository": "https://github.com/KDE/kwindowsystem.git",
+      "version": "6.32.0",
+      "commit": "870fed584663656db8b5e3d4ec1a7048b5eff25f",
+      "license": "LGPL-2.0-or-later",
+      "sourceManifest": "third_party/kwayland-parent/upstream.md",
+      "protocolBlob": "cc3271dca4d6211bf6d04c34c0ca973c52f9b552",
+      "qtPrivateAbi": "6.12.1"
     }
   }
 }

@@ -2,10 +2,10 @@
 // reliable request completion and a cancellable async OpenPipeWireRemote API.
 // Include GLib before Qt so the latter's optional keyword macros cannot alter it.
 #include <libportal/portal.h>
-#include <libportal-qt6/portal-qt6.h>
 
 #include "platform/linux/portal/PortalCapture.h"
 #include "platform/linux/portal/PortalSupport.h"
+#include "platform/linux/portal/PortalParent.h"
 
 #include <QAbstractEventDispatcher>
 #include <QGuiApplication>
@@ -30,12 +30,13 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         QPointer<QWindow> parent;
         QMetaObject::Connection parentDestroyed;
         GCancellable* cancellable{g_cancellable_new()};
-        XdpParent* portalParent{};
+        std::shared_ptr<PortalParent> portalParent;
         XdpSession* session{};
         gulong sessionClosedHandler{};
         PortalFailure cancellation;
         QVector<PortalStream> streams;
         QString restoreToken;
+        bool interactiveScreenshot{true};
         bool finished{};
 
         ~Operation() {
@@ -45,7 +46,6 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
                 xdp_session_close(session);
                 g_object_unref(session);
             }
-            if (portalParent) xdp_parent_free(portalParent);
             g_clear_object(&cancellable);
         }
     };
@@ -96,7 +96,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         return PortalSupport::checkContext(owner, capabilities.qtPlatform, capabilities.dispatcher);
     }
 
-    void cancel(const std::shared_ptr<Operation>& pending, PortalFailure reason) {
+    void cancel(std::shared_ptr<Operation> pending, PortalFailure reason) {
         if (!pending || pending->finished || pending->cancellation) return;
         pending->cancellation = std::move(reason);
         g_cancellable_cancel(pending->cancellable);
@@ -127,7 +127,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         if (pending->cancellation) error = pending->cancellation;
         pending->finished = true;
         QObject::disconnect(pending->parentDestroyed);
-        if (pending->portalParent) xdp_parent_free(std::exchange(pending->portalParent, nullptr));
+        pending->portalParent.reset();
         if (pending->session) {
             g_clear_signal_handler(&pending->sessionClosedHandler, pending->session);
             xdp_session_close(pending->session);
@@ -181,6 +181,36 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         });
         operation = pending;
         return pending;
+    }
+
+    void prepareParent(const std::shared_ptr<Operation>& pending) {
+        pending->portalParent = PortalParent::create();
+        std::weak_ptr<Private> weakState = shared_from_this();
+        std::weak_ptr<Operation> weakPending = pending;
+        QObject::connect(pending->portalParent.get(), &PortalParent::prepared, pending->portalParent.get(),
+            [weakState, weakPending](const PortalFailure& error) {
+                const auto state = weakState.lock();
+                const auto operation = weakPending.lock();
+                if (!state || !operation || operation->finished) return;
+                if (error || operation->cancellation || state->stopped) { state->finish(operation, error); return; }
+                auto* parent = operation->portalParent->nativeParent();
+                if (!parent) {
+                    state->finish(operation, failure(Code::ParentDestroyed, QStringLiteral("The exported Portal parent is no longer valid")));
+                    return;
+                }
+                if (operation->kind == Operation::Kind::Screenshot)
+                    xdp_portal_take_screenshot(state->portal, parent,
+                        operation->interactiveScreenshot ? XDP_SCREENSHOT_FLAG_INTERACTIVE : XDP_SCREENSHOT_FLAG_NONE,
+                        operation->cancellable, screenshotReady, new Call{state, operation});
+                else
+                    xdp_session_start(operation->session, parent, operation->cancellable,
+                                      sessionStarted, new Call{state, operation});
+            });
+        QObject::connect(pending->portalParent.get(), &PortalParent::invalidated, pending->portalParent.get(),
+            [weakState, weakPending](const PortalFailure& error) {
+                if (const auto state = weakState.lock()) state->cancel(weakPending.lock(), error);
+            });
+        pending->portalParent->prepare(pending->parent, pending->cancellable);
     }
 
     static void initializedPortal(GObject*, GAsyncResult* result, gpointer data) {
@@ -292,9 +322,12 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
             state->finish(pending, failure(Code::ParentDestroyed, QStringLiteral("Portal parent is no longer available")));
             return;
         }
-        pending->portalParent = xdp_parent_new_qt(pending->parent);
-        xdp_session_start(pending->session, pending->portalParent, pending->cancellable,
-                          sessionStarted, new Call{state, pending});
+        if (xdp_session_get_session_state(pending->session) == XDP_SESSION_CLOSED) {
+            state->finish(pending, failure(Code::Unavailable, QStringLiteral("ScreenCast session closed before parent export")));
+            return;
+        }
+        pending->sessionClosedHandler = g_signal_connect(pending->session, "closed", G_CALLBACK(pendingSessionClosed), pending.get());
+        state->prepareParent(pending);
     }
 
     static void sessionStarted(GObject* source, GAsyncResult* result, gpointer data) {
@@ -341,7 +374,6 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         }
         g_autofree char* restore = xdp_session_get_restore_token(pending->session);
         if (restore) pending->restoreToken = QString::fromUtf8(restore);
-        pending->sessionClosedHandler = g_signal_connect(pending->session, "closed", G_CALLBACK(pendingSessionClosed), pending.get());
         xdp_session_open_pipewire_remote_async(pending->session, pending->cancellable,
                                                pipeWireReady, new Call{state, pending});
     }
@@ -350,7 +382,8 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         auto* pending = static_cast<Operation*>(data);
         if (!pending->cancellation)
             pending->cancellation = failure(Code::Unavailable, QStringLiteral("ScreenCast session closed before its remote was ready"));
-        g_cancellable_cancel(pending->cancellable);
+        g_autoptr(GCancellable) cancellation = G_CANCELLABLE(g_object_ref(pending->cancellable));
+        g_cancellable_cancel(cancellation);
     }
 
     static void pipeWireReady(GObject* source, GAsyncResult* result, gpointer data) {
@@ -424,10 +457,8 @@ quint64 PortalCapture::requestScreenshot(QWindow* parent, bool interactive)
     constexpr auto kind = Private::Operation::Kind::Screenshot;
     if (auto error = d->canRequest(kind, parent)) return d->reject(kind, error);
     auto pending = d->begin(kind, parent);
-    pending->portalParent = xdp_parent_new_qt(parent);
-    xdp_portal_take_screenshot(d->portal, pending->portalParent,
-        interactive ? XDP_SCREENSHOT_FLAG_INTERACTIVE : XDP_SCREENSHOT_FLAG_NONE,
-        pending->cancellable, Private::screenshotReady, new Private::Call{d, pending});
+    pending->interactiveScreenshot = interactive;
+    d->prepareParent(pending);
     return pending->id;
 }
 

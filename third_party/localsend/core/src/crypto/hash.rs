@@ -110,21 +110,21 @@ async fn read_and_hash_from_file(
     let mut buffer = vec![0u8; HASH_BUFFER_SIZE];
     let mut hashed = 0_u64;
     let result = async {
-    loop {
-        let read = tokio::select! {
-            biased;
-            _ = cancel_token.cancelled() => return Err(HashError::Cancelled),
-            read = file.read(&mut buffer) => read?,
-        };
-        if read == 0 {
-            break;
+        loop {
+            let read = tokio::select! {
+                biased;
+                _ = cancel_token.cancelled() => return Err(HashError::Cancelled),
+                read = file.read(&mut buffer) => read?,
+            };
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            hashed = hashed.checked_add(read as u64)
+                .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
+            progress(hashed);
         }
-        hasher.update(&buffer[..read]);
-        hashed = hashed.checked_add(read as u64)
-            .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
-        progress(hashed);
-    }
-    Ok(())
+        Ok(())
     }.await;
     // A cancelled async read may already have been submitted to the blocking
     // pool. Join it before releasing a stable lease whose duplicated handle

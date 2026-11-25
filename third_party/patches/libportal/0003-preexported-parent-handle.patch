@@ -1,0 +1,80 @@
+From: huhucapture contributors
+Subject: [PATCH] parent: accept an already asynchronously exported window handle
+
+Based on libportal 0.11.0 fc4d62cfe131e8494c82f597f92b2234d584c367.
+SPDX-License-Identifier: LGPL-3.0-only
+
+Qt 6.12.1's portalWindowIdentifier() synchronously roundtrips Wayland for the
+first foreign handle. Let the caller use Qt's event-driven export first, then
+wrap its real handle with existing XdpParent copy/free and request machinery.
+The caller retains the native exported surface until the Portal request ends.
+This constructor neither exports a window nor implements a Portal request.
+
+diff --git a/libportal/parent.c b/libportal/parent.c
+--- a/libportal/parent.c
++++ b/libportal/parent.c
+@@ -33,6 +33,51 @@
+  * separate libraries.
+  */
+ G_DEFINE_BOXED_TYPE (XdpParent, xdp_parent, xdp_parent_copy, xdp_parent_free)
++
++static gboolean
++export_existing_handle (XdpParent         *parent,
++                        XdpParentExported  callback,
++                        gpointer           data)
++{
++  callback (parent, parent->exported_handle, data);
++  return TRUE;
++}
++
++static void
++unexport_existing_handle (XdpParent *parent)
++{
++  /* The caller, not this string wrapper, owns the native exported surface. */
++}
++
++/**
++ * xdp_parent_new_from_handle:
++ * @handle: an already exported window identifier, with x11: or wayland: prefix
++ *
++ * Wrap a window handle exported asynchronously by the caller's toolkit. The
++ * caller must keep the native export alive until the Portal request finishes.
++ * Copies of this parent own only their identifier strings. No native window
++ * functions or compositor round trips run when libportal exports this parent.
++ *
++ * Returns: (transfer full) (nullable): a parent, or %NULL for an invalid handle
++ */
++XdpParent *
++xdp_parent_new_from_handle (const char *handle)
++{
++  XdpParent *parent;
++
++  if (handle == NULL || !g_utf8_validate (handle, -1, NULL))
++    return NULL;
++  if (!((g_str_has_prefix (handle, "wayland:") && handle[8] != '\0') ||
++        (g_str_has_prefix (handle, "x11:") && handle[4] != '\0' &&
++         !g_str_equal (handle, "x11:0"))))
++    return NULL;
++
++  parent = g_new0 (XdpParent, 1);
++  parent->parent_export = export_existing_handle;
++  parent->parent_unexport = unexport_existing_handle;
++  parent->exported_handle = g_strdup (handle);
++  return parent;
++}
+ 
+ /**
+  * xdp_parent_copy:
+diff --git a/libportal/parent.h b/libportal/parent.h
+--- a/libportal/parent.h
++++ b/libportal/parent.h
+@@ -29,6 +29,9 @@
+ GType xdp_parent_get_type (void);
+ 
+ XDP_PUBLIC
++XdpParent *xdp_parent_new_from_handle (const char *handle);
++
++XDP_PUBLIC
+ XdpParent *xdp_parent_copy (XdpParent *source);
+ 
+ XDP_PUBLIC

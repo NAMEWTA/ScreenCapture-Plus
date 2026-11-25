@@ -83,6 +83,18 @@ bridge 保留可 drain 的终态事件并 join 所有任务；其接口和独立
 最多 50 个；停止时取消并等待这些后台任务。通知可以合并，设备状态及组播运行
 失败仍可查询，不能只依赖可能被合并的 UI 刷新通知。
 
+原有 `wait_stopped` 保留上游调用兼容；原生 bridge 使用
+`wait_stopped_checked` 获取真实 join 结果。三类监督任务共享按引用等待的
+JoinHandle 所有权，等待 future 被取消时不丢失任务；panic/abort 的错误对重复
+和并发调用保持可见。发现后台任务也捕获 panic、停止接纳新任务、取消并 join
+已有工作。组播接收 worker 的 panic 与普通网络不可用区分记录，不能将失败
+当作正常 shutdown。原生 bridge 在销毁 runtime 后才发出最后的 STOPPED。
+
+HTTP 连接 worker 的 TaskTracker 本身只跟踪退出、不返回 panic 结果，因此在
+连接 future 外显式捕获 unwind，记录不可清除的失败并取消同组连接和监听器。
+严格监听器保留的故障事件负责通知应用，checked join 再次核对该错误。已中毒的
+会话锁只在停止清理时恢复访问，以释放资源；不能恢复处理业务请求。
+
 ## 验证范围
 
 时间戳格式测试保留原有精确断言与往返断言。Windows 的 Rust `SystemTime`
@@ -101,6 +113,11 @@ bridge 保留可 drain 的终态事件并 join 所有任务；其接口和独立
 测试源码存在不等于测试通过。实际 Rust 编译、执行结果和双平台环境应记录在
 对应 CI 证据中。本地编写环境未安装 Rust/Cargo，不能据此宣称新改动已经通过。
 新增的 Pending 取消处理和哈希取消后 join 文件 IO 仍需跟随聚合库再次执行回归。
+checked join 的新增测试使用实际 Tokio worker 的 panic/abort，检查清理已执行，
+取消等待后仍能 join，满事件队列不丢失错误结果；源码写入不等于真实 CI 已通过。
+HTTP worker 回归先使实际会话锁中毒，再由真实 TLS prepare-upload 请求触发
+连接 task 的 unwind，检查监听故障、重复 checked join 的错误及原端口重新绑定。
+测试明确注入内部故障，没有给生产路径安装 panic 开关或替换 HTTP/TLS 服务。
 WebRTC signaling 的连接、回调和辅助发送函数只在原有 feature 启用时编译，
 保留其 DTO 测试；不压制整个 crate 的警告，也不为消除警告启用无关运行时。
 真实双机、官方桌面互通、全格式验证、吞吐/资源基线、统一 gifski staticlib、

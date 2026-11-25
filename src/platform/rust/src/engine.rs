@@ -1,6 +1,6 @@
 use crate::config::{self, Config};
 use crate::event::{self, HuhuEvent};
-use crate::receive::{HuhuReceive, ReceiveReport};
+use crate::receive::{HuhuReceive, ReceiveReport, SharedReceiveReport};
 use crate::status::{self, Error, Result};
 use futures_util::FutureExt;
 use localsend::discovery::{self, DeviceChannel, DeviceIdentity, DiscoveredDevice,
@@ -35,7 +35,7 @@ struct Incoming {
     decision: Option<oneshot::Sender<PrepareUploadDecisionV2>>,
     files: HashMap<String, FileDto>,
     accepted: HashSet<String>,
-    report: ReceiveReport,
+    report: SharedReceiveReport,
     cancel: CancellationToken,
     terminal: mpsc::OwnedPermit<HuhuEvent>,
 }
@@ -127,7 +127,7 @@ impl Shared {
             else { None }
         };
         let Some(incoming) = incoming else { return; };
-        let mut report = incoming.report.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let mut report = incoming.report.lock().unwrap_or_else(|error| error.into_inner()).statuses();
         for file in &incoming.accepted { report.entry(file.clone()).or_insert(status::IO); }
         let code = if reason != status::OK { reason }
             else if incoming.accepted.is_empty() { status::CANCELLED }
@@ -211,7 +211,8 @@ impl HuhuTransfer {
                 Ok(discovery) => Some(Arc::new(discovery)),
                 Err(error) => {
                     let _ = server_stop.send(());
-                    runtime.block_on(server.wait_stopped());
+                    runtime.block_on(server.wait_stopped_checked())
+                        .map_err(|_| Error::new(status::PANIC, "LocalSend supervisor failed during startup cleanup"))?;
                     return Err(Error::new(status::IO, error.to_string()));
                 }
             }
@@ -244,12 +245,16 @@ impl HuhuTransfer {
         });
         if let Some(discovery) = shared.discovery.clone() {
             let cancel = shared.cancel.clone();
+            let state = shared.clone();
             shared.tasks.spawn_on(async move {
-                tokio::select! {
-                    biased;
-                    _ = cancel.cancelled() => {},
-                    _ = discovery.announce() => {},
-                }
+                let announced = AssertUnwindSafe(async {
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => {},
+                        _ = discovery.announce() => {},
+                    }
+                }).catch_unwind().await;
+                if announced.is_err() { state.record_panic(); }
             }, runtime.handle());
         }
         Ok(Self { runtime: Some(runtime), shared, receiver: Mutex::new(receiver), pump: Some(pump),
@@ -282,8 +287,10 @@ impl HuhuTransfer {
         self.shared.request_stop();
         self.shared.tasks.close();
         runtime.block_on(async {
-            self.shared.server.wait_stopped().await;
-            if let Some(discovery) = &self.shared.discovery { discovery.wait_stopped().await; }
+            if self.shared.server.wait_stopped_checked().await.is_err() { self.shared.record_panic(); }
+            if let Some(discovery) = &self.shared.discovery {
+                if discovery.wait_stopped_checked().await.is_err() { self.shared.record_panic(); }
+            }
             self.shared.tasks.wait().await;
             if let Some(pump) = self.pump.take() {
                 if pump.await.is_err() { self.shared.fatal_status.store(status::PANIC, Ordering::Release); }
@@ -326,7 +333,7 @@ async fn pump_events(shared: Arc<Shared>, mut server_events: mpsc::Receiver<Serv
                         if incoming.is_some() { let _ = decision_tx.send(PrepareUploadDecisionV2::Decline); continue; }
                         // Store BEFORE the event can be polled and answered.
                         *incoming = Some(Incoming { id: session_id.clone(), decision: Some(decision_tx), files,
-                            accepted: HashSet::new(), report: Arc::new(Mutex::new(HashMap::new())),
+                            accepted: HashSet::new(), report: Arc::new(Mutex::new(ReceiveReport::default())),
                             cancel: shared.cancel.child_token(), terminal });
                         if shared.events.try_send(event).is_err() {
                             if let Some(mut rejected) = incoming.take() {
@@ -382,6 +389,13 @@ async fn pump_events(shared: Arc<Shared>, mut server_events: mpsc::Receiver<Serv
             }
             received = discovery_events.recv(), if !discovery_closed => {
                 match received {
+                    Some(DiscoveryEvent::BackgroundFailed) => {
+                        shared.record_panic();
+                        if let Some(terminal) = fatal_event.take() {
+                            terminal.send(HuhuEvent::error(event::LISTENER_ERROR, 0,
+                                Error::new(status::PANIC, "LocalSend discovery worker panicked")));
+                        }
+                    }
                     Some(DiscoveryEvent::MulticastFailed) => shared.update(HuhuEvent::new(event::DISCOVERY_CHANGED,
                         status::IO, 0, json!({"multicastAvailable": false}))),
                     Some(_) => shared.update(HuhuEvent::new(event::DISCOVERY_CHANGED, status::OK, 0, json!({}))),

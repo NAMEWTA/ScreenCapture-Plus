@@ -12,7 +12,39 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub type ReceiveReport = Arc<Mutex<HashMap<String, i32>>>;
+#[derive(Default)]
+pub struct ReceiveReport {
+    generation: u64,
+    files: HashMap<String, Attempt>,
+}
+
+struct Attempt {
+    generation: u64,
+    status: Option<i32>,
+}
+
+impl ReceiveReport {
+    fn begin(&mut self, file_id: &str) -> Result<u64> {
+        self.generation = self.generation.checked_add(1)
+            .ok_or_else(|| Error::new(status::INVALID_STATE, "Receive attempt space exhausted"))?;
+        self.files.insert(file_id.to_owned(), Attempt { generation: self.generation, status: None });
+        Ok(self.generation)
+    }
+
+    fn record(&mut self, file_id: &str, generation: u64, status: i32) {
+        // A checksum failure permits a new upload with the same file/token.
+        // The previous consumer can outlive that retry, but cannot amend it.
+        if let Some(attempt) = self.files.get_mut(file_id).filter(|attempt| attempt.generation == generation) {
+            attempt.status = Some(status);
+        }
+    }
+
+    pub fn statuses(&self) -> HashMap<String, i32> {
+        self.files.iter().map(|(id, attempt)| (id.clone(), attempt.status.unwrap_or(status::IO))).collect()
+    }
+}
+
+pub type SharedReceiveReport = Arc<Mutex<ReceiveReport>>;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -38,17 +70,21 @@ pub struct HuhuReceive {
     global_cancel: CancellationToken,
     session_cancel: CancellationToken,
     file_id: String,
+    generation: u64,
     kind: u32,
-    report: ReceiveReport,
+    report: SharedReceiveReport,
     inner: Mutex<Inner>,
 }
 
 impl HuhuReceive {
     pub fn new(runtime: Handle, global_cancel: CancellationToken,
         session_cancel: CancellationToken, file_id: String, mime: &str,
-        report: ReceiveReport, receiver: VerifiedUploadReceiver) -> Result<Self> {
-        Ok(Self { runtime, global_cancel, session_cancel, file_id,
-            kind: lease::kind_from_mime(mime)?, report,
+        report: SharedReceiveReport, receiver: VerifiedUploadReceiver) -> Result<Self> {
+        let kind = lease::kind_from_mime(mime)?;
+        let generation = report.lock().map_err(|_| Error::new(status::PANIC, "Receive report was poisoned"))?
+            .begin(&file_id)?;
+        Ok(Self { runtime, global_cancel, session_cancel, file_id, generation,
+            kind, report,
             inner: Mutex::new(Inner { chunks: receiver.chunks, pending: Bytes::new(), eof: false,
                 verification: Some(receiver.verification), verified: None, failed: None,
                 completion: Some(receiver.completion) }) })
@@ -56,7 +92,7 @@ impl HuhuReceive {
 
     fn record(&self, status: i32) {
         self.report.lock().unwrap_or_else(|error| error.into_inner())
-            .insert(self.file_id.clone(), status);
+            .record(&self.file_id, self.generation, status);
     }
 
     fn stopped(&self) -> bool {
@@ -180,7 +216,8 @@ impl Drop for HuhuReceive {
         if let Some(completion) = inner.completion.take() {
             inner.chunks.close();
             let code = inner.failed.unwrap_or(status::CANCELLED);
-            self.report.lock().unwrap_or_else(|error| error.into_inner()).insert(self.file_id.clone(), code);
+            self.report.lock().unwrap_or_else(|error| error.into_inner())
+                .record(&self.file_id, self.generation, code);
             let _ = completion.send(Err(UploadFailure::Cancelled));
         }
     }

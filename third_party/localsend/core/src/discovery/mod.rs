@@ -13,9 +13,11 @@ use crate::model::discovery::{MulticastMessageV2, ProtocolType};
 use crate::multicast::{self, MulticastConfig, MulticastDevice, MulticastEvent, MulticastHandle};
 use crate::util::error::ErrorChain;
 use crate::util::interface::InterfaceFilter;
-use futures_util::StreamExt;
+use crate::util::joined_task::JoinedTask;
+use futures_util::{FutureExt, StreamExt};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -128,6 +130,10 @@ pub enum DiscoveryEvent {
     /// the application should restart discovery to rebind the sockets.
     /// HTTP-based discovery (probes and subnet scans) keeps working.
     MulticastFailed,
+
+    /// An owned discovery worker panicked. Discovery is stopping; the sticky
+    /// failure is also returned by `wait_stopped_checked` if this hint is full.
+    BackgroundFailed,
 }
 
 struct DiscoveryState {
@@ -154,6 +160,7 @@ struct DiscoveryState {
     secure_only: bool,
     cancel: CancellationToken,
     tasks: TaskTracker,
+    task_failed: AtomicBool,
     task_gate: std::sync::Mutex<()>,
     background_slots: Arc<Semaphore>,
     requests: Semaphore,
@@ -163,7 +170,16 @@ impl DiscoveryState {
     fn spawn_background(self: &Arc<Self>, task: impl std::future::Future<Output = ()> + Send + 'static) -> bool {
         let _gate = self.task_gate.lock().unwrap();
         if self.cancel.is_cancelled() || self.tasks.is_closed() { return false; }
-        self.tasks.spawn(task);
+        let state = self.clone();
+        self.tasks.spawn(async move {
+            if AssertUnwindSafe(task).catch_unwind().await.is_err() {
+                state.task_failed.store(true, Ordering::Release);
+                if let Some(events) = &state.event_tx {
+                    let _ = events.try_send(DiscoveryEvent::BackgroundFailed);
+                }
+                state.cancel.cancel();
+            }
+        });
         true
     }
 
@@ -292,7 +308,7 @@ pub struct DiscoveryHandle {
     /// keeps working without it, see [`DiscoveryHandle::multicast_error`].
     multicast: Result<MulticastHandle, anyhow::Error>,
     state: Arc<DiscoveryState>,
-    supervisor: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    supervisor: JoinedTask,
 }
 
 impl DiscoveryHandle {
@@ -567,12 +583,32 @@ impl DiscoveryHandle {
     /// Waits until discovery has terminated and the multicast sockets have
     /// been closed, so that the port can be bound again.
     /// Must be called after requesting a stop via the stop channel.
-    /// Returns immediately when multicast is unavailable.
     pub async fn wait_stopped(&self) {
-        if let Some(task) = self.supervisor.lock().await.take() { let _ = task.await; }
-        if let Ok(multicast) = &self.multicast {
-            multicast.wait_stopped().await;
+        if let Err(error) = self.wait_stopped_checked().await {
+            tracing::error!("Discovery shutdown failed: {error:#}");
         }
+    }
+
+    /// Joins every owned task and preserves supervisor/background failures.
+    /// Multicast being unavailable at startup is not a shutdown failure.
+    pub async fn wait_stopped_checked(&self) -> anyhow::Result<()> {
+        let supervisor = self.supervisor.wait().await;
+        // Also run this cleanup after a supervisor unwind. Nothing admitted
+        // before the gate closed may outlive the successful join result.
+        {
+            let _gate = self.state.task_gate.lock().unwrap_or_else(|error| error.into_inner());
+            self.state.cancel.cancel();
+            self.state.tasks.close();
+        }
+        self.state.tasks.wait().await;
+        let mut multicast_result = Ok(());
+        if let Ok(multicast) = &self.multicast {
+            multicast_result = multicast.wait_stopped_checked().await;
+        }
+        supervisor?;
+        multicast_result?;
+        anyhow::ensure!(!self.state.task_failed.load(Ordering::Acquire), "discovery worker panicked");
+        Ok(())
     }
 
     /// The runtime socket failure remains observable even when an informational
@@ -660,6 +696,7 @@ async fn start_inner(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>, se
         secure_only,
         cancel: CancellationToken::new(),
         tasks: TaskTracker::new(),
+        task_failed: AtomicBool::new(false),
         task_gate: std::sync::Mutex::new(()),
         background_slots: Arc::new(Semaphore::new(BACKGROUND_CONCURRENCY)),
         requests: Semaphore::new(SCAN_CONCURRENCY),
@@ -707,9 +744,12 @@ async fn start_inner(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>, se
     let supervisor = tokio::spawn({
         let state = state.clone();
         async move {
-            let _ = stop_rx.await;
+            tokio::select! {
+                _ = stop_rx => {},
+                _ = state.cancel.cancelled() => {},
+            }
             {
-                let _gate = state.task_gate.lock().unwrap();
+                let _gate = state.task_gate.lock().unwrap_or_else(|error| error.into_inner());
                 state.cancel.cancel();
                 state.tasks.close();
             }
@@ -717,7 +757,7 @@ async fn start_inner(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>, se
             state.tasks.wait().await;
         }
     });
-    DiscoveryHandle { multicast, state, supervisor: tokio::sync::Mutex::new(Some(supervisor)) }
+    DiscoveryHandle { multicast, state, supervisor: JoinedTask::new(supervisor) }
 }
 
 /// Answers an announcement with a register request, as the protocol requires.
@@ -885,5 +925,51 @@ fn confirmed_device(
             protocol,
         }),
         download: response.download,
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn actual_background_panic_is_joined_even_when_event_queue_is_full() {
+        let identity = crate::crypto::cert::generate_self_signed().unwrap();
+        let (events, mut event_rx) = mpsc::channel(1);
+        // Fill the informational queue before the worker fails. The checked
+        // join must carry the persistent error even if its hint cannot fit.
+        events.try_send(DiscoveryEvent::MulticastFailed).unwrap();
+        let (_stop, stop_rx) = oneshot::channel();
+        let handle = start_secure(DiscoveryConfig {
+            group: multicast::DEFAULT_MULTICAST_GROUP,
+            group_v6: None,
+            port: 0,
+            interface_filter: InterfaceFilter { whitelist: Some(vec!["127.0.0.1".into()]), blacklist: None },
+            device: MulticastDevice { alias: "join test".into(), version: "2.2".into(),
+                device_model: None, device_type: None, fingerprint: identity.fingerprint,
+                port: 53317, protocol: ProtocolType::Https, download: false },
+            identity: DeviceIdentity { cert_pem: identity.certificate_pem, private_key_pem: identity.private_key_pem },
+            timeout: Duration::from_millis(100), event_tx: Some(events),
+        }, stop_rx).await.unwrap();
+        let dropped = Arc::new(AtomicBool::new(false));
+        struct Worker(Arc<AtomicBool>);
+        impl Drop for Worker {
+            fn drop(&mut self) { self.0.store(true, Ordering::Release); }
+        }
+        let worker = Worker(dropped.clone());
+        assert!(handle.state.spawn_background(async move {
+            let _worker = worker;
+            panic!("exercise a real discovery worker unwind");
+        }));
+        let failure = tokio::time::timeout(Duration::from_secs(5), handle.wait_stopped_checked())
+            .await.unwrap().unwrap_err();
+        assert!(failure.to_string().contains("panicked"));
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(handle.state.tasks.is_empty());
+        assert!(handle.state.tasks.is_closed());
+        assert!(!handle.state.spawn_background(async {}));
+        assert!(handle.wait_stopped_checked().await.is_err());
+        assert!(matches!(event_rx.try_recv().unwrap(), DiscoveryEvent::MulticastFailed));
+        assert!(event_rx.try_recv().is_err());
     }
 }

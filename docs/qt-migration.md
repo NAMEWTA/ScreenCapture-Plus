@@ -15,14 +15,15 @@
 | 路径 | 当前职责 | 需要继续完成的部分 |
 | --- | --- | --- |
 | `src/core/` | 无 Qt / Win32 的像素、批注排版、活动历史、归档命名、录制结果和时间合同 | 会话、能力与跨屏坐标的完整产品合同 |
-| `src/editor/` 的模型与 `EditorDocument.h` | 共用几何、拖动、文字、编号、批注与唯一活动历史；原 Windows 工具直接复用 | 正式 Qt 九工具画布和采集会话接入 |
+| `src/editor/` 的模型与 `EditorDocument.h` | 共用几何、拖动、文字、编号、批注、工具参数与唯一活动历史；原 Windows 工具直接复用 | 采集会话及完整产品入口接入 |
+| `src/ui/qt/Editor*` | 共用九工具画布、单一文字输入、完整批注面板、原图马赛克及带令牌的异步输出请求 | 组件实际编译与交互验证、归档 / 剪贴板 / 贴图服务接线、真实 IME 与混合 DPI |
 | `src/services/rendering/` | Qt 字体测量、完整备注排版和离屏合图，保留原图像素与失败时旧输出 | 正式编辑器导出接入及真实桌面字体 / IME 验收 |
 | `src/services/config/` | UTF-8 / UTF-16 JSON 读取、未知字段保留、首次迁移备份、路径选择与原子替换 | 设置页面、运行时效果、系统自启与快捷键接入 |
 | `src/services/localization/` | 六份原语言、同一 BOM 解析器、英语回退、目录优先级和缓存刷新 | 正式窗口语言切换、长译文与 IME 验收 |
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
-| `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理 | 异步 Wayland 父窗导出、PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
-| `third_party/localsend/` | 固定上游 core、受控补丁、真实 TLS / 文件流测试和依赖锁 | 聚合 Rust 静态库 / C ABI、Qt 设备与任务服务、完整媒体解码及两端互传 |
+| `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；复用 KWindowSystem 的异步 Wayland 父窗导出 | 异步导出的真实合成器验证、PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
+| `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭 | 双平台同进程 ABI 与依赖锁验证、Qt 设备和任务服务、完整媒体解码及两端互传 |
 
 同一工具的交互规则不能因为平台迁移而被“统一”成不同语义。例如普通矩形越过对边时可以翻转，批注范围则限制在原图内；普通序号按活动最大值加一，批注高水位编号永不复用。移动、文字与样式修改仍遵循现有历史语义，不借模型抽取改变撤销行为。
 
@@ -47,14 +48,14 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 | P00 | 实施与验证中 | Qt / 原生媒体 / Rust 同进程、Portal 三类接口、Linux 软件编码与许可、固定机器性能基线 |
 | P01 | CMake 与双平台组件 CI 已接入 | 唯一产品版本、完整固定恢复、正式最小 Qt 壳与安装链 |
 | P02 | 未验收 | 真实共用控件、字体 / 弹层 / 密度样例、混合 DPI 拖动 |
-| P03 | 九工具模型与 EditorDocument 已由旧产品复用 | 会话及正式 Qt 集成 |
+| P03 | 九工具模型、工具参数、马赛克与 EditorDocument 已由旧产品和 Qt 编辑器共用 | 会话及正式 Qt 产品集成 |
 | P04 | 原生媒体 / 文件边界解耦中 | 截图、热键、窗口 / 光标、COM 与录制全生命周期 |
 | P05 | Portal 控制面实施与验证中 | X11、PipeWire、全局键及真实桌面能力矩阵 |
 | P06 | 配置、语言和文件发布合同已实现 | QR / 回收 / 剪贴板 / 缩略图 / lease 的完整迁移 |
-| P07 | 未验收 | 正式 Qt CLI / 单实例 / 托盘、设置 / 历史 / 关于及完整编辑器 |
+| P07 | 共享 Qt 编辑器组件进入验证，未验收 | 正式 Qt CLI / 单实例 / 托盘、设置 / 历史 / 关于及采集和输出服务接线 |
 | P08 | 未验收 | 共用长截图会话、平台帧源与实际滚动 |
 | P09 | Windows 错误和 finalize 边界已修复 | Qt 工具条、Linux MP4 / 音频、共享 GIF、长时同步与恢复 |
-| P10 | 上游 core 适配与故障测试中 | C ABI、任务和设备 UI、接收归档与 P10a 双平台互传；P10b 独立记录 |
+| P10 | 上游 core、聚合 C ABI 及故障测试实施中 | 同进程验证、任务和设备 UI、接收归档与 P10a 双平台互传；P10b 独立记录 |
 | P11 | 未验收 | 旧版更新桥接、完整包下载及 Windows / Linux 安装格式 |
 | P12 | 未验收 | F01–F15、真实双屏 / IME / 音视频、性能、稳定性和干净机器升级卸载 |
 | P13 | 等待 P12 | 删除旧生产架构后从干净检出重新验证 |
@@ -66,12 +67,12 @@ v0.0.5 的下载、单 EXE 与 Windows 10 1803 支持说明只适用于旧产品
 
 `qt_image_contract` 验证真实 Qt 像素与导出边界，Windows 另链接保留的原生媒体后端；`qt_annotation_render` 写出完整 PNG 并检查字体和像素；`qt_settings_store` 操作真实文件系统；`windows_audio_format` 用保护页验证格式读取边界。Linux 的 Portal 故障测试使用真实 D-Bus 和不存在的服务，证明错误、取消、晚到回调与释放，不替代授权对话框或 PipeWire 帧采集。
 
-Windows 的字体测试使用原生 `windows` Qt 平台插件但不创建可见顶层窗；Linux 的离屏文字测试安装实际中文字体。Windows `offscreen` 的占位字体引擎不能作为中文字体覆盖证据。PNG 只证明已执行的导出场景，不能证明中文输入法、键盘焦点或跨屏拖动。
+Windows 的字体测试使用原生 `windows` Qt 平台插件；Linux 的离屏文字测试安装实际中文字体。编辑器组件测试创建真实 Qt 控件并直接驱动受控输入，不等同于物理键鼠或系统 IME。Windows `offscreen` 的占位字体引擎不能作为中文字体覆盖证据。PNG 只证明已执行的导出场景，不能证明中文输入法或跨屏拖动。
 
 当前执行环境不能承担实体双屏、音源四组合、GNOME / Plasma 授权、长时录制和空白机器安装验收。这些项保持未验证，并在对应 PR / Issue 留出明确状态。所有必要发布门槛完成以前，不修改正式发布声明、不关闭实施 Issue、不生成声称已经交付双平台产品的正式 Release。
 
 ## 固定依赖与复用记录
 
-实际已接入的验证版本集中在 [依赖锁](../build/dependencies.lock.json)，不覆盖仍服务于旧产品的工具链。Qt 使用匹配的 v143 和动态 CRT `/MD` / `/MDd`；旧产品的 v145 / `/MT` 在 P13 前保留原验证入口。Qt SDK 资产与最终部署工具的完整哈希清单仍是 P00 待完成项。
+实际已接入的验证版本集中在 [依赖锁](../build/dependencies.lock.json)，不覆盖仍服务于旧产品的工具链。Qt 使用匹配的 v143 和动态 CRT；C++ 组件分别验证 `/MD` 与 `/MDd`。固定 Rust 标准库使用 release CRT，所以聚合 ABI 目标只接受 Release / RelWithDebInfo 的 `/MD`，不通过屏蔽链接冲突伪装为 Debug 兼容。旧产品的 v145 / `/MT` 在 P13 前保留原验证入口。Qt SDK 资产与最终部署工具的完整哈希清单仍是 P00 待完成项。
 
 LocalSend 源码来源、逐文件 blob、改动补丁与许可见 [LocalSend core](localsend-core.md)。libportal 的来源、补丁范围、构建与真实桌面 probe 见 [Linux Portal](linux-portal.md)。其他原生实现延续 [上游致谢](upstream.md) 中记录的归属。Qt、gifski、libportal、FFmpeg / x264 各有自己的许可条件；仓库根 MIT 许可不等于最终组合二进制只有 MIT 条款。

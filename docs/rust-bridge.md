@@ -75,6 +75,14 @@ Qt Debug 的既有独立组件测试继续执行，Windows `/MDd` 聚合仍是�
 事件是 `STOPPED`，空队列随后返回 `CLOSED`。系统文件操作本身阻塞时，停止需要
 等待它实际结束；不能一边报告释放完成一边保留访问旧句柄的线程。
 
+bridge 调用 core 的 `wait_stopped_checked`。HTTP、发现、组播的监督任务被真正
+join 后才释放其句柄；重复或并发等待保留原来的 panic/abort 结果。取消一次等待
+不会消费任务所有权，也不会让下次等待伪报成功。后台发现任务的 panic 会停止
+发现，并由 checked join 保留错误，即使刷新事件队列已满。停止结果与 `STOPPED`
+的 status 都会报告 `PANIC`，不能只在日志里留下错误后返回 OK。
+HTTP 连接 worker 的 panic 同样进入持久失败状态，并取消监听和同组连接；不能
+因 TaskTracker 已空就把该次退出当作成功。
+
 项目导出函数在 ABI 边界捕获 Rust panic，异步业务 worker 的 panic 转为明确
 终态并请求停止。gifski 保持上游 C API；传入的像素尺寸、跨度、时间戳与回调
 生命周期仍须遵循其头文件。C++ 异常不得越过 upstream C 回调，finish 返回值
@@ -107,6 +115,10 @@ peer 参数必须带真实 TLS 发现得到的 fingerprint，alias 不参与认�
 成功回执。接收方取消会同时处理 core 的 Pending 和 Active 会话，防止决定与
 激活交错后出现晚到的“复活”会话。
 
+官方协议允许相同 fileId/token 在 SHA 错误后重新上传。每次文件交接都有自己的
+内部代次；旧 receive 延迟释放或完成时不能覆盖新尝试的状态。`RECEIVE_END.files`
+反映每个文件最后一次被接纳的尝试；还未完成的尝试不会因前一次失败而伪装完成。
+
 ## 事件数据
 
 `HuhuEventView` 的 kind/status/operation 是固定宽度字段。json 切片只在 event
@@ -137,6 +149,11 @@ httpStatus。每个已获准的 send/discover operation 恰有一个 END；拒�
 错误、停止与终态、手动 TLS 发现。归档错误用例显式注入应用 IO 失败；它不声称
 已经完成成功归档。`tests/qt/rust_bridge_probe.cpp` 负责同一个 Qt 进程内的真实
 gifski 编码/逐帧解码、TLS、SHA、FileCommitter 与错误/退出验证。
+
+重试回归通过实际 TLS 发送同长度错误内容，收到 422 后使用同一 token 重试，
+保留旧 receive 到新尝试归档报错之后再释放；第二个文件保持会话打开，最后逐项
+检查新状态没有被旧句柄覆盖。core 另运行真实 Tokio task panic/abort、并发和
+重复 join、取消等待后重新 join，以及通知满队列时的发现 worker 回收测试。
 
 这些源码存在不表示用例已运行。实际执行结果由对应 CI 记录；本地编写环境没有
 Rust/Cargo。当前聚合新增代码等待真实 CI 编译和运行，不能拿已通过的 core 测试

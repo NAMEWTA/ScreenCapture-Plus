@@ -77,6 +77,7 @@ if(BUILD_TESTING)
     huhucapture_test(number_model tests/number_model_tests.cpp)
     huhucapture_test(text_model tests/text_model_tests.cpp)
     huhucapture_test(editor_document tests/editor_document_tests.cpp)
+    huhucapture_test(mosaic_pixels tests/mosaic_pixels_tests.cpp)
     huhucapture_test(recording_results tests/recording_result_tests.cpp)
     if(TARGET huhucapture_file_committer)
         find_package(Threads REQUIRED)
@@ -112,6 +113,19 @@ if(HUHUCAPTURE_QT_VALIDATION)
         "${PROJECT_BINARY_DIR}/annotation-render/$<CONFIG>")
     target_link_libraries(qt_annotation_render PRIVATE huhucapture_annotation_renderer)
     set_tests_properties(qt_annotation_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
+    add_library(huhucapture_editor STATIC
+        src/ui/qt/EditorTypes.h src/ui/qt/EditorTypes.cpp
+        src/ui/qt/EditorShape.h src/ui/qt/EditorShape.cpp
+        src/ui/qt/EditorCanvas.h src/ui/qt/EditorCanvas.cpp
+        src/ui/qt/EditorWindow.h src/ui/qt/EditorWindow.cpp
+        resources/qt/huhucapture_ui.qrc)
+    set_target_properties(huhucapture_editor PROPERTIES AUTOMOC ON AUTORCC ON CXX_EXTENSIONS OFF)
+    target_link_libraries(huhucapture_editor PUBLIC huhucapture_annotation_renderer Qt6::Widgets)
+    huhucapture_test(qt_editor_components tests/qt/editor_component_tests.cpp
+        "${PROJECT_BINARY_DIR}/editor-render/$<CONFIG>")
+    target_link_libraries(qt_editor_components PRIVATE huhucapture_editor)
+    set_tests_properties(qt_editor_components PROPERTIES TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
     if(WIN32)
         add_test(NAME qt_annotation_missing_font
             COMMAND qt_annotation_render --expect-font-unavailable)
@@ -203,21 +217,37 @@ if(HUHUCAPTURE_QT_VALIDATION)
             message(FATAL_ERROR "Portal validation is only supported on Linux")
         endif()
         find_package(PkgConfig REQUIRED)
+        enable_language(C)
+        find_package(Qt6 6.12.1 EXACT REQUIRED COMPONENTS WaylandClient GuiPrivate)
         pkg_check_modules(LIBPORTAL REQUIRED IMPORTED_TARGET libportal=0.11.0)
         pkg_check_modules(LIBPORTAL_QT REQUIRED IMPORTED_TARGET libportal-qt6=0.11.0)
         pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.80)
+        pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client>=1.22)
+        if(NOT TARGET Wayland::Scanner)
+            find_program(WAYLAND_SCANNER_EXECUTABLE wayland-scanner REQUIRED)
+            add_executable(Wayland::Scanner IMPORTED)
+            set_target_properties(Wayland::Scanner PROPERTIES IMPORTED_LOCATION "${WAYLAND_SCANNER_EXECUTABLE}")
+        endif()
         find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
         add_library(huhucapture_portal STATIC
             src/platform/linux/portal/PortalTypes.h
             src/platform/linux/portal/PortalSupport.h
+            src/platform/linux/portal/PortalParent.h
+            src/platform/linux/portal/PortalParent.cpp
             src/platform/linux/portal/PortalCapture.h
             src/platform/linux/portal/PortalCapture.cpp
             src/platform/linux/portal/PortalShortcuts.h
-            src/platform/linux/portal/PortalShortcuts.cpp)
+            src/platform/linux/portal/PortalShortcuts.cpp
+            third_party/kwayland-parent/WaylandForeign.h
+            third_party/kwayland-parent/WaylandForeign.cpp)
         set_target_properties(huhucapture_portal PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
         target_compile_definitions(huhucapture_portal PRIVATE QT_NO_KEYWORDS)
         target_link_libraries(huhucapture_portal PUBLIC huhucapture_core Qt6::Core Qt6::Gui
-            PRIVATE Qt6::Widgets PkgConfig::LIBPORTAL PkgConfig::LIBPORTAL_QT PkgConfig::GIO)
+            PRIVATE Qt6::Widgets Qt6::GuiPrivate Qt6::WaylandClient PkgConfig::WAYLAND_CLIENT
+                PkgConfig::LIBPORTAL PkgConfig::LIBPORTAL_QT PkgConfig::GIO)
+        target_include_directories(huhucapture_portal PRIVATE "${PROJECT_SOURCE_DIR}/third_party/kwayland-parent")
+        qt6_generate_wayland_protocol_client_sources(huhucapture_portal PRIVATE_CODE
+            FILES "${PROJECT_SOURCE_DIR}/third_party/wayland-protocols/xdg-foreign-unstable-v2.xml")
         target_compile_options(huhucapture_portal PRIVATE -Wall -Wextra -Wpedantic)
         add_executable(portal_fault_tests tests/platform/portal_fault_tests.cpp)
         target_compile_definitions(portal_fault_tests PRIVATE QT_NO_KEYWORDS)
@@ -242,6 +272,10 @@ if(HUHUCAPTURE_QT_VALIDATION)
         add_executable(portal_shortcuts_probe tests/platform/portal_shortcuts_probe.cpp)
         target_compile_definitions(portal_shortcuts_probe PRIVATE QT_NO_KEYWORDS)
         target_link_libraries(portal_shortcuts_probe PRIVATE huhucapture_portal)
+        add_executable(portal_parent_probe tests/platform/portal_parent_probe.cpp)
+        target_compile_definitions(portal_parent_probe PRIVATE QT_NO_KEYWORDS)
+        target_link_libraries(portal_parent_probe PRIVATE huhucapture_portal Qt6::Widgets
+            PkgConfig::WAYLAND_CLIENT PkgConfig::LIBPORTAL PkgConfig::GIO)
         # This executable requires a real desktop and user authorization. It is
         # deliberately not reported as a passing offscreen CTest capture test.
     endif()

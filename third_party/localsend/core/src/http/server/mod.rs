@@ -15,12 +15,14 @@ use crate::http::server::v2::ServerEventV2;
 use crate::http::server::web::{WebConfig, WebShare};
 use crate::http::state::ClientInfo;
 use crate::http::limits::{TransferLimits, HEADER_BYTES, HEADER_COUNT};
+use crate::util::joined_task::JoinedTask;
 use common::client_cert_verifier::CustomClientCertVerifier;
 use common::error::AppError;
 use common::response;
 use common::response::BoxedBody;
 use common::session::SessionStateV2;
 use connection_limit::{ConnectionLimiter, LimitReached, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP};
+use futures_util::FutureExt;
 use hyper::body::Incoming;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
@@ -31,7 +33,8 @@ use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex as SyncMutex};
+use std::panic::AssertUnwindSafe;
+use std::sync::{Arc, Mutex as SyncMutex, atomic::{AtomicBool, Ordering}};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -101,6 +104,9 @@ pub struct AppState {
 
     /// Native receiver restrictions; absent for unchanged upstream callers.
     strict: Option<Arc<TransferLimits>>,
+
+    /// A worker failure must survive TaskTracker's completion-only wait.
+    task_failed: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -136,6 +142,7 @@ impl AppState {
             v2,
             connection_limiter: ConnectionLimiter::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP),
             strict: None,
+            task_failed: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -157,7 +164,8 @@ pub struct ServerHandle {
     /// The task running the accept loops. Completes after a stop has been
     /// requested, the listeners have been dropped and all connections have
     /// been closed.
-    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    task: JoinedTask,
+    task_failed: Arc<AtomicBool>,
 }
 
 impl ServerHandle {
@@ -203,9 +211,18 @@ impl ServerHandle {
     /// and all connections have been dropped, so that the port can be bound again.
     /// Must be called after requesting a stop via the stop channel.
     pub async fn wait_stopped(&self) {
-        if let Some(task) = self.task.lock().await.take() {
-            let _ = task.await;
+        if let Err(error) = self.wait_stopped_checked().await {
+            tracing::error!("HTTP shutdown failed: {error:#}");
         }
+    }
+
+    /// Joins the supervisor and reports its actual termination result. Errors
+    /// persist for repeated/concurrent waiters; dropping a waiter does not
+    /// consume or detach the task. Native applications must use this variant.
+    pub async fn wait_stopped_checked(&self) -> anyhow::Result<()> {
+        self.task.wait().await?;
+        anyhow::ensure!(!self.task_failed.load(Ordering::Acquire), "HTTP worker failed before orderly shutdown");
+        Ok(())
     }
 
     /// Cancels the pending or active v2 upload session if it matches `session_id`,
@@ -286,7 +303,7 @@ pub async fn start_with_port(
                         // `try_send` because this task must reach its end even
                         // when nobody consumes events anymore, so that
                         // `wait_stopped` cannot hang.
-                        if let Some(event_tx) = v2_event_tx {
+                        if let Some(event_tx) = &v2_event_tx {
                             let _ = event_tx.try_send(ServerEventV2::ListenerFailed {
                                 error: format!("{err:#}"),
                             });
@@ -305,6 +322,13 @@ pub async fn start_with_port(
                     tokio::time::sleep(std::time::Duration::from_secs(u64::MAX)).await;
                 } => {}
                 _ = stop_rx => {}
+                _ = cancel.cancelled() => {
+                    if let Some(event_tx) = &v2_event_tx {
+                        let _ = event_tx.try_send(ServerEventV2::ListenerFailed {
+                            error: "HTTP connection worker panicked".into(),
+                        });
+                    }
+                }
             }
 
             // Hard-drop connections that are still being served, so that no
@@ -320,7 +344,8 @@ pub async fn start_with_port(
         port: bound_port,
         ipv6_bound,
         bound_addresses: Vec::new(),
-        task: Mutex::new(Some(task)),
+        task: JoinedTask::new(task),
+        task_failed: state.task_failed.clone(),
     })
 }
 
@@ -392,10 +417,18 @@ pub async fn start_bound_v2(
             }
             tokio::select! {
                 _ = stop_rx => {},
+                _ = cancel.cancelled() => {
+                    listener_failure.send(ServerEventV2::ListenerFailed {
+                        error: "HTTP connection worker panicked".into(),
+                    });
+                },
                 result = accept_tasks.join_next() => {
                     let error = match result {
                         Some(Ok(Err(error))) => format!("{error:#}"),
-                        Some(Err(error)) => format!("{error:#}"),
+                        Some(Err(error)) => {
+                            state.task_failed.store(true, Ordering::Release);
+                            format!("{error:#}")
+                        },
                         _ => "listener stopped unexpectedly".to_string(),
                     };
                     listener_failure.send(ServerEventV2::ListenerFailed { error });
@@ -404,7 +437,7 @@ pub async fn start_bound_v2(
             // No selected listener may continue serving after another failed.
             cancel.cancel();
             if let Some(v2) = &state.v2 {
-                let mut slot = v2.session.lock().unwrap();
+                let mut slot = v2.session.lock().unwrap_or_else(|error| error.into_inner());
                 match slot.take() {
                     Some(SessionStateV2::Active(session)) => {
                         session.cancel.cancel();
@@ -423,13 +456,17 @@ pub async fn start_bound_v2(
                 }
             }
             accept_tasks.abort_all();
-            while accept_tasks.join_next().await.is_some() {}
+            while let Some(result) = accept_tasks.join_next().await {
+                if result.is_err_and(|error| !error.is_cancelled()) {
+                    state.task_failed.store(true, Ordering::Release);
+                }
+            }
             connections.close();
             connections.wait().await;
         }
     });
     Ok(ServerHandle { v2: state.v2, port: bound_port, ipv6_bound: false,
-        bound_addresses, task: Mutex::new(Some(task)) })
+        bound_addresses, task: JoinedTask::new(task), task_failed: state.task_failed })
 }
 
 /// Binds an IPv6 listener with `IPV6_V6ONLY` enabled.
@@ -606,7 +643,9 @@ async fn start_server_with_listener(
         let tls_acceptor = tls_acceptor.clone();
         let app_state = app_state.clone();
         let cancel = cancel.clone();
-        connections.spawn(async move {
+        let task_failed = app_state.task_failed.clone();
+        let worker_cancel = cancel.clone();
+        connections.spawn(supervise_connection(async move {
             let _permit = permit;
             let serve = serve_connection(tcp_stream, remote_addr, tls_acceptor, app_state);
             tokio::select! {
@@ -614,7 +653,80 @@ async fn start_server_with_listener(
                 // Hard-drop the connection when the server is stopped.
                 _ = cancel.cancelled() => {}
             }
-        });
+        }, task_failed, worker_cancel));
+    }
+}
+
+/// TaskTracker joins ownership but deliberately discards each task's result.
+/// Retain panic state and stop sibling connections before that result is lost.
+async fn supervise_connection(connection: impl std::future::Future<Output = ()>,
+    failed: Arc<AtomicBool>, cancel: CancellationToken) {
+    if AssertUnwindSafe(connection).catch_unwind().await.is_err() {
+        failed.store(true, Ordering::Release);
+        cancel.cancel();
+    }
+}
+
+#[cfg(test)]
+mod connection_failure_tests {
+    use super::*;
+    use crate::crypto::cert::generate_self_signed;
+    use crate::crypto::hash::sha256_hex;
+    use crate::http::client::LsHttpClientV2;
+    use crate::http::dto_v2::{PrepareUploadRequestDtoV2, RegisterDtoV2};
+    use crate::model::discovery::ProtocolType;
+    use crate::model::transfer::FileDto;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tls_connection_panic_stops_listener_and_checked_join_retains_failure() {
+        const PNG: &[u8] = include_bytes!("../../../tests/fixtures/one-pixel.png");
+        let server_identity = generate_self_signed().unwrap();
+        let sender_identity = generate_self_signed().unwrap();
+        let (events, mut events_rx) = mpsc::channel(4);
+        let (_stop, stop_rx) = oneshot::channel();
+        let handle = start_bound_v2(vec![Ipv4Addr::LOCALHOST], 0,
+            TlsConfig { cert: server_identity.certificate_pem, private_key: server_identity.private_key_pem },
+            ClientInfo { alias: "worker unwind receiver".into(), version: "2.2".into(),
+                device_model: None, device_type: None, token: server_identity.fingerprint.clone() },
+            ServerConfigV2 { pin: None, verify_checksums: true, event_tx: events },
+            TransferLimits::default(), stop_rx).await.unwrap();
+        let address = handle.local_addresses()[0];
+
+        // Deliberately poison the actual session lock, then exercise the real
+        // TLS/HTTP request path that encounters it. No production panic hook
+        // or replacement server is installed. Shutdown must recover this lock
+        // only for cancellation and release, never continue serving with it.
+        let v2 = handle.v2.as_ref().unwrap();
+        assert!(std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _session = v2.session.lock().unwrap();
+            panic!("inject session state failure before a real TLS request");
+        })).is_err());
+        assert!(!handle.task_failed.load(Ordering::Acquire));
+        let client = LsHttpClientV2::try_new(&sender_identity.private_key_pem,
+            &sender_identity.certificate_pem, Some(server_identity.fingerprint), Some(Duration::from_secs(5))).unwrap();
+        let file = FileDto { id: "file".into(), file_name: "failure.png".into(), size: PNG.len() as u64,
+            file_type: "image/png".into(), sha256: Some(sha256_hex(PNG)), preview: None, metadata: None };
+        let request = client.prepare_upload(ProtocolType::Https, "127.0.0.1", handle.port(), None,
+            PrepareUploadRequestDtoV2 { info: RegisterDtoV2 {
+                alias: "worker unwind sender".into(), version: "2.2".into(), device_model: None,
+                device_type: None, fingerprint: sender_identity.fingerprint, port: 53317,
+                protocol: ProtocolType::Https, download: false,
+            }, files: HashMap::from([(file.id.clone(), file)]) }, None, CancellationToken::new());
+        assert!(tokio::time::timeout(Duration::from_secs(10), request).await.unwrap().is_err());
+        let event = tokio::time::timeout(Duration::from_secs(5), events_rx.recv()).await.unwrap().unwrap();
+        assert!(matches!(event, ServerEventV2::ListenerFailed { error }
+            if error == "HTTP connection worker panicked"));
+        let failure = tokio::time::timeout(Duration::from_secs(5), handle.wait_stopped_checked())
+            .await.unwrap().unwrap_err();
+        assert!(failure.to_string().contains("HTTP worker"));
+        assert!(handle.task_failed.load(Ordering::Acquire));
+        assert!(handle.wait_stopped_checked().await.is_err());
+        // This OS bind is possible only after every owned accept loop really
+        // dropped the previous listener, not merely after an error was logged.
+        let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+        assert_eq!(rebound.local_addr().unwrap(), address);
     }
 }
 

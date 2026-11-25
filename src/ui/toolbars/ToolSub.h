@@ -1,6 +1,7 @@
 #pragma once
 #include <include/Ling.h>
 #include "ui/toolbars/ToolbarMetrics.h"
+#include "editor/ToolSettings.h"
 
 class WinPin;
 class Tip;
@@ -107,5 +108,5 @@ private:
 	// 序号半径的取值范围（逻辑像素）。下限跟着 ShapeNumber 拖拽/滚轮的下限走，
 	// 上限给滑块留个头 —— 再大就超出滑块能表达的范围了，拖拽仍可继续放大，只是不再回写
 	static constexpr float numberMin{ 6.f }, numberMax{ 86.f };
-	std::vector<UINT32> colors = { 0XCF1322FF, 0XD48806FF, 0X389E0DFF, 0X13C2C2FF, 0X0958D9FF, 0X722ED1FF, 0XEB2F96FF, 0X000000FF, 0XFFFFFFFF };
+	std::vector<UINT32> colors{ HuhuCapture::Editor::toolColors.begin(), HuhuCapture::Editor::toolColors.end() };
 };

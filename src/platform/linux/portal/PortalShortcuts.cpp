@@ -1,8 +1,8 @@
 #include <libportal/portal.h>
-#include <libportal-qt6/portal-qt6.h>
 
 #include "platform/linux/portal/PortalShortcuts.h"
 #include "platform/linux/portal/PortalSupport.h"
+#include "platform/linux/portal/PortalParent.h"
 
 #include <QPointer>
 #include <QSet>
@@ -43,7 +43,7 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         QPointer<QWindow> parent;
         QMetaObject::Connection parentDestroyed;
         GCancellable* cancellable{g_cancellable_new()};
-        XdpParent* portalParent{};
+        std::shared_ptr<PortalParent> portalParent;
         XdpGlobalShortcutsSession* candidate{};
         gulong candidateClosedHandler{};
         QVector<PortalShortcutRequest> requested;
@@ -59,7 +59,6 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
                 xdp_global_shortcuts_session_close(candidate);
                 g_object_unref(candidate);
             }
-            if (portalParent) xdp_parent_free(portalParent);
             g_clear_object(&cancellable);
         }
     };
@@ -115,7 +114,7 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         return PortalSupport::checkContext(owner, capabilities.qtPlatform, capabilities.dispatcher);
     }
 
-    void cancel(const std::shared_ptr<Operation>& pending, PortalFailure reason) {
+    void cancel(std::shared_ptr<Operation> pending, PortalFailure reason) {
         if (!pending || pending->finished || pending->cancellation) return;
         pending->cancellation = std::move(reason);
         g_cancellable_cancel(pending->cancellable);
@@ -153,7 +152,7 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         if (pending->cancellation) error = pending->cancellation;
         pending->finished = true;
         QObject::disconnect(pending->parentDestroyed);
-        if (pending->portalParent) xdp_parent_free(std::exchange(pending->portalParent, nullptr));
+        pending->portalParent.reset();
         if (pending->candidate) {
             auto* session = xdp_global_shortcuts_session_get_session(pending->candidate);
             g_clear_signal_handler(&pending->candidateClosedHandler, session);
@@ -265,7 +264,8 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         auto* pending = static_cast<Operation*>(data);
         if (pending->finished || pending->cancellation) return;
         pending->cancellation = failure(Code::Unavailable, QStringLiteral("The pending shortcut session closed"));
-        g_cancellable_cancel(pending->cancellable);
+        g_autoptr(GCancellable) cancellation = G_CANCELLABLE(g_object_ref(pending->cancellable));
+        g_cancellable_cancel(cancellation);
     }
     static void sessionCreated(GObject* source, GAsyncResult* result, gpointer data) {
         const std::unique_ptr<Call> call(static_cast<Call*>(data));
@@ -279,8 +279,38 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
             return;
         }
         auto* session = xdp_global_shortcuts_session_get_session(pending->candidate);
+        if (xdp_session_get_session_state(session) == XDP_SESSION_CLOSED) {
+            state->finish(pending, failure(Code::Unavailable, QStringLiteral("Shortcut session closed before parent export")));
+            return;
+        }
         pending->candidateClosedHandler = g_signal_connect(session, "closed", G_CALLBACK(candidateClosed), pending.get());
-        pending->portalParent = xdp_parent_new_qt(pending->parent);
+        state->prepareParent(pending);
+    }
+
+    void prepareParent(const std::shared_ptr<Operation>& pending) {
+        pending->portalParent = PortalParent::create();
+        std::weak_ptr<Private> weakState = shared_from_this();
+        std::weak_ptr<Operation> weakPending = pending;
+        QObject::connect(pending->portalParent.get(), &PortalParent::prepared, pending->portalParent.get(),
+            [weakState, weakPending](const PortalFailure& error) {
+                const auto state = weakState.lock();
+                const auto operation = weakPending.lock();
+                if (!state || !operation || operation->finished) return;
+                if (error || operation->cancellation || state->stopped) { state->finish(operation, error); return; }
+                if (!operation->portalParent->nativeParent()) {
+                    state->finish(operation, failure(Code::ParentDestroyed, QStringLiteral("The exported shortcut parent is no longer valid")));
+                    return;
+                }
+                state->bindCandidate(operation);
+            });
+        QObject::connect(pending->portalParent.get(), &PortalParent::invalidated, pending->portalParent.get(),
+            [weakState, weakPending](const PortalFailure& error) {
+                if (const auto state = weakState.lock()) state->cancel(weakPending.lock(), error);
+            });
+        pending->portalParent->prepare(pending->parent, pending->cancellable);
+    }
+
+    void bindCandidate(const std::shared_ptr<Operation>& pending) {
         g_autoptr(GPtrArray) shortcuts = g_ptr_array_new_with_free_func(reinterpret_cast<GDestroyNotify>(xdp_global_shortcut_free));
         for (const auto& shortcut : pending->requested) {
             const auto id = shortcut.id.toUtf8();
@@ -289,8 +319,8 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
             g_ptr_array_add(shortcuts, xdp_global_shortcut_new(id.constData(), description.constData(),
                 trigger.isEmpty() ? nullptr : trigger.constData()));
         }
-        xdp_global_shortcuts_session_bind_shortcuts_with_parent(pending->candidate, shortcuts, pending->portalParent,
-            pending->cancellable, shortcutsBound, new Call{state, pending});
+        xdp_global_shortcuts_session_bind_shortcuts_with_parent(pending->candidate, shortcuts, pending->portalParent->nativeParent(),
+            pending->cancellable, shortcutsBound, new Call{shared_from_this(), pending});
     }
 
     static void shortcutsBound(GObject* source, GAsyncResult* result, gpointer data) {

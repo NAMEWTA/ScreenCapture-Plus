@@ -10,33 +10,11 @@
 using namespace Microsoft::WRL;
 
 namespace {
-	// 每个工具的滑块：值在 config.json 里的键名、值域、默认值（都是逻辑像素）。
-	// 键名各工具语义不同 —— 矩形/椭圆/箭头/线条是线宽，序号是圆半径，文字是字号。
-	// 集中放这一张表，是因为值域有两处要用：beginTool 建滑块，以及在图形上滚滚轮
-	// 改尺寸时（setShapeSliderVal）夹值 —— 分开写迟早会对不上。
-	struct SliderCfg {
-		const wchar_t* key;
-		float min, max, def;
-	};
-	const std::pair<const wchar_t*, SliderCfg> sliderCfgs[]{
-		{ L"rect",    { L"width",     1.f, 26.f,  2.f } },
-		{ L"ellipse", { L"width",     1.f, 26.f,  2.f } },
-		{ L"arrow",   { L"width",     1.f, 16.f,  3.f } },
-		{ L"number",  { L"radius",    6.f, 86.f, 16.f } },
-		{ L"line",    { L"width",     1.f, 60.f, 12.f } },
-		{ L"text",    { L"fontSize", 10.f, 60.f, 20.f } },
-		{ L"mosaic",  { L"width",    18.f, 68.f, 28.f } },
-		{ L"eraser",  { L"width",    18.f, 68.f, 28.f } },
-	};
-	// 找不到就返回 nullptr：调用方传的都是本文件里的字面量或图形自己的工具名，
-	// 真没命中说明表漏了一项，此时什么都不做比崩掉或按错值域夹要好
-	const SliderCfg* findSliderCfg(const std::wstring& tool)
-	{
-		for (auto& [id, cfg] : sliderCfgs) {
-			if (tool == id) return &cfg;
-		}
-		return nullptr;
-	}
+    using SliderCfg = HuhuCapture::Editor::ToolSlider;
+    const SliderCfg* findSliderCfg(const std::wstring& tool)
+    {
+        return HuhuCapture::Editor::findToolSlider(tool);
+    }
 }
 
 ToolSub::ToolSub(WinPin* win) :Ling::WinBase(), win(win)

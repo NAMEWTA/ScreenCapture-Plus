@@ -13,6 +13,7 @@ const INVALID_ARGUMENT: i32 = -1;
 const INVALID_STATE: i32 = -2;
 const IO: i32 = -3;
 const CANCELLED: i32 = -4;
+const CHECKSUM_MISMATCH: i32 = -7;
 const CLOSED: i32 = -11;
 
 struct Engine(*mut HuhuTransfer, Value);
@@ -260,5 +261,136 @@ fn explicit_tls_discovery_returns_verified_peer_identity() {
     assert_eq!((discovered.view().operation, discovered.view().status), (operation, OK));
     assert_eq!(discovered.json()["fingerprint"], receiver.1["fingerprint"]);
     sender.stop();
+    receiver.stop();
+}
+
+#[test]
+fn late_failed_receive_cannot_overwrite_a_real_tls_retry_result() {
+    use localsend::crypto::{cert::generate_self_signed, hash::sha256_hex};
+    use localsend::http::client::{ClientError, LsHttpClientV2};
+    use localsend::http::dto_v2::{PrepareUploadRequestDtoV2, RegisterDtoV2};
+    use localsend::model::{discovery::ProtocolType, transfer::FileDto};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+
+    fn take(receiver: &Engine, id: &str) -> Receive {
+        let event = receiver.next(2);
+        assert_eq!(event.json()["fileId"], id);
+        let mut raw = ptr::null_mut();
+        unsafe { assert_eq!(huhu_event_take_receive(event.0, &mut raw), OK); }
+        Receive(raw)
+    }
+
+    fn consume(receive: &Receive, expected: &[u8], verification_status: i32) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut actual = Vec::new();
+        let mut bytes = [0; 17];
+        loop {
+            assert!(Instant::now() < deadline);
+            let mut count = 0;
+            let code = unsafe { huhu_receive_read(receive.0, bytes.as_mut_ptr(), bytes.len(), &mut count, 100) };
+            if code == TIMEOUT { continue; }
+            if code == END { assert_eq!(count, 0); break; }
+            assert_eq!(code, OK);
+            assert!(count > 0 && count <= bytes.len());
+            actual.extend_from_slice(&bytes[..count]);
+        }
+        assert_eq!(actual, expected);
+        let mut verification = HuhuVerification::default();
+        loop {
+            assert!(Instant::now() < deadline);
+            let code = unsafe { huhu_receive_verify(receive.0, 100, &mut verification) };
+            if code == TIMEOUT { continue; }
+            assert_eq!(code, verification_status);
+            break;
+        }
+        if verification_status == OK {
+            assert_eq!(verification.received_bytes, expected.len() as u64);
+            assert_eq!(verification.sender_checksum_matched, 1);
+            assert_eq!(verification.media_kind, 1);
+        }
+    }
+
+    fn expect_http(runtime: &tokio::runtime::Runtime,
+        task: tokio::task::JoinHandle<Result<(), ClientError>>, status: u16) {
+        let result = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(20), task).await.unwrap().unwrap()
+        });
+        assert!(matches!(&result, Err(ClientError::StatusCode(error)) if error.status == status),
+            "expected HTTP {status}, received {result:?}");
+    }
+
+    let receiver = Engine::new();
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let identity = generate_self_signed().unwrap();
+    let client = {
+        let _entered = runtime.enter();
+        Arc::new(LsHttpClientV2::try_new(&identity.private_key_pem, &identity.certificate_pem,
+            Some(receiver.1["fingerprint"].as_str().unwrap().to_owned()), Some(Duration::from_secs(20))).unwrap())
+    };
+    let port = receiver.1["port"].as_u64().unwrap() as u16;
+    let files: HashMap<_, _> = ["retry", "last"].into_iter().map(|id| (id.to_owned(), FileDto {
+        id: id.to_owned(), file_name: format!("{id}.png"), size: PNG.len() as u64,
+        file_type: "image/png".into(), sha256: Some(sha256_hex(PNG)), preview: None, metadata: None,
+    })).collect();
+    let prepare = runtime.spawn({
+        let client = client.clone();
+        async move {
+            client.prepare_upload(ProtocolType::Https, "127.0.0.1", port, None,
+                PrepareUploadRequestDtoV2 { info: RegisterDtoV2 {
+                    alias: "real retry sender".into(), version: "2.2".into(), device_model: None,
+                    device_type: None, fingerprint: identity.fingerprint, port: 53317,
+                    protocol: ProtocolType::Https, download: false,
+                }, files }, None, CancellationToken::new()).await
+        }
+    });
+    let offer = receiver.next(1).json();
+    assert_eq!(offer["files"].as_array().unwrap().len(), 2);
+    let session_id = offer["sessionId"].as_str().unwrap();
+    let selected = br#"["retry","last"]"#;
+    unsafe { assert_eq!(huhu_transfer_accept(receiver.0, session_id.as_ptr(), session_id.len(),
+        selected.as_ptr(), selected.len()), OK); }
+    let session = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(20), prepare).await.unwrap().unwrap().unwrap().response.unwrap()
+    });
+    let upload = |id: &str, body: Vec<u8>| {
+        let client = client.clone();
+        let token = session.files[id].clone();
+        let session_id = session.session_id.clone();
+        let id = id.to_owned();
+        runtime.spawn(async move {
+            client.upload(ProtocolType::Https, "127.0.0.1", port, None, &session_id, &id,
+                &token, body.into(), CancellationToken::new()).await
+        })
+    };
+
+    // Corrupt the real request body without changing its length or PNG magic.
+    // The HTTP 422 keeps this file/token retryable; retain its C consumer.
+    let mut corrupt = PNG.to_vec();
+    *corrupt.last_mut().unwrap() ^= 1;
+    let first = upload("retry", corrupt.clone());
+    let old = take(&receiver, "retry");
+    consume(&old, &corrupt, CHECKSUM_MISMATCH);
+    expect_http(&runtime, first, 422);
+
+    let second = upload("retry", PNG.to_vec());
+    let retry = take(&receiver, "retry");
+    consume(&retry, PNG, OK);
+    // The archive reports a real failure, so there is no fabricated durable
+    // receipt. A second offered file keeps RECEIVE_END from racing this drop.
+    unsafe { assert_eq!(huhu_receive_complete(retry.0, IO, 1), OK); }
+    expect_http(&runtime, second, 500);
+    drop(retry);
+    drop(old); // Must not replace the retry's IO with the old checksum error.
+
+    let last = upload("last", PNG.to_vec());
+    let receive = take(&receiver, "last");
+    consume(&receive, PNG, OK);
+    unsafe { assert_eq!(huhu_receive_complete(receive.0, IO, 1), OK); }
+    expect_http(&runtime, last, 500);
+    let ended = receiver.next(3);
+    assert_eq!(ended.view().status, IO);
+    assert_eq!(ended.json()["files"], json!({"retry": IO, "last": IO}));
     receiver.stop();
 }

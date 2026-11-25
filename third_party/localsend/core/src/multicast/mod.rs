@@ -13,6 +13,7 @@ mod socket;
 
 use crate::model::discovery::{DeviceType, MulticastMessageV2, ProtocolType};
 use crate::util::interface::InterfaceFilter;
+use crate::util::joined_task::JoinedTask;
 use serde::Serialize;
 use socket::MulticastSocket;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -20,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
 
 /// The multicast group used by LocalSend.
@@ -172,6 +173,7 @@ struct MulticastState {
     /// releases the port and turns further sends into no-ops.
     sockets: RwLock<Vec<SendSocket>>,
     failed: AtomicBool,
+    task_failed: AtomicBool,
 }
 
 /// A [`MulticastMessageV2`] plus the legacy `announce` flag of protocol v2.
@@ -215,7 +217,7 @@ pub struct MulticastHandle {
 
     /// The task supervising the receive loops. Completes after a stop has been
     /// requested and all sockets have been closed.
-    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    task: JoinedTask,
 }
 
 impl MulticastHandle {
@@ -242,9 +244,19 @@ impl MulticastHandle {
     /// so that the port can be bound again.
     /// Must be called after requesting a stop via the stop channel.
     pub async fn wait_stopped(&self) {
-        if let Some(task) = self.task.lock().await.take() {
-            let _ = task.await;
+        if let Err(error) = self.wait_stopped_checked().await {
+            tracing::error!("Multicast shutdown failed: {error:#}");
         }
+    }
+
+    /// Preserves supervisor/receiver panic results for every shutdown waiter.
+    pub async fn wait_stopped_checked(&self) -> anyhow::Result<()> {
+        let result = self.task.wait().await;
+        self.cancel.cancel();
+        self.state.sockets.write().await.clear();
+        result?;
+        anyhow::ensure!(!self.state.task_failed.load(Ordering::Acquire), "multicast receiver panicked");
+        Ok(())
     }
 }
 
@@ -275,6 +287,7 @@ pub async fn start(
     let state = Arc::new(MulticastState {
         device: config.device,
         failed: AtomicBool::new(false),
+        task_failed: AtomicBool::new(false),
         sockets: RwLock::new(
             sockets
                 .iter()
@@ -304,7 +317,14 @@ pub async fn start(
 
             tokio::select! {
                 // All receive loops gave up on their socket.
-                _ = async { while receivers.join_next().await.is_some() {} } => {
+                _ = async {
+                    while let Some(result) = receivers.join_next().await {
+                        if result.is_err() {
+                            state.task_failed.store(true, Ordering::Release);
+                            break;
+                        }
+                    }
+                } => {
                     tracing::error!("All multicast sockets failed, stopping multicast discovery");
                     state.failed.store(true, Ordering::Release);
                     // Tell the application, so it can restart discovery.
@@ -320,7 +340,12 @@ pub async fn start(
 
             // Wait for the sockets to be released, so that the port is free
             // once this task completes.
-            receivers.shutdown().await;
+            receivers.abort_all();
+            while let Some(result) = receivers.join_next().await {
+                if result.is_err_and(|error| !error.is_cancelled()) {
+                    state.task_failed.store(true, Ordering::Release);
+                }
+            }
             state.sockets.write().await.clear();
         }
     });
@@ -328,7 +353,7 @@ pub async fn start(
     Ok(MulticastHandle {
         state,
         cancel,
-        task: Mutex::new(Some(task)),
+        task: JoinedTask::new(task),
     })
 }
 

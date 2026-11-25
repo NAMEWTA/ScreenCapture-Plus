@@ -21,7 +21,6 @@ private:
 	void resetMosaic();
 	void buildMosaicBitmap();
 	Microsoft::WRL::ComPtr<ID2D1Bitmap> createMosaicBitmap(int blockSize);
-	void mosaicPixels(BYTE* bits, UINT32 pitch, UINT32 width, UINT32 height, int blockSize);
 private:
 	HuhuCapture::Editor::BoxModel box_;
 	HuhuCapture::Editor::StrokeModel stroke_;

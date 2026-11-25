@@ -4,6 +4,7 @@
 #include "ui/toolbars/ToolSub.h"
 #include "editor/History.h"
 #include "editor/shapes/ShapeMosaic.h"
+#include "core/MosaicPixels.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -271,49 +272,10 @@ ComPtr<ID2D1Bitmap> ShapeMosaic::createMosaicBitmap(int blockSize)
 	CopyMemory(pixels.data(), mapped.bits, pixels.size());
 	cpuBitmap->Unmap();
 
-	mosaicPixels(pixels.data(), mapped.pitch, localSize.width, localSize.height, blockSize);
+	if (!HuhuCapture::Core::mosaicPixels(pixels, mapped.pitch, static_cast<int>(localSize.width),
+		static_cast<int>(localSize.height), blockSize)) return result;
 
 	auto bitmapProps = D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
 	hr = ctx->CreateBitmap(localSize, pixels.data(), mapped.pitch, &bitmapProps, result.GetAddressOf());
 	return result;
-}
-
-// 按 blockSize 分块，每块取平均色再整块填回去 —— 就是马赛克
-void ShapeMosaic::mosaicPixels(BYTE* bits, UINT32 pitch, UINT32 width, UINT32 height, int blockSize)
-{
-	if (!bits || blockSize <= 0 || width == 0 || height == 0) return;
-
-	for (UINT32 y = 0; y < height; y += blockSize) {
-		UINT32 yEnd = std::min(y + (UINT32)blockSize, height);
-		for (UINT32 x = 0; x < width; x += blockSize) {
-			UINT32 xEnd = std::min(x + (UINT32)blockSize, width);
-			unsigned long long bSum{ 0 }, gSum{ 0 }, rSum{ 0 }, aSum{ 0 }, count{ 0 };
-			for (UINT32 yy = y; yy < yEnd; ++yy) {
-				auto row = bits + yy * pitch;
-				for (UINT32 xx = x; xx < xEnd; ++xx) {
-					auto pixel = row + xx * 4;
-					bSum += pixel[0];
-					gSum += pixel[1];
-					rSum += pixel[2];
-					aSum += pixel[3];
-					++count;
-				}
-			}
-			if (count == 0) continue;
-			BYTE b = (BYTE)(bSum / count);
-			BYTE g = (BYTE)(gSum / count);
-			BYTE r = (BYTE)(rSum / count);
-			BYTE a = (BYTE)(aSum / count);
-			for (UINT32 yy = y; yy < yEnd; ++yy) {
-				auto row = bits + yy * pitch;
-				for (UINT32 xx = x; xx < xEnd; ++xx) {
-					auto pixel = row + xx * 4;
-					pixel[0] = b;
-					pixel[1] = g;
-					pixel[2] = r;
-					pixel[3] = a;
-				}
-			}
-		}
-	}
 }

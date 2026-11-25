@@ -51,7 +51,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus nasm
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus nasm libwayland-dev libwayland-bin sway
       - name: Restore the exact Qt validation toolchain
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
@@ -91,6 +91,9 @@ jobs:
         run: |
           cmake --build artifacts/cmake/qt-validation --config Debug --parallel 2
           ctest --test-dir artifacts/cmake/qt-validation -C Debug --output-on-failure --no-tests=error
+      - name: Exercise real Wayland parent ownership and GUI responsiveness (Debug)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-wayland-parent.py artifacts/cmake/qt-validation/portal_parent_probe --artifacts artifacts/cmake/qt-validation/wayland-parent/Debug
       - name: Configure Linux Release
         if: runner.os == 'Linux'
         run: cmake --preset qt-validation -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON
@@ -99,6 +102,9 @@ jobs:
         run: |
           cmake --build artifacts/cmake/qt-validation --config Release --parallel 2
           ctest --test-dir artifacts/cmake/qt-validation -C Release --output-on-failure --no-tests=error
+      - name: Exercise real Wayland parent ownership and GUI responsiveness (Release)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-wayland-parent.py artifacts/cmake/qt-validation/portal_parent_probe --artifacts artifacts/cmake/qt-validation/wayland-parent/Release
       - name: Retain real configure and test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -109,6 +115,8 @@ jobs:
             artifacts/cmake/qt-validation/CMakeFiles/CMakeConfigureLog.yaml
             artifacts/cmake/qt-validation/Testing/Temporary/
             artifacts/cmake/qt-validation/annotation-render/
+            artifacts/cmake/qt-validation/editor-render/
+            artifacts/cmake/qt-validation/wayland-parent/
             .deps/portal-validation/build-info.json
             .deps/portal-validation/build/meson-logs/
             .deps/media-validation/build-info.json

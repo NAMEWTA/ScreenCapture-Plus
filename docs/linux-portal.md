@@ -6,7 +6,7 @@
 
 入口为 [PortalCapture](../src/platform/linux/portal/PortalCapture.h) 和 [PortalShortcuts](../src/platform/linux/portal/PortalShortcuts.h)，实现位于同目录。两者共用 PortalTypes 的错误合同及 PortalSupport 的初始化、错误转换和 context 检查。CMake 目标为 `huhucapture_portal`，仅 Linux 的 `HUHUCAPTURE_PORTAL_VALIDATION=ON` 启用，并要求 `HUHUCAPTURE_QT_VALIDATION=ON`。公共头只有 Qt/标准库类型，不向编辑模型暴露 `XdpPortal`、GObject、GVariant 或 PipeWire 类型。
 
-- 直接链接 libportal 的 Screenshot、CreateSession、SelectSources、Start、Session.Close 和 Qt parent helper。仅用 GIO 查询公共 `Properties.GetAll` 能力，不另写一套 Portal 请求协议。
+- 直接链接 libportal 的 Screenshot、CreateSession、SelectSources、Start、Session.Close。X11 直接用其 Qt parent helper；Wayland 使用成熟异步导出后再交给 libportal 的 parent 抽象。仅用 GIO 查询公共 `Properties.GetAll` 能力，不另写一套 Portal 请求协议。
 - Screenshot 成功返回 Portal 给出的有效本地文件 URI。它不代表图片已经解码、导入历史或复制到剪贴板；那些操作由共享媒体服务完成。
 - ScreenCast 成功必须经过授权、非空 stream 元数据解析和真实 `OpenPipeWireRemote` FD 获取。`takePipeWireFd()` 只转移一次 FD，调用方负责关闭或将其所有权交给 PipeWire。
 - `PortalStream` 的 position/size 是 compositor 坐标，不能当作实际视频像素或 DPI 比例。后续 PipeWire 层必须依据协商格式读取像素尺寸、stride、buffer 类型与时间戳。
@@ -18,7 +18,9 @@
 
 libportal 0.11.0 的 `xdp_portal_initable_new()` 内部仍调用同步 `g_bus_get_sync()`。控制器只在 GTask worker 上构造它，完成后把对象交给 Qt 线程。没有使用会在 session bus 缺失时 abort 的 `xdp_portal_new()` 或 `XdpQt::globalPortalObject()`。GUI 线程不等待 join 或同步 DBus 请求。共享 GIO bus 连接显式设置 `exit-on-close=FALSE`，否则 [GIO 的默认行为](https://docs.gtk.org/gio/func.bus_get_sync.html) 可能在运行中断线时直接结束进程。`closed` 信号交给同一 Qt/GLib context 处理，取消待决请求并释放活动会话；不绕过文件或媒体清理。
 
-**Wayland parent 导出仍有已确认的上游阻塞风险。** 固定 libportal 的 Qt helper 调用 `QDesktopUnixServices::portalWindowIdentifier()`；Qt 6.12.1 在首次 Wayland foreign handle 导出时可能执行同步 `wl_display_roundtrip_queue()`。因此当前控制面不能被描述为已经满足完整的 GUI 非阻塞门槛。不得把 `QWindow` 移交 worker 规避线程规则；必须在平台 parent 接缝复用官方异步导出对象或有来源的实现。Shortcuts 包装已拒绝空句柄、`wayland:`、`x11:` 和 `x11:0`，但这不解决同步等待。源码依据为 Qt 的 [qwaylandplatformservices.cpp](https://github.com/qt/qtbase/blob/v6.12.1/src/plugins/platforms/wayland/qwaylandplatformservices.cpp) 和 [qwaylandxdgshell.cpp](https://github.com/qt/qtbase/blob/v6.12.1/src/plugins/platforms/wayland/plugins/shellintegration/xdg-shell/qwaylandxdgshell.cpp)；实际修复及桌面验收仍是发布前置条件。
+固定 libportal 的 Qt helper 调用 `QDesktopUnixServices::portalWindowIdentifier()`；Qt 6.12.1 在首次 Wayland foreign handle 导出时执行同步 `wl_display_roundtrip_queue()`。源码依据为 Qt 的 [qwaylandplatformservices.cpp](https://github.com/qt/qtbase/blob/v6.12.1/src/plugins/platforms/wayland/qwaylandplatformservices.cpp) 和 [qwaylandxdgshell.cpp](https://github.com/qt/qtbase/blob/v6.12.1/src/plugins/platforms/wayland/plugins/shellintegration/xdg-shell/qwaylandxdgshell.cpp)。因此 Wayland 走独立的 [PortalParent](../src/platform/linux/portal/PortalParent.h) 平台接缝：复用 KWindowSystem 6.32.0 的两个异步导出类，通过官方 QWaylandClientExtensionTemplate、标准 xdg-foreign-v2 生成绑定及 handleReceived 取得真实句柄，再包装成 libportal parent。没有将 QWindow 移到 worker，也不调用阻塞 roundtrip、独立 dispatch 或嵌套事件循环。具体源码、逐文件 blob、作者和许可见 [upstream 记录](../third_party/kwayland-parent/upstream.md)。
+
+导出对象活到 Portal 请求终态。取消、父窗 surface/role 销毁、compositor 移除导出协议都会释放导出对象并报告原因；迟到 Qt 信号因 QObject context 或终态检查被丢弃。只有收到非空原生 handle 才创建 `wayland:` 标识。原生 handle 导出若 5 秒仍未收到响应，明确失败并释放 proxy；该截止值只用于 compositor 元数据请求，不套在人工 Portal 授权对话框上。parent 导出成功后发生失效会取消仍待决的 Portal 请求。ScreenCast 授权完成后独立持有 session，释放 parent 不会关闭活动录制。
 
 每次授权拥有自己的 cancellable、请求编号、parent 连接和回调状态。parent 在请求完成前销毁会取消该请求；迟到回调仍完成原请求并清理资源，不访问已销毁 QObject。控制器销毁后，异步回调保留清理状态但不再发 UI 信号。应用退出编排仍应先取消待决请求、等待终态回调，再结束事件循环；不能先停掉整个 dispatcher 后把异步资源清理算作完成。
 
@@ -69,11 +71,13 @@ GlobalShortcuts 的能力单独查询。控制器直接调用 libportal 的 Crea
 
 [第二个补丁](../third_party/patches/libportal/0002-globalshortcuts-lifetime-and-qt-parent.patch) 独立修改 globalshortcuts.c/.h，保留第一个补丁的固定哈希。它复用原来的 g_rc_box Call，修复预取消、Close 后不完成 GTask、终态 handler 断开次序、迟到方法回调与失败临时 session 清理，并增加 `bind_shortcuts_with_parent()` 窄包装。该包装调用原 BindShortcuts API 和现有 parent exporter，为导出回调与请求回调各保留独立引用，直到真正回调结束才释放 parent。它不增加新的授权协议，也不改变原 API。GlobalShortcuts 上游实现起点为 [280c128](https://github.com/flatpak/libportal/commit/280c1281e0d1710574d3409869097df0de61c366)；固定版本之后未找到对应生命周期修复可直接移植。原始 globalshortcuts.c 和 .h blob 分别为 `59b35c2462ada102554628b80cc23147275973ae`、`70a6920ef2374c2b575cf450afe366052bb0d010`。
 
+[第三个补丁](../third_party/patches/libportal/0003-preexported-parent-handle.patch) 只扩展 parent.c/.h 的构造入口，允许调用方传入已经真实导出的合法窗口标识。parent 的复制/释放沿用 libportal，只持有自己的字符串；原生 export 的生命周期仍由 PortalParent 管理。原文件作者为 Georges Basile Stavracas Neto，blob 分别为 `7c9a2df201360c65b47c1d5e7714e699b7bd8cc0`、`8bced8d64d3accdade72f387dd9b6951bd41f7a0`。前两个补丁不变，第三个补丁也没有改写 Portal 协议或更换采集后端。
+
 被修改的原文件版权归 Matthias Clasen；libportal Qt helper 还保留 Georges Basile Stavracas Neto、Jan Grulich、Neal Gompa 和 GNOME Foundation 等原始归属。libportal 和本补丁按 LGPL-3.0-only 使用，附带原始 [COPYING](../third_party/patches/libportal/COPYING) 与其所引用的 [GPL v3 文本](../third_party/patches/libportal/COPYING.GPL3)。后者来自 Qt 6.12.1 的 `LICENSES/GPL-3.0-only.txt`，原 blob `94a9ed024d3859793618152ea559a168bbcbb5e2`。不能将新增库重新标为 MIT；正式打包还必须提供匹配的动态库、源码、受控补丁和许可记录。
 
 ## 构建与检查入口
 
-Ubuntu 24.04 需要 `build-essential meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus`，GIO/GLib ≥2.80。同一 Qt prefix 必须提供 Core/Gui/Widgets 及版本匹配的 private headers；不要让 pkg-config/qmake 选择系统的其他 Qt。
+Ubuntu 24.04 需要 `build-essential meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus libwayland-dev libwayland-bin sway`，GIO/GLib ≥2.80。同一 Qt prefix 必须提供 Core/Gui/Widgets/WaylandClient、qtwaylandscanner 及版本匹配的 Gui private headers；不要让 pkg-config/qmake 选择系统的其他 Qt。只链接 Qt 与 Wayland 的所需模块，不安装整个 KWindowSystem 运行时。
 
 ```sh
 export HUHUCAPTURE_QT_ROOT=/absolute/path/to/Qt/6.12.1/gcc_64
@@ -87,12 +91,13 @@ cmake -S . -B artifacts/portal -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DBUILD_TESTING=ON -DHUHUCAPTURE_QT_VALIDATION=ON \
   -DHUHUCAPTURE_PORTAL_VALIDATION=ON
 cmake --build artifacts/portal --target portal_fault_tests portal_capture_probe \
-  portal_shortcuts_fault_tests portal_shortcuts_probe
+  portal_shortcuts_fault_tests portal_shortcuts_probe portal_parent_probe
 dbus-run-session -- artifacts/portal/portal_fault_tests
 artifacts/portal/portal_fault_tests --no-bus
 dbus-run-session -- artifacts/portal/portal_shortcuts_fault_tests
 artifacts/portal/portal_shortcuts_fault_tests --no-bus
 artifacts/portal/portal_shortcuts_fault_tests --disconnect-bus
+python3 scripts/test-wayland-parent.py artifacts/portal/portal_parent_probe
 ```
 
 依赖脚本从固定 commit 的干净私有目录检出，核对补丁哈希和 `git apply --check`，再用 Meson 构建 Qt6 backend。默认关闭其他 UI backend、文档、introspection、vapi 和上游测试；这只是本模块的受控编译输入，不代表跳过后续产品或桌面验收。已有工作目录不会被脚本 reset/clean，重建时选择新的空 workspace。
@@ -100,6 +105,10 @@ artifacts/portal/portal_shortcuts_fault_tests --disconnect-bus
 `portal_fault_tests` 使用真实 session bus 和一个不存在的服务。它验证 unavailable、立即取消、预取消、错误后 cleanup cancellation、Qt/GLib 同线程分发，并等待 GObject weak-finalize 来证明迟到方法回调已释放引用。它没有模拟 Portal 成功响应，也不证明任何桌面支持截图或录屏。`--no-bus` 验证缺失总线时返回错误而非 abort。
 
 `portal_shortcuts_fault_tests` 对真实缺失服务执行 GlobalShortcuts CreateSession 的未取消、立即取消、预取消及引用释放检查。`--disconnect-bus` 自行启动一个隔离的真实 dbus-daemon，在两个控制器获得连接之后实际终止它，要求进程继续运行、closed 在 Qt 线程分发、新请求返回 Unavailable。该测试没有构造假的 Portal 服务，不能证明活动桌面会话的清理或按键触发成功。
+
+`test-wayland-parent.py` 启动自己拥有的 headless Sway/pixman compositor，使用私有 runtime 目录和最小配置，不接入用户的桌面或 bus。Ubuntu 24.04 的 [Sway 1.9](https://packages.ubuntu.com/noble/sway) 与 [wlroots 0.17.1](https://packages.ubuntu.com/noble/libwlroots12t64) 可提供该环境；Sway 固定源码 [`1a3cfc50`](https://github.com/swaywm/sway/blob/1a3cfc50c15124c2be18c025e609112ee15de4aa/sway/server.c) 明确创建 xdg-foreign-v2 全局对象。测试记录实际安装版本，不把包版本假定为运行证据。
+
+探针先在真实 compositor 上导出正常句柄，然后协调器暂停自己的 compositor 子进程，检查取消、待决 parent 销毁、owner 销毁和原生元数据超时期间 Qt 的 10 毫秒 heartbeat 仍在运行。恢复后用异步 `wl_display_sync` 作为实际服务端屏障，检查迟到事件处理和 owner 释放。另一个模式验证成功导出后 parent 销毁的失效通知。外部 watchdog 在 probe GUI 卡住时仍会恢复 compositor 并结束测试；finally 清理及父进程死亡信号确保不会留下协调器拥有的暂停进程。probe 本身不接受 PID，也不会向任何进程发信号。结果、心跳、Sway 日志写入 `artifacts/tests/wayland-parent/`。这些检查只证明原生窗口导出接缝，不替代 Portal 授权、GNOME/Plasma、多屏硬件或 PipeWire 验收。
 
 真实桌面上可以运行以下探针，并保存输出、桌面/Portal 版本和人工操作记录：
 
@@ -122,4 +131,4 @@ artifacts/portal/portal_shortcuts_probe --bind --rebind-trigger CTRL+SHIFT+F12 -
 
 Shortcuts 探针的 `--bind` 必须观察到真实 Activated 信号才通过，默认等待 15 秒，可用 `--hold-ms` 调整人工观察时间。成功重绑或取消重绑后会重新统计激活；取消重绑还检查旧列表与 session 保留。未收到真实激活不会用能力版本或绑定返回值替代通过结果。
 
-当前工作环境没有可声明的 GNOME/Plasma Wayland 桌面，因此接受/拒绝/取消授权、parent 销毁、session 外部关闭、restore token 失效、真实截图内容、多屏缩放、快捷键实际绑定/触发/重绑均是 **not run**。Wayland parent 异步导出、PipeWire 帧/音频、完整应用退出和发行包部署仍需后续实现与验收。具体编译和自动故障检查结果以对应提交的 CI 为准，不用本说明预先宣称通过。
+当前工作环境没有可声明的 GNOME/Plasma Wayland 桌面，因此接受/拒绝/取消授权、Portal 对话框 parent 销毁、session 外部关闭、restore token 失效、真实截图内容、多屏缩放、快捷键实际绑定/触发/重绑均是 **not run**。异步 parent 的真实 Sway 检查与实际桌面 Portal 验收分开记录；PipeWire 帧/音频、完整应用退出和发行包部署仍需后续实现与验收。具体编译和自动故障检查结果以对应提交的 CI 为准，不用本说明预先宣称通过。

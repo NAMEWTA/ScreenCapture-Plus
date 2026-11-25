@@ -77,24 +77,39 @@
          }
          #[cfg(target_os = "android")]
          FileContent::Fd(fd) => {
-@@ -86,6 +109,7 @@
+@@ -86,20 +109,28 @@
  
      let mut buffer = vec![0u8; HASH_BUFFER_SIZE];
      let mut hashed = 0_u64;
+-    loop {
+-        let read = tokio::select! {
+-            biased;
+-            _ = cancel_token.cancelled() => return Err(HashError::Cancelled),
+-            read = file.read(&mut buffer) => read?,
+-        };
+-        if read == 0 {
+-            break;
 +    let result = async {
-     loop {
-         let read = tokio::select! {
-             biased;
-@@ -96,10 +120,17 @@
-             break;
++        loop {
++            let read = tokio::select! {
++                biased;
++                _ = cancel_token.cancelled() => return Err(HashError::Cancelled),
++                read = file.read(&mut buffer) => read?,
++            };
++            if read == 0 {
++                break;
++            }
++            hasher.update(&buffer[..read]);
++            hashed = hashed.checked_add(read as u64)
++                .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
++            progress(hashed);
          }
-         hasher.update(&buffer[..read]);
+-        hasher.update(&buffer[..read]);
 -        hashed += read as u64;
-+        hashed = hashed.checked_add(read as u64)
-+            .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
-         progress(hashed);
-     }
-     Ok(())
+-        progress(hashed);
+-    }
+-    Ok(())
++        Ok(())
 +    }.await;
 +    // A cancelled async read may already have been submitted to the blocking
 +    // pool. Join it before releasing a stable lease whose duplicated handle
@@ -111,7 +126,17 @@
  mod store;
  
  pub use store::{
-@@ -19,7 +20,9 @@
+@@ -12,14 +13,18 @@
+ use crate::multicast::{self, MulticastConfig, MulticastDevice, MulticastEvent, MulticastHandle};
+ use crate::util::error::ErrorChain;
+ use crate::util::interface::InterfaceFilter;
+-use futures_util::StreamExt;
++use crate::util::joined_task::JoinedTask;
++use futures_util::{FutureExt, StreamExt};
+ use std::collections::HashSet;
+ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
++use std::panic::AssertUnwindSafe;
+ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
  use std::sync::Arc;
  use std::time::{Duration, SystemTime};
  use store::{Announcement, DeviceStore, Observation};
@@ -122,7 +147,7 @@
  
  /// The default timeout of the register requests sent by discovery, matching
  /// the Flutter app's default discovery timeout. Discovery only talks to LAN
-@@ -32,6 +35,7 @@
+@@ -32,6 +37,7 @@
  /// How many hosts a subnet scan probes at once, matching the Flutter app's
  /// legacy HTTP discovery.
  const SCAN_CONCURRENCY: usize = 50;
@@ -130,13 +155,25 @@
  
  /// This device's TLS identity, sent as client certificate with every register
  /// request (client certificates are mandatory in HTTPS mode).
-@@ -147,9 +151,29 @@
+@@ -124,6 +130,10 @@
+     /// the application should restart discovery to rebind the sockets.
+     /// HTTP-based discovery (probes and subnet scans) keeps working.
+     MulticastFailed,
++
++    /// An owned discovery worker panicked. Discovery is stopping; the sticky
++    /// failure is also returned by `wait_stopped_checked` if this hint is full.
++    BackgroundFailed,
+ }
+ 
+ struct DiscoveryState {
+@@ -147,9 +157,39 @@
      /// Number of confirmations in this run, on which
      /// [`DiscoveryHandle::discover_staged`] decides whether to escalate.
      confirmations: AtomicU64,
 +    secure_only: bool,
 +    cancel: CancellationToken,
 +    tasks: TaskTracker,
++    task_failed: AtomicBool,
 +    task_gate: std::sync::Mutex<()>,
 +    background_slots: Arc<Semaphore>,
 +    requests: Semaphore,
@@ -146,7 +183,16 @@
 +    fn spawn_background(self: &Arc<Self>, task: impl std::future::Future<Output = ()> + Send + 'static) -> bool {
 +        let _gate = self.task_gate.lock().unwrap();
 +        if self.cancel.is_cancelled() || self.tasks.is_closed() { return false; }
-+        self.tasks.spawn(task);
++        let state = self.clone();
++        self.tasks.spawn(async move {
++            if AssertUnwindSafe(task).catch_unwind().await.is_err() {
++                state.task_failed.store(true, Ordering::Release);
++                if let Some(events) = &state.event_tx {
++                    let _ = events.try_send(DiscoveryEvent::BackgroundFailed);
++                }
++                state.cancel.cancel();
++            }
++        });
 +        true
 +    }
 +
@@ -160,7 +206,7 @@
      fn register_dto(&self) -> RegisterDtoV2 {
          RegisterDtoV2 {
              alias: self.device.alias.clone(),
-@@ -185,9 +209,19 @@
+@@ -185,9 +225,19 @@
          port: u16,
          protocol: ProtocolType,
      ) -> Result<Option<StatefulDevice>, ClientError> {
@@ -183,7 +229,7 @@
  
          // In HTTPS mode the certificate is the peer's identity; the
          // fingerprint claimed in the body only counts without encryption.
-@@ -231,6 +265,8 @@
+@@ -231,6 +281,8 @@
      }
  
      fn emit(&self, event: DiscoveryEvent) {
@@ -192,15 +238,15 @@
          if let Some(event_tx) = &self.event_tx {
              // Never wait for the application here. A subnet scan confirms up to
              // 255 devices in a burst, far more than the channel holds, and
-@@ -256,6 +292,7 @@
+@@ -256,6 +308,7 @@
      /// keeps working without it, see [`DiscoveryHandle::multicast_error`].
      multicast: Result<MulticastHandle, anyhow::Error>,
      state: Arc<DiscoveryState>,
-+    supervisor: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
++    supervisor: JoinedTask,
  }
  
  impl DiscoveryHandle {
-@@ -314,6 +351,7 @@
+@@ -314,6 +367,7 @@
          &self,
          channels: Vec<HttpChannel>,
      ) -> Result<Vec<StatefulDevice>, ClientError> {
@@ -208,7 +254,7 @@
          let client = self.state.unpinned_client()?;
  
          let state = &self.state;
-@@ -354,6 +392,7 @@
+@@ -354,6 +408,7 @@
          protocol: ProtocolType,
          grace: Duration,
      ) -> Result<(), ClientError> {
@@ -216,7 +262,7 @@
          let confirmations = self.state.confirmations.load(Ordering::Relaxed);
          let escalate = async {
              self.discover_known_http_channels(known_channels).await?;
-@@ -386,8 +425,10 @@
+@@ -386,8 +441,10 @@
          port: u16,
          protocol: ProtocolType,
      ) -> Result<Vec<StatefulDevice>, ClientError> {
@@ -229,7 +275,7 @@
          }
          let _guard = ScanGuard {
              state: &self.state,
-@@ -446,6 +487,12 @@
+@@ -446,6 +503,12 @@
      /// A channel that was dialed before is not dialed again, so two devices
      /// running this do not keep answering each other.
      pub async fn observe_inbound(&self, device: DiscoveredDevice) -> bool {
@@ -242,7 +288,7 @@
          let (is_new, merged) = self
              .state
              .observed(device.clone(), Observation::ReachedUs, None);
-@@ -480,6 +527,7 @@
+@@ -480,6 +543,7 @@
          channel: DeviceChannel,
          result: Result<(), String>,
      ) -> bool {
@@ -250,14 +296,39 @@
          let event =
              self.state
                  .store
-@@ -521,9 +569,16 @@
+@@ -519,11 +583,38 @@
+     /// Waits until discovery has terminated and the multicast sockets have
+     /// been closed, so that the port can be bound again.
      /// Must be called after requesting a stop via the stop channel.
-     /// Returns immediately when multicast is unavailable.
+-    /// Returns immediately when multicast is unavailable.
      pub async fn wait_stopped(&self) {
-+        if let Some(task) = self.supervisor.lock().await.take() { let _ = task.await; }
++        if let Err(error) = self.wait_stopped_checked().await {
++            tracing::error!("Discovery shutdown failed: {error:#}");
++        }
++    }
++
++    /// Joins every owned task and preserves supervisor/background failures.
++    /// Multicast being unavailable at startup is not a shutdown failure.
++    pub async fn wait_stopped_checked(&self) -> anyhow::Result<()> {
++        let supervisor = self.supervisor.wait().await;
++        // Also run this cleanup after a supervisor unwind. Nothing admitted
++        // before the gate closed may outlive the successful join result.
++        {
++            let _gate = self.state.task_gate.lock().unwrap_or_else(|error| error.into_inner());
++            self.state.cancel.cancel();
++            self.state.tasks.close();
++        }
++        self.state.tasks.wait().await;
++        let mut multicast_result = Ok(());
          if let Ok(multicast) = &self.multicast {
-             multicast.wait_stopped().await;
-         }
+-            multicast.wait_stopped().await;
+-        }
++            multicast_result = multicast.wait_stopped_checked().await;
++        }
++        supervisor?;
++        multicast_result?;
++        anyhow::ensure!(!self.state.task_failed.load(Ordering::Acquire), "discovery worker panicked");
++        Ok(())
 +    }
 +
 +    /// The runtime socket failure remains observable even when an informational
@@ -267,7 +338,7 @@
      }
  }
  
-@@ -551,7 +606,32 @@
+@@ -551,7 +642,32 @@
  /// the port is already bound by another process or because there is no network
  /// at all, discovery runs without multicast.
  pub async fn start(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>) -> DiscoveryHandle {
@@ -300,7 +371,7 @@
  
      // On failure `multicast_tx` is dropped, which ends the answering task.
      let multicast = multicast::start(
-@@ -563,7 +643,7 @@
+@@ -563,7 +679,7 @@
              device: config.device.clone(),
              event_tx: multicast_tx,
          },
@@ -309,13 +380,14 @@
      )
      .await;
  
-@@ -577,39 +657,67 @@
+@@ -577,39 +693,71 @@
          scanning: std::sync::Mutex::new(HashSet::new()),
          dialing_back: std::sync::Mutex::new(HashSet::new()),
          confirmations: AtomicU64::new(0),
 +        secure_only,
 +        cancel: CancellationToken::new(),
 +        tasks: TaskTracker::new(),
++        task_failed: AtomicBool::new(false),
 +        task_gate: std::sync::Mutex::new(()),
 +        background_slots: Arc::new(Semaphore::new(BACKGROUND_CONCURRENCY)),
 +        requests: Semaphore::new(SCAN_CONCURRENCY),
@@ -371,9 +443,12 @@
 +    let supervisor = tokio::spawn({
 +        let state = state.clone();
 +        async move {
-+            let _ = stop_rx.await;
++            tokio::select! {
++                _ = stop_rx => {},
++                _ = state.cancel.cancelled() => {},
++            }
 +            {
-+                let _gate = state.task_gate.lock().unwrap();
++                let _gate = state.task_gate.lock().unwrap_or_else(|error| error.into_inner());
 +                state.cancel.cancel();
 +                state.tasks.close();
 +            }
@@ -381,11 +456,11 @@
 +            state.tasks.wait().await;
 +        }
 +    });
-+    DiscoveryHandle { multicast, state, supervisor: tokio::sync::Mutex::new(Some(supervisor)) }
++    DiscoveryHandle { multicast, state, supervisor: JoinedTask::new(supervisor) }
  }
  
  /// Answers an announcement with a register request, as the protocol requires.
-@@ -652,15 +760,22 @@
+@@ -652,15 +800,22 @@
  /// several requests in a row, e.g. one for every message of an announcement
  /// burst.
  fn dial_back(state: Arc<DiscoveryState>, device: DiscoveredDevice) {
@@ -411,7 +486,7 @@
  }
  
  /// Sends a register request to a device whose identity is already claimed —
-@@ -680,6 +795,12 @@
+@@ -680,6 +835,12 @@
      }) = device.http().cloned()
      else {
          return;
@@ -424,7 +499,7 @@
      };
  
      // Pin the claimed fingerprint, so nothing is sent to a device that does
-@@ -704,9 +825,11 @@
+@@ -704,9 +865,11 @@
          }
      };
  
@@ -439,6 +514,56 @@
  
      match result {
          Ok(response) => {
+@@ -764,3 +927,49 @@
+         download: response.download,
+     }
+ }
++
++#[cfg(test)]
++mod shutdown_tests {
++    use super::*;
++
++    #[tokio::test]
++    async fn actual_background_panic_is_joined_even_when_event_queue_is_full() {
++        let identity = crate::crypto::cert::generate_self_signed().unwrap();
++        let (events, mut event_rx) = mpsc::channel(1);
++        // Fill the informational queue before the worker fails. The checked
++        // join must carry the persistent error even if its hint cannot fit.
++        events.try_send(DiscoveryEvent::MulticastFailed).unwrap();
++        let (_stop, stop_rx) = oneshot::channel();
++        let handle = start_secure(DiscoveryConfig {
++            group: multicast::DEFAULT_MULTICAST_GROUP,
++            group_v6: None,
++            port: 0,
++            interface_filter: InterfaceFilter { whitelist: Some(vec!["127.0.0.1".into()]), blacklist: None },
++            device: MulticastDevice { alias: "join test".into(), version: "2.2".into(),
++                device_model: None, device_type: None, fingerprint: identity.fingerprint,
++                port: 53317, protocol: ProtocolType::Https, download: false },
++            identity: DeviceIdentity { cert_pem: identity.certificate_pem, private_key_pem: identity.private_key_pem },
++            timeout: Duration::from_millis(100), event_tx: Some(events),
++        }, stop_rx).await.unwrap();
++        let dropped = Arc::new(AtomicBool::new(false));
++        struct Worker(Arc<AtomicBool>);
++        impl Drop for Worker {
++            fn drop(&mut self) { self.0.store(true, Ordering::Release); }
++        }
++        let worker = Worker(dropped.clone());
++        assert!(handle.state.spawn_background(async move {
++            let _worker = worker;
++            panic!("exercise a real discovery worker unwind");
++        }));
++        let failure = tokio::time::timeout(Duration::from_secs(5), handle.wait_stopped_checked())
++            .await.unwrap().unwrap_err();
++        assert!(failure.to_string().contains("panicked"));
++        assert!(dropped.load(Ordering::Acquire));
++        assert!(handle.state.tasks.is_empty());
++        assert!(handle.state.tasks.is_closed());
++        assert!(!handle.state.spawn_background(async {}));
++        assert!(handle.wait_stopped_checked().await.is_err());
++        assert!(matches!(event_rx.try_recv().unwrap(), DiscoveryEvent::MulticastFailed));
++        assert!(event_rx.try_recv().is_err());
++    }
++}
 --- a/core/src/discovery/store.rs
 +++ b/core/src/discovery/store.rs
 @@ -1,3 +1,4 @@
@@ -1227,16 +1352,19 @@
  pub mod common;
  mod connection_limit;
  pub mod internal;
-@@ -13,6 +14,7 @@
+@@ -13,15 +14,18 @@
  use crate::http::server::v2::ServerEventV2;
  use crate::http::server::web::{WebConfig, WebShare};
  use crate::http::state::ClientInfo;
 +use crate::http::limits::{TransferLimits, HEADER_BYTES, HEADER_COUNT};
++use crate::util::joined_task::JoinedTask;
  use common::client_cert_verifier::CustomClientCertVerifier;
  use common::error::AppError;
  use common::response;
-@@ -21,7 +23,7 @@
+ use common::response::BoxedBody;
+ use common::session::SessionStateV2;
  use connection_limit::{ConnectionLimiter, LimitReached, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP};
++use futures_util::FutureExt;
  use hyper::body::Incoming;
  use hyper::{Method, Request, Response, StatusCode};
 -use hyper_util::rt::TokioIo;
@@ -1244,19 +1372,20 @@
  use lru::LruCache;
  use rustls::pki_types::pem::PemObject;
  use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-@@ -29,9 +31,9 @@
+@@ -29,9 +33,10 @@
  use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
  use std::num::NonZeroUsize;
  use std::ops::Deref;
 -use std::sync::Arc;
-+use std::sync::{Arc, Mutex as SyncMutex};
++use std::panic::AssertUnwindSafe;
++use std::sync::{Arc, Mutex as SyncMutex, atomic::{AtomicBool, Ordering}};
  use tokio::io::{AsyncRead, AsyncWrite};
 -use tokio::sync::{mpsc, oneshot, Mutex};
 +use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
  use tokio_util::sync::CancellationToken;
  use tokio_util::task::TaskTracker;
  use web::WebState;
-@@ -62,10 +64,16 @@
+@@ -62,10 +67,16 @@
      pub(crate) event_tx: mpsc::Sender<ServerEventV2>,
  
      /// The single upload session slot. Only one session can be active at a time.
@@ -1274,17 +1403,20 @@
  }
  
  #[derive(Clone)]
-@@ -90,6 +98,9 @@
+@@ -90,6 +101,12 @@
  
      /// Limits the connections being served, shared by the IPv4 and IPv6 listeners.
      connection_limiter: Arc<ConnectionLimiter>,
 +
 +    /// Native receiver restrictions; absent for unchanged upstream callers.
 +    strict: Option<Arc<TransferLimits>>,
++
++    /// A worker failure must survive TaskTracker's completion-only wait.
++    task_failed: Arc<AtomicBool>,
  }
  
  impl AppState {
-@@ -104,8 +115,9 @@
+@@ -104,8 +121,9 @@
                  pin: config.pin,
                  verify_checksums: config.verify_checksums,
                  event_tx: config.event_tx,
@@ -1295,25 +1427,32 @@
              })
          });
  
-@@ -123,6 +135,7 @@
+@@ -123,6 +141,8 @@
              ))),
              v2,
              connection_limiter: ConnectionLimiter::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP),
 +            strict: None,
++            task_failed: Arc::new(AtomicBool::new(false)),
          }
      }
  }
-@@ -137,6 +150,9 @@
- 
+@@ -138,10 +158,14 @@
      /// Whether the IPv6 wildcard listener could be bound.
      ipv6_bound: bool,
-+
+ 
 +    /// Exact listeners when wildcard binding is disabled.
 +    bound_addresses: Vec<SocketAddr>,
- 
++
      /// The task running the accept loops. Completes after a stop has been
      /// requested, the listeners have been dropped and all connections have
-@@ -161,6 +177,9 @@
+     /// been closed.
+-    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
++    task: JoinedTask,
++    task_failed: Arc<AtomicBool>,
+ }
+ 
+ impl ServerHandle {
+@@ -161,6 +185,9 @@
      ///
      /// Empty when the interfaces cannot be enumerated.
      pub fn local_addresses(&self) -> Vec<SocketAddr> {
@@ -1323,11 +1462,30 @@
          let Ok(interfaces) = if_addrs::get_if_addrs() else {
              return Vec::new();
          };
-@@ -189,11 +208,11 @@
-         }
-     }
- 
+@@ -184,16 +211,25 @@
+     /// and all connections have been dropped, so that the port can be bound again.
+     /// Must be called after requesting a stop via the stop channel.
+     pub async fn wait_stopped(&self) {
+-        if let Some(task) = self.task.lock().await.take() {
+-            let _ = task.await;
+-        }
+-    }
+-
 -    /// Cancels the active v2 upload session if it matches `session_id`,
++        if let Err(error) = self.wait_stopped_checked().await {
++            tracing::error!("HTTP shutdown failed: {error:#}");
++        }
++    }
++
++    /// Joins the supervisor and reports its actual termination result. Errors
++    /// persist for repeated/concurrent waiters; dropping a waiter does not
++    /// consume or detach the task. Native applications must use this variant.
++    pub async fn wait_stopped_checked(&self) -> anyhow::Result<()> {
++        self.task.wait().await?;
++        anyhow::ensure!(!self.task_failed.load(Ordering::Acquire), "HTTP worker failed before orderly shutdown");
++        Ok(())
++    }
++
 +    /// Cancels the pending or active v2 upload session if it matches `session_id`,
      /// e.g. because the user aborted the transfer on the receiving side.
      ///
@@ -1338,7 +1496,7 @@
      /// No [ServerEventV2::SessionEnd] is emitted: the application initiated
      /// the cancellation itself.
      ///
-@@ -202,9 +221,15 @@
+@@ -202,9 +238,15 @@
          let Some(v2) = &self.v2 else {
              return false;
          };
@@ -1355,12 +1513,37 @@
                  *slot = None;
                  true
              }
-@@ -294,8 +319,117 @@
+@@ -261,7 +303,7 @@
+                         // `try_send` because this task must reach its end even
+                         // when nobody consumes events anymore, so that
+                         // `wait_stopped` cannot hang.
+-                        if let Some(event_tx) = v2_event_tx {
++                        if let Some(event_tx) = &v2_event_tx {
+                             let _ = event_tx.try_send(ServerEventV2::ListenerFailed {
+                                 error: format!("{err:#}"),
+                             });
+@@ -280,6 +322,13 @@
+                     tokio::time::sleep(std::time::Duration::from_secs(u64::MAX)).await;
+                 } => {}
+                 _ = stop_rx => {}
++                _ = cancel.cancelled() => {
++                    if let Some(event_tx) = &v2_event_tx {
++                        let _ = event_tx.try_send(ServerEventV2::ListenerFailed {
++                            error: "HTTP connection worker panicked".into(),
++                        });
++                    }
++                }
+             }
+ 
+             // Hard-drop connections that are still being served, so that no
+@@ -294,8 +343,130 @@
          v2: state.v2.clone(),
          port: bound_port,
          ipv6_bound,
+-        task: Mutex::new(Some(task)),
 +        bound_addresses: Vec::new(),
-         task: Mutex::new(Some(task)),
++        task: JoinedTask::new(task),
++        task_failed: state.task_failed.clone(),
      })
 +}
 +
@@ -1432,10 +1615,18 @@
 +            }
 +            tokio::select! {
 +                _ = stop_rx => {},
++                _ = cancel.cancelled() => {
++                    listener_failure.send(ServerEventV2::ListenerFailed {
++                        error: "HTTP connection worker panicked".into(),
++                    });
++                },
 +                result = accept_tasks.join_next() => {
 +                    let error = match result {
 +                        Some(Ok(Err(error))) => format!("{error:#}"),
-+                        Some(Err(error)) => format!("{error:#}"),
++                        Some(Err(error)) => {
++                            state.task_failed.store(true, Ordering::Release);
++                            format!("{error:#}")
++                        },
 +                        _ => "listener stopped unexpectedly".to_string(),
 +                    };
 +                    listener_failure.send(ServerEventV2::ListenerFailed { error });
@@ -1444,7 +1635,7 @@
 +            // No selected listener may continue serving after another failed.
 +            cancel.cancel();
 +            if let Some(v2) = &state.v2 {
-+                let mut slot = v2.session.lock().unwrap();
++                let mut slot = v2.session.lock().unwrap_or_else(|error| error.into_inner());
 +                match slot.take() {
 +                    Some(SessionStateV2::Active(session)) => {
 +                        session.cancel.cancel();
@@ -1463,17 +1654,114 @@
 +                }
 +            }
 +            accept_tasks.abort_all();
-+            while accept_tasks.join_next().await.is_some() {}
++            while let Some(result) = accept_tasks.join_next().await {
++                if result.is_err_and(|error| !error.is_cancelled()) {
++                    state.task_failed.store(true, Ordering::Release);
++                }
++            }
 +            connections.close();
 +            connections.wait().await;
 +        }
 +    });
 +    Ok(ServerHandle { v2: state.v2, port: bound_port, ipv6_bound: false,
-+        bound_addresses, task: Mutex::new(Some(task)) })
++        bound_addresses, task: JoinedTask::new(task), task_failed: state.task_failed })
  }
  
  /// Binds an IPv6 listener with `IPV6_V6ONLY` enabled.
-@@ -492,12 +626,14 @@
+@@ -472,7 +643,9 @@
+         let tls_acceptor = tls_acceptor.clone();
+         let app_state = app_state.clone();
+         let cancel = cancel.clone();
+-        connections.spawn(async move {
++        let task_failed = app_state.task_failed.clone();
++        let worker_cancel = cancel.clone();
++        connections.spawn(supervise_connection(async move {
+             let _permit = permit;
+             let serve = serve_connection(tcp_stream, remote_addr, tls_acceptor, app_state);
+             tokio::select! {
+@@ -480,7 +653,80 @@
+                 // Hard-drop the connection when the server is stopped.
+                 _ = cancel.cancelled() => {}
+             }
+-        });
++        }, task_failed, worker_cancel));
++    }
++}
++
++/// TaskTracker joins ownership but deliberately discards each task's result.
++/// Retain panic state and stop sibling connections before that result is lost.
++async fn supervise_connection(connection: impl std::future::Future<Output = ()>,
++    failed: Arc<AtomicBool>, cancel: CancellationToken) {
++    if AssertUnwindSafe(connection).catch_unwind().await.is_err() {
++        failed.store(true, Ordering::Release);
++        cancel.cancel();
++    }
++}
++
++#[cfg(test)]
++mod connection_failure_tests {
++    use super::*;
++    use crate::crypto::cert::generate_self_signed;
++    use crate::crypto::hash::sha256_hex;
++    use crate::http::client::LsHttpClientV2;
++    use crate::http::dto_v2::{PrepareUploadRequestDtoV2, RegisterDtoV2};
++    use crate::model::discovery::ProtocolType;
++    use crate::model::transfer::FileDto;
++    use std::collections::HashMap;
++    use std::time::Duration;
++
++    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++    async fn tls_connection_panic_stops_listener_and_checked_join_retains_failure() {
++        const PNG: &[u8] = include_bytes!("../../../tests/fixtures/one-pixel.png");
++        let server_identity = generate_self_signed().unwrap();
++        let sender_identity = generate_self_signed().unwrap();
++        let (events, mut events_rx) = mpsc::channel(4);
++        let (_stop, stop_rx) = oneshot::channel();
++        let handle = start_bound_v2(vec![Ipv4Addr::LOCALHOST], 0,
++            TlsConfig { cert: server_identity.certificate_pem, private_key: server_identity.private_key_pem },
++            ClientInfo { alias: "worker unwind receiver".into(), version: "2.2".into(),
++                device_model: None, device_type: None, token: server_identity.fingerprint.clone() },
++            ServerConfigV2 { pin: None, verify_checksums: true, event_tx: events },
++            TransferLimits::default(), stop_rx).await.unwrap();
++        let address = handle.local_addresses()[0];
++
++        // Deliberately poison the actual session lock, then exercise the real
++        // TLS/HTTP request path that encounters it. No production panic hook
++        // or replacement server is installed. Shutdown must recover this lock
++        // only for cancellation and release, never continue serving with it.
++        let v2 = handle.v2.as_ref().unwrap();
++        assert!(std::panic::catch_unwind(AssertUnwindSafe(|| {
++            let _session = v2.session.lock().unwrap();
++            panic!("inject session state failure before a real TLS request");
++        })).is_err());
++        assert!(!handle.task_failed.load(Ordering::Acquire));
++        let client = LsHttpClientV2::try_new(&sender_identity.private_key_pem,
++            &sender_identity.certificate_pem, Some(server_identity.fingerprint), Some(Duration::from_secs(5))).unwrap();
++        let file = FileDto { id: "file".into(), file_name: "failure.png".into(), size: PNG.len() as u64,
++            file_type: "image/png".into(), sha256: Some(sha256_hex(PNG)), preview: None, metadata: None };
++        let request = client.prepare_upload(ProtocolType::Https, "127.0.0.1", handle.port(), None,
++            PrepareUploadRequestDtoV2 { info: RegisterDtoV2 {
++                alias: "worker unwind sender".into(), version: "2.2".into(), device_model: None,
++                device_type: None, fingerprint: sender_identity.fingerprint, port: 53317,
++                protocol: ProtocolType::Https, download: false,
++            }, files: HashMap::from([(file.id.clone(), file)]) }, None, CancellationToken::new());
++        assert!(tokio::time::timeout(Duration::from_secs(10), request).await.unwrap().is_err());
++        let event = tokio::time::timeout(Duration::from_secs(5), events_rx.recv()).await.unwrap().unwrap();
++        assert!(matches!(event, ServerEventV2::ListenerFailed { error }
++            if error == "HTTP connection worker panicked"));
++        let failure = tokio::time::timeout(Duration::from_secs(5), handle.wait_stopped_checked())
++            .await.unwrap().unwrap_err();
++        assert!(failure.to_string().contains("HTTP worker"));
++        assert!(handle.task_failed.load(Ordering::Acquire));
++        assert!(handle.wait_stopped_checked().await.is_err());
++        // This OS bind is possible only after every owned accept loop really
++        // dropped the previous listener, not merely after an error was logged.
++        let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
++        assert_eq!(rebound.local_addr().unwrap(), address);
+     }
+ }
+ 
+@@ -492,12 +738,14 @@
  ) {
      let res = match tls_acceptor {
          Some(tls_acceptor) => {
@@ -1491,7 +1779,7 @@
              };
  
              let client_info = {
-@@ -543,6 +679,10 @@
+@@ -543,6 +791,10 @@
      I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
  {
      hyper::server::conn::http1::Builder::new()
@@ -1502,7 +1790,7 @@
          .serve_connection(
              TokioIo::new(io),
              hyper::service::service_fn(move |mut req: Request<Incoming>| {
-@@ -641,6 +781,16 @@
+@@ -641,6 +893,16 @@
  
      let v2_enabled = state.v2.is_some();
  
@@ -2145,15 +2433,24 @@
  //! UDP multicast discovery for the LocalSend protocol (v2.2).
  //!
  //! Devices announce themselves by sending a [`MulticastMessageV2`] to the
-@@ -16,6 +17,7 @@
+@@ -12,13 +13,15 @@
+ 
+ use crate::model::discovery::{DeviceType, MulticastMessageV2, ProtocolType};
+ use crate::util::interface::InterfaceFilter;
++use crate::util::joined_task::JoinedTask;
+ use serde::Serialize;
  use socket::MulticastSocket;
  use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
  use std::sync::Arc;
 +use std::sync::atomic::{AtomicBool, Ordering};
  use std::time::Duration;
  use tokio::net::UdpSocket;
- use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
-@@ -50,7 +52,7 @@
+-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
++use tokio::sync::{mpsc, oneshot, RwLock};
+ use tokio_util::sync::CancellationToken;
+ 
+ /// The multicast group used by LocalSend.
+@@ -50,7 +53,7 @@
  
  /// The largest datagram that is read at once. Announcements are far smaller;
  /// anything bigger is truncated and then fails to parse.
@@ -2162,15 +2459,21 @@
  
  /// How many consecutive receive errors are tolerated before a socket is given
  /// up on. Receiving may fail transiently (on Windows an ICMP error of a
-@@ -169,6 +171,7 @@
+@@ -169,6 +172,8 @@
      /// The sockets used for sending. Emptied once discovery is stopped, which
      /// releases the port and turns further sends into no-ops.
      sockets: RwLock<Vec<SendSocket>>,
 +    failed: AtomicBool,
++    task_failed: AtomicBool,
  }
  
  /// A [`MulticastMessageV2`] plus the legacy `announce` flag of protocol v2.
-@@ -216,6 +219,8 @@
+@@ -212,10 +217,12 @@
+ 
+     /// The task supervising the receive loops. Completes after a stop has been
+     /// requested and all sockets have been closed.
+-    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
++    task: JoinedTask,
  }
  
  impl MulticastHandle {
@@ -2179,23 +2482,80 @@
      /// Announces this device to the network, which makes every other LocalSend
      /// device on it register with this device over HTTP.
      ///
-@@ -269,6 +274,7 @@
+@@ -237,9 +244,19 @@
+     /// so that the port can be bound again.
+     /// Must be called after requesting a stop via the stop channel.
+     pub async fn wait_stopped(&self) {
+-        if let Some(task) = self.task.lock().await.take() {
+-            let _ = task.await;
+-        }
++        if let Err(error) = self.wait_stopped_checked().await {
++            tracing::error!("Multicast shutdown failed: {error:#}");
++        }
++    }
++
++    /// Preserves supervisor/receiver panic results for every shutdown waiter.
++    pub async fn wait_stopped_checked(&self) -> anyhow::Result<()> {
++        let result = self.task.wait().await;
++        self.cancel.cancel();
++        self.state.sockets.write().await.clear();
++        result?;
++        anyhow::ensure!(!self.state.task_failed.load(Ordering::Acquire), "multicast receiver panicked");
++        Ok(())
+     }
+ }
+ 
+@@ -269,6 +286,8 @@
  
      let state = Arc::new(MulticastState {
          device: config.device,
 +        failed: AtomicBool::new(false),
++        task_failed: AtomicBool::new(false),
          sockets: RwLock::new(
              sockets
                  .iter()
-@@ -300,6 +306,7 @@
+@@ -298,8 +317,16 @@
+ 
+             tokio::select! {
                  // All receive loops gave up on their socket.
-                 _ = async { while receivers.join_next().await.is_some() {} } => {
+-                _ = async { while receivers.join_next().await.is_some() {} } => {
++                _ = async {
++                    while let Some(result) = receivers.join_next().await {
++                        if result.is_err() {
++                            state.task_failed.store(true, Ordering::Release);
++                            break;
++                        }
++                    }
++                } => {
                      tracing::error!("All multicast sockets failed, stopping multicast discovery");
 +                    state.failed.store(true, Ordering::Release);
                      // Tell the application, so it can restart discovery.
                      // `try_send` because this task must reach its end even
                      // when nobody consumes events anymore, so that
-@@ -348,6 +355,12 @@
+@@ -313,7 +340,12 @@
+ 
+             // Wait for the sockets to be released, so that the port is free
+             // once this task completes.
+-            receivers.shutdown().await;
++            receivers.abort_all();
++            while let Some(result) = receivers.join_next().await {
++                if result.is_err_and(|error| !error.is_cancelled()) {
++                    state.task_failed.store(true, Ordering::Release);
++                }
++            }
+             state.sockets.write().await.clear();
+         }
+     });
+@@ -321,7 +353,7 @@
+     Ok(MulticastHandle {
+         state,
+         cancel,
+-        task: Mutex::new(Some(task)),
++        task: JoinedTask::new(task),
+     })
+ }
+ 
+@@ -348,6 +380,12 @@
                  received
              }
              Err(err) => {
@@ -2208,7 +2568,7 @@
                  consecutive_errors += 1;
                  tracing::warn!(
                      "Could not receive multicast message on interface {}: {err:#}",
-@@ -363,6 +376,7 @@
+@@ -363,6 +401,7 @@
                  continue;
              }
          };
@@ -2216,7 +2576,7 @@
  
          let message = match serde_json::from_slice::<MulticastMessageV2>(&buffer[..size]) {
              Ok(message) => message,
-@@ -371,6 +385,11 @@
+@@ -371,6 +410,11 @@
                  continue;
              }
          };
@@ -2228,6 +2588,119 @@
  
          // Loopback is enabled, so our own messages come back as well.
          if message.fingerprint == state.device.fingerprint {
+--- /dev/null
++++ b/core/src/util/joined_task.rs
+@@ -0,0 +1,98 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
++//! One owned supervisor join, including a persistent result for repeat callers.
++
++use tokio::sync::Mutex;
++use tokio::task::JoinHandle;
++
++pub(crate) struct JoinedTask {
++    state: Mutex<State>,
++}
++
++struct State {
++    task: Option<JoinHandle<()>>,
++    failure: Option<&'static str>,
++}
++
++impl JoinedTask {
++    pub(crate) fn new(task: JoinHandle<()>) -> Self {
++        Self { state: Mutex::new(State { task: Some(task), failure: None }) }
++    }
++
++    pub(crate) async fn wait(&self) -> anyhow::Result<()> {
++        let mut state = self.state.lock().await;
++        if let Some(task) = state.task.as_mut() {
++            // Await by reference: cancellation of this waiter must not detach
++            // the supervisor or make the next waiter report a false success.
++            let result = task.await;
++            state.task = None;
++            if let Err(error) = result {
++                state.failure = Some(if error.is_panic() { "supervisor panicked" }
++                    else { "supervisor was cancelled before completing shutdown" });
++            }
++        }
++        match state.failure {
++            Some(message) => Err(anyhow::anyhow!(message)),
++            None => Ok(()),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
++    use std::time::Duration;
++    use tokio::sync::{oneshot, Semaphore};
++
++    struct Dropped(Arc<AtomicBool>);
++    impl Drop for Dropped {
++        fn drop(&mut self) { self.0.store(true, Ordering::Release); }
++    }
++
++    #[tokio::test]
++    async fn actual_task_panic_is_joined_and_remains_an_error() {
++        let dropped = Arc::new(AtomicBool::new(false));
++        let owner = Dropped(dropped.clone());
++        let supervisor = Arc::new(JoinedTask::new(tokio::spawn(async move {
++            let _owner = owner;
++            panic!("exercise a real supervisor unwind");
++        })));
++        let (first, concurrent) = tokio::join!(supervisor.wait(), supervisor.wait());
++        assert!(first.unwrap_err().to_string().contains("panicked"));
++        assert!(concurrent.is_err());
++        assert!(dropped.load(Ordering::Acquire));
++        assert!(supervisor.wait().await.is_err());
++    }
++
++    #[tokio::test]
++    async fn cancelled_waiter_retains_the_task_until_it_really_exits() {
++        let release = Arc::new(Semaphore::new(0));
++        let done = Arc::new(AtomicBool::new(false));
++        let (started, started_rx) = oneshot::channel();
++        let supervisor = JoinedTask::new(tokio::spawn({
++            let release = release.clone();
++            let done = done.clone();
++            async move {
++                started.send(()).unwrap();
++                let _permit = release.acquire().await.unwrap();
++                done.store(true, Ordering::Release);
++            }
++        }));
++        started_rx.await.unwrap();
++        assert!(tokio::time::timeout(Duration::from_millis(10), supervisor.wait()).await.is_err());
++        assert!(!done.load(Ordering::Acquire));
++        release.add_permits(1);
++        supervisor.wait().await.unwrap();
++        assert!(done.load(Ordering::Acquire));
++        supervisor.wait().await.unwrap();
++    }
++
++    #[tokio::test]
++    async fn aborted_supervisor_is_not_reported_as_success() {
++        let task = tokio::spawn(std::future::pending::<()>());
++        task.abort();
++        let supervisor = JoinedTask::new(task);
++        assert!(supervisor.wait().await.unwrap_err().to_string().contains("cancelled"));
++        assert!(supervisor.wait().await.is_err());
++    }
++}
+--- a/core/src/util/mod.rs
++++ b/core/src/util/mod.rs
+@@ -1,6 +1,9 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ pub mod base64;
+ pub mod error;
+ pub mod filename;
+ #[cfg(feature = "if-addrs")]
+ pub mod interface;
++#[cfg(any(feature = "http", feature = "multicast"))]
++pub(crate) mod joined_task;
+ pub(crate) mod time;
 --- a/core/src/webrtc/signaling.rs
 +++ b/core/src/webrtc/signaling.rs
 @@ -1,13 +1,22 @@

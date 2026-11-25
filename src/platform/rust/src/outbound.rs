@@ -71,6 +71,7 @@ pub fn send(shared: &Arc<Shared>, peer: Peer, leases: Vec<Arc<Lease>>) -> Result
                 HuhuEvent::error(event::SEND_END, operation, Error::new(status::PANIC, "LocalSend send worker panicked"))
             }
         };
+        if result.status == status::PANIC { state.record_panic(); }
         state.finish_operation(operation);
         terminal.send(result);
     }, &shared.runtime);
@@ -130,7 +131,7 @@ async fn run_send(shared: Arc<Shared>, operation: u64, peer: Peer,
         if let Some(active) = shared.operations.lock().unwrap_or_else(|error| error.into_inner()).get_mut(&operation) {
             active.remote_session = Some(response.session_id.clone());
         }
-        for (index, mut file) in files.drain(..).enumerate() {
+        for (index, file) in files.drain(..).enumerate() {
             let Some(token) = response.files.get(&file.dto.id) else { continue; };
             results[index].accepted = true;
             let file_id = file.dto.id.clone();
@@ -141,7 +142,8 @@ async fn run_send(shared: Arc<Shared>, operation: u64, peer: Peer,
             let producer = tokio::spawn(async move {
                 // The LeaseUse stays inside this task until all underlying
                 // file reads have really completed, including cancellation.
-                let source = file.file.take().ok_or_else(|| Error::new(status::INVALID_STATE, "Media lease lost its file"))?;
+                let mut lease_use = file;
+                let source = lease_use.file.take().ok_or_else(|| Error::new(status::INVALID_STATE, "Media lease lost its file"))?;
                 read_media(source, file_size, data_tx, producer_cancel).await
             });
             let progress = Arc::new(Progress { bytes: AtomicU64::new(0), last_ms: AtomicU64::new(0), start: Instant::now() });
