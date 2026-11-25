@@ -117,6 +117,21 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
     require(timeBase.num > 0 && timeBase.den > 0, "Read a positive actual output time base");
     constexpr AVRational hundredNs{1, 10'000'000};
     const AVRational cadence{1, static_cast<int>(fps)};
+    const auto inputEnd = sink.lastSubmitted + sink.lastSubmittedDuration;
+    require(sink.lastOriginalEnd > sink.lastSubmitted && sink.lastOriginalEnd <= sink.tailTargetEnd &&
+        sink.tailTargetEnd == inputEnd,
+        "The final native input must preserve its original interval and use its one frozen CFR target");
+    // Compute the independent boundary with FFmpeg's rational rescaler rather
+    // than the production integer helper. The preceding grid boundary must be
+    // strictly before the original end: equality must not add another frame.
+    const auto targetFrame = av_rescale_q(sink.tailTargetEnd, hundredNs, cadence);
+    require(targetFrame > 0 && av_rescale_q(targetFrame, cadence, hundredNs) == sink.tailTargetEnd,
+        "The frozen final target must be an actual rounded nominal-FPS boundary");
+    const auto previousBoundary = av_rescale_q(targetFrame - 1, cadence, hundredNs);
+    require(previousBoundary >= 0 && previousBoundary < sink.lastOriginalEnd &&
+        sink.tailTargetEnd > previousBoundary &&
+        sink.tailTargetEnd - sink.lastOriginalEnd < sink.tailTargetEnd - previousBoundary,
+        "The final target must be the first covering CFR boundary and add less than one frame");
     std::uint64_t decoded{}, packets{};
     std::int64_t lastPts{}, lastEnd{}, lastPacketPts{AV_NOPTS_VALUE};
     const auto receive = [&](bool draining) {
@@ -160,7 +175,6 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
     // encoded packet need not have the greatest presentation timestamp. The
     // independent decoded timeline still proves complete tail coverage below.
     const auto lastEncodedPacket = av_rescale_q(lastPacketPts, timeBase, hundredNs);
-    const auto inputEnd = sink.lastSubmitted + sink.lastSubmittedDuration;
     const auto frameTicks = (10'000'000ll + fps - 1) / fps;
     require(lastEncodedPacket >= 0 && std::llabs(lastEncodedPacket - sink.lastEncoded) <= 1 && decodedEnd >= inputEnd &&
         decodedEnd - inputEnd <= frameTicks,
@@ -171,6 +185,8 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
         {QStringLiteral("lastEncodedPacket100ns"), static_cast<qint64>(lastEncodedPacket)},
         {QStringLiteral("decodedEnd100ns"), static_cast<qint64>(decodedEnd)},
         {QStringLiteral("submittedEnd100ns"), static_cast<qint64>(inputEnd)},
+        {QStringLiteral("lastOriginalEnd100ns"), static_cast<qint64>(sink.lastOriginalEnd)},
+        {QStringLiteral("tailTargetEnd100ns"), static_cast<qint64>(sink.tailTargetEnd)},
         {QStringLiteral("nominalFps"), static_cast<qint64>(fps)},
         {QStringLiteral("contiguousTimeline"), true}};
 }

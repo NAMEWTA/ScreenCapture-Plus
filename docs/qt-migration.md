@@ -26,8 +26,8 @@
 | `src/services/transfer/` 与 `src/ui/qt/Transfer*` / `ReceivePrompt` | 有界 Qt actor 与独立接收 worker，真实接收归档、完整校验、设备 / 证书确认 / 进度 UI、窗口重开所需有界结果快照 | 新增界面实际 CI、正式持久身份和网卡装配、物理双端与性能门槛 |
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
-| `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；KWindowSystem 异步父窗导出已通过指定 Sway 生命周期测试 | PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
-| `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease 与 CPU / MemFd 数据面，固定客户端和受控失败路径补丁 | 实际采流 CI、X11 / GNOME / Plasma、音频及完整录制接线 |
+| `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；KWindowSystem 异步父窗导出和 ScreenCast 采流已通过受控 Sway 检查 | 真实 GNOME / Plasma 授权与物理桌面验收 |
+| `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease、旧 MemFd 描述符兼容映射；Debug / Release 已通过真实 Sway 采流、resize、daemon-loss 和停止后帧保留检查 | GNOME / Plasma、物理显示器、实际音源及长时录制验收 |
 | `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭 | Qt 设备和任务服务、完整 MP4 解码及两端互传；聚合 ABI 和一致锁已通过指定双平台 CI |
 
 同一工具的交互规则不能因为平台迁移而被“统一”成不同语义。例如普通矩形越过对边时可以翻转，批注范围则限制在原图内；普通序号按活动最大值加一，批注高水位编号永不复用。移动、文字与样式修改仍遵循现有历史语义，不借模型抽取改变撤销行为。
@@ -57,11 +57,11 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 | P02 | 共享设置 / 历史 / 关于窗口已进入真实组件测试 | Linux 桌面完整交互、真实弹层与混合 DPI 拖动 |
 | P03 | 九工具模型、参数、马赛克及 EditorDocument 共用，并接入截图/贴图会话 | 实体桌面交互、混合 DPI、完整备注和真实 IME 验收 |
 | P04 | 原生媒体 / 文件边界解耦中 | 截图、热键、窗口 / 光标、COM 与录制全生命周期 |
-| P05 | Portal 控制面实施与验证中 | X11、PipeWire、全局键及真实桌面能力矩阵 |
+| P05 | Portal 控制面与受控 Sway/PipeWire 数据面已完成指定自动检查 | 物理 X11 / GNOME / Plasma、全局键及真实桌面能力矩阵 |
 | P06 | 配置、语言和文件发布合同已实现 | QR / 回收 / 剪贴板 / 缩略图 / lease 的完整迁移 |
 | P07 | CLI/单实例/托盘、设置/历史/关于、截图与输出已由应用统一持有 | 完整双平台用户旅程与物理桌面验收 |
 | P08 | 共用滚动控制器、拼接器、原生/Portal 帧源及输出已接入 | 真实 X11/Wayland/Windows 长图旅程与稳定性 |
-| P09 | 共享录制会话/Qt 工具条、Linux H264/AAC/PipeWire、Windows 原生后端与 GIF 已接入 | 原生录制 CI、旧 MP3 音轨跨平台验证、实际音源/长时同步 |
+| P09 | 共享录制会话/Qt 工具条、Linux H264/AAC/PipeWire、Windows 原生后端与 GIF 已接入；真实 Windows MP3 音轨已由固定 Linux 解码器独立校验 | 原生录制尾部覆盖、实际音源/长时同步及完整桌面旅程 |
 | P10 | 上游 core、聚合 C ABI、真实 TLS 归档测试和共享任务 / 设备 UI 实施中 | 新增界面实际验证、正式身份 / 网卡装配与 P10a 双平台互传；P10b 独立记录 |
 | P11 | 完整包清单/下载和 Windows setup/ZIP、Linux DEB/AppImage 打包已接入 | 同 SHA 实际包验证、旧版桥接、干净机器安装升级卸载 |
 | P12 | 未验收 | F01–F15、真实双屏 / IME / 音视频、性能、稳定性和干净机器升级卸载 |

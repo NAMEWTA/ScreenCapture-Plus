@@ -91,13 +91,41 @@ def snapshot(source, target):
     return identity
 
 
+def cargo_environment(private):
+    """The fixed public-source profile does not inherit Cargo credentials/config."""
+    environment = BUNDLE.git_environment()
+    for key in tuple(environment):
+        if key.startswith("CARGO_") or key in (
+            "RUSTC", "RUSTDOC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS", "RUSTUP_TOOLCHAIN", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
+            "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY",
+            "no_proxy", "NO_PROXY",
+        ):
+            del environment[key]
+    environment.update(CARGO_HOME=str(private), CARGO_TARGET_DIR=str(private / "target"),
+                       CARGO_NET_OFFLINE="true", CARGO_NET_GIT_FETCH_WITH_CLI="false", RUSTUP_AUTO_INSTALL="0",
+                       CARGO_HTTP_PROXY="")
+    # In the fixed Cargo, an explicit empty HTTP proxy bypasses libgit2's
+    # Config::open_default fallback and tells libcurl to use no proxy. Git CLI
+    # configuration environment variables alone cannot isolate that fallback.
+    # Cargo searches .cargo in the working directory and every ancestor, even
+    # with a private CARGO_HOME. This fixed checkout has no such configuration.
+    for directory in (ROOT, *ROOT.parents):
+        for name in ("config", "config.toml"):
+            BUNDLE.require(not os.path.lexists(directory / ".cargo" / name),
+                           "The fixed source profile cannot inherit Cargo configuration: " + str(directory / ".cargo" / name))
+    return environment
+
+
 class Retention:
-    def __init__(self, output, commit, qt_prefix):
+    def __init__(self, output, commit, qt_prefix, *, fetch_locked_sources=False):
         self.output, self.commit, self.qt_prefix = output, commit, qt_prefix
+        self.fetch_locked_sources = fetch_locked_sources
         self.materials = []
         self.report = {"schemaVersion": 1, "kind": "huhucapture-linux-development-source-retention",
                        "sourceCommit": commit, "platform": "linux", "profile": "existing-application-build",
-                       "commands": [], "retainedMaterials": [], "status": "started"}
+                       "commands": [], "retainedMaterials": [], "status": "started",
+                       "fetchLockedSources": fetch_locked_sources}
         self.coverage = {"schemaVersion": 1, "sourceCommit": commit, "platform": "linux",
                          "registryArchives": [], "missingRegistryArchives": [], "missingMaterials": []}
         (output / "logs").mkdir()
@@ -120,6 +148,11 @@ class Retention:
         record = {"id": identifier, "arguments": [str(item) for item in arguments], "cwd": str(ROOT),
                   "stdout": stdout_path.relative_to(self.output).as_posix(),
                   "stderr": stderr_path.relative_to(self.output).as_posix()}
+        if environment is not None:
+            record["environment"] = {key: environment[key] for key in (
+                "CARGO_HOME", "CARGO_NET_OFFLINE", "CARGO_NET_GIT_FETCH_WITH_CLI", "RUSTUP_AUTO_INSTALL", "RUSTC",
+                "CARGO_HTTP_PROXY",
+            ) if key in environment}
         self.report["commands"].append(record)
         with stdout_path.open("xb") as stdout, stderr_path.open("xb") as stderr:
             try:
@@ -127,7 +160,10 @@ class Retention:
                                         stdout=stdout, stderr=stderr)
             except OSError as error:
                 record.update(exitCode=None, launchError=str(error))
-                raise
+                stderr.write(("Process could not be started: " + str(error) + "\n").encode("utf-8", "replace"))
+                if checked:
+                    raise
+                return record
         record["exitCode"] = result.returncode
         if checked:
             BUNDLE.require(result.returncode == 0,
@@ -191,6 +227,10 @@ class Retention:
         return metadata
 
     def registry_archives(self, packages, cache):
+        # Rescanning after fetch replaces coverage, not previously retained
+        # bytes. Verified archives remain available even after a partial fetch.
+        self.coverage["registryArchives"] = []
+        self.coverage["missingRegistryArchives"] = []
         for package in sorted(packages, key=package_key):
             source = package.get("source") or ""
             if not source.startswith("registry+"):
@@ -199,19 +239,52 @@ class Retention:
             name = BUNDLE.relative(package["name"] + "-" + package["version"] + ".crate")
             original = cache / name
             record = {**package_identity(package_key(package)), "lockedSha256": package["checksum"]}
+            BUNDLE.require(BUNDLE.HEX64.fullmatch(package["checksum"] or ""), "Invalid locked registry checksum")
             if not original.exists():
                 self.coverage["missingRegistryArchives"].append(record)
                 continue
-            BUNDLE.require(BUNDLE.HEX64.fullmatch(package["checksum"] or ""), "Invalid locked registry checksum")
             actual = BUNDLE.descriptor(original)
             if actual["sha256"] != package["checksum"]:
                 self.coverage["invalidRegistryArchive"] = {**record, "actual": actual, "input": str(original)}
                 raise ValueError("Existing registry archive differs from Cargo.lock: " + name)
             target = self.output / "inputs/registry-cache" / name
-            retained = snapshot(original, target)
+            if os.path.lexists(target):
+                BUNDLE.require(target.is_file() and not target.is_symlink(), "Invalid retained registry archive")
+                retained = BUNDLE.descriptor(target)
+            else:
+                retained = snapshot(original, target)
             BUNDLE.require(retained == actual, "Registry archive changed after checksum validation")
             self.coverage["registryArchives"].append({**record, "archive": retained,
                                                        "retained": target.relative_to(self.output).as_posix()})
+
+    def registry_coverage(self):
+        return {key: list(self.coverage[key]) for key in ("registryArchives", "missingRegistryArchives")}
+
+    def fetch_locked(self, packages, cache, cargo, environment, cargo_lock, private):
+        self.coverage["registryArchiveCoverageBeforeFetch"] = self.registry_coverage()
+        original_lock = cargo_lock.read_bytes()
+        exported = private / "project-source-check"
+        BUNDLE.export_git_objects(ROOT, self.commit, exported)
+        source_files = BUNDLE.inventory(exported)
+        BUNDLE.compare_checkout(ROOT, source_files, self.commit)
+        inputs = {"sourceCommit": self.commit, "sourceTreeSha256": BUNDLE.tree_digest(source_files),
+                  "cargoLockSha256Before": BUNDLE.digest(cargo_lock)}
+        self.coverage["fetchInputs"] = inputs
+        fetch_environment = dict(environment)
+        fetch_environment["CARGO_NET_OFFLINE"] = "false"
+        # No --target: the fixed Cargo fetch traverses every platform in the
+        # locked workspace resolution. It does not replace actual build metadata.
+        record = self.command("cargo-fetch", [cargo, "fetch", "--locked", "--manifest-path",
+                              str(ROOT / "third_party/localsend/Cargo.toml")],
+                              environment=fetch_environment, checked=False)
+        self.coverage["fetch"] = record
+        inputs["cargoLockSha256After"] = BUNDLE.digest(cargo_lock)
+        BUNDLE.require(cargo_lock.read_bytes() == original_lock, "Cargo.lock changed during locked source fetch")
+        BUNDLE.compare_checkout(ROOT, source_files, self.commit)
+        self.clean_project()
+        inputs["sourceUnchanged"] = True
+        self.registry_archives(packages, cache)
+        self.coverage["registryArchiveCoverageAfterFetch"] = self.registry_coverage()
 
     def gifski_checkout(self, lock, metadata, cargo_home):
         pin = lock["gifski"]
@@ -248,39 +321,45 @@ class Retention:
                                    "retained": "inputs/gifski", "sourceTreeSha256": BUNDLE.tree_digest(expected)}
         return source
 
-    def offline_vendor(self, cargo_home, cache, gifski_source):
-        environment = BUNDLE.git_environment()
-        environment.update(CARGO_NET_OFFLINE="true", RUSTUP_AUTO_INSTALL="0")
-        for key in ("RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
-                    "CARGO_TARGET_DIR", "RUSTUP_TOOLCHAIN"):
-            environment.pop(key, None)
-        executables = {}
-        for program in ("cargo", "rustc"):
-            record = self.command(program + "-path", ["rustup", "which", "--toolchain", TOOLCHAIN, program],
-                                  environment=environment)
-            executable = Path((self.output / record["stdout"]).read_text().strip()).resolve(strict=True)
-            version = self.command(program + "-version", [str(executable), "--version", "--verbose"],
-                                   environment=environment)
-            text = (self.output / version["stdout"]).read_text()
-            BUNDLE.require(text.startswith(program + " " + TOOLCHAIN + " "), "The installed toolchain differs from the lock")
-            executables[program] = str(executable)
-            self.coverage[program] = {"version": text.strip(), "executable": str(executable), **BUNDLE.descriptor(executable)}
-        environment["RUSTC"] = executables["rustc"]
+    def prepare_vendor(self, packages, cargo_lock, cargo_home, cache, gifski_source):
         # Only a private, disposable cache is writable by Cargo. Never copy a
         # Cargo home/config/credentials, or retain unrelated registry archives.
         with tempfile.TemporaryDirectory(prefix="source-vendor-cache-", dir=ROOT / "artifacts") as temporary:
             private = Path(temporary)
+            environment = cargo_environment(private)
+            executables = {}
+            for program in ("cargo", "rustc"):
+                record = self.command(program + "-path", ["rustup", "which", "--toolchain", TOOLCHAIN, program],
+                                      environment=environment)
+                executable = Path((self.output / record["stdout"]).read_text().strip()).resolve(strict=True)
+                version = self.command(program + "-version", [str(executable), "--version", "--verbose"],
+                                       environment=environment)
+                text = (self.output / version["stdout"]).read_text()
+                BUNDLE.require(text.startswith(program + " " + TOOLCHAIN + " "), "The installed toolchain differs from the lock")
+                executables[program] = str(executable)
+                self.coverage[program] = {"version": text.strip(), "executable": str(executable), **BUNDLE.descriptor(executable)}
+            environment["RUSTC"] = executables["rustc"]
             index = cargo_home / "registry/index" / cache.name
             if index.is_dir():
                 shutil.copytree(index, private / "registry/index" / cache.name, symlinks=False)
-            database = cargo_home / "git/db" / gifski_source.parent.name
-            if database.is_dir():
-                commit = self.coverage["gifski"]["source"].rsplit("#", 1)[-1]
-                raw = BUNDLE.git(database, "cat-file", "commit", commit)
-                BUNDLE.require(BUNDLE.object_digest("commit", raw) == commit, "Cached gifski Git database differs from its pin")
-                shutil.copytree(database, private / "git/db" / database.name, symlinks=False)
-            shutil.copytree(self.output / "inputs/registry-cache", private / "registry/cache" / cache.name)
-            environment.update(CARGO_HOME=str(private), CARGO_TARGET_DIR=str(private / "target"))
+            database = private / "git/db" / gifski_source.parent.name
+            database.parent.mkdir(parents=True)
+            # Seed only verified local objects, without copying a cached Git
+            # configuration, hooks or credential helper into the network phase.
+            BUNDLE.git(ROOT, "-c", "protocol.file.allow=always", "clone", "--bare", "--local", "--no-hardlinks",
+                       "--dissociate", str(self.output / "inputs/gifski"), str(database))
+            commit = self.coverage["gifski"]["source"].rsplit("#", 1)[-1]
+            actual_commit = BUNDLE.git(database, "rev-parse", "--verify", commit + "^{commit}").decode().strip()
+            raw = BUNDLE.git(database, "cat-file", "commit", commit)
+            BUNDLE.require(actual_commit == commit and BUNDLE.object_digest("commit", raw) == commit,
+                           "Private gifski database is missing the exact locked commit")
+            # Cargo's locked-revision/local-object branch returns this database
+            # without entering its Git network/credential-configuration path.
+            self.coverage["gifski"]["privateDatabaseCommit"] = actual_commit
+            private_cache = private / "registry/cache" / cache.name
+            shutil.copytree(self.output / "inputs/registry-cache", private_cache)
+            if self.fetch_locked_sources:
+                self.fetch_locked(packages, private_cache, executables["cargo"], environment, cargo_lock, private)
             vendor = self.output / "inputs/rust-vendor"
             record = self.command("cargo-vendor", [executables["cargo"], "vendor", "--locked", "--offline",
                                   "--versioned-dirs", "--manifest-path", str(ROOT / "third_party/localsend/Cargo.toml"),
@@ -321,7 +400,7 @@ class Retention:
         self.coverage["qtPrefix"] = str(self.qt_prefix)
         for index, path in enumerate(files):
             self.material("qt-sbom-" + str(index), path)
-        vendor = self.offline_vendor(cargo_home, cache, gifski_source)
+        vendor = self.prepare_vendor(packages, cargo_lock, cargo_home, cache, gifski_source)
         self.clean_project()
         write_new(self.output / "cargo-coverage.json", self.coverage)
         self.materials.append({"id": "cargo-coverage", "path": "cargo-coverage.json"})
@@ -353,8 +432,10 @@ class Retention:
         BUNDLE.require(set(NATIVE_SOURCES) | {"huhucapture", "localsend", "gifski"} <= provided,
                        "A required actual source disappeared during collection")
         self.clean_project()
-        self.report.update(status="incomplete-bundle-retained", complete=False,
+        fetch_failed = self.fetch_locked_sources and self.coverage["fetch"]["exitCode"] != 0
+        self.report.update(status="incomplete-bundle-retained-fetch-failed" if fetch_failed else "incomplete-bundle-retained", complete=False,
                            archive=manifest["archive"], gaps=manifest["gaps"])
+        return 1 if fetch_failed else 0
 
 
 def main():
@@ -362,6 +443,8 @@ def main():
     parser.add_argument("--qt-prefix", type=Path, required=True, help="Actual QT_ROOT_DIR from this Linux CI job")
     parser.add_argument("--source-commit", required=True, help="Actual checkout SHA, including the PR merge SHA")
     parser.add_argument("--output", type=Path, required=True, help="New directory under this checkout's ignored artifacts/")
+    parser.add_argument("--fetch-locked-sources", action="store_true",
+                        help="Fetch the fixed lock into a private cache before offline collection; retain materials but fail on fetch failure")
     args = parser.parse_args()
     retention = None
     try:
@@ -375,10 +458,13 @@ def main():
         qt = args.qt_prefix.resolve(strict=True)
         BUNDLE.require(qt.is_dir(), "Actual Qt prefix is missing")
         output.mkdir(parents=True)
-        retention = Retention(output, args.source_commit, qt)
-        retention.run()
-        print(json.dumps({"output": str(output), "complete": False, "archive": retention.report["archive"]}, indent=2))
-        return 0
+        retention = Retention(output, args.source_commit, qt, fetch_locked_sources=args.fetch_locked_sources)
+        result = retention.run()
+        print(json.dumps({"output": str(output), "status": retention.report["status"],
+                          "complete": False, "archive": retention.report["archive"]}, indent=2))
+        if result:
+            print("Locked Cargo fetch failed; verified incomplete bundle and actual logs are retained.", file=sys.stderr)
+        return result
     except (ValueError, KeyError, OSError, RuntimeError, UnicodeError, subprocess.SubprocessError,
             tomllib.TOMLDecodeError) as error:
         if retention:

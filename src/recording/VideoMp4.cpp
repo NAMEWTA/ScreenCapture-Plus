@@ -1,6 +1,7 @@
 #include "recording/VideoMp4.h"
 #include "core/MediaClock.h"
 #include "core/PixelBuffer.h"
+#include "core/RecordingTime.h"
 #include "platform/windows/AudioFormat.h"
 #include "platform/windows/ComApartment.h"
 #include "platform/windows/GdiCapture.h"
@@ -1980,6 +1981,27 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     DWORD VideoBufferSize = cbWidth * he;
     LONGLONG lastSubmittedVideoTime = 0;
     LONGLONG lastSubmittedVideoDuration = 0;
+    LONGLONG lastOriginalVideoEnd = 0;
+    LONGLONG tailTargetVideoEnd = 0;
+    // One extra owned frame lets the final interval be completed before MF can
+    // retain its sample. Pixels are never rewritten or recaptured at shutdown.
+    CComPtr<IMFSample> pendingVideoSample;
+    LONGLONG pendingVideoTime = 0;
+    LONGLONG pendingVideoDuration = 0;
+    const auto submitPendingVideo = [&]() -> HRESULT {
+        if (!pendingVideoSample) return S_OK;
+        CComPtr<IMFSample> sample;
+        sample.Attach(pendingVideoSample.Detach());
+        const auto status = pSinkWriter->WriteSample(OutVideoStreamIndex, sample);
+        if (SUCCEEDED(status)) {
+            ++dp.result.framesWritten;
+            lastSubmittedVideoTime = pendingVideoTime;
+            lastSubmittedVideoDuration = pendingVideoDuration;
+        }
+        // Detach before WriteSample: a failed submission is never retried by
+        // the final cleanup path, nor counted as a successfully accepted frame.
+        return status;
+    };
 
     unsigned long long rtA = 0;
     unsigned long long rtV = 0;
@@ -2004,7 +2026,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             dp.DurationLimitReached = true;
             return true;
         }
-        if (dp.HasVideo && !dp.Framer && dp.FirstFrameTimeoutMS && dp.result.framesWritten == 0 &&
+        if (dp.HasVideo && !dp.Framer && dp.FirstFrameTimeoutMS && dp.result.framesWritten == 0 && !pendingVideoSample &&
             static_cast<unsigned long long>(elapsed) >= dp.FirstFrameTimeoutMS) {
             hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
             return true;
@@ -2422,12 +2444,11 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
                 hr = pVideoSample->SetSampleDuration(ThisDurV);
                 if (FAILED(hr)) break;
-                hr = pSinkWriter->WriteSample(OutVideoStreamIndex, pVideoSample);
-                if (FAILED(hr))
-                    break;
-                dp.result.framesWritten++;
-                lastSubmittedVideoTime = static_cast<LONGLONG>(rtV);
-                lastSubmittedVideoDuration = static_cast<LONGLONG>(ThisDurV);
+                hr = submitPendingVideo();
+                if (FAILED(hr)) break;
+                pendingVideoSample = pVideoSample;
+                pendingVideoTime = static_cast<LONGLONG>(rtV);
+                pendingVideoDuration = static_cast<LONGLONG>(ThisDurV);
             }
         }
 
@@ -2503,6 +2524,28 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     if (FAILED(hr)) dp.result.fail(failureStage, static_cast<std::int64_t>(hr));
     const auto audioError = firstAudioError.load();
     if (FAILED(audioError)) dp.result.fail(RecordingStage::Capture, audioError);
+    if (pendingVideoSample) {
+        // MF's frame-rate conversion can round a variable final interval down.
+        // Freeze its original end once and extend this unsubmitted sample to
+        // the first complete nominal-FPS boundary. Do not chase wall time or
+        // sink statistics while draining, and never shorten the source interval.
+        const auto tail = HuhuCapture::Core::recordingTailTime(
+            pendingVideoTime, pendingVideoDuration, dp.fps);
+        if (!tail) dp.result.fail(RecordingStage::Encode, E_INVALIDARG);
+        else {
+            lastOriginalVideoEnd = tail->originalEnd;
+            tailTargetVideoEnd = tail->targetEnd;
+            const auto duration = tail->targetEnd - pendingVideoTime;
+            const auto timed = pendingVideoSample->SetSampleDuration(duration);
+            if (FAILED(timed)) dp.result.fail(RecordingStage::Encode, timed);
+            else {
+                pendingVideoDuration = duration;
+                const auto written = submitPendingVideo();
+                if (FAILED(written)) dp.result.fail(RecordingStage::Encode, written);
+            }
+        }
+        pendingVideoSample.Release();
+    }
     if (pSinkWriter) {
         if (dp.Finalizing) {
             try { dp.Finalizing(); }
@@ -2522,7 +2565,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 statistics.qwNumSamplesEncoded, statistics.qwNumSamplesProcessed,
                 statistics.llLastTimestampReceived, statistics.llLastTimestampEncoded,
                 statistics.llLastTimestampProcessed, lastSubmittedVideoTime,
-                lastSubmittedVideoDuration, statistics.dwByteCountQueued};
+                lastSubmittedVideoDuration, statistics.dwByteCountQueued,
+                lastOriginalVideoEnd, tailTargetVideoEnd};
         }
     }
     if (dp.result.firstError)

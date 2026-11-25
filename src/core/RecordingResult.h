@@ -24,6 +24,9 @@ struct RecordingSinkStatistics {
     std::int64_t lastReceived{}, lastEncoded{}, lastProcessed{};
     std::int64_t lastSubmitted{}, lastSubmittedDuration{};
     std::uint32_t queuedBytes{};
+    // Frozen before submitting the retained final video sample. The original
+    // end is never reduced; the target is its first rounded nominal-FPS boundary.
+    std::int64_t lastOriginalEnd{}, tailTargetEnd{};
 };
 
 // One writer (the recording worker); the owner reads only after synchronized

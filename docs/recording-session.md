@@ -39,6 +39,16 @@ Windows 工具窗口调用原有 `WDA_EXCLUDEFROMCAPTURE` 能力，并按真实 
 
 Wayland 的授权 source 没有可通用推导的全局坐标，因此不会执行这种位置推断。上述提示也不声称排除了工具窗口；用户在开始后移动控制条仍可能使它进入画面。实际 GNOME / Plasma / X11 窗口管理器和 Windows DWM 捕获结果属于真实桌面验收。
 
+## Windows 原生末帧和时间边界
+
+[`VideoMp4`](../src/recording/VideoMp4.cpp) 沿用单调时钟的实际捕获时间和现有中间样本时长，不用成功帧数除以帧率缩短慢采集的录制。每次捕获创建独立的 MF sample / buffer，像素交付后不再改写。视频路径额外保留一份尚未交给 sink writer 的样本；下一帧到来时提交前一份，因此增加的应用持有量有明确的一帧上限。已捕获的 pending 首帧不会被当成“尚无首帧”而触发超时，GIF / Framer 路径不经过这个队列。
+
+停止时先固定最后一个真实样本原本声明的终点 `E = timestamp + duration`。[纯时间规则](../src/core/RecordingTime.h) 在 100 ns 单位中求名义帧率边界 `B(k) = round(k * 10000000 / fps)`，选择首个不早于 `E` 的 `T`；恰好落在已舍入边界上的终点保持不动。只把仍未提交的末样本时长延长至 `T - timestamp`，随后提交一次并 finalize。原始区间不会被缩短，延长量小于相邻 CFR 边界之间的一帧；目标不会随着排空耗时或 sink statistics 反复后移，也不会在用户停止后重新捕获画面。音频的样本时钟、MP3 配置、暂停判定和录制时限的停止条件继续使用原路径，视频末尾只承担明确的帧粒度对齐。
+
+成功计数仍只表示 `WriteSample` 已接受的输入；pending 不提前计数，失败的提交不在清理阶段重试。停止前的采集 / 音源错误先保存，末样本或 finalize 的后来结果不能覆盖它。可恢复的已有媒体仍走原来的失败保留路径。最终统计同时记录原始 `E`、冻结的 `T`、最后成功输入区间和 MF 各阶段计数。
+
+Windows 原生 probe 使用独立 FFmpeg 有理数换算检查：`E <= T`、前一个帧边界严格早于 `E`、最终输入终点等于 `T`，并完整解码验证连续呈现时间线覆盖 `T`。输入受理数、编码 / 处理数、实际 packet 数和完整解码帧数按各自阶段核对，不把输入一帧必然等于转换后输出一帧作为前提。纯整数测试只能证明舍入 / 溢出规则，不能替代实际 Windows MF 排空与桌面录制证据。
+
 ## 软件编码和音画时间
 
 [`SoftwareMp4Recording`](../src/recording/SoftwareMp4Recording.cpp) 通过固定 FFmpeg 的库 API 创建 MP4，不调用外部录屏或编码命令。H.264 使用 libx264、YUV420P、veryfast / zerolatency、CRF 23、无 B 帧；这些是 Linux 新路径的明确配置，不改变 Windows 保留编码器。RGB 转 YUV 使用明确的 BT.709 矩阵和视频范围，并保留可映射的源 primaries / transfer 标签。
@@ -88,6 +98,7 @@ Windows 运行 `qt_legacy_mp3_recording --generate <全新目录>`；Linux 和 W
 | 验证 | 实际覆盖 | 不覆盖 |
 | --- | --- | --- |
 | `recording_geometry` / `recording_frame` | 真实帧池、八种变换、RGBA / BGRA、负 stride、裁剪、预算、代次 / source 变化拒绝 | OS 采集和设备 |
+| `recording_time` | 末区间保留、30 / 60 fps 分数 tick 舍入、最小上取整和有符号整数边界 | MF 编码、排空和原生录制 |
 | `qt_recording_pipeline` | 实际 gifski / libx264 / AAC、完整解码、尾帧 / duration、真实文件归档、首停止意图、GUI heartbeat、恢复和异步退出 | 原生桌面和音源采集 |
 | `qt_recording_admission` | 真实 QObject 生命周期、缺少 backend 的拒绝、空闲关闭和同步销毁回调 | 采集与编码 |
 | `qt_recording_session`（Windows） | 真实 native preflight 和阻塞目录失败、写句柄已关闭、暂存保留、重新开始与 owner 销毁 | 成功桌面采集 |

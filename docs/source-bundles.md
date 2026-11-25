@@ -195,12 +195,12 @@ Linux AppImage runtime 除自己的固定源码外，必须包括 `appimage-musl
 
 ### 保留现有 Linux 应用 CI 的真实来源
 
-`scripts/retain-development-sources.py` 是当前完整 Linux 应用 job 的固定编排入口，调用上面的收集器。它不负责下载或构建依赖，也不提供任意组件/profile 扩展。应在 `build-native-rust.py`、`build-portal.py`、`build-pipewire.py`、`build-software-media.py` 已成功之后运行；可以安排在应用测试和打包之后、最终上传之前，使前面的测试失败也不丢失已经取得的来源材料。
+`scripts/retain-development-sources.py` 是当前完整 Linux 应用 job 的固定编排入口，调用上面的收集器。它默认离线，显式选项只允许取得现有 Cargo.lock 指定的公开来源；它不构建依赖，也不提供任意组件/profile 扩展。应在 `build-native-rust.py`、`build-portal.py`、`build-pipewire.py`、`build-software-media.py` 已成功之后运行；可以安排在应用测试和打包之后、最终上传之前，使前面的测试失败也不丢失已经取得的来源材料。
 
 ```sh
 python scripts/retain-development-sources.py \
   --qt-prefix "$QT_ROOT_DIR" \
-  --source-commit "$GITHUB_SHA" \
+  --source-commit "$(git rev-parse HEAD)" \
   --output artifacts/source-retention/linux-incomplete
 ```
 
@@ -224,9 +224,27 @@ Cargo 的 metadata、锁、原始档案及 vendor 是四个分别记录的集合
 
 gifski 的实际 checkout 先使用收集器已有的 Git 对象与逐字节检查，只额外识别 Cargo 自己的 `.cargo-ok` 完成标记，其他未记录源码仍会拒绝。之后从这个已核对的本地 checkout 建立干净对象副本，禁用 hooks、fsmonitor、签名自动展示、外部 Git 配置及懒加载；不访问远端。实际原始 checkout 不会被清理或重置，最终由主收集器再次核对固定源码。
 
-vendor 使用确实已安装的 Rust/Cargo 1.97.1，先记录实际程序版本与哈希，然后执行 `vendor --locked --offline --versioned-dirs`。所有相关子进程都设置 `RUSTUP_AUTO_INSTALL=0` 和 `CARGO_NET_OFFLINE=true`。一次性私有 cache 只复制本次 registry index、对应 gifski Git database 和已验证的锁定 `.crate`；不复制整个 Cargo home、配置或 credentials，完成后删除此次临时 cache。
+vendor 使用确实已安装的 Rust/Cargo 1.97.1，先记录实际程序版本与哈希，然后执行 `vendor --locked --offline --versioned-dirs`。所有相关子进程都设置 `RUSTUP_AUTO_INSTALL=0`；除下面明确开启的 fetch 阶段外，始终设置 `CARGO_NET_OFFLINE=true`。一次性私有 cache 只复制本次 registry index 和已验证的锁定 `.crate`，gifski database 从已核对的本地 checkout 以禁止 hooks 和远端访问的 bare clone 准备。不复制整个 Cargo home、缓存 Git 配置或 credentials；移除继承的 Cargo 配置/凭据环境变量，并拒绝工作目录及祖先路径中的 `.cargo/config`、`config.toml`，避免 Cargo 绕过私有 home 读取外部配置。完成后删除此次临时 cache，原构建 cache 和 checkout 不参与写入。
 
-vendor 的真实退出码、命令及 stdout/stderr 都会保留。退出码为 0 才把实际目录和配置传给 `rustVendor`；完整锁覆盖仍由主收集器逐项检查。vendor 非零时保留已验证的原始 `.crate` 和原始日志，省略 `rustVendor`，继续生成明确缺项的档案。安装工具链、联网补齐、生成虚假 vendor/checksum 或把失败改成成功都不属于此 profile。
+固定公开 CI profile 还明确设置 `CARGO_HTTP_PROXY` 为空并移除继承的代理环境变量，采用直接下载；这个选择写入每条命令的环境摘要。固定 Cargo 的[代理选择代码](https://github.com/rust-lang/cargo/blob/c980f4866141969fab6254a680546a277789d6f0/src/cargo/util/network/proxy.rs)在未指定 Cargo 代理时会用 libgit2 读取外部 Git 配置，不能只依靠 Git CLI 的隔离变量。显式空值阻止这条回退，并按 [libcurl 的规则](https://curl.se/libcurl/c/CURLOPT_PROXY.html)禁用代理。唯一 Git 依赖 gifski 的私有 bare database 必须再次通过完整锁定提交与对象哈希检查；固定 Cargo 在已拥有该对象时直接使用本地 database，不进入 Git 网络凭据路径。
+
+vendor 的真实退出码、命令及 stdout/stderr 都会保留。退出码为 0 才把实际目录和配置传给 `rustVendor`；完整锁覆盖仍由主收集器逐项检查。vendor 非零时保留已验证的原始 `.crate` 和原始日志，省略 `rustVendor`，继续生成明确缺项的档案。不安装工具链，不生成替代 vendor/checksum，也不把某个子命令的失败记录改成成功。
+
+需要补齐当前锁中尚未缓存的 registry 原始档案时，在同一固定 profile 增加显式选项：
+
+```sh
+python scripts/retain-development-sources.py \
+  --qt-prefix "$QT_ROOT_DIR" \
+  --source-commit "$(git rev-parse HEAD)" \
+  --output artifacts/source-retention/linux-incomplete \
+  --fetch-locked-sources
+```
+
+这个选项在任务私有 cache 中使用刚核对的 Cargo 1.97.1 可执行文件，真实执行 `fetch --locked --manifest-path <checkout>/third_party/localsend/Cargo.toml`，仅此子进程设置 `CARGO_NET_OFFLINE=false`。不传 `--target`，因此获取固定锁对所有平台保留的依赖；不重算或替换原生构建的 `cargo-metadata.json`。Cargo 的[官方 fetch 文档](https://doc.rust-lang.org/cargo/commands/cargo-fetch.html)说明锁定和目标选择规则；实际已安装版本对应的[固定实现](https://github.com/rust-lang/cargo/blob/c980f4866141969fab6254a680546a277789d6f0/src/cargo/ops/cargo_fetch.rs)调用完整 workspace resolution，并下载整个遍历集合。它不执行产品编译。
+
+fetch 前先从实际提交导出并逐字节核对项目源码，保存 Cargo.lock 原始字节；fetch 返回后再次核对源码、锁和实际 HEAD。无论 fetch 返回 0 还是普通非零，都会逐条重扫私有 cache，只把 SHA256 与原锁一致的新增 `.crate` 发布到保留目录。已经保留的档案只核对、不覆盖；缺项、原始 coverage 和 fetch 后 coverage 分别记录。锁、源码或档案的真实矛盾仍立即失败。网络请求失败可能留下部分有效档案，这些档案会进入后续正常离线收集。
+
+随后仍实际执行原有 offline vendor 和 collector。显式 fetch 非零（或真实启动失败）不会阻止这两个阶段尝试保留已有材料；如果收集成功，报告状态为 `incomplete-bundle-retained-fetch-failed`，脚本最终仍返回 **1**，保留这一请求步骤的失败。fetch 退出 0 也不能独立证明 vendor 成功或源码完整。只有未请求 fetch，或实际 fetch 成功且 collector 正常完成时，profile 才返回 0。collector 自身的矛盾不降级为普通缺项。
 
 新输出目录包含：
 
@@ -234,9 +252,9 @@ vendor 的真实退出码、命令及 stdout/stderr 都会保留。退出码为 
 | --- | --- |
 | `bundle/` | 主收集器真实生成的源码档案与 `source-manifest.json`；本 profile 要求实际结果为 `complete: false` |
 | `collection-plan.json` | 实际提供给收集器的固定来源计划 |
-| `cargo-coverage.json` | 完整锁与实际 metadata 集合、原始档案及缺项、vendor 真退出码和实际输出包集合 |
+| `cargo-coverage.json` | 完整锁与实际 metadata 集合、原始档案及缺项、vendor 真退出码和实际输出包集合；请求 fetch 时另存前后 coverage、真实命令结果和源码/锁不变检查 |
 | `retention-report.json` | 实际 checkout SHA、执行命令、退出码、材料哈希、最终失败原因或未完成归档结果 |
-| `logs/`、`vendor-config.toml` | 实际命令输出；vendor 失败时 stdout 文件可能为空或不构成配置 |
+| `logs/`、`vendor-config.toml` | 实际命令输出；fetch 使用独立的 `cargo-fetch.stdout.log` / `cargo-fetch.stderr.log`；vendor 失败时 stdout 文件可能为空或不构成配置 |
 | `materials/` | 复制并校验后的原始记录及 Qt SBOM |
 | `inputs/registry-cache/` | 仅发布校验成功的原始 `.crate`，失败的复制不会冒充已验证材料 |
 | `inputs/gifski/` | 核对过的本地干净 checkout，供主收集器导出 |
@@ -249,8 +267,11 @@ vendor 的真实退出码、命令及 stdout/stderr 都会保留。退出码为 
 
 ```sh
 python3 tests/source_bundle_tests.py -v
+python3 tests/source_retention_tests.py -v
 ```
 
 测试使用真正的临时 Git 仓库、Git 补丁、源码 tar、Cargo registry 形式的原始档案和真实文件，不访问网络，不操作产品工作树。覆盖固定对象与许可证导出、索引/refs 不变、未记录修改/删除/未初始化子模块、篡改 vendor 后重写校验清单、路径及链接链安全、确定性归档、未完成状态与覆盖拒绝，以及 fsmonitor 不执行、保留后原输入被改变、矛盾配置参数和空/错误部署目录。Linux 的输出绑定测试用实际 `cc` 编译带真实嵌入身份的小型元数据探针并验证篡改检测；它不会被认定为完整产品，运行目录审计仍明确失败。缺少编译器会使该测试失败。普通 Windows 环境明确跳过这一 Linux ELF 检查以及需要 Unix 可执行脚本/符号链接权限的构造测试，其余 Git、原始档案和清单检查继续执行。
+
+固定 profile 的窄合同测试另外使用临时 Git 仓库、实际文件与受控 Python 子进程，验证部分结果留存、前后 coverage、继承配置隔离、真实退出码/双日志、锁及其他源码中途变化拒绝，以及显式 fetch 失败后的最终非零语义。测试不会联网或冒充一次真实 Cargo fetch/vendor；这两项必须由已安装固定工具链的实际 CI 保留证据。
 
 这些测试证明收集和绑定规则，不是一次产品源码完备性、实际 Cargo 工具链重做或正式许可验收。实际固定 Cargo 重做及完整平台源码包必须另外保留真实执行证据。

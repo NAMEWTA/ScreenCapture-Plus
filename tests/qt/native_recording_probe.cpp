@@ -147,6 +147,8 @@ QJsonObject resultJson(const recording::SessionResult& result)
         sink[QStringLiteral("lastSubmitted100ns")] = static_cast<qint64>(statistics.lastSubmitted);
         sink[QStringLiteral("lastSubmittedDuration100ns")] = static_cast<qint64>(statistics.lastSubmittedDuration);
         sink[QStringLiteral("queuedBytes")] = static_cast<qint64>(statistics.queuedBytes);
+        sink[QStringLiteral("lastOriginalEnd100ns")] = static_cast<qint64>(statistics.lastOriginalEnd);
+        sink[QStringLiteral("tailTargetEnd100ns")] = static_cast<qint64>(statistics.tailTargetEnd);
         item[QStringLiteral("sinkStatistics")] = sink;
     }
     item[QStringLiteral("finalized")] = result.backend.media.finalized;

@@ -159,7 +159,7 @@ jobs:
       - name: Retain actual source inputs from the existing Linux dependency build
         if: ${{ !cancelled() && steps.application-dependencies.outcome == 'success' }}
         run: |
-          python scripts/retain-development-sources.py --qt-prefix "$QT_ROOT_DIR" --source-commit "$(git rev-parse HEAD)" --output artifacts/source-retention/linux-incomplete
+          python scripts/retain-development-sources.py --qt-prefix "$QT_ROOT_DIR" --source-commit "$(git rev-parse HEAD)" --output artifacts/source-retention/linux-incomplete --fetch-locked-sources
       - name: Preserve incomplete corresponding-source materials and collection evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

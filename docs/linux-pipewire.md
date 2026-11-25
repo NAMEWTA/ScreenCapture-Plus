@@ -172,8 +172,10 @@ Ubuntu 24.04 的 Portal-wlr 0.7.1 在实际 CI 中于 Start 阶段返回 `Operat
 
 但 0.8.1 的[初始化条件](https://github.com/emersion/xdg-desktop-portal-wlr/blob/e1d5d16f0e064a0b788c5d70c11461b15ee7a4af/src/screencast/wlr_screencast.c) 仍要求旧 `wlr_screencopy` 同时具有 `linux-dmabuf`。Sway 1.9/wlroots 0.17.1 的 pixman/headless 输出公布 `wlr_screencopy` v3 与 `wl_shm`，却没有 `linux-dmabuf` 或 ext-image 协议；该初始化条件会让后端在探针启动前退出，无法使用已有的 SHM 实现。
 
-依赖锁按顺序应用两份受控补丁。[include 补丁](../third_party/patches/portal-wlr/0001-include-posix-close-declaration.patch) 修复实际编译发现的 `close()` 缺少 POSIX `unistd.h` 声明，保留上游 `-Werror`。[SHM 启动补丁](../third_party/patches/portal-wlr/0002-allow-wlr-shm-without-dmabuf.patch) 仅在已绑定 `screencopy_manager` 和 `shm` 时允许进入既有 SHM 路径；原 ext-image、DMA-BUF/GBM 和缺少协议时的失败分支保留。脚本逐份核对 SHA-256 并执行 `git apply --check`，把固定来源及补丁清单保留在构建元数据中。已核对原始 Git blob、补丁顺序和最终源码字节；实际 CI 已观察到后端成功启动并交付 MemFd，随后定位到前述旧描述符映射问题。完整实际帧、resize、daemon-loss 与服务存活检查仍须由包含兼容映射的新 CI 给出结果。
+依赖锁按顺序应用两份受控补丁。[include 补丁](../third_party/patches/portal-wlr/0001-include-posix-close-declaration.patch) 修复实际编译发现的 `close()` 缺少 POSIX `unistd.h` 声明，保留上游 `-Werror`。[SHM 启动补丁](../third_party/patches/portal-wlr/0002-allow-wlr-shm-without-dmabuf.patch) 仅在已绑定 `screencopy_manager` 和 `shm` 时允许进入既有 SHM 路径；原 ext-image、DMA-BUF/GBM 和缺少协议时的失败分支保留。脚本逐份核对 SHA-256 并执行 `git apply --check`，把固定来源及补丁清单保留在构建元数据中。
 
-测试通过正式配置 `output_name=HEADLESS-1, chooser_type=none` 选择脚本自建输出；这不证明人工授权对话框或任何现有桌面同意了采集。后端只用于建立真实测试环境，其源码没有复制进应用。升级测试后端也不构成宣称新一轮采集已通过，仍须以实际结果为准。
+包含兼容映射的 Debug 与 Release 已在上述真实 headless Sway 环境分别通过 capture、resize 和 daemon-loss。实际 JSON 核对了源时间戳、原生 MemFd、动态帧图案、格式变更、已取 buffer 全部归还，以及底层流销毁后消费者保留的图像仍可读取。该结果覆盖受控测试桌面的采流和释放合同；每次修改仍需保留与实际提交一致的新结果，不将旧产物替换为新提交的证明。
+
+测试通过正式配置 `output_name=HEADLESS-1, chooser_type=none` 选择脚本自建输出；这不证明人工授权对话框或任何现有桌面同意了采集。后端只用于建立真实测试环境，其源码没有复制进应用。
 
 编译、原生故障、真实桌面三类结果分别以对应提交的 CI 日志和产物为准。没有实际运行的检查必须保持 **not run**。本探针不能替代 GNOME/Plasma 的接受/拒绝/取消与热插拔、混合 DPI、实体显示器、HDR/DMA-BUF、音频、FFmpeg 同时编码、资源/延迟基线、长时间稳定性、安装包或完整产品验收。

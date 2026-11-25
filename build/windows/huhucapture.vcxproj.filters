@@ -476,6 +476,9 @@
     <ClInclude Include="..\..\src\core\RecordingResult.h">
       <Filter>src\core</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\core\RecordingTime.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\editor\AnnotationModel.h">
       <Filter>src\editor</Filter>
     </ClInclude>
