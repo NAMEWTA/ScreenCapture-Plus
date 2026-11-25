@@ -25,10 +25,17 @@
   "reviewedSourceFiles": [
     "Cargo.toml",
     "src/lib.rs",
+    "src/collector.rs",
     "src/c_api.rs",
     "src/c_api/c_api_error.rs",
     "gifski.h",
     "LICENSE"
   ],
+  "reviewedSourceBlobs": {
+    "src/c_api.rs": "cb676c4c777e0966d083276a8c37630d994bdacb",
+    "src/collector.rs": "513ed1e6e84493e52fae45c6f811a241350afd9a",
+    "src/lib.rs": "de92ec28c74f9f623bd11391c26e4605baaa4437"
+  },
+  "sharedEncoder": "src/services/media/GifEncoder.cpp reuses the existing quality-80 fast infinite-repeat profile and unmodified upstream C ABI. The write callback borrows the already claimed descriptor until gifski_finish joins its writer; it does not use file_output's reopen/unlink behavior. Frames are ordered and input PTS is checked before the upstream denoiser/quantizer. Only OS descriptor write/flush differs in platform FileOutput.cpp.",
   "notice": "The repository MIT license does not replace gifski AGPL terms or corresponding-source obligations for a combined distribution."
 }

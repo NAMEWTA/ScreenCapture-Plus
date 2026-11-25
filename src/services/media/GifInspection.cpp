@@ -1,4 +1,5 @@
 #include "services/media/GifInspection.h"
+#include "core/GifLimits.h"
 
 #include <algorithm>
 #include <limits>
@@ -17,7 +18,7 @@ Inspection inspectGif(const QString& path, const Limits& limits,
     }
     // The product records at most six minutes at 16 FPS. Keep headroom for its
     // final frame while bounding foreign input; no full-frame animation array.
-    constexpr std::uint32_t maximumFrames = 6000;
+    constexpr auto maximumFrames = Core::maximumValidatedGifFrames;
     constexpr std::uint64_t maximumGifCanvas = std::uint64_t{65535} * 65535;
     const auto canvas = std::min(limits.maximumImageBytes / 4, maximumGifCanvas);
     if (!canvas || !limits.maximumFileBytes ||

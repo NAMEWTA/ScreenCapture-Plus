@@ -3,9 +3,7 @@
 #include <memory>
 #include <string>
 
-// Encoder implementations are private translation units; window/tool headers only
-// need forward declarations for the session parameters.
-namespace VideoGif { struct GifParam; }
+namespace HuhuCapture::Recording { struct BackendRequest; }
 
 class WinCap;
 class ToolVideo;
@@ -30,12 +28,12 @@ public:
 	// Ctrl+S / Ctrl+C 转给工具条上的"存文件" / "存剪切板"；没在录制时返回 false
 	bool onSaveKey(bool toClipboard);
 private:
-	struct Mp4Recording;
+	struct ActiveRecording;
+	void startRecording(HuhuCapture::Recording::BackendRequest request);
 	void stopWorker();
 	WinCap* win;
 	std::unique_ptr<ToolVideo> tool;
-	std::shared_ptr<Mp4Recording> mp4Param;
-	std::unique_ptr<VideoGif::GifParam> gifParam;
+	std::shared_ptr<ActiveRecording> recording;
 	std::jthread captureThread;
 	std::shared_ptr<int> lifetime{ std::make_shared<int>(0) };
 };

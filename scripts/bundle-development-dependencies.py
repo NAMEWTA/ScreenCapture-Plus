@@ -34,6 +34,33 @@ def digest(path):
     return checksum.hexdigest()
 
 
+def elf_soname(path, env=None):
+    with path.open("rb") as stream:
+        if stream.read(4) != b"\x7fELF":
+            return None
+    dynamic = output("readelf", "--wide", "--dynamic", str(path), env=env)
+    names = re.findall(r"\(SONAME\).*?\[([^\]]+)\]", dynamic)
+    if len(names) > 1 or (names and (PurePosixPath(names[0]).name != names[0] or names[0] in (".", ".."))):
+        raise RuntimeError(f"Invalid ELF SONAME in the development SDK: {path}")
+    return names[0] if names else None
+
+
+def verify_soname_aliases(bundle):
+    """ldd checks a DSO's dependencies, not that DSO's own loader name."""
+    found = []
+    for binary in sorted(bundle.rglob("*")):
+        if binary.is_symlink() or not binary.is_file():
+            continue
+        name = elf_soname(binary)
+        if not name:
+            continue
+        alias = binary.parent / name
+        if not alias.exists() or alias.resolve(strict=True) != binary.resolve(strict=True):
+            raise RuntimeError(f"SDK is missing the actual ELF SONAME alias: {alias} -> {binary.name}")
+        found.append({"path": str(binary.relative_to(bundle)), "soname": name})
+    return found
+
+
 def require_empty(path):
     path.mkdir(parents=True, exist_ok=True)
     if path.is_symlink() or any(path.iterdir()):
@@ -316,6 +343,19 @@ def make_bundle(options):
         if not pending:
             break
         for binary in pending:
+            # A -dev .so link can point straight to a versioned DSO. That DSO
+            # need not be a dependency of any other SDK file, so ldd alone
+            # misses its intermediate SONAME link (for example XTEST). Copy
+            # the real runner-owned alias and attribute its runtime package.
+            relative_binary = str(binary.relative_to(bundle))
+            source = copied_system.get(relative_binary)
+            soname = elf_soname(binary, environment)
+            if source and soname:
+                original = Path(source["source"])
+                alias = original.parent / soname
+                if not alias.exists() or alias.resolve(strict=True) != original.resolve(strict=True):
+                    raise RuntimeError(f"Runner library has no matching SONAME alias: {original} ({soname})")
+                copy_system(alias)
             versions = output("readelf", "--wide", "--version-info", str(binary), env=environment)
             # Only the required-version section describes this binary's host
             # requirement; do not mistake its exported versions for a demand.
@@ -386,8 +426,9 @@ def make_bundle(options):
         if not path.resolve(strict=True).is_relative_to(bundle):
             raise RuntimeError(f"A copied SDK symlink escapes the bundle: {path}")
     metadata["systemFiles"] = copied_system
+    metadata["elfSonames"] = verify_soname_aliases(bundle)
     metadata["hostAbiVersions"] = sorted(abi_requirements)
-    metadata["hostRequirements"] = "Linux amd64 satisfying hostAbiVersions, a C++20 compiler and its matching standard-library/libc/kernel development headers. The current CMake validation requires dbus-run-session; session-fault tests also require dbus-daemon. No glibc, loader, compiler, GPU driver, compositor, bus daemon or user session is supplied. GUI/Portal acceptance is separate."
+    metadata["hostRequirements"] = "Linux amd64 satisfying hostAbiVersions, a C++20 compiler and its matching standard-library/libc/kernel development headers, and binutils readelf for actual SONAME validation. The current CMake validation requires dbus-run-session; session-fault tests also require dbus-daemon. No glibc, loader, compiler, GPU driver, compositor, bus daemon or user session is supplied. GUI/Portal acceptance is separate."
     (bundle / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     shutil.copy2(Path(__file__), bundle / "bundle-development-dependencies.py")
     inventory = {}
@@ -444,6 +485,9 @@ def restore_bundle(options):
     if actual_files != set(manifest["files"]) | {"manifest.json"}:
         raise RuntimeError("The SDK archive has files absent from its inventory")
     metadata = json.loads((bundle / "metadata.json").read_text())
+    sonames = verify_soname_aliases(bundle)
+    if "elfSonames" in metadata and sonames != metadata["elfSonames"]:
+        raise RuntimeError("Restored ELF SONAMEs differ from the bundle's actual library metadata")
     rewrites = []
     mapping = [(old, str(bundle / name)) for name, old in metadata["originalPrefixes"].items() if name != "cmake"]
     for path in bundle.rglob("*"):

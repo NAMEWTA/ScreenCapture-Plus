@@ -49,13 +49,19 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
             g_clear_object(&cancellable);
         }
     };
-    struct Call {
+    struct Callback {
         std::shared_ptr<Private> state;
-        std::shared_ptr<Operation> operation;
+        explicit Callback(std::shared_ptr<Private> value) : state(std::move(value)) { ++state->callbacks; }
+        ~Callback() { --state->callbacks; state->checkDrained(); }
     };
-    struct Probe {
-        std::shared_ptr<Private> state;
+    struct Call : Callback {
+        std::shared_ptr<Operation> operation;
+        Call(std::shared_ptr<Private> state, std::shared_ptr<Operation> pending)
+            : Callback(std::move(state)), operation(std::move(pending)) {}
+    };
+    struct Probe : Callback {
         bool screenCast;
+        Probe(std::shared_ptr<Private> state, bool cast) : Callback(std::move(state)), screenCast(cast) {}
     };
 
     QPointer<PortalCapture> owner;
@@ -75,6 +81,8 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
     bool initializing{};
     bool ready{};
     bool stopped{};
+    bool draining{}, shutdownQueued{};
+    unsigned callbacks{}, deliveries{};
 
     explicit Private(PortalCapture* value) : owner(value) {
         busName = qgetenv("LIBPORTAL_PORTAL_BUS_NAME");
@@ -112,7 +120,37 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         if (owner && !stopped) Q_EMIT owner->screenCastClosed(reason);
     }
 
-    void shutdown() {
+    void checkDrained() {
+        if (!draining || stopped || !owner || shutdownQueued || callbacks || deliveries || operation || activeSession || initializing) return;
+        shutdownQueued = true;
+        if (nameWatch) g_bus_unwatch_name(std::exchange(nameWatch, 0));
+        if (bus) g_clear_signal_handler(&busClosedHandler, bus);
+        g_clear_object(&portal);
+        g_clear_object(&bus);
+        const auto state = shared_from_this();
+        QTimer::singleShot(0, owner, [state] {
+            if (!state->owner || state->stopped) return;
+            if (state->callbacks || state->deliveries || state->operation || state->activeSession || state->initializing) {
+                state->shutdownQueued = false;
+                state->checkDrained();
+                return;
+            }
+            Q_EMIT state->owner->shutdownFinished();
+        });
+    }
+
+    void requestShutdown() {
+        if (draining || stopped) return;
+        draining = true; ready = false;
+        g_cancellable_cancel(initialization);
+        cancel(operation, failure(Code::Cancelled, QStringLiteral("Portal capture is shutting down")));
+        closeActive();
+        if (nameWatch) g_bus_unwatch_name(std::exchange(nameWatch, 0));
+        if (bus) g_clear_signal_handler(&busClosedHandler, bus);
+        checkDrained();
+    }
+
+    void destroy() {
         stopped = true;
         g_cancellable_cancel(initialization);
         cancel(operation, failure(Code::Cancelled, QStringLiteral("Portal owner destroyed")));
@@ -135,32 +173,40 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         }
         if (operation == pending) operation.reset();
         if (!owner || stopped) return;
+        ++deliveries;
         if (pending->kind == Operation::Kind::Screenshot)
             Q_EMIT owner->screenshotFinished(pending->id, uri, error);
         else
             Q_EMIT owner->screenCastFinished(pending->id, pending->streams, pending->restoreToken, error);
+        --deliveries;
+        checkDrained();
     }
 
     quint64 reject(Operation::Kind kind, PortalFailure error) {
+        if (draining || stopped) return 0;
         const auto id = nextId++;
         const auto state = shared_from_this();
+        ++deliveries;
         QTimer::singleShot(0, owner, [state, id, kind, error = std::move(error)] {
-            if (!state->owner || state->stopped) return;
-            if (kind == Operation::Kind::Screenshot)
-                Q_EMIT state->owner->screenshotFinished(id, {}, error);
-            else
-                Q_EMIT state->owner->screenCastFinished(id, {}, {}, error);
+            if (state->owner && !state->stopped) {
+                if (kind == Operation::Kind::Screenshot)
+                    Q_EMIT state->owner->screenshotFinished(id, {}, error);
+                else
+                    Q_EMIT state->owner->screenCastFinished(id, {}, {}, error);
+            }
+            --state->deliveries;
+            state->checkDrained();
         });
         return id;
     }
 
     PortalFailure canRequest(Operation::Kind kind, QWindow* parent) {
         if (auto error = checkContext()) return error;
-        if (!ready || stopped) return failure(Code::Unavailable, QStringLiteral("Portal initialization has not succeeded"));
+        if (!ready || stopped || draining) return failure(Code::Unavailable, QStringLiteral("Portal initialization has not succeeded or is shutting down"));
         if (operation || activeSession) return failure(Code::Busy, QStringLiteral("A Portal request or screencast is already active"));
-        if (!parent || parent->thread() != owner->thread())
+        if ((!parent && kind == Operation::Kind::ScreenCast) || (parent && parent->thread() != owner->thread()))
             return failure(Code::ParentDestroyed, QStringLiteral("A live parent window on the GUI thread is required"));
-        if (!parent->isVisible() || !parent->handle())
+        if (parent && (!parent->isVisible() || !parent->handle()))
             return failure(Code::InvalidState, QStringLiteral("The Portal parent window must have a visible native surface"));
         const auto& feature = kind == Operation::Kind::Screenshot ? capabilities.screenshot : capabilities.screenCast;
         if (!feature.available())
@@ -175,7 +221,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         pending->parent = parent;
         std::weak_ptr<Private> weakState = shared_from_this();
         std::weak_ptr<Operation> weakOperation = pending;
-        pending->parentDestroyed = QObject::connect(parent, &QObject::destroyed, owner, [weakState, weakOperation] {
+        if (parent) pending->parentDestroyed = QObject::connect(parent, &QObject::destroyed, owner, [weakState, weakOperation] {
             if (auto state = weakState.lock())
                 state->cancel(weakOperation.lock(), failure(Code::ParentDestroyed, QStringLiteral("Portal parent window was destroyed")));
         });
@@ -214,11 +260,17 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
     }
 
     static void initializedPortal(GObject*, GAsyncResult* result, gpointer data) {
-        const std::unique_ptr<std::shared_ptr<Private>> holder(static_cast<std::shared_ptr<Private>*>(data));
-        const auto state = *holder;
+        const std::unique_ptr<Callback> holder(static_cast<Callback*>(data));
+        const auto state = holder->state;
         g_autoptr(GError) nativeError = nullptr;
         std::unique_ptr<InitializedPortal> initialized(static_cast<InitializedPortal*>(g_task_propagate_pointer(G_TASK(result), &nativeError)));
         if (state->stopped) return;
+        if (state->draining) {
+            state->initializing = false;
+            if (state->owner) Q_EMIT state->owner->initialized(state->capabilities,
+                failure(Code::Cancelled, QStringLiteral("Portal initialization was cancelled during shutdown")));
+            return;
+        }
         if (!initialized) {
             state->initializing = false;
             auto error = fromError(nativeError);
@@ -245,6 +297,14 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         g_autoptr(GError) error = nullptr;
         g_autoptr(GVariant) returned = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), result, &error);
         if (state->stopped) return;
+        if (state->draining) {
+            if (--state->probesPending == 0) {
+                state->initializing = false;
+                if (state->owner) Q_EMIT state->owner->initialized(state->capabilities,
+                    failure(Code::Cancelled, QStringLiteral("Portal initialization was cancelled during shutdown")));
+            }
+            return;
+        }
         auto& feature = probe->screenCast ? state->capabilities.screenCast : state->capabilities.screenshot;
         if (!returned) feature.failure = fromError(error);
         else {
@@ -283,6 +343,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         capabilities.screenCast.failure = reason;
         cancel(operation, reason);
         closeActive(std::move(reason));
+        if (owner && !stopped) Q_EMIT owner->capabilitiesChanged(capabilities);
     }
     static void portalVanished(GDBusConnection*, const gchar*, gpointer data) {
         const auto state = static_cast<Private*>(data)->shared_from_this();
@@ -440,13 +501,13 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
 };
 
 PortalCapture::PortalCapture(QObject* parent) : QObject(parent), d(std::make_shared<Private>(this)) {}
-PortalCapture::~PortalCapture() { Q_ASSERT(d->onOwnerThread()); d->shutdown(); }
+PortalCapture::~PortalCapture() { Q_ASSERT(d->onOwnerThread()); d->destroy(); }
 
 void PortalCapture::initialize()
 {
     Q_ASSERT(d->onOwnerThread());
     if (auto error = d->checkContext()) { Q_EMIT initialized(d->capabilities, error); return; }
-    if (d->initializing || d->ready || d->operation || d->activeSession) {
+    if (d->initializing || d->ready || d->operation || d->activeSession || d->draining || d->stopped) {
         Q_EMIT initialized(d->capabilities, failure(Code::InvalidState, QStringLiteral("Portal initialization was already requested")));
         return;
     }
@@ -461,7 +522,7 @@ void PortalCapture::initialize()
     d->initializing = true;
     g_cancellable_reset(d->initialization);
     auto* task = g_task_new(nullptr, d->initialization, Private::initializedPortal,
-                            new std::shared_ptr<Private>(d));
+                            new Private::Callback(d));
     g_task_run_in_thread(task, initializeInWorker);
     g_object_unref(task);
 }
@@ -470,10 +531,14 @@ quint64 PortalCapture::requestScreenshot(QWindow* parent, bool interactive)
 {
     Q_ASSERT(d->onOwnerThread());
     constexpr auto kind = Private::Operation::Kind::Screenshot;
+    if (d->draining || d->stopped) return 0;
     if (auto error = d->canRequest(kind, parent)) return d->reject(kind, error);
     auto pending = d->begin(kind, parent);
     pending->interactiveScreenshot = interactive;
-    d->prepareParent(pending);
+    if (parent) d->prepareParent(pending);
+    else xdp_portal_take_screenshot(d->portal, nullptr,
+        interactive ? XDP_SCREENSHOT_FLAG_INTERACTIVE : XDP_SCREENSHOT_FLAG_NONE,
+        pending->cancellable, Private::screenshotReady, new Private::Call{d, pending});
     return pending->id;
 }
 
@@ -481,6 +546,7 @@ quint64 PortalCapture::requestScreenCast(QWindow* parent, const ScreenCastOption
 {
     Q_ASSERT(d->onOwnerThread());
     constexpr auto kind = Private::Operation::Kind::ScreenCast;
+    if (d->draining || d->stopped) return 0;
     if (auto error = d->canRequest(kind, parent)) return d->reject(kind, error);
     const auto types = (options.monitors ? XDP_OUTPUT_MONITOR : 0) | (options.windows ? XDP_OUTPUT_WINDOW : 0);
     const auto cursor = options.cursor == ScreenCastOptions::Cursor::Hidden ? XDP_CURSOR_MODE_HIDDEN
@@ -509,6 +575,13 @@ void PortalCapture::cancelRequest(quint64 id)
     Q_ASSERT(d->onOwnerThread());
     if (d->operation && d->operation->id == id)
         d->cancel(d->operation, failure(Code::Cancelled, QStringLiteral("Portal request canceled by caller")));
+}
+
+void PortalCapture::shutdown()
+{
+    Q_ASSERT(d->onOwnerThread());
+    const auto state = d;
+    state->requestShutdown();
 }
 
 void PortalCapture::closeScreenCast() { Q_ASSERT(d->onOwnerThread()); d->closeActive(); }

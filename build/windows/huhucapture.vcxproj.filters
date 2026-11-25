@@ -132,6 +132,18 @@
     <ClCompile Include="..\..\src\platform\windows\NativeMp4Recording.cpp">
       <Filter>src\platform\windows</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\NativeGifRecording.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileOutput.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\services\media\GifEncoder.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\core\MediaFrame.cpp">
+      <Filter>src\core</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\recording\CapVideo.cpp">
       <Filter>src\recording</Filter>
     </ClCompile>
@@ -341,10 +353,28 @@
     <ClInclude Include="..\..\src\platform\windows\NativeMp4Recording.h">
       <Filter>src\platform\windows</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\platform\windows\NativeGifRecording.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\FileOutput.h">
+      <Filter>src\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\services\media\GifEncoder.h">
+      <Filter>src\services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\GifLimits.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\MediaFrame.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\recording\RecordingBackend.h">
       <Filter>src\recording</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\windows\CaptureExclusion.h">
       <Filter>src\platform\windows</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\platform\windows\DesktopClipboard.h">

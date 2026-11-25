@@ -172,6 +172,15 @@
       "license": "LGPL-2.0-or-later",
       "copyright": "2018 Red Hat, Inc.; author Matthias Clasen",
       "use": "source-reviewed official FileTransfer version property and real service dependencies; no copied implementation"
+    },
+    {
+      "name": "qwaylanddataoffer.cpp",
+      "path": "src/plugins/platforms/wayland/qwaylanddataoffer.cpp",
+      "sha": "5ec7f075aa7fda82e4b1cd33711dfe99bb0e696f",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylanddataoffer.cpp",
+      "use": "source-reviewed text MIME normalization and actual receiving semantics; public APIs, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "copyright": "The Qt Company Ltd., 2016"
     }
   ]
 }

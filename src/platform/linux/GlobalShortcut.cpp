@@ -374,12 +374,17 @@ private:
         if (!connection_ || stopped_) return;
         while (auto* value = xcb_poll_for_event(connection_)) {
             CPointer<xcb_generic_event_t> event(value);
+            if (event->response_type & 0x80) continue;
             const auto type = event->response_type & 0x7f;
             if (type == XCB_MAPPING_NOTIFY) {
-                xcb_refresh_keyboard_mapping(symbols_, reinterpret_cast<xcb_mapping_notify_event_t*>(event.get()));
-                scheduleRemap(); continue;
+                auto* mapping = reinterpret_cast<xcb_mapping_notify_event_t*>(event.get());
+                if (mapping->request == XCB_MAPPING_KEYBOARD || mapping->request == XCB_MAPPING_MODIFIER) {
+                    xcb_refresh_keyboard_mapping(symbols_, mapping);
+                    scheduleRemap();
+                }
+                continue;
             }
-            if (discardKeys || (event->response_type & 0x80) || state_.suspended || !state_.registered) continue;
+            if (discardKeys || state_.suspended || !state_.registered) continue;
             if (type == XCB_KEY_RELEASE) {
                 const auto* key = reinterpret_cast<const xcb_key_release_event_t*>(event.get());
                 if (heldKey_ == key->detail) heldKey_ = 0;
@@ -414,6 +419,11 @@ private:
             if (stopped_ || state_.suspended || state_.requestedKeys.isEmpty() || pending_) return;
             std::vector<Grab> candidate;
             auto failure = acquire(state_.requestedKeys, candidate, active_);
+            // X11 also sends MappingNotify when switching the core keyboard
+            // to an input device with the same map (including first XTEST
+            // input). A no-op remap must not discard that device's first
+            // already queued, valid activation or its held-key state.
+            const bool registrationsChanged = candidate != active_;
             if (!failure) {
                 failure = releaseExcept(active_, candidate);
                 if (failure) closeX11();
@@ -425,7 +435,11 @@ private:
                 active_.clear(); state_.registered = false;
                 failure.code = ShortcutError::RestoreFailed;
             }
-            state_.failure = failure; drainStaleKeys(); Q_EMIT owner_.changed();
+            state_.failure = failure;
+            const QPointer<LinuxShortcut> life(this);
+            if (failure || registrationsChanged) drainStaleKeys();
+            else drainEvents(); // A checked reply may have buffered events in XCB.
+            if (life) Q_EMIT owner_.changed();
         });
     }
     ShortcutSnapshot state_;

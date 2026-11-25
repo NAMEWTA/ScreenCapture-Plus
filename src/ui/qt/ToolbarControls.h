@@ -8,6 +8,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QResource>
+#include <QStyle>
+#include <QStyleOption>
 #include <QToolButton>
 #include <QWidget>
 #include <QtMath>
@@ -113,10 +115,10 @@ public:
     }
     bool hasHeightForWidth() const override { return true; }
     int heightForWidth(int width) const override
-    { return qCeil(UI::measureToolbar(widths_, static_cast<float>(width)).height); }
+    { return qCeil(UI::measureToolbar(visibleWidths(), static_cast<float>(width)).height); }
     QSize sizeHint() const override
     {
-        const auto extent = UI::measureToolbar(widths_);
+        const auto extent = UI::measureToolbar(visibleWidths());
         return {qCeil(extent.width), qCeil(extent.height)};
     }
     QSize minimumSizeHint() const override { return {buttonSize + 2, heightForWidth(width())}; }
@@ -136,12 +138,20 @@ protected:
         painter.setPen(QColor(168, 168, 168)); painter.drawRect(rect().adjusted(0, 0, -1, -1));
     }
 private:
+    std::vector<float> visibleWidths() const
+    {
+        std::vector<float> result; result.reserve(widths_.size());
+        for (std::size_t i = 0; i < controls_.size(); ++i)
+            if (!controls_[i]->isHidden()) result.push_back(widths_[i]);
+        return result;
+    }
     void arrange()
     {
         if (controls_.empty()) { setFixedHeight(0); return; }
         const int limit = (std::max)(buttonSize, width() - 2);
         int x = 1, y = 1;
         for (std::size_t i = 0; i < controls_.size(); ++i) {
+            if (controls_[i]->isHidden()) continue;
             const int w = qCeil(widths_[i]);
             if (x > 1 && x + w > limit + 1) { x = 1; y += buttonSize; }
             controls_[i]->setGeometry(x, y, w, buttonSize);
@@ -163,6 +173,22 @@ protected:
     {
         QPainter painter(this); painter.fillRect(QRectF(0, (height() - UI::toolbarDividerHeight) / 2,
             UI::toolbarDivider, UI::toolbarDividerHeight), QColor(220, 220, 220));
+    }
+};
+
+// Use the active Qt style's toolbar grip instead of another icon asset. The
+// owning window handles the press with QWindow::startSystemMove(), so Wayland
+// retains its actual input serial and the compositor owns cross-screen moves.
+class ToolbarDragHandle final : public QWidget {
+public:
+    explicit ToolbarDragHandle(QWidget* parent) : QWidget(parent)
+    { setCursor(::Qt::SizeAllCursor); }
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QStyleOption option; option.initFrom(this); option.state |= QStyle::State_Horizontal;
+        QPainter painter(this);
+        style()->drawPrimitive(QStyle::PE_IndicatorToolBarHandle, &option, &painter, this);
     }
 };
 

@@ -8,8 +8,8 @@
 #include "services/Setting.h"
 #include "services/Lang.h"
 #include "platform/windows/NativeMp4Recording.h"
+#include "platform/windows/NativeGifRecording.h"
 #include "platform/FileIdentity.h"
-#include "recording/VideoGif.h"
 
 namespace {
     std::wstring recordingPath(const wchar_t* extension)
@@ -36,7 +36,7 @@ namespace {
 
 }
 
-struct CapVideo::Mp4Recording {
+struct CapVideo::ActiveRecording {
     std::wstring path;
     HuhuCapture::Recording::BackendResult result;
     std::optional<HuhuCapture::Platform::FileIdentity> identity;
@@ -78,14 +78,12 @@ void CapVideo::dispose()
 
 bool CapVideo::isRecording() const
 {
-    return mp4Param || gifParam;
+    return static_cast<bool>(recording);
 }
 
 void CapVideo::startMp4(bool useSpeaker, bool useMic)
 {
     if (isRecording()) return;
-    const auto path = recordingPath(L"mp4");
-    if (path.empty()) { showRecordError(Lang::get(L"video.recordFailed"), Lang::get(L"about.sysTip")); return; }
     const auto& cut = win->cutMask->maskRect;
     const auto left = std::max(static_cast<long>(win->x), static_cast<long>(win->x + cut.left));
     const auto top = std::max(static_cast<long>(win->y), static_cast<long>(win->y + cut.top));
@@ -95,76 +93,82 @@ void CapVideo::startMp4(bool useSpeaker, bool useMic)
     request.region = {static_cast<std::int32_t>(left), static_cast<std::int32_t>(top),
         static_cast<std::int32_t>(right - left), static_cast<std::int32_t>(bottom - top)};
     request.systemAudio = useSpeaker; request.microphone = useMic;
-    mp4Param = std::make_shared<Mp4Recording>(); mp4Param->path = path;
-    const auto operation = mp4Param;
-    const auto errText = Lang::get(L"video.recordFailed");
-    const auto errTitle = Lang::get(L"about.sysTip");
-    const auto dispatcher = Ling::App::get()->dq;
-    const std::weak_ptr<int> ownerAlive = lifetime;
-    captureThread = std::jthread([operation, request, dispatcher, ownerAlive, errText, errTitle](std::stop_token stop) {
-        using HuhuCapture::Core::RecordingStage;
-        try {
-            if (stop.stop_requested()) { operation->result.stopRequested = true; return; }
-            // Claim the legacy host's GUID path exclusively. The shared backend
-            // then receives the same identity-checked writer as the Qt session.
-            const auto file = CreateFileW(operation->path.c_str(), GENERIC_WRITE, 0, nullptr,
-                CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-            if (file == INVALID_HANDLE_VALUE) {
-                operation->result.media.fail(RecordingStage::Prepare, HRESULT_FROM_WIN32(GetLastError()));
-            } else if (!CloseHandle(file)) {
-                operation->result.media.fail(RecordingStage::Finalize, HRESULT_FROM_WIN32(GetLastError()));
-            } else {
-                std::error_code error;
-                const auto claimed = HuhuCapture::Platform::readFileSnapshot(operation->path, error);
-                if (!claimed) operation->result.media.fail(RecordingStage::Prepare, error.value());
-                else {
-                    operation->identity = claimed->identity;
-                    auto writer = HuhuCapture::Platform::openOwnedEmptyFileForWrite(operation->path, claimed->identity, error);
-                    if (!writer) operation->result.media.fail(RecordingStage::Prepare, error.value());
-                    else operation->result = HuhuCapture::Platform::Windows::runNativeMp4(request, std::move(writer), {}, stop);
-                }
-            }
-        } catch (const std::bad_alloc&) { operation->result.media.fail(RecordingStage::Encode, E_OUTOFMEMORY); }
-        catch (...) { operation->result.media.fail(RecordingStage::Encode, E_FAIL); }
-        // Reuse the existing WinClipboard dispatcher/lifetime pattern. A worker
-        // must not block the GUI's stop/join in a worker-owned modal MessageBox.
-        if (operation->result.media.firstError) {
-            try {
-                dispatcher.TryEnqueue([operation, ownerAlive, errText, errTitle] {
-                    if (!ownerAlive.expired() && !operation->errorReported.exchange(true))
-                        showRecordError(errText + L"\n\n" + operation->path, errTitle);
-                });
-            } catch (...) { /* stop() also reports any unreported worker error. */ }
-        }
-    });
+    startRecording(request);
 }
 
 void CapVideo::startGif()
 {
     if (isRecording()) return;
-    auto& cutMask = win->cutMask;
-    const auto videoTempPath = recordingPath(L"gif");
-    if (videoTempPath.empty()) { showRecordError(Lang::get(L"video.recordFailed"), Lang::get(L"about.sysTip")); return; }
-    gifParam = std::make_unique<VideoGif::GifParam>();
-    gifParam->x = (int)(win->x + cutMask->maskRect.left);
-    gifParam->y = (int)(win->y + cutMask->maskRect.top);
-    gifParam->w = (int)(cutMask->maskRect.right - cutMask->maskRect.left);
-    gifParam->h = (int)(cutMask->maskRect.bottom - cutMask->maskRect.top);
-    gifParam->path = videoTempPath;
+    const auto& cut = win->cutMask->maskRect;
+    HuhuCapture::Recording::BackendRequest request;
+    request.format = HuhuCapture::Recording::Format::Gif;
+    request.region = {static_cast<std::int32_t>(win->x + cut.left),
+        static_cast<std::int32_t>(win->y + cut.top),
+        static_cast<std::int32_t>(cut.right - cut.left), static_cast<std::int32_t>(cut.bottom - cut.top)};
+    request.framesPerSecond = 16; request.maximumDuration = std::chrono::minutes(6);
+    request.systemAudio = false; request.microphone = false;
+    startRecording(request);
+}
+
+void CapVideo::startRecording(HuhuCapture::Recording::BackendRequest request)
+{
+    if (isRecording()) return;
+    const auto path = recordingPath(request.format == HuhuCapture::Recording::Format::Mp4 ? L"mp4" : L"gif");
+    if (path.empty()) { showRecordError(Lang::get(L"video.recordFailed"), Lang::get(L"about.sysTip")); return; }
+    recording = std::make_shared<ActiveRecording>(); recording->path = path;
+    const auto operation = recording;
     const auto errText = Lang::get(L"video.recordFailed");
     const auto errTitle = Lang::get(L"about.sysTip");
-    captureThread = std::jthread([this, errText, errTitle](std::stop_token) {
-        try {
-            VideoGif::createGif(gifParam.get());
-            if (gifParam->result.firstError)
-                showRecordError(errText + L"\n\n" + gifParam->path, errTitle);
-        }
-        catch (...) {
-            // The GIF encoder and DIB own their resources even on allocation failure.
-            gifParam->result.fail(HuhuCapture::Core::RecordingStage::Encode, E_FAIL);
-            showRecordError(errText + L"\n\n" + gifParam->path, errTitle);
-        }
-    });
+    const auto dispatcher = Ling::App::get()->dq;
+    const std::weak_ptr<int> ownerAlive = lifetime;
+    try {
+        captureThread = std::jthread([operation, request, dispatcher, ownerAlive, errText, errTitle](std::stop_token stop) {
+            using HuhuCapture::Core::RecordingStage;
+            try {
+                if (stop.stop_requested()) { operation->result.stopRequested = true; return; }
+                // Claim the legacy host's GUID path exclusively. The shared backend
+                // then receives the same identity-checked writer as the Qt session.
+                const auto file = CreateFileW(operation->path.c_str(), GENERIC_WRITE, 0, nullptr,
+                    CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                if (file == INVALID_HANDLE_VALUE) {
+                    operation->result.media.fail(RecordingStage::Prepare, HRESULT_FROM_WIN32(GetLastError()));
+                } else {
+                    // Read identity from CREATE_NEW's actual handle before closing
+                    // it. A pathname replacement in the later reopen gap must not
+                    // become the file this legacy host claims to own.
+                    BY_HANDLE_FILE_INFORMATION identity{};
+                    if (!GetFileInformationByHandle(file, &identity)) {
+                        operation->result.media.fail(RecordingStage::Prepare, HRESULT_FROM_WIN32(GetLastError()));
+                    } else operation->identity = HuhuCapture::Platform::FileIdentity{identity.dwVolumeSerialNumber,
+                        (std::uint64_t{identity.nFileIndexHigh} << 32) | identity.nFileIndexLow};
+                    if (!CloseHandle(file))
+                        operation->result.media.fail(RecordingStage::Finalize, HRESULT_FROM_WIN32(GetLastError()));
+                    if (!operation->result.media.firstError) {
+                        std::error_code error;
+                        auto writer = HuhuCapture::Platform::openOwnedEmptyFileForWrite(operation->path, *operation->identity, error);
+                        if (!writer) operation->result.media.fail(RecordingStage::Prepare, error.value());
+                        else operation->result = request.format == HuhuCapture::Recording::Format::Mp4
+                            ? HuhuCapture::Platform::Windows::runNativeMp4(request, std::move(writer), {}, stop)
+                            : HuhuCapture::Platform::Windows::runNativeGif(request, std::move(writer), {}, stop);
+                    }
+                }
+            } catch (const std::bad_alloc&) { operation->result.media.fail(RecordingStage::Encode, E_OUTOFMEMORY); }
+            catch (...) { operation->result.media.fail(RecordingStage::Encode, E_FAIL); }
+            // Reuse the existing WinClipboard dispatcher/lifetime pattern. A worker
+            // must not block the GUI's stop/join in a worker-owned modal MessageBox.
+            if (operation->result.media.firstError) {
+                try {
+                    dispatcher.TryEnqueue([operation, ownerAlive, errText, errTitle] {
+                        if (!ownerAlive.expired() && !operation->errorReported.exchange(true))
+                            showRecordError(errText + L"\n\n" + operation->path, errTitle);
+                    });
+                } catch (...) { /* stop() also reports any unreported worker error. */ }
+            }
+        });
+    } catch (...) {
+        recording.reset();
+        showRecordError(errText + L"\n\n" + path, errTitle);
+    }
 }
 
 bool CapVideo::onSaveKey(bool toClipboard)
@@ -174,29 +178,22 @@ bool CapVideo::onSaveKey(bool toClipboard)
 
 std::wstring CapVideo::stop()
 {
-    if (!mp4Param && !gifParam) return L"";
+    if (!recording) return L"";
     // 遮罩也别留在屏幕上，录完这一帧就该收工了
     win->hide();
-    std::wstring filePath;
-    if (mp4Param) {
-        captureThread.request_stop();
-        filePath = mp4Param->path;
-    }
-    if (gifParam) {
-        gifParam->isFinish = true;
-        filePath = gifParam->path;
-    }
+    auto filePath = recording->path;
+    captureThread.request_stop();
     stopWorker();
-    auto& result = mp4Param ? mp4Param->result.media : gifParam->result;
+    auto& result = recording->result.media;
     if (!result.canArchive()) {
         // A clean immediate stop has no media to keep. On any capture, encode
         // or finalize failure retain this unique session path for recovery,
         // but never hand it to archiveFile as a completed recording.
         if (result.completion(true) == HuhuCapture::Core::RecordingCompletion::Cancelled) {
-            if (mp4Param && mp4Param->identity) {
+            if (recording->identity) {
                 std::error_code error;
                 const auto current = HuhuCapture::Platform::readFileSnapshot(filePath, error);
-                if (current && current->identity != *mp4Param->identity) {
+                if (current && current->identity != *recording->identity) {
                     result.fail(HuhuCapture::Core::RecordingStage::Finalize, HRESULT_FROM_WIN32(ERROR_FILE_INVALID));
                 } else if (current && !DeleteFileW(filePath.c_str())) {
                     const auto cleanup = GetLastError();
@@ -205,23 +202,21 @@ std::wstring CapVideo::stop()
                 } else if (!current && error && error != std::errc::no_such_file_or_directory) {
                     result.fail(HuhuCapture::Core::RecordingStage::Finalize, error.value());
                 }
-            } else if (!mp4Param) DeleteFileW(filePath.c_str());
+            }
         }
         filePath.clear();
     }
-    const auto failedMp4 = mp4Param && result.firstError && !mp4Param->errorReported.exchange(true)
-        ? mp4Param->path : std::wstring{};
+    const auto failed = result.firstError && !recording->errorReported.exchange(true)
+        ? recording->path : std::wstring{};
     // 参数置空即"已停止"，stopIfRecording / dispose 再进来时不会重复 join
-    mp4Param.reset();
-    gifParam.reset();
-    if (!failedMp4.empty()) showRecordError(Lang::get(L"video.recordFailed") + L"\n\n" + failedMp4,
+    recording.reset();
+    if (!failed.empty()) showRecordError(Lang::get(L"video.recordFailed") + L"\n\n" + failed,
         Lang::get(L"about.sysTip"));
     return filePath;
 }
 
 void CapVideo::stopWorker()
 {
-    if (mp4Param) captureThread.request_stop();
-    if (gifParam) gifParam->isFinish = true;
+    if (recording) captureThread.request_stop();
     if (captureThread.joinable()) captureThread.join();
 }

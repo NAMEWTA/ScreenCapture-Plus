@@ -1833,6 +1833,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     if (FAILED(hr))
         return -9;
     pMediaTypeVideoIn->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    hr = pMediaTypeVideoIn->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    if (FAILED(hr)) return -9;
 
     MFSetAttributeSize(pMediaTypeVideoIn, MF_MT_FRAME_SIZE, wi,he);
     MFSetAttributeRatio(pMediaTypeVideoIn, MF_MT_FRAME_RATE, dp.fps, 1);
@@ -1996,8 +1998,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
     const LONG cbWidth = multi * wi;
     DWORD VideoBufferSize = cbWidth * he;
-    CComPtr<IMFMediaBuffer> pVideoBuffer = NULL;
-    CComPtr<IMFSample> pVideoSampleS = NULL;
+    LONGLONG lastSubmittedVideoTime = 0;
+    LONGLONG lastSubmittedVideoDuration = 0;
 
     unsigned long long rtA = 0;
     unsigned long long rtV = 0;
@@ -2383,12 +2385,13 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
 
 
-            if (!pVideoBuffer)
-            {
-                hr = MFCreateMemoryBuffer(VideoBufferSize, &pVideoBuffer);
-                if (FAILED(hr))
-                    break;
-            }
+            // The sink/transform may retain this sample after WriteSample
+            // returns. Follow the official sink-writer WriteFrame ownership:
+            // allocate one immutable sample and buffer for each submission,
+            // then release our references without rewriting queued input.
+            CComPtr<IMFMediaBuffer> pVideoBuffer;
+            hr = MFCreateMemoryBuffer(VideoBufferSize, &pVideoBuffer);
+            if (FAILED(hr)) break;
 
             hr = pVideoBuffer->Lock(&pData, NULL, NULL);
             if (FAILED(hr))
@@ -2423,17 +2426,9 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             hr = pVideoBuffer->SetCurrentLength(VideoBufferSize);
             if (FAILED(hr)) break;
 
-            CComPtr<IMFSample> pVideoSample = NULL;
-
-            if (!pVideoSampleS)
-            {
-                hr = MFCreateSample(&pVideoSampleS);
-                if (FAILED(hr)) break;
-            }
-            pVideoSample = pVideoSampleS;
-
-
-            pVideoSample->RemoveAllBuffers();
+            CComPtr<IMFSample> pVideoSample;
+            hr = MFCreateSample(&pVideoSample);
+            if (FAILED(hr)) break;
             hr = pVideoSample->AddBuffer(pVideoBuffer);
             if (FAILED(hr)) break;
 
@@ -2470,6 +2465,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 if (FAILED(hr))
                     break;
                 dp.result.framesWritten++;
+                lastSubmittedVideoTime = static_cast<LONGLONG>(rtV);
+                lastSubmittedVideoDuration = static_cast<LONGLONG>(ThisDurV);
             }
         }
 
@@ -2552,6 +2549,20 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
         }
         const auto finalizeResult = pSinkWriter->Finalize();
         dp.result.finish(SUCCEEDED(finalizeResult), static_cast<std::int64_t>(finalizeResult));
+        if (dp.HasVideo && !dp.Framer) {
+            MF_SINK_WRITER_STATISTICS statistics{};
+            statistics.cb = sizeof(statistics);
+            const auto status = pSinkWriter->GetStatistics(OutVideoStreamIndex, &statistics);
+            // Preserve the actual HRESULT, including an unsupported query. It
+            // must not become a fabricated zero-output success or erase a real
+            // capture/finalization error. The probe records all three stages.
+            dp.result.sinkStatistics = HuhuCapture::Core::RecordingSinkStatistics{
+                static_cast<std::int64_t>(status), statistics.qwNumSamplesReceived,
+                statistics.qwNumSamplesEncoded, statistics.qwNumSamplesProcessed,
+                statistics.llLastTimestampReceived, statistics.llLastTimestampEncoded,
+                statistics.llLastTimestampProcessed, lastSubmittedVideoTime,
+                lastSubmittedVideoDuration, statistics.dwByteCountQueued};
+        }
     }
     if (dp.result.firstError)
         return dp.result.firstError->stage == RecordingStage::Finalize ? -14 : -16;

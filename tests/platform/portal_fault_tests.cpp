@@ -106,33 +106,58 @@ struct MissingServiceCases {
 
 int main(int argc, char** argv)
 {
-    const bool noBus = argc == 2 && std::string_view(argv[1]) == "--no-bus";
+    bool noBus = false, stopInitializing = false, lateRequest = false;
+    for (int index = 1; index < argc; ++index) {
+        noBus |= std::string_view(argv[index]) == "--no-bus";
+        stopInitializing |= std::string_view(argv[index]) == "--shutdown-initializing";
+        lateRequest |= std::string_view(argv[index]) == "--shutdown-with-late-request";
+    }
     qputenv("QT_QPA_PLATFORM", "offscreen");
     qputenv("LIBPORTAL_PORTAL_BUS_NAME", "org.huhucapture.PortalUnavailable");
     if (noBus) qputenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/huhucapture-session-bus");
     QGuiApplication app(argc, argv);
     PortalCapture control;
     MissingServiceCases nativeCases;
+    int initializationCompletions = 0, shutdownCompletions = 0;
+    QObject::connect(&control, &PortalCapture::shutdownFinished, &app, [&] {
+        require(++shutdownCompletions == 1, "Portal shutdown completed more than once");
+        require(initializationCompletions == (lateRequest ? 0 : 1), "Portal shutdown preceded its actual initialization completion");
+        require(control.requestScreenshot(nullptr) == 0 && control.requestScreenCast(nullptr) == 0,
+            "A drained Portal controller reopened request admission");
+        if (noBus || stopInitializing || lateRequest) QCoreApplication::exit(EXIT_SUCCESS);
+        else nativeCases.run();
+    });
     QObject::connect(&control, &PortalCapture::initialized, &app,
         [&](const PortalCapabilities& capabilities, const PortalFailure& error) {
             require(QThread::currentThread() == app.thread(), "Initialization completion left the GUI thread");
-            require(error.code == PortalFailure::Code::Unavailable,
-                    "Unavailable bus/service was not reported as unavailable");
+            require(++initializationCompletions == 1, "Initialization completed more than once");
+            require(error.code == (stopInitializing ? PortalFailure::Code::Cancelled : PortalFailure::Code::Unavailable),
+                    "Unavailable/cancelled initialization did not retain its actual outcome");
             require(!capabilities.screenshot.available() && !capabilities.screenCast.available(),
                     "Unavailable Portal advertised capture support");
             require(QAbstractEventDispatcher::instance()->inherits("QEventDispatcherGlib"),
                     "Qt is not dispatching the GLib context");
-            if (noBus) QCoreApplication::exit(EXIT_SUCCESS);
-            else nativeCases.run();
+            if (!stopInitializing) control.shutdown();
         });
-    QTimer::singleShot(0, &control, &PortalCapture::initialize);
+    QTimer::singleShot(0, &control, [&] {
+        if (lateRequest) {
+            control.shutdown();
+            require(control.requestScreenshot(nullptr) == 0 && control.requestScreenCast(nullptr) == 0,
+                "Shutdown must close admission before queueing its drained signal");
+        } else {
+            control.initialize();
+            if (stopInitializing) control.shutdown();
+        }
+    });
     QTimer::singleShot(10000, &app, [&] {
         std::cerr << "Portal fault test did not complete or release its requests\n";
         QCoreApplication::exit(EXIT_FAILURE);
     });
     const auto result = app.exec();
     if (result == EXIT_SUCCESS)
-        std::cout << (noBus ? "Unavailable session bus propagated without abort\n"
-                            : "Real D-Bus failure, cancellation and callback release checks passed\n");
+        std::cout << (lateRequest ? "Shutdown closes real Portal request admission before its queued terminal signal\n" :
+            stopInitializing ? "Actual initialization cancellation drained before Portal shutdown completion\n" :
+            noBus ? "Unavailable session bus propagated and shutdown drained without abort\n"
+                  : "Real D-Bus failure, cancellation, callback release and controller shutdown checks passed\n");
     return result;
 }

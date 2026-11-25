@@ -57,9 +57,16 @@ public:
     ~PortalCapture() override;
 
     void initialize();
+    // Screenshot permits a genuine null parent (tray/shortcut entry); a nonnull
+    // parent must still be a visible, live native window. ScreenCast requires it.
+    // Both request methods return zero after shutdown closes admission.
     quint64 requestScreenshot(QWindow* parent, bool interactive = true);
     quint64 requestScreenCast(QWindow* parent, const ScreenCastOptions& options = {});
     void cancelRequest(quint64 requestId);
+    // Cancel work and release native requests on the shared GUI/GLib dispatcher.
+    // Keep that dispatcher alive until shutdownFinished; destruction alone is
+    // not a positive proof that asynchronous callbacks have drained.
+    void shutdown();
     void closeScreenCast();
     bool hasActiveScreenCast() const;
 
@@ -69,10 +76,12 @@ public:
 
 Q_SIGNALS:
     void initialized(const PortalCapabilities& capabilities, const PortalFailure& failure);
+    void capabilitiesChanged(const PortalCapabilities& capabilities);
     void screenshotFinished(quint64 requestId, const QUrl& uri, const PortalFailure& failure);
     void screenCastFinished(quint64 requestId, const QVector<PortalStream>& streams,
                             const QString& restoreToken, const PortalFailure& failure);
     void screenCastClosed(const PortalFailure& failure);
+    void shutdownFinished();
 
 private:
     struct Private;

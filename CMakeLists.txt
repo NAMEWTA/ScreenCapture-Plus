@@ -85,11 +85,13 @@ endif()
 # shared. This target never depends on Qt or the presentation layer.
 if(WIN32)
     add_library(huhucapture_file_committer STATIC
-        src/platform/windows/FileCommitter.cpp src/platform/windows/FileIdentity.cpp src/platform/windows/PrivateStorage.cpp)
+        src/platform/windows/FileCommitter.cpp src/platform/windows/FileIdentity.cpp
+        src/platform/windows/FileOutput.cpp src/platform/windows/PrivateStorage.cpp)
     target_link_libraries(huhucapture_file_committer PRIVATE ole32 advapi32)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_library(huhucapture_file_committer STATIC
-        src/platform/linux/FileCommitter.cpp src/platform/linux/FileIdentity.cpp src/platform/linux/PrivateStorage.cpp)
+        src/platform/linux/FileCommitter.cpp src/platform/linux/FileIdentity.cpp
+        src/platform/linux/FileOutput.cpp src/platform/linux/PrivateStorage.cpp)
 endif()
 if(TARGET huhucapture_file_committer)
     target_link_libraries(huhucapture_file_committer PUBLIC huhucapture_core)
@@ -250,6 +252,16 @@ if(HUHUCAPTURE_QT_VALIDATION)
     set_target_properties(huhucapture_recording_session PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
     target_link_libraries(huhucapture_recording_session PUBLIC huhucapture_media_archive Qt6::Core
         PRIVATE Qt6::Concurrent)
+    add_library(huhucapture_recording_ui STATIC
+        src/ui/qt/RecordingWindow.h src/ui/qt/RecordingWindow.cpp)
+    set_target_properties(huhucapture_recording_ui PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+    target_link_libraries(huhucapture_recording_ui PUBLIC
+        huhucapture_recording_session huhucapture_capture huhucapture_editor Qt6::Widgets)
+    huhucapture_test(qt_recording_window tests/qt/recording_window_tests.cpp
+        "${PROJECT_BINARY_DIR}/recording-render/$<CONFIG>")
+    target_link_libraries(qt_recording_window PRIVATE huhucapture_recording_ui huhucapture_languages)
+    set_tests_properties(qt_recording_window PROPERTIES TIMEOUT 90
+        ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
     huhucapture_test(qt_recording_admission tests/qt/recording_admission_tests.cpp)
     target_link_libraries(qt_recording_admission PRIVATE huhucapture_recording_session)
     huhucapture_test(qt_media_archive tests/qt/media_archive_tests.cpp)
@@ -263,6 +275,7 @@ if(HUHUCAPTURE_QT_VALIDATION)
         find_package(Qt6 6.12.1 EXACT REQUIRED COMPONENTS Concurrent)
         add_library(huhucapture_desktop_services STATIC
             src/services/desktop/DesktopResult.h
+            src/services/desktop/CaptureExclusion.h src/services/desktop/CaptureExclusion.cpp
             src/services/desktop/SystemClipboard.h src/services/desktop/SystemClipboard.cpp
             src/services/desktop/DesktopFiles.h src/services/desktop/DesktopFiles.cpp
             src/services/desktop/FileRevealer.h src/services/desktop/FileRevealer.cpp)
@@ -421,6 +434,14 @@ if(HUHUCAPTURE_QT_VALIDATION)
             INTERFACE_INCLUDE_DIRECTORIES "${PROJECT_SOURCE_DIR}/src/platform/rust/include;${PROJECT_SOURCE_DIR}/third_party/gifski")
         add_library(huhucapture_gif_inspection STATIC src/services/media/GifInspection.cpp)
         target_link_libraries(huhucapture_gif_inspection PUBLIC huhucapture_media_archive huhucapture_rust)
+        add_library(huhucapture_gif_encoder STATIC src/services/media/GifEncoder.cpp)
+        target_link_libraries(huhucapture_gif_encoder PUBLIC
+            huhucapture_media_frames huhucapture_file_committer PRIVATE huhucapture_rust)
+        set_target_properties(huhucapture_gif_encoder PROPERTIES CXX_EXTENSIONS OFF)
+        huhucapture_test(qt_gif_encoder tests/qt/gif_encoder_tests.cpp)
+        target_link_libraries(qt_gif_encoder PRIVATE huhucapture_gif_encoder huhucapture_gif_inspection)
+        set_tests_properties(qt_gif_encoder PROPERTIES TIMEOUT 120
+            ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
         add_library(huhucapture_transfer STATIC
             src/services/transfer/ReceiveSink.h
             src/services/transfer/TransferService.h
@@ -501,6 +522,20 @@ if(HUHUCAPTURE_QT_VALIDATION)
         target_link_libraries(qt_recording_session PRIVATE
             huhucapture_recording_session huhucapture_native_media)
         set_tests_properties(qt_recording_session PROPERTIES TIMEOUT 120)
+        if(HUHUCAPTURE_RUST_VALIDATION)
+            add_library(huhucapture_native_gif STATIC src/platform/windows/NativeGifRecording.cpp)
+            target_link_libraries(huhucapture_native_gif PUBLIC
+                huhucapture_gif_encoder huhucapture_native_media)
+            target_compile_options(huhucapture_native_gif PRIVATE /W4 /utf-8 /permissive-)
+            set_target_properties(huhucapture_native_gif PROPERTIES CXX_EXTENSIONS OFF)
+            huhucapture_test(native_gif_recording_probe tests/qt/native_recording_probe.cpp
+                "${PROJECT_BINARY_DIR}/native-gif-recording/$<CONFIG>")
+            target_compile_definitions(native_gif_recording_probe PRIVATE HUHUCAPTURE_GIF_RECORDING_PROBE=1)
+            target_link_libraries(native_gif_recording_probe PRIVATE Qt6::Widgets Qt6::Concurrent
+                huhucapture_recording_session huhucapture_native_gif huhucapture_gif_inspection)
+            set_tests_properties(native_gif_recording_probe PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE
+                ENVIRONMENT "QT_QPA_PLATFORM=windows")
+        endif()
     endif()
     if(HUHUCAPTURE_PORTAL_VALIDATION)
         if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -545,7 +580,15 @@ if(HUHUCAPTURE_QT_VALIDATION)
         add_test(NAME portal_missing_service
             COMMAND "${DBUS_RUN_SESSION}" -- $<TARGET_FILE:portal_fault_tests>)
         add_test(NAME portal_missing_session_bus COMMAND portal_fault_tests --no-bus)
-        set_tests_properties(portal_missing_service portal_missing_session_bus PROPERTIES
+        add_test(NAME portal_shutdown_initializing
+            COMMAND "${DBUS_RUN_SESSION}" -- $<TARGET_FILE:portal_fault_tests> --shutdown-initializing)
+        add_test(NAME portal_shutdown_initializing_no_bus
+            COMMAND portal_fault_tests --no-bus --shutdown-initializing)
+        add_test(NAME portal_shutdown_closed_admission
+            COMMAND portal_fault_tests --shutdown-with-late-request)
+        set_tests_properties(portal_missing_service portal_missing_session_bus
+            portal_shutdown_initializing portal_shutdown_initializing_no_bus
+            portal_shutdown_closed_admission PROPERTIES
             TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         add_executable(portal_shortcuts_fault_tests tests/platform/portal_shortcuts_fault_tests.cpp)
         target_compile_definitions(portal_shortcuts_fault_tests PRIVATE QT_NO_KEYWORDS)

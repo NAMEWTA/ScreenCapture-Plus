@@ -62,6 +62,11 @@ Qt 图像数据，GIF/MP4 提供 `text/uri-list`；没有自写像素传输或 W
 也在准备结束前成为独立内存，不借用随后可能复用的外部字符缓冲。
 剪贴板内容由持续运行的 Qt 应用拥有，不依附发起操作的窗口。
 
+固定 Qt 的 Wayland 接收端会把 `text/plain;charset=utf-8` 在
+`QMimeData::formats()` 中规范化为 `text/plain`。独立接收验证以 `hasText()`
+判断就绪，然后同时比较显式 UTF-8 内容和 `QClipboard::text()` 的完整文本；
+不等待被 Qt 隐藏的格式名称，也不省略中文、非 BMP 字符、换行及制表符校验。
+
 固定 Qt 6.12.1 会为本地文件 URL 额外提供
 `application/vnd.portal.filetransfer`；另一个 Qt Wayland 进程读取文件时优先
 通过会话总线的 `org.freedesktop.portal.Documents` 服务执行 FileTransfer。

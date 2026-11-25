@@ -144,6 +144,10 @@ jobs:
             artifacts/cmake/qt-validation/annotation-render/
             artifacts/cmake/qt-validation/editor-render/
             artifacts/cmake/qt-validation/desktop-render/
+            artifacts/cmake/qt-validation/capture-render/
+            artifacts/cmake/qt-validation/recording-render/
+            artifacts/cmake/qt-validation/settings-controller/
+            artifacts/cmake/qt-validation/settings-controller-unavailable/
             artifacts/cmake/qt-validation/wayland-parent/
             artifacts/cmake/qt-validation/wayland-clipboard/
             artifacts/cmake/qt-validation/pipewire/

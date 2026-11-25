@@ -86,8 +86,14 @@ jobs:
       - name: Exercise real GIF, TLS, transfer interfaces, durable commit and shutdown
         working-directory: .
         run: |
-          cmake --build artifacts/cmake/native-validation --config Release --target qt_rust_bridge qt_transfer_service qt_transfer_ui qt_lan_controller --parallel 2
-          ctest --test-dir artifacts/cmake/native-validation -C Release --output-on-failure --no-tests=error -R '^qt_(rust_bridge|transfer_service|transfer_ui|lan_controller)$'
+          cmake --build artifacts/cmake/native-validation --config Release --target qt_rust_bridge qt_transfer_service qt_transfer_ui qt_lan_controller qt_gif_encoder --parallel 2
+          ctest --test-dir artifacts/cmake/native-validation -C Release --output-on-failure --no-tests=error -R '^qt_(rust_bridge|transfer_service|transfer_ui|lan_controller|gif_encoder)$'
+      - name: Record actual Windows desktop frames through GDI and the shared GIF encoder
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: |
+          cmake --build artifacts/cmake/native-validation --config Release --target native_gif_recording_probe --parallel 2
+          ctest --test-dir artifacts/cmake/native-validation -C Release --output-on-failure --no-tests=error -R '^native_gif_recording_probe$'
       - name: Retain the actual workspace dependency resolution
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -104,5 +110,6 @@ jobs:
             artifacts/cmake/native-validation/rust-bridge/
             artifacts/cmake/native-validation/transfer-render/
             artifacts/cmake/native-validation/lan-controller-render/
+            artifacts/cmake/native-validation/native-gif-recording/
           if-no-files-found: error
           retention-days: 14

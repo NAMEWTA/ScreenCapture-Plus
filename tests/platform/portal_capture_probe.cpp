@@ -39,6 +39,8 @@ int main(int argc, char** argv)
     arguments.setApplicationDescription(QStringLiteral("Actual Portal control-plane probe; no capture frames are synthesized"));
     arguments.addHelpOption();
     arguments.addOption({"screenshot", "Request an interactive screenshot"});
+    arguments.addOption({"unparented", "Use the real parent-less Screenshot path from a tray/shortcut entry"});
+    arguments.addOption({"noninteractive", "Request a noninteractive Screenshot where the actual desktop permits it"});
     arguments.addOption({"screencast", "Request monitors and open their real PipeWire remote; does not decode frames"});
     arguments.addOption({"cancel-after-ms", "Cancel pending authorization after this interval", "milliseconds"});
     arguments.addOption({"destroy-parent-after-ms", "Destroy the authorization parent after this interval", "milliseconds"});
@@ -51,7 +53,8 @@ int main(int argc, char** argv)
     window->resize(640, 240);
     const bool screenshot = arguments.isSet("screenshot");
     const bool screenCast = arguments.isSet("screencast");
-    if (screenshot || screenCast) window->show();
+    if (screenCast || (screenshot && !arguments.isSet("unparented"))) window->show();
+    if (screenCast && arguments.isSet("unparented")) return 2;
     quint64 request{};
     int remoteFd{-1};
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &control, [&] {
@@ -71,7 +74,8 @@ int main(int argc, char** argv)
                    {"failure", describe(error)}});
             if (error) { app.exit(1); return; }
             if (!screenshot && !screenCast) { app.exit(0); return; }
-            request = screenshot ? control.requestScreenshot(window.get()) : control.requestScreenCast(window.get());
+            request = screenshot ? control.requestScreenshot(arguments.isSet("unparented") ? nullptr : window.get(),
+                !arguments.isSet("noninteractive")) : control.requestScreenCast(window.get());
             if (arguments.isSet("cancel-after-ms")) {
                 bool ok = false;
                 const auto delay = arguments.value("cancel-after-ms").toInt(&ok);

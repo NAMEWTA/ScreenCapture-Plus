@@ -75,7 +75,7 @@ jobs:
           test "$(qmake -query QT_INSTALL_PREFIX)" = "$QT_ROOT_DIR"
           cmake --version
           ninja --version
-          pkg-config --modversion libportal libportal-qt6 libpipewire-0.3 gio-2.0 wayland-client
+          pkg-config --modversion libportal libportal-qt6 libpipewire-0.3 gio-2.0 wayland-client xcb-shm xcb-xfixes xcb-xtest
           test "$(pkg-config --variable=prefix gio-2.0)" = "$(pwd)/artifacts/relocated-development/sdk/system/usr"
           test "$(pkg-config --variable=prefix libportal)" = "$(pwd)/artifacts/relocated-development/sdk/portal"
           cmake -S . -B artifacts/cmake/relocated-development -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON

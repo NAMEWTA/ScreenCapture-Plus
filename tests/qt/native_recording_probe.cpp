@@ -1,9 +1,14 @@
 #define NOMINMAX
 #include <Windows.h>
 
-#include "platform/windows/NativeMp4Recording.h"
 #include "recording/RecordingSession.h"
+#ifdef HUHUCAPTURE_GIF_RECORDING_PROBE
+#include "platform/windows/NativeGifRecording.h"
+#include "services/media/GifInspection.h"
+#else
+#include "platform/windows/NativeMp4Recording.h"
 #include "services/media/VideoInspection.h"
+#endif
 
 #include <QApplication>
 #include <QColor>
@@ -15,6 +20,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QImageReader>
 #include <QPainter>
 #include <QPointer>
 #include <QScreen>
@@ -42,6 +48,16 @@ namespace core = HuhuCapture::Core;
 using namespace std::chrono_literals;
 
 namespace {
+#ifdef HUHUCAPTURE_GIF_RECORDING_PROBE
+constexpr auto nativeBackend = &HuhuCapture::Platform::Windows::runNativeGif;
+constexpr auto mediaKind = media::Kind::Gif;
+constexpr bool gifProbe = true;
+#else
+constexpr auto nativeBackend = &HuhuCapture::Platform::Windows::runNativeMp4;
+constexpr auto mediaKind = media::Kind::Mp4;
+constexpr bool gifProbe = false;
+#endif
+
 void require(bool condition, const char* message)
 { if (!condition) throw std::runtime_error(message); }
 void settle()
@@ -112,8 +128,12 @@ std::shared_ptr<media::MediaArchiveService> archiveAt(const QString& path)
 {
     return std::make_shared<media::MediaArchiveService>(path,
         [](const QString& file, media::Kind kind, std::stop_token stop) -> media::Inspection {
+#ifdef HUHUCAPTURE_GIF_RECORDING_PROBE
+            if (kind == media::Kind::Gif) return media::inspectGif(file, {}, stop);
+#else
             if (kind == media::Kind::Mp4) return media::inspectVideo(file, {}, stop);
-            return {{media::Error::Unsupported, QStringLiteral("This actual probe covers MP4 only")}, kind, {}, 0};
+#endif
+            return {{media::Error::Unsupported, QStringLiteral("The probe inspector does not handle the requested format")}, kind, {}, 0};
         });
 }
 QJsonObject resultJson(const recording::SessionResult& result)
@@ -123,6 +143,21 @@ QJsonObject resultJson(const recording::SessionResult& result)
     item[QStringLiteral("state")] = static_cast<int>(result.state);
     item[QStringLiteral("intent")] = static_cast<int>(result.intent);
     item[QStringLiteral("framesSubmitted")] = static_cast<qint64>(result.backend.media.framesWritten);
+    if (result.backend.media.sinkStatistics) {
+        const auto& statistics = *result.backend.media.sinkStatistics;
+        QJsonObject sink;
+        sink[QStringLiteral("queryStatus")] = static_cast<qint64>(statistics.queryStatus);
+        sink[QStringLiteral("samplesReceived")] = static_cast<qint64>(statistics.received);
+        sink[QStringLiteral("samplesEncoded")] = static_cast<qint64>(statistics.encoded);
+        sink[QStringLiteral("samplesProcessed")] = static_cast<qint64>(statistics.processed);
+        sink[QStringLiteral("lastReceived100ns")] = static_cast<qint64>(statistics.lastReceived);
+        sink[QStringLiteral("lastEncoded100ns")] = static_cast<qint64>(statistics.lastEncoded);
+        sink[QStringLiteral("lastProcessed100ns")] = static_cast<qint64>(statistics.lastProcessed);
+        sink[QStringLiteral("lastSubmitted100ns")] = static_cast<qint64>(statistics.lastSubmitted);
+        sink[QStringLiteral("lastSubmittedDuration100ns")] = static_cast<qint64>(statistics.lastSubmittedDuration);
+        sink[QStringLiteral("queuedBytes")] = static_cast<qint64>(statistics.queuedBytes);
+        item[QStringLiteral("sinkStatistics")] = sink;
+    }
     item[QStringLiteral("finalized")] = result.backend.media.finalized;
     item[QStringLiteral("stopRequested")] = result.backend.stopRequested;
     item[QStringLiteral("durationLimitReached")] = result.backend.durationLimitReached;
@@ -177,26 +212,91 @@ void checkCover(const QImage& image)
 void inspectRecording(const QString& path, const recording::BackendResult& recorded,
     const QString& coverPath, QJsonObject& evidence)
 {
+#ifdef HUHUCAPTURE_GIF_RECORDING_PROBE
+    const auto inspection = worker([path] { return media::inspectGif(path); });
+#else
     const auto inspection = worker([path] { return media::inspectVideo(path); });
+#endif
     evidence[QStringLiteral("inspectionFailure")] = inspection.failure.detail;
     evidence[QStringLiteral("framesDecoded")] = static_cast<qint64>(inspection.frames);
     evidence[QStringLiteral("sha256")] = digest(path);
     require(!inspection.failure && recorded.prepared &&
         inspection.dimensions == QSize(recorded.prepared->region.width, recorded.prepared->region.height) &&
-        inspection.frames == recorded.media.framesWritten && inspection.frames >= 2,
-        "Every frame accepted by the real MF writer must survive finalization and strict all-track inspection");
+        (gifProbe ? inspection.frames <= recorded.media.framesWritten : inspection.frames == recorded.media.framesWritten) &&
+        inspection.frames >= 2,
+        gifProbe ? "The actual animated GIF must contain complete decoded frames after finalization" :
+            "Every frame accepted by the real MF writer must survive finalization and strict all-track inspection");
+#ifdef HUHUCAPTURE_GIF_RECORDING_PROBE
+    const auto decoded = worker([path, coverPath, frames = inspection.frames] {
+        QImageReader reader(path, "gif");
+        std::uint64_t count{};
+        qint64 delay{};
+        while (reader.canRead()) {
+            const auto image = reader.read();
+            require(!image.isNull(), "Read each real GIF frame after complete stream validation");
+            checkCover(image);
+            if (!count) require(image.save(coverPath, "PNG"), "Preserve the actual first GIF frame");
+            delay += reader.nextImageDelay(); ++count;
+        }
+        require(count == frames, "The native GIF inspector and Qt must agree on every encoded frame");
+        return delay;
+    });
+    evidence[QStringLiteral("encodedDurationMilliseconds")] = decoded;
+    require(std::abs(static_cast<double>(decoded) - static_cast<double>(recorded.media.framesWritten) * 1000.0 / 16) <= 20,
+        "Legal GIF frame merging must retain the complete submitted 16 FPS timeline");
+#else
     const auto cover = worker([path] { return media::videoThumbnail(path, 256); });
     evidence[QStringLiteral("coverFailure")] = cover.failure.detail;
     evidence[QStringLiteral("coverDecoder")] = static_cast<int>(cover.decoder);
     require(!cover.failure, "Generate a real native/software-decoded recording cover");
     require(cover.image.save(coverPath, "PNG"), "Preserve actual decoded cover evidence");
     checkCover(cover.image);
+#endif
 }
 void assertEntryCount(const media::MediaArchiveService& archive, std::size_t count)
 {
     const auto files = archive.list();
     require(!files.failure && files.entries.size() == count, "Only the intended finalized recordings belong to history");
 }
+#ifdef HUHUCAPTURE_GIF_RECORDING_PROBE
+QJsonArray gifPreflight(const QString& directory)
+{
+    auto archive = archiveAt(directory);
+    QJsonArray evidence;
+    for (unsigned variant = 0; variant < 5; ++variant) {
+        recording::BackendRequest request;
+        request.format = recording::Format::Gif; request.region = {0, 0, 32, 24};
+        request.framesPerSecond = 16; request.maximumDuration = std::chrono::minutes(6);
+        request.systemAudio = false; request.microphone = false;
+        std::stop_source stop;
+        if (variant == 0) stop.request_stop();
+        if (variant == 1) request.framesPerSecond = 0;
+        if (variant == 2) request.microphone = true;
+        if (variant == 3) request.framesPerSecond = 51;
+        if (variant == 4) request.framesPerSecond = 50; // exceeds the complete GIF frame budget at six minutes
+        auto file = archive->createStaging();
+        require(!file.failure && file.file, "Create an actual owned GIF preflight file");
+        std::error_code error;
+        auto handle = file.file.openWriter(error);
+        require(handle && !error, "Open the real identity-checked GIF writer");
+        const auto result = worker([request, handle = std::move(handle), token = stop.get_token()]() mutable {
+            return nativeBackend(request, std::move(handle), {}, token);
+        });
+        require(!result.prepared && !result.media.framesWritten && !result.media.canArchive() &&
+            (variant == 0 ? !result.media.firstError && result.stopRequested : result.media.firstError.has_value()),
+            "Real GIF preflight must report clean cancellation or the requested unsupported parameters");
+        require(QFileInfo(file.file.path()).size() == 0 && !file.file.discard(),
+            "Native preflight must close its writer without producing media");
+        QJsonObject item;
+        item[QStringLiteral("case")] = QStringLiteral("gif-preflight-%1").arg(variant);
+        item[QStringLiteral("stopRequested")] = result.stopRequested;
+        if (result.media.firstError) item[QStringLiteral("nativeError")] = static_cast<qint64>(result.media.firstError->code);
+        item[QStringLiteral("passed")] = true;
+        evidence.append(item);
+    }
+    return evidence;
+}
+#endif
 }
 
 int main(int argc, char** argv)
@@ -223,11 +323,18 @@ int main(int argc, char** argv)
         QTemporaryDir run(parent + QStringLiteral("/run-XXXXXX"));
         require(run.isValid(), "Claim an exclusively owned recording evidence directory");
         run.setAutoRemove(false);
-        reportPath = run.path() + QStringLiteral("/native-recording.json");
+        reportPath = run.path() + (gifProbe ? QStringLiteral("/native-gif-recording.json") : QStringLiteral("/native-recording.json"));
         report[QStringLiteral("schema")] = 1;
         report[QStringLiteral("status")] = QStringLiteral("running");
-        report[QStringLiteral("scope")] = QStringLiteral("Actual visible Windows desktop -> retained DXGI/GDI -> MF MP4 -> strict all-track FFmpeg inspection and decoded cover. Audio disabled. Actual capture source and codec recorded per case. No physical multi-monitor, mixed-DPI, HDR, audio, sustained-performance or installation acceptance is claimed.");
+        report[QStringLiteral("scope")] = gifProbe
+            ? QStringLiteral("Actual visible Windows desktop -> retained full-region GDI -> shared fixed gifski -> strict complete GIF decode, actual pixels and timeline. No audio exists in GIF. No physical multi-monitor, mixed-DPI, HDR, sustained-performance or installation acceptance is claimed.")
+            : QStringLiteral("Actual visible Windows desktop -> retained DXGI/GDI -> MF MP4 -> strict all-track FFmpeg inspection and decoded cover. Audio disabled. Actual capture source and codec recorded per case. No physical multi-monitor, mixed-DPI, HDR, audio, sustained-performance or installation acceptance is claimed.");
         saveReport();
+
+#ifdef HUHUCAPTURE_GIF_RECORDING_PROBE
+        report[QStringLiteral("preflight")] = gifPreflight(run.path() + QStringLiteral("/preflight"));
+        saveReport();
+#endif
 
         PatternWindow pattern;
         QObject observation;
@@ -241,10 +348,11 @@ int main(int argc, char** argv)
         request.region = physicalClient(pattern);
         request.systemAudio = false; request.microphone = false; request.cursor = false;
         request.maximumDuration = 8s;
-        const auto aligned = recording::alignedMp4Region(request.region);
+        if (gifProbe) { request.format = recording::Format::Gif; request.framesPerSecond = 16; }
+        const auto aligned = gifProbe ? std::optional(request.region) : recording::alignedMp4Region(request.region);
         require(aligned.has_value(), "The actual client area must yield a valid aligned recording region");
         auto archive = archiveAt(run.path() + QStringLiteral("/archive"));
-        recording::RecordingSession session(archive, HuhuCapture::Platform::Windows::runNativeMp4);
+        recording::RecordingSession session(archive, nativeBackend);
         QTimer heartbeat;
         heartbeat.setInterval(5);
         std::uint64_t beats{};
@@ -302,7 +410,7 @@ int main(int argc, char** argv)
                 require(completed->state == recording::SessionState::Completed && completed->archive.durable() &&
                     completed->archivedEntry && completed->archivedEntry->path == completed->archive.path &&
                     completed->archivedEntry->name == QFileInfo(completed->archive.path).fileName() &&
-                    completed->archivedEntry->kind == media::Kind::Mp4 && completed->archivedEntry->snapshot.bytes,
+                    completed->archivedEntry->kind == mediaKind && completed->archivedEntry->snapshot.bytes,
                     "Save/copy intent must first publish a fully inspected durable recording");
                 const auto verifiedEntry = *completed->archivedEntry;
                 require(worker([archive, verifiedEntry] {
@@ -349,7 +457,7 @@ int main(int argc, char** argv)
         auto returned = std::make_shared<std::atomic<bool>>(false);
         auto orphanOwner = std::make_unique<recording::RecordingSession>(orphanArchive,
             [nativeResult, returned](const auto& arguments, auto writer, const auto& events, auto stop) {
-                auto result = HuhuCapture::Platform::Windows::runNativeMp4(arguments, std::move(writer), events, stop);
+                auto result = nativeBackend(arguments, std::move(writer), events, stop);
                 *nativeResult = result; returned->store(true, std::memory_order_release); return result;
             });
         QPointer<recording::RecordingSession> orphan = orphanOwner.get();

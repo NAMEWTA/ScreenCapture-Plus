@@ -170,8 +170,12 @@ void receiveFile(const QString& expected)
 void receiveText(const QString& expected)
 {
     auto* clipboard = QApplication::clipboard();
-    waitFor([&] { return clipboard->mimeData()->hasFormat(QStringLiteral("text/plain;charset=utf-8")); },
-        "the independent process receives the explicit UTF-8 text offer");
+    // Qt 6.12 QWaylandMimeData::formats_sys() exposes both plain-text wire
+    // types as text/plain. Waiting for the UTF-8 spelling in formats() can
+    // never complete even when the real compositor delivered that offer.
+    // Keep checking the explicit wire payload as well as Qt's Unicode value.
+    waitFor([&] { return clipboard->mimeData()->hasText(); },
+        "the independent process receives an actual normalized text offer");
     require(clipboard->mimeData()->data(QStringLiteral("text/plain;charset=utf-8")) == expected.toUtf8() &&
         clipboard->text() == expected, "the receiver gets exact Unicode, non-BMP text, tabs and line endings");
 }
@@ -193,7 +197,16 @@ void runReceiver(const QString& kind, const QString& expected)
     QProcess child; child.setProcessChannelMode(QProcess::MergedChannels);
     child.start(QCoreApplication::applicationFilePath(), {kind, expected});
     require(child.waitForStarted(2000), "start an actual independent clipboard receiver");
-    waitFor([&] { return child.state() == QProcess::NotRunning; }, "the real receiver completes while the owner pumps its event loop");
+    try {
+        waitFor([&] { return child.state() == QProcess::NotRunning; }, "the real receiver completes while the owner pumps its event loop");
+    } catch (...) {
+        // Preserve the actual receiver's protocol/error evidence on failure,
+        // then reap our own child rather than losing it in QProcess's dtor.
+        const auto output = child.readAll(); std::cerr << output.constData();
+        child.kill(); child.waitForFinished(2000);
+        const auto tail = child.readAll(); std::cerr << tail.constData();
+        throw;
+    }
     const auto output = child.readAll(); std::cout << output.constData();
     require(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0, "the separate process validates the actual system clipboard");
 }

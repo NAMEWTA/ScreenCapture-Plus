@@ -72,7 +72,13 @@ Win32 键码映射；数字键盘运算符含义保持不变。一个隐藏的 Q
 候选与旧绑定共用的 grab 不会在失败回滚时被误撤销。checked ungrab 确认服务端完成
 释放后才返回，其他客户端可实际获得该键。MappingNotify 后重新计算注册；重绑失败
 停止分发已经不再代表所选符号的旧键码。Qt socket notifier 分发此连接的事件，拒绝
-SendEvent 伪造标志、抑制自动重复并按代次丢弃旧的排队激活。应用退出断开自己的 XCB
+SendEvent 伪造标志、抑制自动重复并按代次丢弃旧的排队激活。只有实际 grab 集改变或
+重绑失败才递增代次；相同映射的通知不能丢弃仍有效的第一次按键。X server 在切换
+到输入设备时也可能发出这类通知，见已阅读的
+[CopyKeyClass / XkbDeviceApplyKeymap](https://github.com/mirror/xserver/blob/fc625fe172d9f6a149a594b5214364bedf680239/Xi/exevents.c)
+和 [XkbSendLegacyMapNotify](https://github.com/mirror/xserver/blob/fc625fe172d9f6a149a594b5214364bedf680239/xkb/xkbEvents.c)。
+映射重查中的同步 XCB reply 可能已经缓存按键事件，因此无变化重查后仍正常排空事件，
+不能只等待文件描述符下一次可读。应用退出断开自己的 XCB
 连接，服务端释放该客户端全部抓取。它不改变桌面其他客户端的键盘状态。
 
 ### Wayland / Portal
@@ -137,6 +143,8 @@ Exec 转义依据 [Desktop Entry 规范](https://specifications.freedesktop.org/
 Windows SendInput / Linux XTEST 生成实际 OS 输入，验证全局激活、冲突、录入期间
 释放、保存失败后旧注册仍占用、候选释放和退出清理。实际 Qt 控件驱动设置保存与
 多语言切换，并输出真实窗口 PNG；这类输入不等于物理键盘、输入法或混合 DPI 验收。
+X11 测试逐项检查真实 XTEST 请求的原生错误和结束后的按键释放状态，并在私有测试
+服务器原样重提交现有键盘映射，验证真实 MappingNotify 后第一次输入仍可触发。
 
 Linux 生产依赖是已有 Qt、Portal、GIO 加 xcb / xcb-keysyms / xkbcommon；
 `xcb-xtest` 只用于测试。测试必须在真正 X11 / Xvfb 下运行原生分支，不能用 offscreen
