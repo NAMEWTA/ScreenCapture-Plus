@@ -13,6 +13,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPointer>
 #include <QTemporaryDir>
@@ -52,7 +53,12 @@ template<class Work> auto worker(Work work)
     return future.get();
 }
 QByteArray read(const QString& path)
-{ QFile file(path); require(file.open(QIODevice::ReadOnly), "Read real exported bytes"); return file.readAll(); }
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        throw std::runtime_error((QStringLiteral("Read real exported bytes: ") + path + QStringLiteral(": ") + file.errorString()).toStdString());
+    return file.readAll();
+}
 media::Entry entryAt(const media::MediaArchiveService& archive, const QString& path)
 {
     const auto listed = archive.list(); require(!listed.failure, "List real archive entries");
@@ -314,6 +320,67 @@ void directImageOutput(const QString& root)
     workspace.shutdown();
     std::cout << "PASS direct capture output shares real archive, chooser and cancellation without an editor\n";
 }
+
+void completedRecordingOutput(const QString& root)
+{
+    auto archive = std::make_shared<media::MediaArchiveService>(root + QStringLiteral("/completed-output-archive"));
+    QImage pixels(37, 29, QImage::Format_ARGB32); pixels.fill(QColor(42, 84, 126, 213));
+    const auto saved = worker([&] { return archive->archiveImage(pixels); });
+    require(saved.durable(), "Publish complete actual media before requesting its follow-up output");
+    const auto original = read(saved.path);
+    const auto listed = archive->list();
+    require(!listed.failure && listed.entries.size() == 1, "Retain the completed file's exact post-publication identity");
+    const auto entry = listed.entries.front();
+    desktop::SystemClipboard clipboard; desktop::FileRevealer revealer;
+    application::MediaWorkspace workspace(archive, clipboard, revealer);
+    QObject owner; QWidget parent; parent.show();
+    unsigned completions{}; ui::OutputResult last{ui::OutputResult::Failed};
+    const auto done = [&](ui::OutputResult result, const QString&) { last = result; ++completions; };
+    require(workspace.outputArchived(&owner, &parent, 10, ui::OutputIntent::SaveAs, entry, done),
+        "A completed recording uses the same owned output pipeline");
+    waitFor([&] { return parent.findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog")); },
+        "A listed archive produces the real shared destination chooser");
+    auto* dialog = parent.findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog"));
+    static_cast<QDialog*>(dialog)->reject();
+    waitFor([&] { return completions == 1 && !workspace.busy(); }, "Cancel completed-recording Save As");
+    require(last == ui::OutputResult::Cancelled && read(saved.path) == original && archive->list().entries.size() == 1,
+        "Cancelled Save As retains the already completed archive byte for byte without duplicating it");
+    settle();
+    require(workspace.outputArchived(&owner, &parent, 11, ui::OutputIntent::SaveAs, entry, done),
+        "A subsequent output can export the same completed file");
+    waitFor([&] { return parent.findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog")); }, "Open completed-file export chooser");
+    dialog = parent.findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog"));
+    const auto exported = root + QStringLiteral("/completed-recording-export.png");
+    dialog->setDirectory(root);
+    // Archive validation is asynchronous, so this chooser is already visible
+    // with its filename editor focused. Drive its real text input; selectFile
+    // does not replace an actively edited selection in this state.
+    auto* filename = dialog->findChild<QLineEdit*>(QStringLiteral("fileNameEdit"));
+    require(filename, "The real Qt destination chooser exposes its filename input");
+    filename->setText(QFileInfo(exported).fileName());
+    require(dialog->selectedFiles() == QStringList{exported}, "The actual completed-file chooser selected the requested destination");
+    static_cast<QDialog*>(dialog)->accept();
+    waitFor([&] { return completions == 2 && !workspace.busy(); }, "Export a completed archive through the real service");
+    require(last == ui::OutputResult::Succeeded && read(exported) == original &&
+        read(saved.path) == original && archive->list().entries.size() == 1,
+        "Output copies the selected complete archive and never archives it a second time");
+    auto unmanaged = entry; unmanaged.path = exported;
+    require(workspace.outputArchived(&owner, &parent, 12, ui::OutputIntent::Archive, unmanaged, done),
+        "Admission is asynchronous for paths requiring real filesystem validation");
+    waitFor([&] { return completions == 3 && !workspace.busy(); }, "Refuse an unmanaged completed-looking path");
+    require(last == ui::OutputResult::Failed && read(exported) == original && archive->list().entries.size() == 1,
+        "A caller cannot authorize arbitrary unmanaged paths as recording archives");
+    const auto retained = saved.path + QStringLiteral(".held");
+    require(QFile::rename(saved.path, retained) && pixels.save(saved.path, "PNG"),
+        "Replace the path with a different actual file while retaining original media");
+    require(workspace.outputArchived(&owner, &parent, 13, ui::OutputIntent::Archive, entry, done),
+        "Validate the original recording identity asynchronously");
+    waitFor([&] { return completions == 4 && !workspace.busy(); }, "Refuse a replaced recording archive object");
+    require(last == ui::OutputResult::Failed && read(retained) == original,
+        "A newly listed replacement cannot inherit the completed recording's output authorization");
+    workspace.shutdown();
+    std::cout << "PASS completed-media Save As reuse, cancellation and managed-file boundaries\n";
+}
 }
 
 int main(int argc, char** argv)
@@ -327,6 +394,7 @@ int main(int argc, char** argv)
         worker([&] { exportAndCache(temporary.path()); return true; });
         workspaceJourneys(temporary.path());
         directImageOutput(temporary.path());
+        completedRecordingOutput(temporary.path());
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

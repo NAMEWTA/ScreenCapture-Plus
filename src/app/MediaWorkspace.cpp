@@ -78,7 +78,7 @@ struct MediaWorkspace::State {
     QThreadPool pool;
     QPointer<ui::HistoryWindow> history;
     std::vector<QPointer<ui::EditorWindow>> editors;
-    bool stopping{}, sendAvailable{}, refreshNeeded{};
+    bool stopping{}, shutdownReported{}, sendAvailable{}, refreshNeeded{};
     struct Job {
         // Identity only; never dereferenced. QPointer is cleared before the
         // destroyed signal, which must still cancel this view's pending work.
@@ -119,6 +119,7 @@ struct MediaWorkspace::State {
         bool cancelled{};
         ImageOutputCompletion completed;
         QMetaObject::Connection originDestroyed;
+        std::optional<Media::Entry> archivedEntry;
     };
     std::vector<std::shared_ptr<OutputTarget>> outputs;
     std::uint64_t outputBytes{};
@@ -143,6 +144,12 @@ struct MediaWorkspace::State {
     { return translator ? translator(key) : key.toString(); }
     bool busy() const
     { return !jobs.empty() || !clipboardWaits.empty() || !revealWaits.empty() || !dialogs.empty() || !outputs.empty() || bool(removal); }
+    void finishShutdown()
+    {
+        if (!stopping || shutdownReported || busy()) return;
+        shutdownReported = true;
+        Q_EMIT owner->shutdownFinished();
+    }
     void notifyBusy()
     {
         // Admission cannot call arbitrary listeners before its state is fully
@@ -172,7 +179,7 @@ struct MediaWorkspace::State {
                 if (!alive) return;
                 const auto found = std::find(jobs.begin(), jobs.end(), job);
                 if (found != jobs.end()) { queuedBytes -= job->bytes; jobs.erase(found); }
-                if (stopping) return;
+                if (stopping) { finishShutdown(); return; }
                 // Cancellation also covers work which has returned while its
                 // GUI completion is still queued. Never start a new stage or
                 // show a confirmation for that cancelled operation.
@@ -241,7 +248,7 @@ struct MediaWorkspace::State {
         auto done = std::move(pending->completed);
         const QPointer<MediaWorkspace> alive(owner);
         if (!stopping) done(pending->cancelled ? QDialog::Rejected : status);
-        if (alive) notifyBusy();
+        if (alive) { notifyBusy(); finishShutdown(); }
     }
     void showDialog(QDialog* dialog, QObject* origin, quint64 token, std::function<void(int)> done)
     {
@@ -327,7 +334,7 @@ struct MediaWorkspace::State {
         std::optional<Media::ExportDestination> destination = {})
     {
         if (stopping || !target->origin || target->cancelled) { finishOutput(target, ui::OutputResult::Cancelled); return; }
-        if (image.isNull()) { finishOutput(target, ui::OutputResult::Failed); return; }
+        if (image.isNull() && !target->archivedEntry) { finishOutput(target, ui::OutputResult::Failed); return; }
         if (intent == ui::OutputIntent::Pin) {
             const QPointer<MediaWorkspace> alive(owner);
             const auto* opened = owner->openEditor(image, true);
@@ -335,14 +342,19 @@ struct MediaWorkspace::State {
             return;
         }
         if (intent == ui::OutputIntent::SaveAs && !destination) {
-            auto* dialog = new QFileDialog(target->parent, text(u"tool.save"), archive->directory(), QStringLiteral("PNG (*.png)"));
+            const auto extension = target->archivedEntry ?
+                target->archivedEntry->kind == Media::Kind::Mp4 ? QStringLiteral("mp4") :
+                target->archivedEntry->kind == Media::Kind::Gif ? QStringLiteral("gif") : QStringLiteral("png") : QStringLiteral("png");
+            auto* dialog = new QFileDialog(target->parent, text(u"tool.save"), archive->directory(),
+                extension.toUpper() + QStringLiteral(" (*.") + extension + QChar(u')'));
             dialog->setObjectName(QStringLiteral("mediaSaveAsDialog"));
             dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->setAcceptMode(QFileDialog::AcceptSave);
-            dialog->setFileMode(QFileDialog::AnyFile); dialog->setDefaultSuffix(QStringLiteral("png"));
+            dialog->setFileMode(QFileDialog::AnyFile); dialog->setDefaultSuffix(extension);
             // The worker first records the exact existing file. Only our one
             // subsequent question can authorize replacement of that snapshot.
             dialog->setOption(QFileDialog::DontConfirmOverwrite);
-            dialog->selectFile(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")) + QStringLiteral(".png"));
+            dialog->selectFile(target->archivedEntry ? target->archivedEntry->name :
+                QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")) + QChar(u'.') + extension);
             showDialog(dialog, target->identity, target->token, [this, dialog, target, intent, image](int status) {
                 if (!target->origin || target->cancelled) { finishOutput(target, ui::OutputResult::Cancelled); return; }
                 if (status != QDialog::Accepted) { finishOutput(target, ui::OutputResult::Cancelled); return; }
@@ -355,24 +367,33 @@ struct MediaWorkspace::State {
         }
         const auto bytes = image.sizeInBytes();
         const auto archiveService = archive;
+        const auto archivedEntry = target->archivedEntry;
         const bool accepted = bytes >= 0 && submit(target->identity, target->token, static_cast<std::uint64_t>(bytes),
-            [archiveService, image = std::move(image), intent, destination](std::stop_token stop) {
-                WorkResult result; result.archived = archiveService->archiveImage(image, stop);
-                if (!result.archived.durable()) {
-                    result.failure = result.archived.failure;
-                    if (!result.failure) result.failure = {Media::Error::Commit, QStringLiteral("The archive did not confirm durable completion")};
-                    return result;
+            [archiveService, image = std::move(image), intent, destination, archivedEntry](std::stop_token stop) {
+                WorkResult result;
+                if (archivedEntry) {
+                    const auto checked = archiveService->validatedLease(*archivedEntry, stop);
+                    if (checked.failure) { result.failure = checked.failure; return result; }
+                    result.lease = checked.lease;
+                } else {
+                    result.archived = archiveService->archiveImage(image, stop);
+                    if (!result.archived.durable()) {
+                        result.failure = result.archived.failure;
+                        if (!result.failure) result.failure = {Media::Error::Commit, QStringLiteral("The archive did not confirm durable completion")};
+                        return result;
+                    }
                 }
                 try {
                 if (intent == ui::OutputIntent::Clipboard) {
-                    auto prepared = Desktop::prepareImage(image, {}, stop);
+                    auto prepared = archivedEntry ? Desktop::prepareFile(std::move(result.lease), {}, stop) :
+                        Desktop::prepareImage(image, {}, stop);
                     if (prepared.failure) {
                         result.failure = {prepared.failure.code == Desktop::Error::Cancelled ? Media::Error::Cancelled : Media::Error::Write,
                             prepared.failure.detail}; return result;
                     }
                     result.clipboard = std::move(prepared.content);
                 } else if (intent == ui::OutputIntent::SaveAs) {
-                    const auto entry = completedEntry(result.archived);
+                    const auto entry = archivedEntry ? *archivedEntry : completedEntry(result.archived);
                     result.exported = Media::exportArchiveFile(*archiveService, entry, *destination, stop);
                     result.failure = result.exported.failure;
                 }
@@ -541,13 +562,13 @@ MediaWorkspace::MediaWorkspace(std::shared_ptr<Media::MediaArchiveService> archi
         auto found = state_->clipboardWaits.find(token); if (found == state_->clipboardWaits.end()) return;
         auto callback = std::move(found->second.completed); state_->clipboardWaits.erase(found);
         const QPointer<MediaWorkspace> alive(this); if (!state_->stopping) callback(result);
-        if (alive) Q_EMIT busyChanged(busy());
+        if (alive) { Q_EMIT busyChanged(busy()); if (alive) state_->finishShutdown(); }
     });
     connect(&revealer, &Desktop::FileRevealer::finished, this, [this](quint64 token, const auto& result) {
         auto found = state_->revealWaits.find(token); if (found == state_->revealWaits.end()) return;
         auto callback = std::move(found->second.completed); state_->revealWaits.erase(found);
         const QPointer<MediaWorkspace> alive(this); if (!state_->stopping) callback(result);
-        if (alive) Q_EMIT busyChanged(busy());
+        if (alive) { Q_EMIT busyChanged(busy()); if (alive) state_->finishShutdown(); }
     });
 }
 MediaWorkspace::~MediaWorkspace()
@@ -587,6 +608,7 @@ void MediaWorkspace::shutdown()
     for (const auto& output : state_->outputs) QObject::disconnect(output->originDestroyed);
     state_->outputs.clear(); state_->outputBytes = 0;
     state_->removal.reset(); state_->capabilities();
+    QTimer::singleShot(0, this, [this] { state_->finishShutdown(); });
 }
 bool MediaWorkspace::outputImage(QObject* origin, QWidget* dialogParent, quint64 token,
     ui::OutputIntent intent, QImage image, ImageOutputCompletion completion)
@@ -605,6 +627,43 @@ bool MediaWorkspace::outputImage(QObject* origin, QWidget* dialogParent, quint64
     target->originDestroyed = connect(origin, &QObject::destroyed, this, [this, origin, token] { state_->cancel(origin, token); });
     state_->outputs.push_back(target); state_->outputBytes += target->bytes;
     state_->output(target, intent, std::move(image));
+    return true;
+}
+bool MediaWorkspace::outputArchived(QObject* origin, QWidget* dialogParent, quint64 token,
+    ui::OutputIntent intent, const Media::Entry& archivedEntry, ImageOutputCompletion completion)
+{
+    if (state_->stopping || !state_->archive || !origin || origin->thread() != thread() ||
+        (dialogParent && dialogParent->thread() != thread()) || !token || !completion || archivedEntry.path.isEmpty() ||
+        (intent != ui::OutputIntent::Clipboard && intent != ui::OutputIntent::SaveAs && intent != ui::OutputIntent::Archive) ||
+        state_->outputs.size() >= 8 || std::any_of(state_->outputs.begin(), state_->outputs.end(), [&](const auto& existing) {
+            return existing->identity == origin && existing->token == token;
+        })) return false;
+    auto target = std::make_shared<State::OutputTarget>();
+    target->identity = origin; target->origin = origin; target->parent = dialogParent;
+    target->token = token; target->completed = std::move(completion);
+    target->originDestroyed = connect(origin, &QObject::destroyed, this, [this, origin, token] { state_->cancel(origin, token); });
+    state_->outputs.push_back(target);
+    const auto archive = state_->archive;
+    if (!state_->submit(origin, token, 0, [archive, archivedEntry](std::stop_token stop) {
+        WorkResult result;
+        if (stop.stop_requested()) {
+            result.failure = {Media::Error::Cancelled, QStringLiteral("The completed media output was cancelled")};
+            return result;
+        }
+        // Preserve the recording worker's post-publication identity. Relisting
+        // by path here would accidentally authorize a replacement object.
+        auto lease = archive->lease(archivedEntry); result.failure = lease.failure; result.lease = std::move(lease.lease);
+        return result;
+    }, [this, target, intent](WorkResult result) {
+        if (!target->origin || target->cancelled) { state_->finishOutput(target, ui::OutputResult::Cancelled); return; }
+        if (result.failure || !result.lease) {
+            state_->finishOutput(target, ui::OutputResult::Failed, result.failure.detail); return;
+        }
+        target->archivedEntry = result.lease->entry();
+        state_->output(target, intent, {});
+    })) {
+        state_->finishOutput(target, ui::OutputResult::Failed, budgetFailure().detail);
+    }
     return true;
 }
 void MediaWorkspace::cancelOutput(QObject* origin, quint64 token)

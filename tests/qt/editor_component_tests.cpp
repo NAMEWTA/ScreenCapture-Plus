@@ -224,6 +224,28 @@ void historyAndCaptureLoss()
     std::cout << "PASS nested hit testing, capture cancellation, resize preservation and both ID policies\n";
 }
 
+void windowDeactivation()
+{
+    UIQ::EditorWindow window; load(window, pixels());
+    auto* canvas = window.canvas(); canvas->setTool(UIQ::EditorTool::Rectangle);
+    press(*canvas, {70, 70}); move(*canvas, {180, 160});
+    require(canvas->pointerGestureActive(), "real editor window owns an unfinished gesture");
+    QEvent deactivate(QEvent::WindowDeactivate); QApplication::sendEvent(&window, &deactivate);
+    require(!canvas->pointerGestureActive() && canvas->document().activeCount() == 0,
+        "top-level WindowDeactivate ends and discards an unfinished gesture without relying on child FocusOut");
+    canvas->setTool(UIQ::EditorTool::Annotation);
+    drag(*canvas, {70, 70}, {240, 190});
+    const auto before = canvas->document().findAnnotation(1)->annotationModel()->bounds();
+    press(*canvas, {150, 70}); move(*canvas, {150, 90});
+    const auto moved = canvas->document().findAnnotation(1)->annotationModel()->bounds();
+    require(moved.top > before.top && canvas->pointerGestureActive(), "existing editor geometry is actively resizing");
+    QApplication::sendEvent(&window, &deactivate);
+    const auto kept = canvas->document().findAnnotation(1)->annotationModel()->bounds();
+    require(!canvas->pointerGestureActive() && kept.top == moved.top && kept.bottom == moved.bottom,
+        "top-level deactivation keeps the existing geometry's last valid result");
+    std::cout << "PASS top-level deactivation cancels unfinished drawing and retains existing geometry\n";
+}
+
 void textFocusAndToolbar(const QString& directory)
 {
     UIQ::EditorWindow window; load(window, pixels({520, 250}));
@@ -481,7 +503,7 @@ int main(int argc, char** argv)
         const QFontInfo info(app.font());
         std::cout << "FONT " << info.family().toStdString() << " / " << info.pixelSize() << " px; QPA "
                   << QGuiApplication::platformName().toStdString() << '\n';
-        sourceOwnershipAndScale(); nineToolRendering(directory); historyAndCaptureLoss();
+        sourceOwnershipAndScale(); nineToolRendering(directory); historyAndCaptureLoss(); windowDeactivation();
         textFocusAndToolbar(directory); notesAndOutput(directory); zoomAndPureImage(); selectionChromeAndWheel(); noteCaptionLayout(directory);
         std::cout << "PASS real Qt editor component contracts (physical multi-monitor/IME sessions remain separate acceptance)\n";
         return 0;

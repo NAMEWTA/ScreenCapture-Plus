@@ -1,0 +1,27 @@
+{
+  "qtVersion": "6.12.1",
+  "qtCommit": "5af1a37e31a869cd6eb8a73d82e2c71a450e6634",
+  "files": [
+    {
+      "path": "src/plugins/platforms/wayland/qwaylandwindow_p.h",
+      "sha": "9ac3f4cefcb776eeee98243dfc3bee39c38c028b",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylandwindow_p.h",
+      "use": "source-reviewed private activation setter; no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "path": "src/plugins/platforms/wayland/qwaylandwindow.cpp",
+      "sha": "4279d9c27f7dcfda49450ace362dbd28f86ae6d9",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylandwindow.cpp",
+      "use": "source-reviewed live surface-role requirement and activation dispatch; no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "path": "src/plugins/platforms/wayland/plugins/shellintegration/xdg-shell/qwaylandxdgshell.cpp",
+      "sha": "6de7eb747c96529ebf50ec5cda25380d7addc39b",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/plugins/shellintegration/xdg-shell/qwaylandxdgshell.cpp",
+      "use": "source-reviewed existing-token consumption, clearing and registry support; no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    }
+  ]
+}

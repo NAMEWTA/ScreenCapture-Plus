@@ -14,7 +14,7 @@
       "patchedSha256": "c0578524b6d2f7ddd5fca355dad593d6c8f2a0861d9b9c3f395c980b97124ef1"
     }
   ],
-  "use": "Directly compile the upstream API example for P00 software-codec validation; not the product recording implementation.",
+  "use": "Directly compile the upstream API example for P00 software-codec validation. Its stream setup, encoder send/receive and muxing API flow is also adapted by src/recording/SoftwareMp4Recording.cpp, with production frame/audio sources, checked owned-descriptor output, real monotonic timestamps, cancellation and first-error-preserving teardown. The example's generated media is never a production capture source.",
   "reference": {
     "file": "doc/examples/demux_decode.c",
     "blob": "5c38742e7f76555923f5433f3cff93270d1cc747",

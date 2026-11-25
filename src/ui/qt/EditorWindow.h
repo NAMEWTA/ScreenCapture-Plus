@@ -16,6 +16,9 @@ public:
 
     EditorCanvas* canvas() const noexcept;
     EditorFailure loadImage(const QImage& image);
+    // One initial placement, before editing. Fits to this monitor's work area
+    // and clamps only this first position; subsequent native moves remain free.
+    bool applyInitialPlacement(QScreen* screen, QPoint imageTopLeft);
     void setTranslator(EditorTranslator translator);
     void refreshLanguage();
     void setOutputEnabled(OutputIntent intent, bool enabled);
@@ -38,6 +41,7 @@ signals:
     void operationFailed(EditorFailure failure);
 
 protected:
+    bool event(QEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;

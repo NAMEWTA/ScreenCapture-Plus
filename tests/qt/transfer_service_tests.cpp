@@ -3,6 +3,10 @@
 #include "services/media/GifInspection.h"
 #include "services/files/QtPaths.h"
 #include "gifski.h"
+#ifdef HUHUCAPTURE_TRANSFER_ALL_MEDIA
+#include "services/media/VideoInspection.h"
+#include <QCryptographicHash>
+#endif
 
 #include <QCoreApplication>
 #include <QColor>
@@ -96,7 +100,10 @@ QByteArray identity(const char* alias)
 
 media::Inspection inspectOther(const QString& path, media::Kind kind, std::stop_token stop)
 {
-    require(kind == media::Kind::Gif, "This fixture requests only the actual supplied GIF inspector");
+#ifdef HUHUCAPTURE_TRANSFER_ALL_MEDIA
+    if (kind == media::Kind::Mp4) return media::inspectVideo(path, {}, stop);
+#endif
+    require(kind == media::Kind::Gif, "Only a registered complete media decoder may inspect this transfer");
     return media::inspectGif(path, {}, stop);
 }
 
@@ -153,6 +160,34 @@ media::Entry createGif(const std::shared_ptr<media::MediaArchiveService>& archiv
     require(result.durable(), "Full GIF decoder must authorize source archival");
     return entryFor(archive, result.path);
 }
+
+
+#ifdef HUHUCAPTURE_TRANSFER_ALL_MEDIA
+media::Entry importMp4(const std::shared_ptr<media::MediaArchiveService>& archive, const QString& fixtureRoot)
+{
+    const auto path = QDir(fixtureRoot).filePath(QStringLiteral("valid.mp4"));
+    const auto result = onWorker([=] {
+        const auto manifest = QJsonDocument::fromJson(readFile(QDir(fixtureRoot).filePath(QStringLiteral("manifest.json")))).object();
+        require(manifest.value(QStringLiteral("schema")).toInt() == 1 &&
+            manifest.value(QStringLiteral("ffmpegCommit")).toString() == QStringLiteral("946fcce07b6dcd0331c8cc609192aeff5e1924f8"),
+            "Reuse the pinned real H.264/AAC encoder fixture and its provenance");
+        const auto cases = manifest.value(QStringLiteral("cases")).toArray();
+        const auto selected = std::find_if(cases.cbegin(), cases.cend(), [](const QJsonValue& value) {
+            return value.toObject().value(QStringLiteral("file")).toString() == QStringLiteral("valid.mp4");
+        });
+        require(selected != cases.cend() && selected->toObject().value(QStringLiteral("accept")).toBool(),
+            "The existing real video fixture must declare complete valid media");
+        QFile input(path); QCryptographicHash hash(QCryptographicHash::Sha256);
+        require(input.open(QIODevice::ReadOnly) && hash.addData(&input) &&
+            QString::fromLatin1(hash.result().toHex()) == selected->toObject().value(QStringLiteral("sha256")).toString(),
+            "Transfer only the exact real MP4 bytes declared by the shared encoder fixture");
+        input.close();
+        return archive->importFile(path, media::Kind::Mp4);
+    });
+    require(result.durable() && result.media.frames == 251, "The full MP4 decoder authorizes all original video frames before archival");
+    return entryFor(archive, result.path);
+}
+#endif
 
 struct Source {
     std::shared_ptr<const transfer::PreparedMedia> prepared;
@@ -299,7 +334,7 @@ void successfulTransfer(transfer::TransferService& sender, Events& senderEvents,
         received.receivedFiles.front().status == HUHU_OK, "Receive terminal contains the exact successful local publication");
     const auto& saved = received.receivedFiles.front();
     require(saved.attempt != 0 && !saved.path.isEmpty(), "The worker's real attempt and path survive the actor handoff");
-    require(readFile(saved.path) == readFile(entry.path), "Transfer preserves original PNG/GIF bytes without re-encoding");
+    require(readFile(saved.path) == readFile(entry.path), "Transfer preserves original media bytes without re-encoding");
     require(entryFor(destination, saved.path).kind == entry.kind, "Only the strictly decoded committed media enters history");
     require(source.historyLifetime.expired(), "Release the history lease only after the real native SEND_END");
     const auto storage = receiving.sink->statistics();
@@ -328,7 +363,7 @@ struct DecodeGate {
     }
 };
 
-void run()
+void run([[maybe_unused]] const QString& videoFixtureRoot)
 {
     QTemporaryDir temporary;
     require(temporary.isValid(), "Create owned isolated filesystem for service integration");
@@ -336,6 +371,9 @@ void run()
     const auto destination = archive(QDir(temporary.path()).filePath(QString::fromUtf8("接收历史")));
     const auto png = createPng(sourceArchive, qRgb(20, 100, 230));
     const auto gif = createGif(sourceArchive, QDir(temporary.path()).filePath(QString::fromUtf8("完整动画.gif")));
+#ifdef HUHUCAPTURE_TRANSFER_ALL_MEDIA
+    const auto mp4 = importMp4(sourceArchive, videoFixtureRoot);
+#endif
     const auto existing = createPng(destination, qRgb(230, 100, 20));
     const auto originalExisting = readFile(existing.path);
     const auto senderConfig = identity("huhucapture service sender");
@@ -366,6 +404,9 @@ void run()
         receiving.info.value(QStringLiteral("fingerprint")), "Manual discovery verifies the actual peer TLS identity");
     successfulTransfer(sender, senderEvents, receiver, receiverEvents, receiving, sourceArchive, png, destination);
     successfulTransfer(sender, senderEvents, receiver, receiverEvents, receiving, sourceArchive, gif, destination);
+#ifdef HUHUCAPTURE_TRANSFER_ALL_MEDIA
+    successfulTransfer(sender, senderEvents, receiver, receiverEvents, receiving, sourceArchive, mp4, destination);
+#endif
     require(readFile(existing.path) == originalExisting, "Import never replaces an existing archive entry");
 
     const auto receiveBeforeMismatch = receiverEvents.values.size();
@@ -522,8 +563,14 @@ int main(int argc, char** argv)
 {
     QCoreApplication application(argc, argv);
     try {
-        run();
+#ifdef HUHUCAPTURE_TRANSFER_ALL_MEDIA
+        require(argc == 2, "Supply the existing real MP4 fixture directory for the all-media integration");
+        run(QString::fromLocal8Bit(argv[1]));
+        std::cout << "production TransferService/ReceiveArchiveSink: real TLS, PNG/GIF/MP4 full-decoder round trips, pinned identity, refusal, leases, bounded events and joined cancellation passed\n";
+#else
+        run({});
         std::cout << "production TransferService/ReceiveArchiveSink: real TLS, PNG/GIF, pinned identity, refusal, leases, bounded events and joined cancellation passed\n";
+#endif
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "transfer service integration failed: " << error.what() << '\n';

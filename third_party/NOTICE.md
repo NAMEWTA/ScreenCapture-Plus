@@ -65,6 +65,13 @@ licenses apply independently of the root application license.
 | x265 4.1, validation fixtures only | Official VideoLAN archive with the recorded SHA-512 and reviewed source blobs in [hevc-fixtures/upstream.json](hevc-fixtures/upstream.json) | GPL-2.0-or-later; [original COPYING](hevc-fixtures/COPYING.x265). Two independent upstream CLI builds produce real Main / Main10 inputs; x265 is not linked into or distributed with the product. |
 | KWindowSystem 6.32.0 | `KDE/kwindowsystem` `870fed584663656db8b5e3d4ec1a7048b5eff25f` | LGPL-2.0-or-later, Kai Uwe Broulik; only the two asynchronous xdg-foreign export classes are adapted. [Exact source blobs and changes](kwayland-parent/upstream.md), [license](kwayland-parent/LICENSES/LGPL-2.0-or-later.txt). |
 | xdg-foreign unstable v2 protocol | QtBase `5af1a37e31a869cd6eb8a73d82e2c71a450e6634`, source blob `cc3271dca4d6211bf6d04c34c0ca973c52f9b552` | MIT, Red Hat Inc. 2015–2016; the complete notice is retained in the unmodified [protocol XML](wayland-protocols/xdg-foreign-unstable-v2.xml). |
+| QHotkey X11 passive-grab behavior | `Skycoder42/QHotkey` `4e3a244d87f1f7e741e1395f2ffe825f3a8ada45` | BSD-3-Clause, Felix Barz; [original license](qhotkey/LICENSE), [exact source and adaptation](qhotkey/upstream.md). Only checked X11 shortcut behavior is adapted; no separate QHotkey runtime is linked. |
+| PipeWire audio capture example | Same PipeWire 1.6.11 commit, `src/examples/audio-capture.c` | MIT, Wim Taymans; [original COPYING](pipewire-audio/COPYING) and [source/changes](pipewire-audio/upstream.json). Native stream negotiation and processing are adapted for the bounded audio source. |
+| Windows SDK sample IStream | `microsoft/Windows-classic-samples` `434f6002bdf9cf9829406c3ff2b33387982d6168` | MIT, Microsoft Corporation; [original license](windows-sdk-stream/LICENSE), [source and ownership changes](windows-sdk-stream/upstream.json). The adapter retains an already checked file object for Media Foundation output. |
+
+Wayland activation uses the matching Qt private API after checking the actual
+surface role; no implementation is copied. The pinned source review and version
+restriction are recorded in [window-activation/upstream.json](window-activation/upstream.json).
 
 The shared clipboard, recycle and file-reveal services reuse the existing native
 Windows implementation and public Qt/GIO APIs. Their exact audited source files,
@@ -84,8 +91,10 @@ an explicit CI gate.
 The software-codec probe also adapts the decode/drain API flow from FFmpeg's
 `doc/examples/demux_decode.c`, Copyright (c) 2012 Stefano Sabatini; the
 [full MIT notice](ffmpeg-examples/demux-decode-license.txt) and exact source blob
-are retained. The complete-file inspection and fixture remux flow additionally retain Stefano Sabatini's [remux notice](ffmpeg-examples/remux-license.txt) and [exact source records](ffmpeg-examples/video-inspection-upstream.json). These media service candidates are subject to the actual [malformed-file gates](../docs/video-inspection.md). This is dependency validation, not a production Linux recorder;
-see [scope and reproducible inputs](../docs/software-codecs.md).
+are retained. The complete-file inspection and fixture remux flow additionally retain Stefano Sabatini's [remux notice](ffmpeg-examples/remux-license.txt) and [exact source records](ffmpeg-examples/video-inspection-upstream.json). These media services remain subject to the actual [malformed-file gates](../docs/video-inspection.md).
+The unified application uses them for its Linux recorder; component checks do not establish
+real audio-device or long-duration recording acceptance. See [the application boundary](../docs/qt-application.md)
+and [reproducible inputs](../docs/software-codecs.md).
 
 LocalSend's application UI and Flutter/Dart runtime are not included. Unselected
 upstream Rust APIs remain in the audited source to keep the fork reviewable; the

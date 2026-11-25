@@ -30,7 +30,7 @@ jobs:
           root.mkdir(parents=True)
           specs = [
               dict(key='linuxdeploy', repository='linuxdeploy/linuxdeploy', tag='1-alpha-20251107-1', commit='cc7b86472c3caa3fd729b9dc502fd2aa78394257', assetId=313839329, name='linuxdeploy-x86_64.AppImage', size=19421688, sha256='c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d', licenseFile='LICENSE.txt'),
-              dict(key='linuxdeployPluginQt', repository='linuxdeploy/linuxdeploy-plugin-qt', tag='1-alpha-20250213-1', commit='ce5291e25979d7d6417551d787f308b88c1b8d76', assetId=228957072, name='linuxdeploy-plugin-qt-x86_64.AppImage', size=12317424, sha256=None, licenseFile='LICENSE.txt'),
+              dict(key='linuxdeployPluginQt', repository='linuxdeploy/linuxdeploy-plugin-qt', tag='1-alpha-20250213-1', commit='ce5291e25979d7d6417551d787f308b88c1b8d76', assetId=228957072, name='linuxdeploy-plugin-qt-x86_64.AppImage', size=12317424, sha256='15106be885c1c48a021198e7e1e9a48ce9d02a86dd0a1848f00bdbf3c1c92724', licenseFile='LICENSE.txt'),
               dict(key='appimagetool', repository='AppImage/appimagetool', tag='1.9.1', commit='8c8c91f762b412a19f4e8d2c4b35afb98f2d7c81', assetId=324406736, name='appimagetool-x86_64.AppImage', size=15092216, sha256='ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0', licenseFile='LICENSE'),
               dict(key='appimageRuntime', repository='AppImage/type2-runtime', tag='20251108', commit='dd6cebedcbddde9c82f89b011e8e1d40b6e43868', assetId=326011592, name='runtime-x86_64', size=944632, sha256='2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d', licenseFile='LICENSE'),
           ]
@@ -48,7 +48,7 @@ jobs:
                       if length > limit: raise RuntimeError('Download exceeds declared budget: ' + url)
                       digest.update(block); output.write(block)
               return {'name': destination.name, 'size': length, 'sha256': digest.hexdigest(), 'url': url}
-          manifest = {'schemaVersion': 1, 'scope': 'Build tools only; initial missing upstream digest is bootstrap evidence, not a release acceptance', 'tools': []}
+          manifest = {'schemaVersion': 1, 'scope': 'Pinned build tools only; byte verification is not a product release acceptance', 'tools': []}
           for spec in specs:
               folder = root / spec['key']; folder.mkdir()
               api = f"https://api.github.com/repos/{spec['repository']}/releases/tags/{spec['tag']}"
@@ -60,7 +60,7 @@ jobs:
               url = f"https://github.com/{spec['repository']}/releases/download/{spec['tag']}/{spec['name']}"
               if asset['name'] != spec['name'] or asset['size'] != spec['size'] or asset['browser_download_url'] != url:
                   raise RuntimeError('Release asset identity changed')
-              if spec['sha256'] and asset.get('digest') != 'sha256:' + spec['sha256']:
+              if asset.get('digest') and asset['digest'] != 'sha256:' + spec['sha256']:
                   raise RuntimeError('Official release digest differs from the reviewed pin')
               actual = fetch(url, folder/spec['name'], spec['size'])
               if actual['size'] != spec['size'] or (spec['sha256'] and actual['sha256'] != spec['sha256']):

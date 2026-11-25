@@ -33,6 +33,11 @@ public:
     // A rejected admission returns false without invoking completion.
     bool outputImage(QObject* origin, QWidget* dialogParent, quint64 token,
         UI::Qt::OutputIntent intent, QImage image, ImageOutputCompletion completion);
+    // Recording output already has a durable archive. Reuse the exact same
+    // destination/overwrite and clipboard receipts without creating a second
+    // archive or deleting the original when Save As is cancelled.
+    bool outputArchived(QObject* origin, QWidget* dialogParent, quint64 token,
+        UI::Qt::OutputIntent intent, const Media::Entry& archivedEntry, ImageOutputCompletion completion);
     void cancelOutput(QObject* origin, quint64 token);
     void notifyArchiveChanged();
     void revealArchivedFile(const QString& path);
@@ -45,6 +50,9 @@ Q_SIGNALS:
     void archiveChanged();
     void busyChanged(bool busy);
     void operationFailed(const QString& message);
+    // Every owned worker, dialog and desktop request has settled. Normal app
+    // exit waits for this instead of destroying a service with active jobs.
+    void shutdownFinished();
 
 private:
     struct State;

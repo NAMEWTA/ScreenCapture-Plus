@@ -31,6 +31,7 @@ public Q_SLOTS:
 Q_SIGNALS:
     void changeRequested(quint64 token, const SettingChange& change);
     void shortcutCaptureActive(bool active);
+    void captureRequested();
     void openArchiveRequested();
     void lanSettingsRequested();
     void openLinkRequested(const QUrl& url);

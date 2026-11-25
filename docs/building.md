@@ -2,7 +2,7 @@
 
 ## Qt 迁移验证入口
 
-当前正式 Windows 构建仍使用本页后续的 PowerShell / MSBuild 入口。根目录 CMake 用于 [Issue #5 的迁移验证](qt-migration.md)，还不生成最终 Qt 应用或安装包。CMake 要求 3.25 以上及 C++20 编译器，纯核心配置不需要 Qt：
+当前正式 Windows 构建仍使用本页后续的 PowerShell / MSBuild 入口。根目录 CMake 默认构建 [Issue #5 的迁移验证](qt-migration.md)；显式开启 `HUHUCAPTURE_BUILD_APP=ON` 可构建统一 Qt 应用。完整应用预设及服务边界见 [Qt 应用](qt-application.md)，实际安装树和开发包命令见 [打包说明](qt-packaging.md)。这些入口仍受 P12 发布验收约束。CMake 要求 3.25 以上及 C++20 编译器，纯核心配置不需要 Qt：
 
 ```sh
 cmake --preset core

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+prefix=/opt/huhucapture
+export PIPEWIRE_MODULE_DIR="$prefix/lib/pipewire-0.3"
+export SPA_PLUGIN_DIR="$prefix/lib/spa-0.2"
+export PIPEWIRE_CONFIG_DIR="$prefix/share/pipewire"
+exec "$prefix/bin/huhucapture" "$@"

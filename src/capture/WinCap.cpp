@@ -3,6 +3,7 @@
 #include "capture/WinCap.h"
 #include "editor/WinPin.h"
 #include "capture/CutMask.h"
+#include "capture/PixelSample.h"
 #include "app/App.h"
 #include "services/ImageExport.h"
 #include "services/MediaHistory.h"
@@ -343,16 +344,7 @@ void WinCap::copyCurrentStage()
 
 std::tuple<int, int, int, int> WinCap::getCMYK(const BYTE& r, const BYTE& g, const BYTE& b)
 {
-    double R = r / 255.0, G = g / 255.0, B = b / 255.0;
-    double K = 1.0 - (std::max)(R, (std::max)(G, B));
-    double C = (K == 1.0) ? 0.0 : (1.0 - R - K) / (1.0 - K);
-    double M = (K == 1.0) ? 0.0 : (1.0 - G - K) / (1.0 - K);
-    double Y = (K == 1.0) ? 0.0 : (1.0 - B - K) / (1.0 - K);
-    return std::make_tuple(static_cast<int>(std::round(C * 100)),
-        static_cast<int>(std::round(M * 100)),
-        static_cast<int>(std::round(Y * 100)),
-        static_cast<int>(std::round(K * 100))
-    );
+    return HuhuCapture::Capture::cmyk(r, g, b);
 }
 ComPtr<ID2D1Bitmap1> WinCap::getCutImg()
 {

@@ -47,7 +47,7 @@ jobs:
         working-directory: .
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk fontconfig
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk fontconfig pkg-config libxcb1-dev
       - name: Restore the exact upstream Rust toolchain
         run: |
           rustup toolchain install 1.97.1 --profile minimal

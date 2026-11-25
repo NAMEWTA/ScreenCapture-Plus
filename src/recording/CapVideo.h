@@ -1,10 +1,10 @@
 #pragma once
 #include <thread>
-#include <include/Ling.h>
+#include <memory>
+#include <string>
 
 // Encoder implementations are private translation units; window/tool headers only
 // need forward declarations for the session parameters.
-namespace VideoMp4 { struct DESKTOPCAPTUREPARAMS; }
 namespace VideoGif { struct GifParam; }
 
 class WinCap;
@@ -30,10 +30,12 @@ public:
 	// Ctrl+S / Ctrl+C 转给工具条上的"存文件" / "存剪切板"；没在录制时返回 false
 	bool onSaveKey(bool toClipboard);
 private:
+	struct Mp4Recording;
 	void stopWorker();
 	WinCap* win;
 	std::unique_ptr<ToolVideo> tool;
-	std::unique_ptr<VideoMp4::DESKTOPCAPTUREPARAMS> mp4Param;
+	std::shared_ptr<Mp4Recording> mp4Param;
 	std::unique_ptr<VideoGif::GifParam> gifParam;
 	std::jthread captureThread;
+	std::shared_ptr<int> lifetime{ std::make_shared<int>(0) };
 };

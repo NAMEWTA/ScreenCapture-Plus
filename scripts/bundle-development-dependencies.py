@@ -19,7 +19,7 @@ HOST_LIBRARIES = re.compile(r"^(ld-linux.*|lib(c|m|pthread|dl|rt|util|resolv|anl
 HOST_PACKAGES = {"libc6", "libc6-dev", "libc-dev-bin", "linux-libc-dev", "libstdc++6", "libgcc-s1"}
 MODULES = ("gio-2.0", "gio-unix-2.0", "gobject-2.0", "gthread-2.0", "glib-2.0",
            "wayland-client", "wayland-cursor", "wayland-egl", "xkbcommon", "gl", "egl",
-           "xcb", "xcb-keysyms", "xcb-randr", "xcb-shm", "xcb-xfixes", "xcb-xtest")
+           "xcb", "xcb-keysyms", "xcb-randr", "xcb-shm", "xcb-xfixes", "xcb-xtest", "openssl")
 
 
 def output(*arguments, env=None):
@@ -32,6 +32,22 @@ def digest(path):
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             checksum.update(block)
     return checksum.hexdigest()
+
+
+def soname_alias(path):
+    """Find the installed loader name of an actual shared ELF object."""
+    with path.open("rb") as stream:
+        if stream.read(4) != b"\x7fELF":
+            return None
+    names = re.findall(r"\(SONAME\).*?\[([^\]]+)\]", output("readelf", "--dynamic", str(path)))
+    if not names:
+        return None
+    if len(names) != 1 or Path(names[0]).name != names[0]:
+        raise RuntimeError(f"Invalid actual ELF SONAME: {path}")
+    alias = path.with_name(names[0])
+    if not alias.exists() or alias.resolve() != path.resolve():
+        raise RuntimeError(f"Installed ELF SONAME does not identify its actual bytes: {alias}")
+    return alias
 
 
 def require_empty(path):
@@ -286,6 +302,12 @@ def make_bundle(options):
             target.symlink_to(os.path.relpath(relocated, target.parent))
         else:
             shutil.copy2(normalized, target)
+            # A development .so link can point directly to .so.0.0.0. Retain
+            # the real loader's .so.0 alias even if no dependency in Qt itself
+            # imports this optional native module (for example XCB XTEST).
+            alias = soname_alias(normalized)
+            if alias is not None and alias != normalized:
+                copy_system(alias)
 
     for package in header_packages:
         files = package_files[package]

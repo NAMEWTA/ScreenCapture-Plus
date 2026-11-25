@@ -3,6 +3,7 @@
 #include "core/PixelBuffer.h"
 #include "platform/windows/AudioFormat.h"
 #include "platform/windows/ComApartment.h"
+#include "platform/windows/GdiCapture.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -637,6 +638,7 @@ public:
     int ConvertHDR = 2; // 0 no convert, 1 convert, 1 convert and go updown
     // 是否成功要到了"系统帮我转成 8 位"的桌面复制，见 Prepare
     bool SDRForced = false;
+    POINT desktopOrigin{};
     HRESULT CreateDirect3DDevice(IDXGIAdapter1* g)
     {
         HRESULT hr = S_OK;
@@ -771,8 +773,8 @@ public:
                         auto lCursorPosition = lCursorInfo.ptScreenPos;
                         DrawIconEx(
                             lHDC,
-                            lCursorPosition.x- iconInfo.xHotspot,
-                            lCursorPosition.y- iconInfo.yHotspot,
+                            lCursorPosition.x - desktopOrigin.x - iconInfo.xHotspot,
+                            lCursorPosition.y - desktopOrigin.y - iconInfo.yHotspot,
                             lCursorInfo.hCursor,
                             0,
                             0,
@@ -835,7 +837,7 @@ public:
         return 1;
     }
 
-    bool Prepare(UINT Output = 0)
+    bool Prepare(UINT Output = 0, const RECT* expectedDesktop = nullptr)
     {
     // Get DXGI device
         CComPtr<IDXGIDevice> lDxgiDevice;
@@ -866,6 +868,11 @@ public:
 
         DXGI_OUTPUT_DESC lOutputDesc;
         hr = lDxgiOutput->GetDesc(&lOutputDesc);
+        if (FAILED(hr)) return 0;
+        if (expectedDesktop && (!EqualRect(expectedDesktop, &lOutputDesc.DesktopCoordinates) ||
+            (lOutputDesc.Rotation != DXGI_MODE_ROTATION_IDENTITY &&
+             lOutputDesc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED))) return 0;
+        desktopOrigin = {lOutputDesc.DesktopCoordinates.left, lOutputDesc.DesktopCoordinates.top};
 
         // QI for Output 1
         CComPtr<IDXGIOutput1> lDxgiOutput1;
@@ -1523,33 +1530,52 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     }
 
     CAPTURE cap;
+    HuhuCapture::Platform::GdiCapture gdi;
     int wi = 0, he = 0;
     if (dp.HasVideo)
     {
-        if (FAILED(cap.CreateDirect3DDevice(dp.ad)))
-            return -1;
-        if (!cap.Prepare(dp.nOutput))
-            return -2;
-        // 桌面复制退回到 FP16 那条路时（Prepare 里要不到 BGRA8），只有 HEVC 收 10 位输入
-        if (cap.InHDR)
-            dp.VIDEO_ENCODING_FORMAT = MFVideoFormat_HEVC;
-        wi = cap.lOutputDuplDesc.ModeDesc.Width;
-        he = cap.lOutputDuplDesc.ModeDesc.Height;
-        if (dp.rx.right && dp.rx.bottom)
-        {
-            wi = dp.rx.right - dp.rx.left;
-            he = dp.rx.bottom - dp.rx.top;
+        if (dp.UseGdiCapture) {
+            const auto width = std::int64_t{dp.GdiRegion.right} - dp.GdiRegion.left;
+            const auto height = std::int64_t{dp.GdiRegion.bottom} - dp.GdiRegion.top;
+            if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return -17;
+            wi = static_cast<int>(width); he = static_cast<int>(height);
+        } else {
+            if (FAILED(cap.CreateDirect3DDevice(dp.ad)))
+                return -1;
+            if (!cap.Prepare(dp.nOutput, dp.VerifyDesktop ? &dp.ExpectedDesktop : nullptr))
+                return -2;
+            // 桌面复制退回到 FP16 那条路时（Prepare 里要不到 BGRA8），只有 HEVC 收 10 位输入
+            if (cap.InHDR)
+                dp.VIDEO_ENCODING_FORMAT = MFVideoFormat_HEVC;
+            wi = cap.lOutputDuplDesc.ModeDesc.Width;
+            he = cap.lOutputDuplDesc.ModeDesc.Height;
+            if (dp.rx.right && dp.rx.bottom)
+            {
+                wi = dp.rx.right - dp.rx.left;
+                he = dp.rx.bottom - dp.rx.top;
+            }
         }
+        const auto layout = HuhuCapture::Core::pixelLayout(wi, he,
+            cap.InHDR == DXGI_FORMAT_UNKNOWN ? 4 : 16);
+        if (!layout || wi > 16384 || he > 16384 || layout->bytes > dp.MaximumFrameBytes ||
+            layout->bytes > (std::numeric_limits<DWORD>::max)()) return -17;
+        if (dp.UseGdiCapture && !gdi.capture(dp.GdiRegion.left, dp.GdiRegion.top, wi, he, dp.Cursor))
+            return -2;
     }
 
     CComPtr<IMFAttributes> attrs;
-    MFCreateAttributes(&attrs, 0);
+    hr = MFCreateAttributes(&attrs, 0);
+    if (FAILED(hr)) return -3;
     attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, true);
 
     VectorStreamX2 bs;
     bs.func = dp.Streamer;
     CComPtr<IMFSinkWriter> pSinkWriter;
-    if (dp.f.empty())
+    if (dp.OutputStream) {
+        hr = attrs->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_MPEG4);
+        if (SUCCEEDED(hr)) hr = MFCreateSinkWriterFromURL(nullptr, dp.OutputStream, attrs, &pSinkWriter);
+    }
+    else if (dp.f.empty())
     {
         if (dp.Framer)
         {
@@ -1969,6 +1995,25 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     v.resize(dp.NCH);
     mixv.resize(dp.NCH);
 
+    const auto recordingStarted = HuhuCapture::Core::MediaClock::now();
+    const auto stopAtDeadline = [&] {
+        if (dp.MustEnd) return true;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            HuhuCapture::Core::MediaClock::now() - recordingStarted).count();
+        if (dp.EndMS && static_cast<unsigned long long>(elapsed) >= dp.EndMS) {
+            dp.DurationLimitReached = true;
+            return true;
+        }
+        if (dp.HasVideo && !dp.Framer && dp.FirstFrameTimeoutMS && dp.result.framesWritten == 0 &&
+            static_cast<unsigned long long>(elapsed) >= dp.FirstFrameTimeoutMS) {
+            hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+            return true;
+        }
+        return false;
+    };
+    if (!dp.MustEnd && SUCCEEDED(firstAudioError.load()) && dp.Prepared)
+        dp.Prepared(dp.VIDEO_ENCODING_FORMAT);
+
 #ifdef _DEBUG
     wchar_t ydebug[300] = { 0};
 #endif
@@ -1977,9 +2022,10 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
         failureStage = RecordingStage::Capture;
         const auto audioError = firstAudioError.load();
         if (FAILED(audioError)) { hr = audioError; break; }
+        if (stopAtDeadline()) break;
         if (!dp.HasAudio && !dp.Framer)
             Sleep((DWORD)msloop);
-        if (dp.MustEnd)
+        if (stopAtDeadline())
             break;
 
         unsigned long long ThisDurA = 0;
@@ -1998,10 +2044,10 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 do {
                     waitResult = WaitForMultipleObjects(static_cast<DWORD>(AudioEvents.size()),
                                                         AudioEvents.data(), TRUE, 100);
-                } while (waitResult == WAIT_TIMEOUT && !dp.MustEnd && SUCCEEDED(firstAudioError.load()));
+                } while (waitResult == WAIT_TIMEOUT && !stopAtDeadline() && SUCCEEDED(firstAudioError.load()));
                 const auto waitAudioError = firstAudioError.load();
                 if (FAILED(waitAudioError)) { hr = waitAudioError; break; }
-                if (dp.MustEnd) break;
+                if (stopAtDeadline()) break;
                 if (waitResult == WAIT_FAILED) {
                     hr = HRESULT_FROM_WIN32(GetLastError());
                     if (SUCCEEDED(hr)) hr = E_FAIL;
@@ -2187,6 +2233,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
         HRESULT hrf = S_FALSE;
         if (dp.HasVideo)
         {
+            if (!dp.UseGdiCapture) {
             hr = cap.lDeskDupl->AcquireNextFrame(
                 0,
                 &lFrameInfo,
@@ -2199,7 +2246,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 bool C = false;
                 for (int i = 0; i < 10 && !dp.MustEnd; i++)
                 {
-                    if (cap.Prepare(dp.nOutput))
+                    if (cap.Prepare(dp.nOutput, dp.VerifyDesktop ? &dp.ExpectedDesktop : nullptr))
                     {
                         C = true;
                         break;
@@ -2212,6 +2259,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             }
             if (FAILED(hr))
                 break;
+            }
 
 
 
@@ -2224,11 +2272,15 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 }
             } frame{ lDesktopResource ? cap.lDeskDupl.p : nullptr };
             // A timeout before the first captured frame supplies no pixels.
-            if (!lDesktopResource && cap.buf.empty()) continue;
+            if (!dp.UseGdiCapture && !lDesktopResource && cap.buf.empty()) continue;
 
             // take a time stamp here
             // Get the current time point
             if (lDesktopResource && !cap.Get(lDesktopResource, dp.Cursor, dp.rx.right && dp.rx.bottom ? &dp.rx : 0)) {
+                hr = E_FAIL;
+                break;
+            }
+            if (dp.UseGdiCapture && !gdi.capture(dp.GdiRegion.left, dp.GdiRegion.top, wi, he, dp.Cursor)) {
                 hr = E_FAIL;
                 break;
             }
@@ -2310,12 +2362,23 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             {
                 memcpy(pData, hdrout.data(), VideoBufferSize);
             }
+            else if (dp.UseGdiCapture)
+            {
+                // Existing GDI pixels are top-down; the retained RGB32 MF input
+                // is bottom-up. Convert row order directly into its one buffer.
+                const auto stride = static_cast<std::size_t>(wi) * 4;
+                const auto pixels = gdi.pixels();
+                for (int row = 0; row < he; ++row)
+                    memcpy(pData + static_cast<std::size_t>(he - row - 1) * stride,
+                           pixels.data() + static_cast<std::size_t>(row) * stride, stride);
+            }
             else
             {
                 memcpy(pData, cap.buf.data(), std::min(cap.buf.size(), (size_t)VideoBufferSize));
             }
             if (dp.Framer)
-                hrf = dp.Framer(cap.InHDR,wi,he,pData, std::min(cap.buf.size(), (size_t)VideoBufferSize), dp.cb);
+                hrf = dp.Framer(cap.InHDR,wi,he,pData, dp.UseGdiCapture ? VideoBufferSize :
+                    std::min(cap.buf.size(), (size_t)VideoBufferSize), dp.cb);
 
             hr = pVideoBuffer->Unlock();
             if (FAILED(hr)) break;
@@ -2431,8 +2494,10 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
         // rtv to ms
         auto rvx = rtV / 10000;
-        if (dp.EndMS > 0 && rvx >= dp.EndMS)
+        if (dp.EndMS > 0 && rvx >= dp.EndMS) {
+            dp.DurationLimitReached = true;
             break;
+        }
 
         if (dp.Framer && hrf == S_OK)
             break;
@@ -2445,6 +2510,10 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     const auto audioError = firstAudioError.load();
     if (FAILED(audioError)) dp.result.fail(RecordingStage::Capture, audioError);
     if (pSinkWriter) {
+        if (dp.Finalizing) {
+            try { dp.Finalizing(); }
+            catch (...) { dp.result.fail(RecordingStage::Finalize, E_FAIL); }
+        }
         const auto finalizeResult = pSinkWriter->Finalize();
         dp.result.finish(SUCCEEDED(finalizeResult), static_cast<std::int64_t>(finalizeResult));
     }
@@ -2466,6 +2535,7 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& params)
 {
     using HuhuCapture::Core::RecordingStage;
     params.result = {};
+    params.DurationLimitReached = false;
     try {
         const auto status = desktopCapture(params);
         if (status != 0 && !params.result.firstError)

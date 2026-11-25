@@ -123,6 +123,15 @@
     <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
       <Filter>src\platform\windows</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileIdentity.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileHandleStream.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\NativeMp4Recording.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\recording\CapVideo.cpp">
       <Filter>src\recording</Filter>
     </ClCompile>
@@ -320,6 +329,15 @@
     <ClInclude Include="..\..\src\platform\FileCommitter.h">
       <Filter>src\platform</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\platform\FileIdentity.h">
+      <Filter>src\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\windows\FileHandleStream.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\windows\NativeMp4Recording.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h">
       <Filter>src\platform\windows</Filter>
     </ClInclude>
@@ -337,6 +355,15 @@
     </ClInclude>
     <ClInclude Include="..\..\src\recording\VideoMp4.h">
       <Filter>src\recording</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\recording\RecordingBackend.h">
+      <Filter>src\recording</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\FrameSource.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\MediaFrame.h">
+      <Filter>src\core</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\services\AnnotationRenderer.h">
       <Filter>src\services</Filter>

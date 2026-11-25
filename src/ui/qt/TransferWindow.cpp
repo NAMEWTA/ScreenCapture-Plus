@@ -343,6 +343,9 @@ void TransferWindow::refreshSnapshot()
     if (!state_->service) { updateActions(); return; }
     const auto snapshot = state_->service->viewSnapshot(); if (!snapshot) return;
     state_->multicastAvailable = snapshot->service && snapshot->service->data.value(QStringLiteral("multicastAvailable")).toBool();
+    if (snapshot->devices && snapshot->service && snapshot->devices->generation == snapshot->service->generation &&
+        snapshot->devices->data.contains(QStringLiteral("multicastAvailable")))
+        state_->multicastAvailable = snapshot->devices->data.value(QStringLiteral("multicastAvailable")).toBool();
     state_->live->setText(Presentation::serviceState(state_->translator, snapshot->state));
     if (snapshot->service && snapshot->service->status != HUHU_OK)
         state_->live->setText(state_->live->text() + QStringLiteral(" · ") + Presentation::status(state_->translator, snapshot->service->status));

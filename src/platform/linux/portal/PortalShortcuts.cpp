@@ -49,6 +49,8 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         QVector<PortalShortcutRequest> requested;
         QVector<PortalShortcutBinding> assigned;
         PortalFailure cancellation;
+        Commit commit;
+        bool unparented{};
         bool finished{};
 
         ~Operation() {
@@ -172,13 +174,13 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         return id;
     }
 
-    PortalFailure canBind(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts) {
+    PortalFailure canBind(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts, bool unparented) {
         if (auto error = checkContext()) return error;
         if (!ready || stopped) return failure(Code::Unavailable, QStringLiteral("GlobalShortcuts initialization has not succeeded"));
         if (operation) return failure(Code::Busy, QStringLiteral("A shortcut binding request is already active"));
-        if (!parent || parent->thread() != owner->thread())
+        if ((!parent && !unparented) || (parent && parent->thread() != owner->thread()))
             return failure(Code::ParentDestroyed, QStringLiteral("A live parent window on the GUI thread is required"));
-        if (!parent->isVisible() || !parent->handle())
+        if (parent && (!parent->isVisible() || !parent->handle()))
             return failure(Code::InvalidState, QStringLiteral("The shortcut parent must have a visible native surface"));
         if (!capabilities.globalShortcuts.available())
             return capabilities.globalShortcuts.failure;
@@ -274,7 +276,7 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         g_autoptr(GError) error = nullptr;
         pending->candidate = xdp_portal_create_global_shortcuts_session_finish(XDP_PORTAL(source), result, &error);
         if (!pending->candidate) { state->finish(pending, fromError(error)); return; }
-        if (state->stopped || pending->cancellation || !pending->parent) {
+        if (state->stopped || pending->cancellation || (!pending->parent && !pending->unparented)) {
             state->finish(pending, failure(Code::ParentDestroyed, QStringLiteral("Shortcut parent is no longer available")));
             return;
         }
@@ -284,7 +286,8 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
             return;
         }
         pending->candidateClosedHandler = g_signal_connect(session, "closed", G_CALLBACK(candidateClosed), pending.get());
-        state->prepareParent(pending);
+        if (pending->unparented) state->bindCandidate(pending);
+        else state->prepareParent(pending);
     }
 
     void prepareParent(const std::shared_ptr<Operation>& pending) {
@@ -319,8 +322,13 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
             g_ptr_array_add(shortcuts, xdp_global_shortcut_new(id.constData(), description.constData(),
                 trigger.isEmpty() ? nullptr : trigger.constData()));
         }
-        xdp_global_shortcuts_session_bind_shortcuts_with_parent(pending->candidate, shortcuts, pending->portalParent->nativeParent(),
-            pending->cancellable, shortcutsBound, new Call{shared_from_this(), pending});
+        if (pending->unparented) {
+            xdp_global_shortcuts_session_bind_shortcuts(pending->candidate, shortcuts, "",
+                pending->cancellable, shortcutsBound, new Call{shared_from_this(), pending});
+        } else {
+            xdp_global_shortcuts_session_bind_shortcuts_with_parent(pending->candidate, shortcuts, pending->portalParent->nativeParent(),
+                pending->cancellable, shortcutsBound, new Call{shared_from_this(), pending});
+        }
     }
 
     static void shortcutsBound(GObject* source, GAsyncResult* result, gpointer data) {
@@ -347,6 +355,26 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         auto* native = xdp_global_shortcuts_session_get_session(pending->candidate);
         if (xdp_session_get_session_state(native) == XDP_SESSION_CLOSED) {
             state->finish(pending, failure(Code::Unavailable, QStringLiteral("Shortcut session closed before binding completed")));
+            return;
+        }
+        // Settings persistence is part of accepting this candidate. Keep the
+        // shared state/operation alive across the callback and re-check every
+        // cancellation/lifetime edge before closing the previous session.
+        bool accepted = true;
+        auto commit = std::move(pending->commit);
+        try { if (commit) accepted = commit(); } catch (...) { accepted = false; }
+        if (pending->finished) return;
+        if (state->stopped || !state->owner || pending->cancellation ||
+            (!pending->unparented && !pending->parent)) {
+            state->finish(pending, failure(Code::Cancelled, QStringLiteral("Shortcut binding canceled during commit")));
+            return;
+        }
+        if (!accepted) {
+            state->finish(pending, failure(Code::Failed, QStringLiteral("Shortcut settings commit was rejected")));
+            return;
+        }
+        if (!pending->candidate || xdp_session_get_session_state(native) == XDP_SESSION_CLOSED) {
+            state->finish(pending, failure(Code::Unavailable, QStringLiteral("Shortcut session closed during commit")));
             return;
         }
         // BindShortcuts is permitted only once per session. Commit the fully
@@ -446,20 +474,36 @@ void PortalShortcuts::initialize()
     g_object_unref(task);
 }
 
-quint64 PortalShortcuts::bindShortcuts(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts)
+void PortalShortcuts::cancelInitialization()
 {
     Q_ASSERT(d->onOwnerThread());
-    if (auto error = d->canBind(parent, shortcuts)) return d->reject(error);
+    if (d->initializing) g_cancellable_cancel(d->initialization);
+}
+
+quint64 PortalShortcuts::bindShortcuts(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts, Commit commit)
+{ return beginBinding(parent, shortcuts, std::move(commit), false); }
+
+quint64 PortalShortcuts::restoreShortcuts(const QVector<PortalShortcutRequest>& shortcuts, Commit commit)
+{ return beginBinding(nullptr, shortcuts, std::move(commit), true); }
+
+quint64 PortalShortcuts::beginBinding(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts, Commit commit, bool unparented)
+{
+    Q_ASSERT(d->onOwnerThread());
+    if (auto error = d->canBind(parent, shortcuts, unparented)) return d->reject(error);
     auto pending = std::make_shared<Private::Operation>();
     pending->id = d->nextId++;
     pending->parent = parent;
     pending->requested = shortcuts;
+    pending->commit = std::move(commit);
+    pending->unparented = unparented;
     std::weak_ptr<Private> weakState = d;
     std::weak_ptr<Private::Operation> weakPending = pending;
-    pending->parentDestroyed = QObject::connect(parent, &QObject::destroyed, this, [weakState, weakPending] {
-        if (auto state = weakState.lock())
-            state->cancel(weakPending.lock(), failure(Code::ParentDestroyed, QStringLiteral("Shortcut parent window was destroyed")));
-    });
+    if (parent) {
+        pending->parentDestroyed = QObject::connect(parent, &QObject::destroyed, this, [weakState, weakPending] {
+            if (auto state = weakState.lock())
+                state->cancel(weakPending.lock(), failure(Code::ParentDestroyed, QStringLiteral("Shortcut parent window was destroyed")));
+        });
+    }
     d->operation = pending;
     xdp_portal_create_global_shortcuts_session(d->portal, pending->cancellable,
         Private::sessionCreated, new Private::Call{d, pending});
@@ -481,6 +525,7 @@ void PortalShortcuts::closeBindings()
 }
 
 bool PortalShortcuts::hasActiveBindings() const { Q_ASSERT(d->onOwnerThread()); return d->active != nullptr; }
+bool PortalShortcuts::available() const { Q_ASSERT(d->onOwnerThread()); return d->ready && !d->stopped && d->capabilities.globalShortcuts.available(); }
 QVector<PortalShortcutBinding> PortalShortcuts::bindings() const { Q_ASSERT(d->onOwnerThread()); return d->assigned; }
 
 } // namespace HuhuCapture::Platform::Linux

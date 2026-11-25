@@ -1,4 +1,7 @@
 #include "services/desktop/SystemClipboard.h"
+
+#include <QSet>
+#include <QThreadPool>
 #include "core/PixelBuffer.h"
 
 #include <QClipboard>
@@ -25,6 +28,11 @@
 #include "platform/windows/DesktopClipboard.h"
 #else
 #include "platform/linux/DesktopClipboard.h"
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
+#include <QDBusVariant>
 #endif
 
 namespace HuhuCapture::Desktop {
@@ -212,13 +220,19 @@ struct SystemClipboard::State {
     std::shared_ptr<PreparedClipboard> content;
     QPointer<QWindow> origin;
     QPointer<QFutureWatcher<Failure>> validation;
+    QSet<QFutureWatcher<Failure>*> workers;
+    QThreadPool pool;
+    quint64 pendingResults{};
+    bool stopping{}, shutdownReported{};
 #ifndef Q_OS_WIN
     std::unique_ptr<Platform::Linux::DesktopClipboard> observer;
+    QPointer<QDBusPendingCallWatcher> filePortal;
 #endif
 };
 
 SystemClipboard::SystemClipboard(QObject* parent) : QObject(parent), state_(std::make_unique<State>())
 {
+    state_->pool.setMaxThreadCount(1);
 #ifndef Q_OS_WIN
     state_->observer = std::make_unique<Platform::Linux::DesktopClipboard>();
     connect(state_->observer.get(), &Platform::Linux::DesktopClipboard::verified, this,
@@ -230,12 +244,15 @@ SystemClipboard::SystemClipboard(QObject* parent) : QObject(parent), state_(std:
 }
 SystemClipboard::~SystemClipboard()
 {
+    state_->stopping = true;
+    state_->pool.waitForDone();
     if (state_->content) state_->content->state_->release();
 }
-bool SystemClipboard::busy() const noexcept { return state_->active != 0; }
+bool SystemClipboard::busy() const noexcept { return state_->active != 0 || !state_->workers.empty(); }
 
 quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWindow* origin)
 {
+    if (QThread::currentThread() == thread() && state_->stopping) return 0;
     auto token = state_->sequence.fetch_add(1) + 1;
     if (!token) token = state_->sequence.fetch_add(1) + 1;
     if (QThread::currentThread() != thread()) {
@@ -258,18 +275,60 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
     }
     try {
         state_->active = token; state_->content = std::move(content); state_->origin = origin;
+#ifndef Q_OS_WIN
+        if (!state_->content->state_->file.isEmpty() &&
+            QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
+            // Fixed Qt prefers the Documents transfer MIME for local files.
+            // Query the actual version asynchronously before replacing any
+            // clipboard data. A compositor receipt alone cannot establish that
+            // a missing document service can later resolve those file URLs.
+            auto message = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.portal.Documents"),
+                QStringLiteral("/org/freedesktop/portal/documents"), QStringLiteral("org.freedesktop.DBus.Properties"),
+                QStringLiteral("Get"));
+            message.setArguments({QStringLiteral("org.freedesktop.portal.FileTransfer"), QStringLiteral("version")});
+            auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message, 3000), this);
+            state_->filePortal = watcher;
+            connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, token, watcher] {
+                const QDBusPendingReply<QDBusVariant> reply = *watcher;
+                if (state_->filePortal == watcher) state_->filePortal.clear();
+                watcher->deleteLater();
+                if (state_->active != token) return;
+                bool numeric = false;
+                const auto version = reply.isValid() ? reply.value().variant().toUInt(&numeric) : 0u;
+                if (!numeric || version < 1) {
+                    const auto detail = reply.isError() ? reply.error().message() : QStringLiteral("FileTransfer version 1 is required");
+                    finish(token, {{Error::Unavailable, reply.isError() ? static_cast<qint64>(reply.error().type()) : 0,
+                        QStringLiteral("The desktop document portal is unavailable for file copying: ") + detail}, {}});
+                    return;
+                }
+                validatePrepared(token);
+            });
+            return token;
+        }
+#endif
+        validatePrepared(token);
+    } catch (const std::bad_alloc&) { finish(token, {allocation(), {}}); }
+    return token;
+}
+
+void SystemClipboard::validatePrepared(quint64 token)
+{
+    if (!token || state_->active != token) return;
+    try {
         if (auto lease = state_->content->state_->lease) {
             // This last identity check remains off the GUI thread. The application
             // read reservation bridges preparation and actual native publication.
             auto* watcher = new QFutureWatcher<Failure>(this); state_->validation = watcher;
+            state_->workers.insert(watcher);
             connect(watcher, &QFutureWatcher<Failure>::finished, this, [this, token, watcher] {
                 const auto failure = watcher->result();
+                state_->workers.remove(watcher);
                 if (state_->validation == watcher) state_->validation.clear();
                 watcher->deleteLater();
-                if (state_->active != token) return;
+                if (state_->active != token) { finishShutdown(); return; }
                 if (failure) finish(token, {failure, {}}); else publishPrepared(token);
             });
-            watcher->setFuture(QtConcurrent::run([lease]() mutable {
+            watcher->setFuture(QtConcurrent::run(&state_->pool, [lease]() mutable {
                 // Empty the stored task capture before QFuture reports its
                 // result; no completed future may retain a hidden media lease.
                 auto reservation = std::move(lease);
@@ -281,7 +340,6 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
             QTimer::singleShot(0, this, [this, token] { if (state_->active == token) publishPrepared(token); });
         }
     } catch (const std::bad_alloc&) { finish(token, {allocation(), {}}); }
-    return token;
 }
 
 void SystemClipboard::publishPrepared(quint64 token)
@@ -342,17 +400,43 @@ void SystemClipboard::finish(quint64 token, ClipboardResult result)
     if (state_->active == token) {
 #ifndef Q_OS_WIN
         state_->observer->cancel();
+        if (state_->filePortal) {
+            disconnect(state_->filePortal, nullptr, this, nullptr);
+            state_->filePortal->deleteLater(); state_->filePortal.clear();
+        }
 #endif
         if (state_->validation) {
-            disconnect(state_->validation, nullptr, this, nullptr);
-            state_->validation->deleteLater(); state_->validation.clear();
+            // Cancellation ends the publication, not the real identity worker.
+            // Its completion still releases the final archive lease and drains
+            // the application's shutdown barrier.
+            state_->validation.clear();
         }
         // Neither the QMimeData nor an externally retained preparation keeps a
         // media lease after completion. Linux's clipboard owner remains Qt.
         if (state_->content) state_->content->state_->release();
         state_->content.reset(); state_->origin.clear(); state_->active = 0;
     }
-    QTimer::singleShot(0, this, [this, token, result = std::move(result)] { Q_EMIT finished(token, result); });
+    ++state_->pendingResults;
+    QTimer::singleShot(0, this, [this, token, result = std::move(result)] {
+        --state_->pendingResults;
+        const QPointer<SystemClipboard> life(this);
+        Q_EMIT finished(token, result);
+        if (life) finishShutdown();
+    });
+}
+
+void SystemClipboard::shutdown()
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (std::exchange(state_->stopping, true)) return;
+    cancel(state_->active);
+    QTimer::singleShot(0, this, [this] { finishShutdown(); });
+}
+void SystemClipboard::finishShutdown()
+{
+    if (!state_->stopping || state_->shutdownReported || busy() || state_->pendingResults) return;
+    state_->shutdownReported = true;
+    Q_EMIT shutdownFinished();
 }
 
 } // namespace HuhuCapture::Desktop

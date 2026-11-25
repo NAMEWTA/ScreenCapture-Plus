@@ -25,6 +25,11 @@ struct DESKTOPCAPTUREPARAMS
     std::function<HRESULT(const BYTE* d, size_t sz,void* cb)> Streamer;
     std::function<HRESULT(DXGI_FORMAT dxgi,int wi,int he,const BYTE* d, size_t sz,void* cb)> Framer;
     std::function<void(IMFAttributes* a)> PrepareAttributes;
+    // Optional owned-file seam. The worker retains the stream until this call
+    // returns; a supplied stream takes precedence over a filename.
+    IMFByteStream* OutputStream{};
+    std::function<void(GUID codec)> Prepared;
+    std::function<void()> Finalizing;
     int fps = 25;
     int NumThreads = 0;
     int Qu = -1;
@@ -39,6 +44,13 @@ struct DESKTOPCAPTUREPARAMS
     HWND hWnd = 0;
     IDXGIAdapter1* ad = 0;
     UINT nOutput = 0;
+    bool VerifyDesktop{};
+    RECT ExpectedDesktop{};
+    bool UseGdiCapture{};
+    RECT GdiRegion{}; // physical virtual-desktop coordinates, never monitor-local
+    std::uint64_t MaximumFrameBytes{256ull * 1024 * 1024};
+    unsigned long long FirstFrameTimeoutMS{5000};
+    bool DurationLimitReached{}; // worker-owned, read after completion
 
     unsigned long long StartMS = 0; // 0, none
     unsigned long long EndMS = 0; // 0, none

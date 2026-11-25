@@ -61,14 +61,18 @@ public:
     // Every nonzero token gets one queued completion while this service lives.
     quint64 publish(std::shared_ptr<PreparedClipboard> content, QWindow* origin);
     void cancel(quint64 token);
+    void shutdown();
     bool busy() const noexcept;
 Q_SIGNALS:
     void finished(quint64 token, const HuhuCapture::Desktop::ClipboardResult& result);
+    void shutdownFinished();
 private:
     struct State;
     std::unique_ptr<State> state_;
+    void validatePrepared(quint64 token);
     void publishPrepared(quint64 token);
     void finish(quint64 token, ClipboardResult result);
+    void finishShutdown();
 };
 
 } // namespace HuhuCapture::Desktop

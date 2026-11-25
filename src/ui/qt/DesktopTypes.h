@@ -30,6 +30,7 @@ struct SettingsSnapshot {
     QString captureShortcut;
     ShortcutEditing shortcutEditing{ShortcutEditing::Unavailable};
     QString shortcutUnavailableReason;
+    QString shortcutCommand;
 };
 
 enum class SettingField { AutoStart, Language, CaptureShortcut };
@@ -49,6 +50,7 @@ struct AboutUpdateSnapshot {
     UpdateError error{UpdateError::None};
     QString version;
     QString file;
+    QString installationInstructionsKey{QStringLiteral("update.downloaded")};
     quint64 received{};
     quint64 total{};
     bool canDownload{};

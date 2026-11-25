@@ -25,6 +25,7 @@
 #include <QStyledItemDelegate>
 #include <QTextCursor>
 #include <QTextLayout>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -411,7 +412,7 @@ struct EditorWindow::State {
     OutputIntent pendingIntent{OutputIntent::Clipboard};
     QPointer<QWidget> previousFocus;
     std::optional<bool> deferredNotesVisibility;
-    bool closeAfterOutput{true}, changingNote{}, deferredNotes{}, notesCollapsed{};
+    bool closeAfterOutput{true}, changingNote{}, deferredNotes{}, notesCollapsed{}, initiallyPlaced{};
 };
 
 EditorWindow::EditorWindow(QWidget* parent)
@@ -545,6 +546,31 @@ EditorFailure EditorWindow::loadImage(const QImage& image)
     auto result = state_->canvas->loadImage(image);
     if (!result) { fitToWorkArea(false); updateActions(); }
     return result;
+}
+
+bool EditorWindow::applyInitialPlacement(QScreen* target, QPoint imageTopLeft)
+{
+    if (QThread::currentThread() != thread() || !target || !QGuiApplication::screens().contains(target) || state_->initiallyPlaced ||
+        !state_->canvas->hasImage() || state_->canvas->canUndo() || state_->canvas->canRedo() ||
+        state_->canvas->pointerGestureActive() || state_->canvas->textEditing() || outputPending()) return false;
+    const QPointer<EditorWindow> lifetime(this);
+    const QPointer<QScreen> screenLifetime(target);
+    state_->initiallyPlaced = true;
+    setScreen(target);
+    if (!lifetime || !screenLifetime) return false;
+    // loadImage may have fitted on the primary monitor before its host knew the
+    // capture source. Refit only this pristine document on the verified screen.
+    state_->canvas->setZoom(1);
+    if (!lifetime || !screenLifetime) return false;
+    fitToWorkArea(!state_->notes->isHidden());
+    if (!lifetime || !screenLifetime) return false;
+    if (layout()) layout()->activate();
+    const auto area = target->availableGeometry();
+    const auto offset = state_->canvas->mapTo(this, QPoint());
+    const auto desired = imageTopLeft - offset;
+    move(std::clamp(desired.x(), area.left(), (std::max)(area.left(), area.right() - width() + 1)),
+        std::clamp(desired.y(), area.top(), (std::max)(area.top(), area.bottom() - height() + 1)));
+    return lifetime != nullptr;
 }
 
 void EditorWindow::setTranslator(EditorTranslator translator)
@@ -832,9 +858,19 @@ void EditorWindow::closeEvent(QCloseEvent* event)
     QGuiApplication::inputMethod()->commit();
     event->accept();
 }
+bool EditorWindow::event(QEvent* event)
+{
+    // QWidget dispatches WindowDeactivate through event(), not changeEvent().
+    // End a pin move/draw immediately even when the focused child stays the same.
+    if (event->type() == QEvent::WindowDeactivate && state_ && state_->canvas) {
+        const QPointer<EditorWindow> lifetime(this);
+        state_->canvas->cancelPointerGesture();
+        if (!lifetime) return true;
+    }
+    return QWidget::event(event);
+}
 void EditorWindow::changeEvent(QEvent* event)
 {
-    if (event->type() == QEvent::WindowDeactivate) state_->canvas->cancelPointerGesture();
     if (event->type() == QEvent::LanguageChange) refreshLanguage();
     QWidget::changeEvent(event);
 }

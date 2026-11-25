@@ -361,7 +361,62 @@ void controllerContracts(const QString& pictures)
     require(!restarted->available() && !restarted->service().statistics().nativeRunning &&
         !senderSettings.value({QStringLiteral("lan"), QStringLiteral("enabled")}).toBool(),
         "Disable stops the actual runtime and persists disabled preference");
+
+    enable(*restarted, QStringLiteral("Disable conflict fixture"), occupiedPort);
+    disablePanel = restarted->openSettings(); settle();
+    const auto externallyChanged = QByteArray("{\"external\":\"must be retained\"}\n");
+    replace(senderSettings.path(), externallyChanged);
+    click(*child<QCheckBox>(*disablePanel, "lanEnable"));
+    require(disablePanel->requestApply(), "Explicit disable reaches the actual persistence conflict");
+    waitFor([&] { return !disablePanel->changePending() && !restarted->service().statistics().nativeRunning; },
+        "Failed persistence must still stop the real listener");
+    require(!restarted->available() && !restarted->settingsSnapshot().enabled &&
+        read(senderSettings.path()) == externallyChanged &&
+        child<QLabel>(*disablePanel, "lanSettingsStatus")->text() == languages.text(u"lan.disableSaveFailure"),
+        "Disable remains effective and reports persistence failure without overwriting external configuration");
     shutdown(*restarted); shutdown(receiver);
+}
+
+void hostLifetimeContracts()
+{
+    QTemporaryDir temporary; require(temporary.isValid(), "Create host lifetime fixture");
+    config::SettingsStore settings(QDir(temporary.path()).filePath(QStringLiteral("config.json")));
+    require(settings.load().ok(), "Load actual host lifetime settings");
+    auto archive = std::make_shared<media::MediaArchiveService>(QDir(temporary.path()).filePath(QStringLiteral("media")));
+    QObject host;
+    {
+        auto controller = std::make_unique<application::LanController>(archive, settings, temporary.path());
+        require(controller->initialize(), "Initialize actual disabled controller");
+        QPointer<application::LanController> lifetime(controller.get());
+        QObject::connect(controller.get(), &application::LanController::busyChanged, &host,
+            [&](bool) { controller.reset(); });
+        controller->shutdown();
+        require(lifetime.isNull(), "Host may synchronously release a disabled controller during shutdown state notification");
+    }
+    {
+        auto controller = std::make_unique<application::LanController>(archive, settings, temporary.path());
+        require(controller->initialize(), "Initialize actual asynchronous lifetime fixture");
+        QTcpServer collision;
+        require(collision.listen(QHostAddress::LocalHost, 0), "Reserve a real test port");
+        enable(*controller, QStringLiteral("Host lifetime fixture"), collision.serverPort());
+        QPointer<application::LanController> lifetime(controller.get());
+        bool joined{};
+        QObject::connect(controller.get(), &application::LanController::shutdownFinished, &host, [&] {
+            joined = !controller->service().statistics().nativeRunning;
+            controller.reset();
+        });
+        controller->shutdown();
+        waitFor([&] { return lifetime.isNull(); }, "Host release on real asynchronous join completion did not finish");
+        require(joined, "shutdownFinished follows real native resource release and permits immediate destruction");
+    }
+    require(settings.setValue({QStringLiteral("lan")}, QStringLiteral("invalid fixture")).ok(),
+        "Write an actual invalid LAN preference without changing the shared configuration format");
+    auto invalid = std::make_unique<application::LanController>(archive, settings, temporary.path());
+    QPointer<application::LanController> invalidLifetime(invalid.get());
+    QObject::connect(invalid.get(), &application::LanController::operationFailed, &host,
+        [&](const QString&) { invalid.reset(); });
+    require(!invalid->initialize() && invalidLifetime.isNull(),
+        "Host may synchronously destroy a controller in its actual invalid-configuration callback");
 }
 
 void configurationConflict()
@@ -388,7 +443,7 @@ int main(int argc, char** argv)
     try {
         const auto pictures = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
         if (!pictures.isEmpty()) require(QDir().mkpath(pictures), "Create actual controller PNG output directory");
-        controllerContracts(pictures); configurationConflict();
+        controllerContracts(pictures); configurationConflict(); hostLifetimeContracts();
         std::cout << "Production LAN controller: actual private identity persistence, shared settings, interface selection, "
             "typed port fallback, TLS transfer after view destruction, global receive confirmation, shared archive and shutdown passed.\n";
         return 0;

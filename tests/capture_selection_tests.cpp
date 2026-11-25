@@ -1,4 +1,5 @@
 #include "capture/SelectionModel.h"
+#include "capture/PixelSample.h"
 
 #include <array>
 #include <iostream>
@@ -155,6 +156,10 @@ int main()
 {
     try {
         windowSelection(); creation(); hitRegionsAndImmediateSnap(); stableAdjustment(); edgeMinimum();
+        require(cmyk(0, 0, 0) == std::tuple{0, 0, 0, 100} && cmyk(255, 255, 255) == std::tuple{0, 0, 0, 0} &&
+            cmyk(255, 128, 0) == std::tuple{0, 50, 100, 0} && cmyk(0, 255, 255) == std::tuple{100, 0, 0, 0},
+            "shared CMYK preserves native percentage rounding including black and white");
+        std::cout << "PASS shared native CMYK percentage rounding\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL " << error.what() << '\n'; return 1;

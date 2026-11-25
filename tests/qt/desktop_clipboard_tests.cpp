@@ -5,10 +5,12 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QWidget>
@@ -156,6 +158,12 @@ void receiveFile(const QString& expected)
     auto* clipboard = QApplication::clipboard();
     waitFor([&] { return clipboard->mimeData()->hasUrls(); }, "the separate process receives an actual file URI offer");
     const auto urls = clipboard->mimeData()->urls();
+    if (urls.size() != 1 || !urls.front().isLocalFile() || urls.front().toLocalFile() != expected) {
+        std::cerr << "URI formats=" << clipboard->mimeData()->formats().join(QLatin1Char(',')).toStdString()
+            << " rawHex=" << clipboard->mimeData()->data(QStringLiteral("text/uri-list")).toHex().constData()
+            << " expected=" << QUrl::fromLocalFile(expected).toEncoded().constData() << '\n';
+        for (const auto& url : urls) std::cerr << "URI actual=" << url.toEncoded().constData() << '\n';
+    }
     require(urls.size() == 1 && urls.front().isLocalFile() && urls.front().toLocalFile() == expected,
         "the file-manager receiver gets the complete Unicode local URI");
 }
@@ -230,6 +238,40 @@ Media::Entry entryAt(Media::MediaArchiveService& archive, const QString& path)
     for (const auto& entry : list.entries) if (entry.path == path) return entry;
     throw std::runtime_error("the real media file is absent from history");
 }
+
+#ifndef Q_OS_WIN
+void unavailableFilePortal(const QString& path, const QString& expectedImage)
+{
+    require(QGuiApplication::platformName().startsWith(QStringLiteral("wayland")), "document portal admission uses the real Wayland backend");
+    Results results; Origin origin; show(origin);
+    waitFor([&] { return QGuiApplication::focusWindow() == origin.windowHandle(); }, "the unavailable-portal process receives real keyboard focus");
+    Media::MediaArchiveService archive(QFileInfo(path).absolutePath());
+    const auto entry = entryAt(archive, path);
+    auto lease = worker([&] { return archive.lease(entry); }); require(!lease.failure && lease.lease, "reserve actual media for portal capability validation");
+    auto prepared = worker([owned = std::move(lease.lease)]() mutable { return Desktop::prepareFile(std::move(owned)); });
+    require(!prepared.failure && prepared.content, "prepare the complete real file without publishing it");
+    const auto result = results.result(results.clipboard.publish(prepared.content, origin.windowHandle()));
+    require(result.failure.code == Desktop::Error::Unavailable && result.publishedFormats.isEmpty(),
+        "an absent real session bus rejects the portal-dependent file before replacing the system clipboard");
+    require(!worker([&] { return archive.reserveRemoval(entry); }).failure, "failed file admission releases its real read reservation");
+    receiveImage(QImage(expectedImage));
+    std::cout << "PASS unavailable Documents portal retains the previous real clipboard and releases history\n";
+}
+
+void runUnavailableFilePortal(const QString& path, const QString& expectedImage)
+{
+    if (!QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) return;
+    QProcess child; child.setProcessChannelMode(QProcess::MergedChannels);
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"), QStringLiteral("unix:path=/nonexistent/huhucapture-clipboard-capability"));
+    child.setProcessEnvironment(environment);
+    child.start(QCoreApplication::applicationFilePath(), {QStringLiteral("--file-portal-unavailable"), path, expectedImage});
+    require(child.waitForStarted(2000), "start a separate real client with an unavailable document bus");
+    waitFor([&] { return child.state() == QProcess::NotRunning; }, "portal capability rejection completes without a GUI-thread wait");
+    const auto output = child.readAll(); std::cout << output.constData();
+    require(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0, "the separate client validates actual unavailable-portal behavior");
+}
+#endif
 
 void contracts(const QString& root)
 {
@@ -318,6 +360,9 @@ void contracts(const QString& root)
     auto finalImage = worker([&] { return Desktop::prepareImage(image); });
     require(results.result(results.request(finalImage.content, *origin)).completed(), "final real owner image publication");
     origin.reset(); events(); runReceiver(QStringLiteral("--read-image"), expected);
+#ifndef Q_OS_WIN
+    runUnavailableFilePortal(gifPath, expected);
+#endif
     std::cout << "PASS real independent image/file/text receiver, bounded preparation, cancellation, changed-file rejection and application-owned clipboard\n";
 }
 }
@@ -327,6 +372,11 @@ int main(int argc, char** argv)
     QApplication app(argc, argv); app.setQuitOnLastWindowClosed(false);
     try {
         const auto arguments = app.arguments();
+#ifndef Q_OS_WIN
+        if (arguments.size() == 4 && arguments[1] == QStringLiteral("--file-portal-unavailable")) {
+            unavailableFilePortal(arguments[2], arguments[3]); return 0;
+        }
+#endif
         if (arguments.size() >= 3 && (arguments[1] == QStringLiteral("--read-image") || arguments[1] == QStringLiteral("--read-file") ||
             arguments[1] == QStringLiteral("--read-text"))) {
             receiver(arguments[1], arguments[2]); std::cout << "PASS separate system clipboard receiver\n"; return 0;

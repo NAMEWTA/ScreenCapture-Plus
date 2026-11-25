@@ -53,7 +53,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus nasm libwayland-dev libwayland-bin sway pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr libglib2.0-bin libpipewire-0.3-dev libinih-dev libgbm-dev libdrm-dev libsystemd-dev fuse3 wtype xvfb xauth libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus nasm libwayland-dev libwayland-bin sway pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr libglib2.0-bin libpipewire-0.3-dev libinih-dev libgbm-dev libdrm-dev libsystemd-dev fuse3 wtype xvfb xauth libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb1-dev libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0
       - name: Build the locked Portal backend for the owned CPU desktop
         if: runner.os == 'Linux'
         run: python3 scripts/build-validation-desktop.py
