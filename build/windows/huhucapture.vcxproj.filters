@@ -114,6 +114,9 @@
     <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp">
       <Filter>src\platform\windows</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\recording\CapVideo.cpp">
       <Filter>src\recording</Filter>
     </ClCompile>
@@ -292,6 +295,9 @@
     </ClInclude>
     <ClInclude Include="..\..\src\platform\windows\ComApartment.h">
       <Filter>src\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\FileCommitter.h">
+      <Filter>src\platform</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h">
       <Filter>src\platform\windows</Filter>

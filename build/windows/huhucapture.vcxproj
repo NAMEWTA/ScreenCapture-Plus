@@ -91,6 +91,9 @@
     <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\recording\CapVideo.cpp" />
     <ClCompile Include="..\..\src\recording\VideoGif.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -186,6 +189,7 @@
     <ClInclude Include="..\..\src\editor\shapes\ShapeText.h" />
     <ClInclude Include="..\..\src\pch.h" />
     <ClInclude Include="..\..\src\platform\windows\ComApartment.h" />
+    <ClInclude Include="..\..\src\platform\FileCommitter.h" />
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h" />
     <ClInclude Include="..\..\src\recording\CapVideo.h" />
     <ClInclude Include="..\..\src\recording\VideoGif.h" />
