@@ -112,6 +112,8 @@ def make_bundle(options):
     qt_version = output(str(qt / "bin/qmake"), "-query", "QT_VERSION")
     if qt_version != lock["qtMigration"]["qt"]["version"]:
         raise RuntimeError("The installed Qt SDK differs from the fixed lock")
+    if not (qt / "translations").is_dir() or not list((qt / "translations").glob("qtbase_*.qm")):
+        raise RuntimeError("The fixed official Qt translations archive is required for deployment")
     originals = {"qt": qt,
         "portal": (root / ".deps/portal-validation/install").resolve(),
         "pipewire": (root / ".deps/pipewire-validation/install").resolve(),
@@ -228,7 +230,7 @@ def make_bundle(options):
     metadata["originalPrefixes"]["cmake"] = str(cmake_prefix)
     (bundle / "tools/bin").mkdir(parents=True)
     tool_packages = set()
-    for name in ("ninja", "pkg-config"):
+    for name in ("ninja", "pkg-config", "dbus-run-session", "dbus-daemon"):
         # GitHub's /usr/local/bin/ninja may precede the official Ubuntu package
         # without belonging to dpkg. Select the installed package explicitly so
         # its observed version, executable bytes and copyright share one source.
@@ -387,7 +389,7 @@ def make_bundle(options):
             raise RuntimeError(f"A copied SDK symlink escapes the bundle: {path}")
     metadata["systemFiles"] = copied_system
     metadata["hostAbiVersions"] = sorted(abi_requirements)
-    metadata["hostRequirements"] = "Linux amd64 satisfying hostAbiVersions, a C++20 compiler and its matching standard-library/libc/kernel development headers. The current CMake validation requires dbus-run-session; session-fault tests also require dbus-daemon. No glibc, loader, compiler, GPU driver, compositor, bus daemon or user session is supplied. GUI/Portal acceptance is separate."
+    metadata["hostRequirements"] = "Linux amd64 satisfying hostAbiVersions, a C++20 compiler and its matching standard-library/libc/kernel development headers. Matching dbus-run-session/dbus-daemon binaries are supplied for isolated validation, without a running user bus. No glibc, loader, compiler, GPU driver, compositor or user session is supplied. GUI/Portal acceptance is separate."
     (bundle / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     shutil.copy2(Path(__file__), bundle / "bundle-development-dependencies.py")
     inventory = {}

@@ -196,6 +196,9 @@ def main():
         components = (build / "config_components.h").read_text(encoding="utf-8")
         if re.search(r"^#define CONFIG_\w+_(ENCODER|HWACCEL) 1$", components, re.MULTILINE):
             raise SystemExit("The inspection-only profile unexpectedly enabled an encoder or hardware backend")
+        for required in ("MP3FLOAT_DECODER", "MPEGAUDIO_PARSER"):
+            if f"#define CONFIG_{required} 1" not in components.splitlines():
+                raise SystemExit(f"The locked inspection profile must retain Windows MP3 recordings: {required}")
         script = build / "build-fixed.sh"
         script.write_text("set -eu\n" + "cd " + shlex.quote(posix(build)) + "\n" +
                           shlex.join((posix(make), "-j" + str(options.jobs))) + "\n" +
