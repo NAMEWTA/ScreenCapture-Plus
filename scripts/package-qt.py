@@ -174,16 +174,17 @@ def prepare_nsis(nsis_archive: Path, workspace: Path):
     return compiler, environment, provenance
 
 
-def windows_installer(prefix: Path, output: Path, workspace: Path, version: str, nsis_archive: Path):
-    compiler, environment, provenance = prepare_nsis(nsis_archive, workspace)
-    records = meta.inventory(prefix)
+def windows_installer_script(prefix: Path, output: Path, version: str, records):
     install, remove, directories = [], [], set()
     for entry in records:
         relative = Path(entry['path'])
         meta.require('linkTarget' not in entry, 'Installer input cannot contain links')
         parent = str(relative.parent).replace('/', '\\')
         output_dir = '$INSTDIR' if parent == '.' else '$INSTDIR\\'+nsi_escape(parent)
-        install.extend(['    SetOutPath "'+output_dir+'"', '    File /oname="'+nsi_escape(relative.name)+'" "'+nsi_escape(prefix/relative)+'"'])
+        # v311 Source/script.cpp rejects a quote immediately after /oname=.
+        # Quote the whole token, as Docs/src/basic.but documents:
+        # https://github.com/NSIS-Dev/nsis/blob/7359413009afd4f0fff472d841fc2f2cc0e0a5f8/Docs/src/basic.but
+        install.extend(['    SetOutPath "'+output_dir+'"', '    File "/oname='+nsi_escape(relative.name)+'" "'+nsi_escape(prefix/relative)+'"'])
         remove.append('    Delete "$INSTDIR\\'+nsi_escape(str(relative).replace('/', '\\'))+'"')
         for ancestor in relative.parents:
             if ancestor != Path('.'): directories.add(str(ancestor).replace('/', '\\'))
@@ -193,6 +194,13 @@ def windows_installer(prefix: Path, output: Path, workspace: Path, version: str,
     source = (ROOT/'build/package/user-installer.nsi.in').read_text()
     for key, value in replacements.items(): source = source.replace('@'+key+'@', value)
     meta.require(not re.search(r'@[A-Z_]+@', source), 'Unexpanded installer template token')
+    return source
+
+
+def windows_installer(prefix: Path, output: Path, workspace: Path, version: str, nsis_archive: Path):
+    compiler, environment, provenance = prepare_nsis(nsis_archive, workspace)
+    records = meta.inventory(prefix)
+    source = windows_installer_script(prefix, output, version, records)
     script = workspace/'installer.nsi'; script.write_text(source, encoding='utf-8-sig')
     run([compiler, '/NOCONFIG', '/INPUTCHARSET', 'UTF8', script], env=environment)
     meta.verify_inventory(prefix, records)

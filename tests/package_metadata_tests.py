@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,25 @@ def nsis_layout_fixture(root):
 
 
 class MetadataBoundaries(unittest.TestCase):
+    def test_generated_nsis_file_arguments_quote_the_complete_oname_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);prefix=root/'NSIS input with spaces $value';prefix.mkdir()
+            names=('plain.txt','payload with spaces 中文 $value.txt')
+            for name in names:
+                (prefix/name).write_text('Script generation fixture only; never installed as a product.\n')
+            output=root/'not-built.exe'
+            script=packager.windows_installer_script(prefix,output,'0.0.5',metadata.inventory(prefix))
+            commands=[line for line in script.splitlines() if line.startswith('    File ')]
+            self.assertEqual(len(commands),len(names))
+            for command,name in zip(commands,sorted(names)):
+                # The fixed official NSIS parser recognizes quoting at the
+                # beginning of each token and rejects /oname="filename".
+                match=re.fullmatch(r'    File "/oname=([^"]+)" "([^"]+)"',command)
+                self.assertIsNotNone(match,command)
+                self.assertEqual(match[1],name.replace('$','$$'))
+                self.assertEqual(match[2],str(prefix/name).replace('$','$$'))
+            self.assertFalse(output.exists(),'Generating the script must not fabricate a compiled installer')
+
     def test_nsis_launcher_and_bin_compiler_are_one_distribution(self):
         with tempfile.TemporaryDirectory() as directory:
             extracted=Path(directory); root=extracted/'distribution'
