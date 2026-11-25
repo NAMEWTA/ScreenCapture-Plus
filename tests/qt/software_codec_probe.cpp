@@ -123,7 +123,11 @@ struct Decoder {
         checked(avcodec_send_packet(codec, packet), "Submit real encoded packet");
         for (;;) {
             const auto result = avcodec_receive_frame(codec, frame);
-            if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) return;
+            if (result == AVERROR_EOF) return;
+            if (result == AVERROR(EAGAIN)) {
+                require(packet != nullptr, "Decoder requested more input after final flush");
+                return;
+            }
             checked(result, "Decode complete media");
             output();
             av_frame_unref(frame);

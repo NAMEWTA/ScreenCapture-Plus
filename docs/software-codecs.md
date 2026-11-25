@@ -19,11 +19,13 @@ x264 原源码采用 GPL-2.0-or-later；FFmpeg 此构建明确启用 `--enable-g
 
 ## 上游示例的帧时长修复
 
-首轮真实编码 / 解码检查暴露了末帧计数不一致。固定 `libavcodec/libx264.c` 把 `AVFrame.duration` 经重排状态原样传给输出 packet；原示例只设置 PTS，没有设置 duration，日志中的视频包时长均为零。受控 [补丁](../third_party/ffmpeg-examples/0001-video-frame-duration.patch) 明确设置一个 codec time-base tick，也就是该示例的 1/25 秒。保留原来必须完整解码 251 帧的断言，不把预期数量改小。原始 blob / SHA256、补丁和本地修改后哈希一起保留；后续生产帧时长必须来自实际时间轴，不能直接照搬示例的固定值。
+真实编码 / 解码检查暴露了末帧计数不一致。固定 `libavcodec/libx264.c` 把 `AVFrame.duration` 经重排状态传给输出 packet，但 `libavcodec/encode.c` 在未设置 `AV_CODEC_FLAG_FRAME_DURATION` 时会主动清零输入 duration；该要求也明确写在同版本 `avcodec.h`。原示例没有声明这个合同，视频包时长均为零。受控 [补丁](../third_party/ffmpeg-examples/0001-video-frame-duration.patch) 在打开视频编码器前启用此标志，并明确设置一个 codec time-base tick，也就是该示例的 1/25 秒。保留原来必须完整解码 251 帧的断言，不把预期数量改小。
+
+同一补丁检查 `av_write_trailer` 和 `avio_closep` 的返回值，保留首个收尾错误；解码探针在最终 flush 后必须得到 EOF，不能把仍需输入的 EAGAIN 当作完成。原始 blob / SHA256、补丁和本地修改后哈希一起保留；后续生产帧时长必须来自实际时间轴，不能直接照搬示例的固定值。
 
 ## 实际验证做什么
 
-`qt_software_codec` 在同一 QGuiApplication 进程中链接 Qt、固定 FFmpeg 和 libx264。它在私有目录中建立自己拥有的文件，调用仅补齐帧时长的官方示例，用已知测试图像和音频生成十秒 MP4，然后：
+`qt_software_codec` 在同一 QGuiApplication 进程中链接 Qt、固定 FFmpeg 和 libx264。它在私有目录中建立自己拥有的文件，调用经过上述窄补丁的官方示例，用已知测试图像和音频生成约十秒 MP4，然后：
 
 - 比较编译头与已加载库的版本，检查实际配置包含 GPL / version3 / libx264 且没有 nonfree。
 - 必须找到 `libx264` 和内置 `aac`，不能悄悄更换编码器或使用外部 ffmpeg 命令。
@@ -31,7 +33,7 @@ x264 原源码采用 GPL-2.0-or-later；FFmpeg 此构建明确启用 `--enable-g
 - 用 libswscale 将实际解码帧转成 Qt BGRA，保存真实视频封面 PNG。
 - 编码和解码句柄结束后，通过公共 FileCommitter 无覆盖提交完整 MP4；每次执行使用独占的新证据目录。
 
-示例自己的输入为 352 × 288 / 25 FPS 和 44.1 kHz 立体声；这些是上游测试信号参数，**不改变产品的 30 FPS 默认值或其他录制合同**。没有把生成的测试信号作为真实桌面或音源验收，测试通过也不能据此判断 1080p30 性能、长时漂移或 120 分钟上限。
+示例自己的输入为 352 × 288 / 25 FPS 和 44.1 kHz 立体声。它包含 PTS 恰好为 10 秒的末帧，251 帧每帧 40 ms 对应视频时长 10.04 秒；不能将其写成精确 10 秒。以上是上游测试信号参数，**不改变产品的 30 FPS 默认值或其他录制合同**。没有把生成的测试信号作为真实桌面或音源验收，测试通过也不能据此判断 1080p30 性能、长时漂移或 120 分钟上限。
 
 ## 构建与运行
 
