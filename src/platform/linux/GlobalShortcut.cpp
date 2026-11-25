@@ -7,6 +7,7 @@
 #include "platform/linux/portal/PortalShortcuts.h"
 
 #include <QGuiApplication>
+#include <QLoggingCategory>
 #include <QPointer>
 #include <QSet>
 #include <QSocketNotifier>
@@ -27,6 +28,7 @@ namespace HuhuCapture::Platform {
 namespace {
 using namespace Desktop;
 using Linux::PortalFailure;
+Q_LOGGING_CATEGORY(shortcutTrace, "huhucapture.shortcuts.x11", QtWarningMsg)
 
 template<class T> struct Free { void operator()(T* value) const noexcept { std::free(value); } };
 template<class T> using CPointer = std::unique_ptr<T, Free<T>>;
@@ -91,6 +93,12 @@ struct Grab {
     uint16_t modifiers{};
     friend bool operator==(const Grab&, const Grab&) = default;
 };
+QString describe(const std::vector<Grab>& grabs)
+{
+    QStringList result;
+    for (const auto& grab : grabs) result.push_back(QStringLiteral("%1:%2:%3").arg(grab.root).arg(grab.key).arg(grab.modifiers));
+    return result.join(QChar(u','));
+}
 
 class LinuxShortcut final : public GlobalShortcutBackend {
 public:
@@ -132,7 +140,11 @@ public:
         for (auto screen = xcb_setup_roots_iterator(setup); screen.rem; xcb_screen_next(&screen)) roots_.push_back(screen.data->root);
         if (roots_.empty() || roots_.size() > 16) { completeInitialization({ShortcutError::Unsupported}); return; }
         notifier_ = std::make_unique<QSocketNotifier>(xcb_get_file_descriptor(connection_), QSocketNotifier::Read, this);
-        connect(notifier_.get(), &QSocketNotifier::activated, this, [this] { drainEvents(); });
+        connect(notifier_.get(), &QSocketNotifier::activated, this, [this] {
+            qCDebug(shortcutTrace) << "socket readable";
+            drainEvents();
+        });
+        qCDebug(shortcutTrace) << "initialized XCB fd" << xcb_get_file_descriptor(connection_) << "roots" << roots_.size();
         state_.editing = ShortcutEditing::LocalCapture; completeInitialization({});
     }
     ShortcutSnapshot snapshot() const override { return state_; }
@@ -179,6 +191,7 @@ public:
         drainStaleKeys();
         state_.requestedKeys = keys; state_.actualTrigger = keys.join(QChar(u'+'));
         state_.registered = true; state_.failure = {};
+        qCDebug(shortcutTrace) << "binding active" << describe(active_) << "generation" << keyGeneration_;
         finish({}); if (life) Q_EMIT owner_.changed();
     }
     void cancel(quint64 request) override
@@ -365,6 +378,7 @@ private:
     {
         heldKey_ = 0; lastReleaseTime_ = 0;
         ++keyGeneration_;
+        qCDebug(shortcutTrace) << "discard superseded input" << "generation" << keyGeneration_;
         // Poll through this client's already queued events, retaining mapping
         // notifications. New activations are delivered after registration.
         drainEvents(true);
@@ -374,32 +388,46 @@ private:
         if (!connection_ || stopped_) return;
         while (auto* value = xcb_poll_for_event(connection_)) {
             CPointer<xcb_generic_event_t> event(value);
-            if (event->response_type & 0x80) continue;
+            if (event->response_type & 0x80) { qCDebug(shortcutTrace) << "ignored SendEvent" << (event->response_type & 0x7f); continue; }
             const auto type = event->response_type & 0x7f;
             if (type == XCB_MAPPING_NOTIFY) {
                 auto* mapping = reinterpret_cast<xcb_mapping_notify_event_t*>(event.get());
+                qCDebug(shortcutTrace) << "mapping notification" << mapping->request << mapping->first_keycode << mapping->count;
                 if (mapping->request == XCB_MAPPING_KEYBOARD || mapping->request == XCB_MAPPING_MODIFIER) {
                     xcb_refresh_keyboard_mapping(symbols_, mapping);
                     scheduleRemap();
                 }
                 continue;
             }
-            if (discardKeys || state_.suspended || !state_.registered) continue;
+            if (discardKeys || state_.suspended || !state_.registered) {
+                if (type == XCB_KEY_PRESS || type == XCB_KEY_RELEASE)
+                    qCDebug(shortcutTrace) << "input discarded" << type << discardKeys << state_.suspended << state_.registered;
+                continue;
+            }
             if (type == XCB_KEY_RELEASE) {
                 const auto* key = reinterpret_cast<const xcb_key_release_event_t*>(event.get());
                 if (heldKey_ == key->detail) heldKey_ = 0;
                 lastReleaseTime_ = key->time; lastReleaseKey_ = key->detail;
             } else if (type == XCB_KEY_PRESS) {
                 const auto* key = reinterpret_cast<const xcb_key_press_event_t*>(event.get());
-                const bool matches = std::any_of(active_.begin(), active_.end(), [key](const Grab& grab) {
-                    return grab.root == key->root && grab.key == key->detail && grab.modifiers == (key->state & 0xff);
-                });
+                const Grab pressed{key->root, key->detail, static_cast<uint16_t>(key->state & 0xff)};
+                const bool matches = std::find(active_.begin(), active_.end(), pressed) != active_.end();
+                // Only the configured grab's code is logged. Other keys that
+                // arrive while a passive grab is held are never transcribed.
+                qCDebug(shortcutTrace) << "key press" << "configured" << matches << "root" << key->root
+                    << "modifiers" << key->state << "held" << (heldKey_ == key->detail)
+                    << "repeat" << (lastReleaseKey_ == key->detail && lastReleaseTime_ == key->time)
+                    << "generation" << keyGeneration_;
                 if (!matches || heldKey_ == key->detail) continue;
                 heldKey_ = key->detail;
                 if (lastReleaseKey_ == key->detail && lastReleaseTime_ == key->time) continue;
                 const auto generation = keyGeneration_;
-                QTimer::singleShot(0, this, [this, generation] {
-                    if (!stopped_ && state_.registered && !state_.suspended && generation == keyGeneration_) Q_EMIT owner_.activated({});
+                QTimer::singleShot(0, this, [this, generation, pressed] {
+                    const bool stillBound = std::find(active_.begin(), active_.end(), pressed) != active_.end();
+                    const bool deliver = !stopped_ && state_.registered && !state_.suspended && generation == keyGeneration_ && stillBound;
+                    qCDebug(shortcutTrace) << "queued activation" << "deliver" << deliver << "still bound" << stillBound
+                        << "generation" << generation << keyGeneration_;
+                    if (deliver) Q_EMIT owner_.activated({});
                 });
             }
         }
@@ -419,11 +447,11 @@ private:
             if (stopped_ || state_.suspended || state_.requestedKeys.isEmpty() || pending_) return;
             std::vector<Grab> candidate;
             auto failure = acquire(state_.requestedKeys, candidate, active_);
-            // X11 also sends MappingNotify when switching the core keyboard
-            // to an input device with the same map (including first XTEST
-            // input). A no-op remap must not discard that device's first
-            // already queued, valid activation or its held-key state.
-            const bool registrationsChanged = candidate != active_;
+            // Device switches can update unrelated keycodes/lock variants too.
+            // Judge queued input by its exact grab, not by equality of the whole
+            // map: an added variant cannot invalidate an already valid press.
+            qCDebug(shortcutTrace) << "mapping recheck" << "before" << describe(active_)
+                << "after" << describe(candidate) << "failure" << static_cast<int>(failure.code);
             if (!failure) {
                 failure = releaseExcept(active_, candidate);
                 if (failure) closeX11();
@@ -436,9 +464,13 @@ private:
                 failure.code = ShortcutError::RestoreFailed;
             }
             state_.failure = failure;
+            if (!std::any_of(active_.begin(), active_.end(), [this](const Grab& grab) { return grab.key == heldKey_; })) {
+                heldKey_ = 0; lastReleaseTime_ = 0;
+            }
             const QPointer<LinuxShortcut> life(this);
-            if (failure || registrationsChanged) drainStaleKeys();
-            else drainEvents(); // A checked reply may have buffered events in XCB.
+            // Checked replies may buffer events in XCB. Process them against
+            // the new real grab set, without throwing away still-valid input.
+            drainEvents();
             if (life) Q_EMIT owner_.changed();
         });
     }

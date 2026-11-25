@@ -30,6 +30,7 @@
 #include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLoggingCategory>
 #include <QPointer>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -217,6 +218,10 @@ void injectChord(bool notifyUnchangedMapping = false)
     std::unique_ptr<xcb_test_get_version_reply_t, decltype(&std::free)> version(
         xcb_test_get_version_reply(connection, xcb_test_get_version(connection, 2, 2), nullptr), std::free);
     require(version && version->major_version >= 2, "Actual server provides XTEST");
+    std::unique_ptr<xcb_get_input_focus_reply_t, decltype(&std::free)> focus(
+        xcb_get_input_focus_reply(connection, xcb_get_input_focus(connection), nullptr), std::free);
+    require(bool(focus), "Read actual native keyboard focus before injection");
+    std::cout << "Actual X11 focus=" << focus->focus << ", revert=" << unsigned(focus->revert_to) << ".\n";
     std::array<xcb_keycode_t, 3> keys{}; const std::array<xcb_keysym_t, 3> wanted{XKB_KEY_Control_L, XKB_KEY_Alt_L, XKB_KEY_F9};
     for (std::size_t index = 0; index < keys.size(); ++index) {
         auto* codes = xcb_key_symbols_get_keycode(symbols, wanted[index]); require(codes && *codes, "Translate real XTEST chord");
@@ -497,6 +502,9 @@ int main(int argc, char** argv)
         try { write(proof, "--auto-start"); return 0; } catch (...) { return 1; }
     }
     try {
+#ifndef _WIN32
+        QLoggingCategory::setFilterRules(qEnvironmentVariable("QT_LOGGING_RULES") + QStringLiteral("\nhuhucapture.shortcuts.x11.debug=true"));
+#endif
         QTemporaryDir directory; require(directory.isValid(), "Create actual isolated filesystem fixture");
         StartupIsolation startup(directory.path());
         QApplication application(argc, argv); application.setQuitOnLastWindowClosed(false);
