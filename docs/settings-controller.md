@@ -82,6 +82,13 @@ SendEvent 伪造标志、抑制自动重复并按用户绑定代次丢弃旧的�
 不能只等待文件描述符下一次可读。应用退出断开自己的 XCB
 连接，服务端释放该客户端全部抓取。它不改变桌面其他客户端的键盘状态。
 
+服务端保留动作不属于普通客户端按键冲突。常见 XKB 的 `srvr_ctrl(fkey2vt)`
+将 `Ctrl+Alt+F1`–`F12` 映射为 `XF86_Switch_VT_*`；固定 X server 的
+[`_XkbFilterSwitchScreen`](https://github.com/mirror/xserver/blob/fc625fe172d9f6a149a594b5214364bedf680239/xkb/xkbActions.c)
+在客户端被动抓取前消费该动作，DDX 不能实际切换 VT 时也不把它改发为普通
+KeyPress。因此 checked grab 成功不代表可覆盖桌面的系统保留动作。应用不修改
+用户 XKB 配置、不关闭系统动作，也不把这种服务端限制包装为成功激活。
+
 ### Wayland / Portal
 
 应用设置稳定 desktop file ID `io.github.NAMEWTA.huhucapture`，动作 ID 为 `capture`。
@@ -144,6 +151,9 @@ Exec 转义依据 [Desktop Entry 规范](https://specifications.freedesktop.org/
 Windows SendInput / Linux XTEST 生成实际 OS 输入，验证全局激活、冲突、录入期间
 释放、保存失败后旧注册仍占用、候选释放和退出清理。实际 Qt 控件驱动设置保存与
 多语言切换，并输出真实窗口 PNG；这类输入不等于物理键盘、输入法或混合 DPI 验收。
+真实激活正测使用 `Ctrl+Shift+F9`，候选与设置录入也使用 `Ctrl+Shift+Fn`，
+避开上述服务端 VT 动作。仍验证第一次实际输入，不预先注入“热身”按键、不
+禁用 XKB 系统动作，也不修改生产默认 F1 或用户自定义快捷键。
 X11 测试逐项检查真实 XTEST 请求的原生错误和结束后的按键释放状态，并在私有测试
 服务器原样重提交现有键盘映射，验证真实 MappingNotify 后第一次输入仍可触发。
 测试启用 `huhucapture.shortcuts.x11` 的 debug 分类，保留实际 focus、映射通知、
