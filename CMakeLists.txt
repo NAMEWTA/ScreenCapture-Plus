@@ -7,9 +7,9 @@ add_library(huhucapture_version INTERFACE)
 target_include_directories(huhucapture_version INTERFACE "${PROJECT_BINARY_DIR}/generated")
 target_compile_features(huhucapture_version INTERFACE cxx_std_20)
 
-# During P00/P03 this builds the shared contracts and migration validation only.
-# The shipping Windows application remains on its verified build until P12.
-# Do not mistake a passing core-only configuration for a Qt product build.
+# Shared contracts can be validated without Qt. The complete application host
+# is selected explicitly below; its native/package acceptance remains separate.
+# The shipping Windows application stays on its verified build until P12.
 include(CTest)
 option(HUHUCAPTURE_QT_VALIDATION "Build the pinned Qt migration validation targets" OFF)
 option(HUHUCAPTURE_PORTAL_VALIDATION "Build the real Linux Portal control-plane validation" OFF)
@@ -19,6 +19,21 @@ option(HUHUCAPTURE_DESKTOP_VALIDATION "Build real system clipboard, trash and fi
 option(HUHUCAPTURE_PIPEWIRE_VALIDATION "Build the fixed Linux PipeWire data-plane validation" OFF)
 option(HUHUCAPTURE_RUST_VALIDATION "Link one Rust aggregate into the real Qt ABI probe" OFF)
 option(HUHUCAPTURE_NATIVE_INPUT_VALIDATION "Build the real OS shortcut/input validation (requires XTEST development files on Linux)" ON)
+option(HUHUCAPTURE_BUILD_APP "Build the shared Qt application and its integrated lifecycle validation" OFF)
+if(HUHUCAPTURE_BUILD_APP)
+    foreach(required IN ITEMS QT DESKTOP RUST VIDEO)
+        if(NOT HUHUCAPTURE_${required}_VALIDATION)
+            message(FATAL_ERROR "The Qt application requires HUHUCAPTURE_${required}_VALIDATION=ON")
+        endif()
+    endforeach()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        foreach(required IN ITEMS PORTAL PIPEWIRE FFMPEG)
+            if(NOT HUHUCAPTURE_${required}_VALIDATION)
+                message(FATAL_ERROR "The Linux application requires HUHUCAPTURE_${required}_VALIDATION=ON")
+            endif()
+        endforeach()
+    endif()
+endif()
 if(HUHUCAPTURE_PORTAL_VALIDATION AND NOT HUHUCAPTURE_QT_VALIDATION)
     message(FATAL_ERROR "Portal validation requires HUHUCAPTURE_QT_VALIDATION=ON")
 endif()
@@ -809,6 +824,10 @@ if(HUHUCAPTURE_QT_VALIDATION)
         target_link_libraries(qt_software_codec PRIVATE Qt6::Gui PkgConfig::FFMPEG
             huhucapture_file_committer ffmpeg_mux_example m)
         set_tests_properties(qt_software_codec PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        add_library(huhucapture_mp4_encoder STATIC src/services/media/Mp4Encoder.cpp)
+        target_link_libraries(huhucapture_mp4_encoder PUBLIC
+            huhucapture_media_frames huhucapture_file_committer PRIVATE PkgConfig::FFMPEG)
+        set_target_properties(huhucapture_mp4_encoder PROPERTIES CXX_EXTENSIONS OFF)
     endif()
     if(HUHUCAPTURE_VIDEO_VALIDATION)
         set(HUHUCAPTURE_VIDEO_FIXTURES "${PROJECT_SOURCE_DIR}/artifacts/video-fixtures"
@@ -832,6 +851,11 @@ if(HUHUCAPTURE_QT_VALIDATION)
             target_link_libraries(video_inspection_fixtures PRIVATE huhucapture_core Qt6::Core
                 PkgConfig::FFMPEG ffmpeg_mux_example m)
             set_target_properties(video_inspection_fixtures PROPERTIES CXX_EXTENSIONS OFF)
+            huhucapture_test(qt_mp4_encoder tests/qt/mp4_encoder_tests.cpp
+                "${PROJECT_BINARY_DIR}/mp4-encoder/$<CONFIG>")
+            target_link_libraries(qt_mp4_encoder PRIVATE huhucapture_mp4_encoder
+                huhucapture_video_inspection PkgConfig::FFMPEG Qt6::Core)
+            set_tests_properties(qt_mp4_encoder PROPERTIES TIMEOUT 180)
         else()
             message(FATAL_ERROR "Video inspection validation targets Windows x64 and Linux amd64")
         endif()
@@ -852,5 +876,46 @@ if(HUHUCAPTURE_QT_VALIDATION)
                 ENVIRONMENT "QT_QPA_PLATFORM=windows"
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:huhucapture_ffmpeg_avformat>")
         endif()
+    endif()
+endif()
+
+
+if(HUHUCAPTURE_BUILD_APP)
+    add_library(huhucapture_application STATIC src/app/QtApplication.h src/app/QtApplication.cpp)
+    set_target_properties(huhucapture_application PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+    target_link_libraries(huhucapture_application PUBLIC
+        huhucapture_startup huhucapture_recording_workspace huhucapture_settings_controller
+        huhucapture_lan_controller huhucapture_gif_inspection huhucapture_video_inspection)
+    if(WIN32)
+        target_sources(huhucapture_application PRIVATE src/platform/windows/DesktopSession.cpp)
+        target_link_libraries(huhucapture_application PRIVATE user32)
+    endif()
+    add_executable(huhucapture WIN32 src/app/qt_main.cpp)
+    target_link_libraries(huhucapture PRIVATE huhucapture_application)
+    set_target_properties(huhucapture PROPERTIES CXX_EXTENSIONS OFF)
+    if(WIN32)
+        target_link_libraries(huhucapture PRIVATE huhucapture_native_media huhucapture_native_gif)
+        target_sources(huhucapture PRIVATE resources/qt/application.rc)
+        target_include_directories(huhucapture PRIVATE "${PROJECT_SOURCE_DIR}/resources")
+        target_compile_definitions(huhucapture PRIVATE
+            HUHU_VERSION_MAJOR=${PROJECT_VERSION_MAJOR} HUHU_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+            HUHU_VERSION_PATCH=${PROJECT_VERSION_PATCH} HUHU_VERSION_REVISION=0)
+        # The same per-monitor awareness used by the retained native product.
+        # Qt's actual screen bindings still own per-screen coordinate conversion.
+        set_target_properties(huhucapture PROPERTIES VS_DPI_AWARE "PerMonitor")
+    endif()
+    huhucapture_test(qt_application_lifecycle tests/qt/application_lifecycle_tests.cpp
+        "${PROJECT_BINARY_DIR}/application-lifecycle/$<CONFIG>")
+    target_link_libraries(qt_application_lifecycle PRIVATE huhucapture_application)
+    set_tests_properties(qt_application_lifecycle PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    if(WIN32)
+        set_tests_properties(qt_application_lifecycle PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:huhucapture_ffmpeg_avformat>")
+    else()
+        add_test(NAME qt_application_clipboard_owner COMMAND "${XVFB_RUN}" -a
+            "${CMAKE_COMMAND}" -E env "QT_QPA_PLATFORM=xcb" $<TARGET_FILE:qt_application_lifecycle>
+            "${PROJECT_BINARY_DIR}/application-clipboard-owner/$<CONFIG>" --clipboard-owner)
+        set_tests_properties(qt_application_clipboard_owner PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
     endif()
 endif()

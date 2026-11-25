@@ -50,6 +50,14 @@ Portal 会话必须活到 worker 返回。正常停止先请求 worker 的 stop 
 
 格式解析和消费者回调均不会让 C++ 异常穿过 C 回调栈。非实时 process 回调只做有界取帧、验证、复制和移交，单次处理最多 16 个 buffer，以免异常源饿死取消或截止事件。消费者必须迅速返回；完整编码应在共享媒体服务的有界队列上执行。
 
+### 实际活动状态与暂停恢复
+
+共享实时源通过 `activityChanged` 接收真正的 `PW_STREAM_STATE_STREAMING` / `PAUSED` 转移和终态 inactivity。这个回调仍在唯一 PipeWire worker 上执行；调用方只更新线程安全健康状态或排队通知，不触碰 GUI，也不能阻塞。重复相同状态不重复通知，消费者异常明确回传 Consumer / Allocation，保留已有首错。
+
+静止画面可能长时间没有新 damage buffer，因此没有把“没有帧”当作暂停或断线。初始 PAUSED 仍由原首帧截止控制；已经交付真实帧后出现 PAUSED 才开始独立、默认五秒的恢复截止。重复 PAUSED 不延长截止，真实 STREAMING 会撤销它；未恢复返回 `PauseTimeout`。来源关闭/失败/用户停止均先使健康状态不再 Streaming，避免消费者在已经失效的来源上无限重复旧图像。
+
+2026-11-25，新增状态接缝以固定 PipeWire 1.6.11 实际严格编译并通过已有真实 socket/epoll/loop deadline/跨线程取消测试；额外断言失败传输和连接前取消不会宣布 Streaming，并最终报告 inactivity。真实 ScreenCast 探针新增原生转移数组、至少一次 Streaming 和返回时 inactive 断言，等待对应 CI 运行；此本地故障测试不证明 compositor PAUSED/恢复或物理显示器静止长录制已经通过。
+
 ## 固定源码、复用与许可
 
 构建输入是 [依赖锁](../build/dependencies.lock.json) 的 PipeWire **1.6.11**、提交 `4287f31510771fc999f8a58a024c81ca10b8d55f`，不能用系统另一个版本通过 API 检查后宣称固定版本通过。Issue 的 R07/R08/R09 均已阅读具体实现：

@@ -143,6 +143,11 @@ void immediateCancellationAndBadArguments()
         options.sourceId = 1;
         PipeWireCaptureCallbacks callbacks;
         callbacks.frame = [](auto) { throw std::runtime_error("no frames can exist before connect"); return false; };
+        bool inactive{};
+        callbacks.activityChanged = [&](bool streaming) {
+            require(!streaming, "pre-connect failure/cancellation must never announce actual Streaming");
+            inactive = true;
+        };
         std::stop_source stop;
         if (cancel) stop.request_stop();
         const auto result = runPipeWireCapture(std::move(socket.client), {cancel ? 42u : 0u, {}},
@@ -150,6 +155,7 @@ void immediateCancellationAndBadArguments()
         require(cancel ? result.stopped && !result.failure :
             result.failure && result.failure->code == PipeWireFailure::Code::InvalidArgument,
             "pre-connect cancellation and bad arguments must remain distinguishable");
+        require(inactive, "terminal cancellation or rejected input reports inactivity");
         checkClosed(fd, socket.peer.get());
     }
 }
@@ -165,6 +171,11 @@ void silentTransportDeadlineAndCancellation()
         options.firstFrameTimeout = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(200);
         PipeWireCaptureCallbacks callbacks;
         callbacks.frame = [](auto) { throw std::runtime_error("a silent transport cannot supply media"); return false; };
+        bool inactive{};
+        callbacks.activityChanged = [&](bool streaming) {
+            require(!streaming, "a silent socket cannot authorize a Streaming state");
+            inactive = true;
+        };
         std::stop_source stop;
         std::jthread cancellation;
         if (cancel) cancellation = std::jthread([&] {
@@ -179,6 +190,7 @@ void silentTransportDeadlineAndCancellation()
             result.failure && result.failure->code == PipeWireFailure::Code::FirstFrameTimeout,
             "silent transport must stop via its actual loop timer or cross-thread event");
         require(result.stats.framesDelivered == 0, "failure tests must not invent successful media");
+        require(inactive, "actual transport timeout/cancellation leaves no Streaming health");
         checkClosed(fd, socket.peer.get());
     }
 }

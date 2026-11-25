@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <limits>
 #include <unistd.h>
 
 namespace HuhuCapture::Platform {
@@ -29,6 +30,19 @@ std::error_code flushFileDescriptor(int descriptor) noexcept
         if (error != EINTR) return {error, std::generic_category()};
     }
     return {};
+}
+
+std::error_code seekFileDescriptor(int descriptor, std::uint64_t absolutePosition) noexcept
+{
+    if (absolutePosition > static_cast<std::uint64_t>((std::numeric_limits<off_t>::max)()))
+        return std::make_error_code(std::errc::value_too_large);
+    for (;;) {
+        const auto position = ::lseek(descriptor, static_cast<off_t>(absolutePosition), SEEK_SET);
+        if (position >= 0) return static_cast<std::uint64_t>(position) == absolutePosition
+            ? std::error_code{} : std::make_error_code(std::errc::io_error);
+        const int error = errno;
+        if (error != EINTR) return {error, std::generic_category()};
+    }
 }
 
 } // namespace HuhuCapture::Platform

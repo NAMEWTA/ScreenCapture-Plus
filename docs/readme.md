@@ -6,6 +6,7 @@
 | --- | --- |
 | Qt 重构完成到哪里，哪些能力尚不能当作产品交付？ | [迁移状态与保护边界](qt-migration.md) |
 | 启动参数、一次性实例与主实例动作转发怎样保留原有语义？ | [共享启动与本地 IPC](qt-startup.md) |
+| 主程序如何装配服务、处理无托盘桌面并等待真实退出？ | [Qt 应用生命周期](qt-application.md) |
 | Qt 编辑器怎样保留九工具与原版焦点、参数和输出语义？ | [共享编辑器合同](qt-editor.md) |
 | 设置、历史、关于页怎样共用控件并等待真实服务结果？ | [共享桌面窗口](qt-desktop.md) |
 | 剪贴板如何确认发布，回收和文件定位如何保留真实结果？ | [桌面系统服务](desktop-integration.md) |
@@ -17,9 +18,12 @@
 | 设备选择、证书确认、接收和任务窗口怎样连接同一传输服务？ | [局域网共享界面](lan-interface.md) |
 | 私有身份、网卡变化、任务和确认窗怎样由应用统一拥有？ | [局域网应用控制层](lan-controller.md) |
 | 截图九宫格调整怎样复用同一源像素选择模型？ | [截图选择模型](capture-selection.md) |
+| 原生像素、源身份和屏幕坐标怎样进入共享截图、编辑与输出？ | [截图与录屏工作区](capture-workspaces.md)、[采集源](screen-capture.md) |
+| 长截图怎样复用原有匹配、节奏和内存保留规则？ | [共享长截图](scroll-capture.md) |
 | Linux Portal 如何与 Qt 共用上下文，怎样验证取消与父窗？ | [Linux Portal 控制面](linux-portal.md) |
 | PipeWire 帧如何归还、跨线程持有并验证实际采流？ | [Linux PipeWire 数据面](linux-pipewire.md) |
 | 软件 H.264 / AAC 如何固定构建，API 探针能证明什么？ | [软件编码依赖](software-codecs.md) |
+| Linux 编码器怎样完整保留视频与 AAC 尾样本并保护输出身份？ | [Linux 录制编码](linux-recording.md) |
 | MP4 完整检查为何区别于首帧封面，坏样本怎样跨平台验证？ | [视频检查与封面](video-inspection.md) |
 | 怎样用固定源码生成实际 HEVC Main / Main10 回归输入？ | [HEVC 样本与复用记录](hevc-fixtures.md) |
 | 项目继承自哪里，如何保留上游归属与许可？ | [上游致谢](upstream.md) |

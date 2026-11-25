@@ -4,7 +4,7 @@
 
 ## 当前构建是什么
 
-当前正式版本仍是 v0.0.5 的 Windows 产品。新的根目录 CMake 构建提供共享 C++20 模型、持久化接口、Qt 服务及平台验证程序，**尚不产生功能完整的 Qt 产品或 Linux 安装包**。组件测试通过不代表界面、录屏、局域网用户流程或安装升级验收完成。
+当前正式版本仍是 v0.0.5 的 Windows 产品。根目录 CMake 已提供共享 C++20 模型、Qt 服务、原生适配和实际 `huhucapture` 程序目标。`HUHUCAPTURE_BUILD_APP=ON` 装配同一套启动、托盘、截图、编辑、历史、设置、录制与局域网服务；Linux 已完成该目标的真实 Release 编译、链接和明确受限的本地生命周期检查。**该宿主仍在功能集成中，不是已通过 P12 的完整产品或正式安装包**。组件或宿主测试通过不能替代真实桌面、音源、两端互传、安装升级和性能验收。
 
 迁移目标是一个 C++20 / Qt 6 Widgets 产品，两端使用同一套界面、编辑器状态与应用服务。平台目录只处理真实系统差异。现有 Windows 原生采集、Media Foundation 和 WASAPI 继续复用；Linux 的 Portal 控制面复用固定 libportal，局域网协议复用固定 LocalSend Rust core。
 
@@ -15,15 +15,15 @@
 | 路径 | 当前职责 | 需要继续完成的部分 |
 | --- | --- | --- |
 | `src/core/` | 无 Qt / Win32 的像素、批注排版、活动历史、归档命名、录制结果和时间合同 | 会话、能力与跨屏坐标的完整产品合同 |
-| `src/app/SingleInstance.*` 与 `src/core/Startup.h` | 既有 CLI 语义、Qt 非阻塞本地动作转发、活锁/崩溃/不确定投递边界；旧产品复用启动规则 | 正式 QApplication / 托盘 / 会话装配及实际启动旅程 |
-| `src/editor/` 的模型与 `EditorDocument.h` | 共用几何、拖动、文字、编号、批注、工具参数与唯一活动历史；原 Windows 工具直接复用 | 采集会话及完整产品入口接入 |
-| `src/ui/qt/Editor*` | 共用九工具画布、单一文字输入、完整批注面板、原图马赛克及带令牌的异步输出请求；双平台组件构建与受控交互测试 | 归档 / 剪贴板 / 贴图服务接线、真实 IME 与混合 DPI |
-| `src/services/rendering/` | Qt 字体测量、完整备注排版和离屏合图，保留原图像素与失败时旧输出 | 正式编辑器导出接入及真实桌面字体 / IME 验收 |
-| `src/services/config/` | UTF-8 / UTF-16 JSON 读取、未知字段保留、首次迁移备份、路径选择与原子替换 | 设置页面、运行时效果、系统自启与快捷键接入 |
+| `src/app/QtApplication.*`、`SingleInstance.*` 与 `src/core/Startup.h` | 同一 QApplication / 托盘 / 可见后备入口、配置和服务所有者；既有 CLI、非阻塞动作转发及真实关闭屏障；旧产品复用启动规则 | 完整双端 IPC / 托盘与真实桌面启动旅程，Linux 录制来源和更新接线 |
+| `src/editor/` 的模型与 `EditorDocument.h` | 共用几何、拖动、文字、编号、批注、工具参数与唯一活动历史；原 Windows 工具和 Qt 工作区直接复用 | 完整产品的物理输入与长期会话验收 |
+| `src/ui/qt/Editor*` 与 `MediaWorkspace` | 共用九工具画布、单一文字输入、完整批注面板、原图马赛克及带令牌的异步归档 / 剪贴板 / 贴图输出；双平台组件构建与受控交互测试 | 真实 IME、混合 DPI、完整桌面字体和导出旅程 |
+| `src/services/rendering/` | Qt 字体测量、完整备注排版和离屏合图，保留原图像素与失败时旧输出；共享编辑器使用同一导出路径 | 真实桌面字体 / IME 与大图资源验收 |
+| `src/services/config/` 与 `SettingsController` | UTF-8 / UTF-16 JSON 读取、未知字段保留、首次迁移备份、路径选择与原子替换；同一设置页接入真实自启、快捷键和运行时状态 | X11 映射、Portal 实际授权、自启和配置迁移的完整桌面验收 |
 | `src/services/localization/` | 六份原语言、同一 BOM 解析器、英语回退、目录优先级和缓存刷新 | 正式窗口语言切换、长译文与 IME 验收 |
-| `src/services/media/` | 共用受管文件命名、PNG 编码 / 完整解码、流式导入、身份租约与持久化结果 | 服务实际验证、完整 GIF / MP4 接入、缩略图缓存、回收及历史 UI 装配 |
-| `src/services/desktop/` | 共用剪贴板准备/发布、回收/第二次永久删除许可、异步文件定位；Windows 旧入口直接共用提取的原生实现 | 双平台新增真实检查、正式应用接线与桌面交互验收 |
-| `src/services/transfer/` 与 `src/ui/qt/Transfer*` / `ReceivePrompt` | 有界 Qt actor 与独立接收 worker，真实接收归档、完整校验、设备 / 证书确认 / 进度 UI、窗口重开所需有界结果快照 | 新增界面实际 CI、正式持久身份和网卡装配、物理双端与性能门槛 |
+| `src/services/media/` | 共用受管命名、PNG / GIF / MP4 完整检查、流式导入、身份租约、缩略图、历史装配及持久化结果；固定 FFmpeg / x264 / AAC 软件编码器已完成真实输出检查 | Linux 实际音视频来源接线、长时同步、现有 Windows 音频格式的跨端兼容 |
+| `src/services/desktop/` | 共用剪贴板准备/发布及排空、回收/第二次永久删除许可、异步定位；宿主和 Windows 旧入口复用同一实现 | Linux 真实剪贴板接管、桌面文件管理器、退出持有和物理交互验收 |
+| `src/services/transfer/`、`LanController` 与 `src/ui/qt/Transfer*` / `ReceivePrompt` | 有界 Qt actor、真实持久身份和网卡装配、独立接收 worker、完整校验与归档、设备 / 证书确认 / 进度 UI及窗口重开快照 | 物理双端、完整产品操作旅程与性能门槛 |
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
 | `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；KWindowSystem 异步父窗导出已通过指定 Sway 生命周期测试 | PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
@@ -53,22 +53,22 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 | 工作包 | 当前状态 | 尚未解除的主要门槛 |
 | --- | --- | --- |
 | P00 | 实施与验证中；Qt / gifski / TLS 同进程已在双平台通过 | 完整原生媒体组合、Portal 三类接口实际授权、Linux 音源与许可分发、固定机器性能基线 |
-| P01 | CMake、唯一产品版本源与双平台组件 CI 已接入 | 完整固定恢复、正式最小 Qt 壳与安装链 |
+| P01 | CMake、唯一产品版本源、实际共享 Qt 宿主与双平台组件 CI 已接入 | 完整固定恢复、宿主双平台 CI 和同源安装链 |
 | P02 | 共享设置 / 历史 / 关于窗口已进入真实组件测试 | Linux 桌面完整交互、真实弹层与混合 DPI 拖动 |
 | P03 | 九工具模型、工具参数、马赛克与 EditorDocument 已由旧产品和 Qt 编辑器共用 | 会话及正式 Qt 产品集成 |
 | P04 | 原生媒体 / 文件边界解耦中 | 截图、热键、窗口 / 光标、COM 与录制全生命周期 |
 | P05 | Portal 控制面实施与验证中 | X11、PipeWire、全局键及真实桌面能力矩阵 |
 | P06 | 配置、语言和文件发布合同已实现 | QR / 回收 / 剪贴板 / 缩略图 / lease 的完整迁移 |
-| P07 | 共享 Qt 编辑器组件进入验证，未验收 | 正式 Qt CLI / 单实例 / 托盘、设置 / 历史 / 关于及采集和输出服务接线 |
-| P08 | 未验收 | 共用长截图会话、平台帧源与实际滚动 |
-| P09 | Windows 错误和 finalize 边界已修复 | Qt 工具条、Linux MP4 / 音频、共享 GIF、长时同步与恢复 |
+| P07 | 同一 Qt 宿主、CLI / 单实例 / 托盘、设置 / 历史 / 关于和截图 / 编辑输出已装配，未验收 | 真实双平台完整旅程、字体 / IME / DPI、更新服务接线 |
+| P08 | 旧产品已调用共享长截图模型，模型保留原重检和终止规则 | 平台持续帧源、共享控制视图与实际滚动 |
+| P09 | 共用录制会话 / 工具条、Windows 原生后端、共享 GIF 与 Linux MP4 编码器已接入并分层验证 | Linux 持续来源 / 音频接线、真实音源四组合、长时同步与恢复 |
 | P10 | 上游 core、聚合 C ABI、真实 TLS 归档测试和共享任务 / 设备 UI 实施中 | 新增界面实际验证、正式身份 / 网卡装配与 P10a 双平台互传；P10b 独立记录 |
 | P11 | 未验收 | 旧版更新桥接、完整包下载及 Windows / Linux 安装格式 |
 | P12 | 未验收 | F01–F15、真实双屏 / IME / 音视频、性能、稳定性和干净机器升级卸载 |
 | P13 | 等待 P12 | 删除旧生产架构后从干净检出重新验证 |
 | P14 | 文档随实现更新，未进入发布 | 许可证 / 对应源码与同 SHA 全部发行资产、必要验收 |
 
-截图与录屏的应用服务接线见 [共享工作区](capture-workspaces.md)，真实原生截图的来源与坐标约束见 [采集服务](screen-capture.md)，长截图的保留规则见 [共享长截图模型](scroll-capture.md)。这些实现分别记录自己的验证范围，尚不代表完整应用或对应工作包已经验收。
+应用所有权、启动和退出屏障见 [共享 Qt 宿主](qt-application.md)。截图与录屏的接线见 [共享工作区](capture-workspaces.md)，真实截图的来源与坐标约束见 [采集服务](screen-capture.md)，长截图的保留规则见 [共享长截图模型](scroll-capture.md)，软件编码和 AAC 尾样本合同见 [Linux 录制](linux-recording.md)。这些实现分别记录自己的实际验证范围，尚不代表整个工作包已经验收。
 
 ## 平台支持与验证口径
 

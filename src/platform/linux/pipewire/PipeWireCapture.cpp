@@ -45,9 +45,12 @@ struct Capture {
     spa_hook streamListener{};
     spa_source* cancelEvent{};
     spa_source* firstFrameTimer{};
+    spa_source* pauseTimer{};
     std::optional<FrameFormat> format;
     std::optional<std::int64_t> previousPts;
     std::optional<MediaClock::time_point> frameDeadline;
+    std::optional<MediaClock::time_point> pauseDeadline;
+    std::optional<bool> streaming;
     bool firstInFormat{true};
     bool connected{};
     bool finished{};
@@ -68,6 +71,7 @@ struct Capture {
             pw_core_disconnect(core);
         }
         if (firstFrameTimer) pw_loop_destroy_source(loop, firstFrameTimer);
+        if (pauseTimer) pw_loop_destroy_source(loop, pauseTimer);
         if (cancelEvent) pw_loop_destroy_source(loop, cancelEvent);
         if (context) pw_context_destroy(context);
         if (mainLoop) pw_main_loop_destroy(mainLoop);
@@ -83,6 +87,33 @@ struct Capture {
             catch (const std::bad_alloc&) {} // The code itself remains observable.
         }
         finished = true;
+        activity(false);
+    }
+
+    void activity(bool active) noexcept
+    {
+        if (streaming && *streaming == active) return;
+        streaming = active;
+        if (!callbacks.activityChanged) return;
+        try { callbacks.activityChanged(active); }
+        catch (const std::bad_alloc&) { fail(Code::Allocation, -ENOMEM, "Activity consumer allocation failed"); }
+        catch (const std::exception& error) { fail(Code::Consumer, -EIO, error.what()); }
+        catch (...) { fail(Code::Consumer, -EIO, "Activity consumer threw an exception"); }
+    }
+
+    void pause(bool paused) noexcept
+    {
+        timespec deadline{};
+        if (paused) {
+            const auto now = MediaClock::now();
+            if (!pauseDeadline) pauseDeadline = now + options.pauseTimeout;
+            const auto nanoseconds = (std::max)(std::int64_t{1},
+                std::chrono::duration_cast<std::chrono::nanoseconds>(*pauseDeadline - now).count());
+            deadline = {static_cast<time_t>(nanoseconds / 1'000'000'000),
+                        static_cast<long>(nanoseconds % 1'000'000'000)};
+        } else pauseDeadline.reset();
+        const int error = pw_loop_update_timer(loop, pauseTimer, &deadline, nullptr, false);
+        if (error < 0) fail(Code::Stream, error, "Cannot update the native stream pause deadline");
     }
 
     bool armFirstFrame() noexcept
@@ -111,6 +142,7 @@ struct Capture {
         auto& self = *static_cast<Capture*>(value);
         self.result.stopped = true;
         self.finished = true;
+        self.activity(false);
     }
 
     static void timedOut(void* value, std::uint64_t) noexcept
@@ -119,6 +151,13 @@ struct Capture {
         if (!self.finished)
             self.fail(Code::FirstFrameTimeout, -ETIMEDOUT,
                       "No valid frame arrived before the negotiated-format deadline");
+    }
+
+    static void pauseTimedOut(void* value, std::uint64_t) noexcept
+    {
+        auto& self = *static_cast<Capture*>(value);
+        if (!self.finished && self.pauseDeadline)
+            self.fail(Code::PauseTimeout, -ETIMEDOUT, "The captured PipeWire stream remained paused past its recovery deadline");
     }
 
     static void coreError(void* value, std::uint32_t, int, int error, const char* message) noexcept
@@ -137,6 +176,16 @@ struct Capture {
             self.fail(Code::Connection, -EPIPE, "The authorized PipeWire stream disconnected");
         else if (state != PW_STREAM_STATE_UNCONNECTED)
             self.connected = true;
+        if (self.finished) return;
+        if (state == PW_STREAM_STATE_STREAMING) {
+            self.pause(false);
+            if (!self.finished) self.activity(true);
+        } else if (state == PW_STREAM_STATE_PAUSED) {
+            self.activity(false);
+            // Initial negotiation is already protected by first-frame timeout.
+            // Never apply this deadline to an otherwise active static desktop.
+            if (!self.finished && self.result.stats.framesDelivered) self.pause(true);
+        }
     }
 
     static bool readColor(const spa_video_info_raw& raw, FrameColor& color) noexcept
@@ -424,6 +473,7 @@ struct Capture {
             if (!callbacks.frame(std::move(frame))) {
                 result.stopped = true;
                 finished = true;
+                activity(false);
             }
         }
     }
@@ -466,6 +516,7 @@ PipeWireCaptureResult runPipeWireCapture(UniqueFd remote, PipeWireTarget target,
             capture.options.sessionId == 0 || capture.options.sourceId == 0 || !capture.callbacks.frame ||
             capture.options.firstFrameTimeout.count() <= 0 ||
             capture.options.firstFrameTimeout > std::chrono::minutes(5) ||
+            capture.options.pauseTimeout.count() <= 0 || capture.options.pauseTimeout > std::chrono::minutes(5) ||
             capture.options.pool.maximumDimension <= 0 || capture.options.pool.slotCount == 0 ||
             capture.options.pool.maximumBytes == 0 || capture.options.maximumFrameRate > 1000) {
             capture.fail(Code::InvalidArgument, -EINVAL, "Invalid authorized target, callback, identities or capture limits");
@@ -473,6 +524,7 @@ PipeWireCaptureResult runPipeWireCapture(UniqueFd remote, PipeWireTarget target,
         }
         if (stop.stop_requested()) {
             capture.result.stopped = true;
+            capture.activity(false);
             return std::move(capture.result);
         }
         const int fdFlags = fcntl(remote.get(), F_GETFD);
@@ -488,7 +540,8 @@ PipeWireCaptureResult runPipeWireCapture(UniqueFd remote, PipeWireTarget target,
         capture.loop = pw_main_loop_get_loop(capture.mainLoop);
         capture.cancelEvent = pw_loop_add_event(capture.loop, Capture::cancel, &capture);
         capture.firstFrameTimer = pw_loop_add_timer(capture.loop, Capture::timedOut, &capture);
-        if (!capture.cancelEvent || !capture.firstFrameTimer) {
+        capture.pauseTimer = pw_loop_add_timer(capture.loop, Capture::pauseTimedOut, &capture);
+        if (!capture.cancelEvent || !capture.firstFrameTimer || !capture.pauseTimer) {
             capture.fail(Code::Initialization, -errno, "Cannot create capture stop/deadline event sources");
             return std::move(capture.result);
         }

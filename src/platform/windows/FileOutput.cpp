@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <io.h>
+#include <limits>
 
 namespace HuhuCapture::Platform {
 
@@ -25,6 +26,16 @@ std::error_code writeFileDescriptor(int descriptor, std::span<const std::uint8_t
 std::error_code flushFileDescriptor(int descriptor) noexcept
 {
     return _commit(descriptor) == 0 ? std::error_code{} : std::error_code{errno, std::generic_category()};
+}
+
+std::error_code seekFileDescriptor(int descriptor, std::uint64_t absolutePosition) noexcept
+{
+    if (absolutePosition > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()))
+        return std::make_error_code(std::errc::value_too_large);
+    const auto position = _lseeki64(descriptor, static_cast<std::int64_t>(absolutePosition), SEEK_SET);
+    if (position < 0) return {errno, std::generic_category()};
+    return static_cast<std::uint64_t>(position) == absolutePosition ? std::error_code{}
+        : std::make_error_code(std::errc::io_error);
 }
 
 } // namespace HuhuCapture::Platform

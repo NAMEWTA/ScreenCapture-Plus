@@ -31,6 +31,7 @@ jobs:
   qt-contracts:
     env:
       AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
+      CARGO_BUILD_JOBS: 2
     strategy:
       fail-fast: false
       matrix:
@@ -44,7 +45,7 @@ jobs:
             arch: win64_msvc2022_64
             archives: qtbase qtsvg
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -132,6 +133,49 @@ jobs:
       - name: Capture real PipeWire frames, resize and daemon loss (Release)
         if: runner.os == 'Linux'
         run: python3 scripts/test-pipewire-capture.py artifacts/cmake/qt-validation/pipewire_capture_probe --pipewire-prefix .deps/pipewire-validation/install --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr --backend-build-info .deps/validation-desktop/build-info.json --artifacts artifacts/cmake/qt-validation/pipewire/Release
+      # Preserve independent full-application evidence after a component test
+      # failure. These steps do not change the failed job's conclusion, and a
+      # missing dependency/configure still fails rather than replacing a service.
+      - name: Restore the fixed native build interpreter for application integration
+        if: ${{ !cancelled() }}
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+      - name: Build the same locked Rust aggregate for the application
+        id: application_rust
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          python scripts/build-native-rust.py
+      - name: Build the complete Windows inspection dependency for the application
+        id: application_video
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        shell: pwsh
+        run: python scripts/build-windows-video-inspection.py
+      - name: Configure the complete shared Linux application
+        id: application_linux
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.application_rust.outcome == 'success' }}
+        run: cmake -S . -B artifacts/cmake/application-validation -G Ninja -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_BUILD_APP=ON -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_DESKTOP_VALIDATION=ON -DHUHUCAPTURE_RUST_VALIDATION=ON -DHUHUCAPTURE_VIDEO_VALIDATION=ON -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON
+      - name: Configure the complete shared Windows application with its actual release CRT
+        id: application_windows
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.application_rust.outcome == 'success' && steps.application_video.outcome == 'success' }}
+        shell: pwsh
+        run: cmake -S . -B artifacts/cmake/application-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_BUILD_APP=ON -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_DESKTOP_VALIDATION=ON -DHUHUCAPTURE_RUST_VALIDATION=ON -DHUHUCAPTURE_VIDEO_VALIDATION=ON
+      - name: Build the actual Qt executable and application lifecycle checks
+        id: application_build
+        if: ${{ !cancelled() && (steps.application_linux.outcome == 'success' || steps.application_windows.outcome == 'success') }}
+        shell: bash
+        run: cmake --build artifacts/cmake/application-validation --config Release --target huhucapture qt_application_lifecycle --parallel 2
+      - name: Validate real application ownership, processes and orderly shutdown
+        if: ${{ !cancelled() && steps.application_build.outcome == 'success' }}
+        shell: bash
+        run: ctest --test-dir artifacts/cmake/application-validation -C Release --output-on-failure --no-tests=error -R '^qt_application_'
+      - name: Validate software recording output and exact AAC tail samples
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.application_linux.outcome == 'success' }}
+        run: |
+          cmake --build artifacts/cmake/application-validation --target qt_mp4_encoder --parallel 2
+          ctest --test-dir artifacts/cmake/application-validation -C Release --output-on-failure --no-tests=error -R '^qt_mp4_encoder$'
       - name: Retain real configure and test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -164,6 +208,18 @@ jobs:
             .deps/media-validation/x264-build/config.log
             .deps/media-validation/ffmpeg-build/ffbuild/config.log
             artifacts/cmake/qt-validation/software-codec/
+            artifacts/cmake/application-validation/CMakeCache.txt
+            artifacts/cmake/application-validation/CMakeFiles/CMakeConfigureLog.yaml
+            artifacts/cmake/application-validation/Testing/Temporary/
+            artifacts/cmake/application-validation/application-lifecycle/
+            artifacts/cmake/application-validation/application-clipboard-owner/
+            artifacts/cmake/application-validation/mp4-encoder/
+            artifacts/cmake/application-validation/huhucapture
+            artifacts/cmake/application-validation/Release/huhucapture.exe
+            artifacts/cmake/application-validation/Release/huhucapture.pdb
+            artifacts/native-rust/build-info.json
+            artifacts/native-rust/build.log
+            .deps/video-inspection-windows/build-info.json
           if-no-files-found: warn
           retention-days: 14
           include-hidden-files: true

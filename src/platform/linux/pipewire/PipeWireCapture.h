@@ -26,12 +26,15 @@ struct PipeWireCaptureOptions {
     std::uint32_t maximumFrameRate{};
     std::uint64_t sessionId{};
     std::uint64_t sourceId{};
+    // A pause after actual capture is different from a quiet Streaming graph.
+    // Only a native PAUSED transition starts this absolute recovery deadline.
+    std::chrono::milliseconds pauseTimeout{5000};
 };
 
 struct PipeWireFailure {
     enum class Code {
         InvalidArgument, Initialization, Connection, Stream, UnsupportedFormat,
-        UnsupportedMemory, InvalidBuffer, Budget, FirstFrameTimeout, Consumer, Allocation
+        UnsupportedMemory, InvalidBuffer, Budget, FirstFrameTimeout, Consumer, Allocation, PauseTimeout
     };
     Code code{Code::Initialization};
     int nativeCode{};
@@ -64,6 +67,10 @@ struct PipeWireCaptureCallbacks {
     // Return false for a clean consumer-requested stop. Enqueue/move the lease
     // into a bounded encoder queue; do not wait for a GUI callback or encode here.
     std::function<bool(Core::FrameLease)> frame;
+    // Actual native STREAMING/PAUSED transitions and terminal inactivity, on
+    // this source worker. Consumers may repeat a static frame only while true;
+    // absence of a new damage buffer is not itself a paused/disconnected source.
+    std::function<void(bool streaming)> activityChanged;
 };
 
 // Worker-only data plane. Blocks the calling worker, owns one independent PW

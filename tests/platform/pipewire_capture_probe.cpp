@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPainter>
@@ -170,6 +171,9 @@ public:
                 bool announced{};
                 bool geometryChanged{};
                 bool sourceTimestampSeen{};
+                bool streamingSeen{};
+                bool active{};
+                QJsonArray activityTransitions;
                 std::optional<std::pair<int, int>> firstSize;
                 Core::FrameLease heldFirst;
                 Core::FrameLease heldLast;
@@ -178,6 +182,11 @@ public:
                 options.sourceId = 1;
                 options.maximumFrameRate = 30;
                 PipeWireCaptureCallbacks callbacks;
+                callbacks.activityChanged = [&](bool streaming) {
+                    active = streaming;
+                    streamingSeen |= streaming;
+                    activityTransitions.append(streaming);
+                };
                 callbacks.formatChanged = [&](const Core::FrameFormat& format, std::uint64_t) {
                     const auto dimensions = std::pair{format.width, format.height};
                     if (!firstSize) firstSize = dimensions;
@@ -226,13 +235,15 @@ public:
                     {"memPtrFrames", static_cast<qint64>(result.stats.memPtrFrames)},
                     {"formatChanges", static_cast<qint64>(result.stats.formatChanges)},
                     {"geometryChanged", geometryChanged}, {"sourceTimestampSeen", sourceTimestampSeen},
+                    {"activityTransitions", activityTransitions}, {"streamingSeen", streamingSeen}, {"activeAfterReturn", active},
                     {"peakPoolBytes", static_cast<qint64>(result.stats.peakPoolBytes)},
                     {"retainedFramesAfterTeardown", retainedFramesValid}, {"pngSaved", pngSaved},
                     {"captureFailure", result.failure ? QString::fromStdString(result.failure->message) : QString{}},
                     {"captureFailureCode", result.failure ? static_cast<int>(result.failure->code) : -1},
                     {"stopped", result.stopped}, {"physicalDisplay", false}, {"audioTested", false}};
                 const bool pixelsValid = matched >= 4 && distinct >= 2 && retainedFramesValid && pngSaved &&
-                    result.stats.buffersDequeued == result.stats.buffersReturned && result.stats.memFdFrames > 0 && sourceTimestampSeen;
+                    result.stats.buffersDequeued == result.stats.buffersReturned && result.stats.memFdFrames > 0 &&
+                    sourceTimestampSeen && streamingSeen && !active;
                 const bool captureSucceeded = !result.failure && result.stopped && matched >= 16 &&
                     (testMode != QStringLiteral("resize") || (geometryChanged && afterResize >= 12));
                 const bool nativeFailure = result.failure &&
