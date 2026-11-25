@@ -40,7 +40,9 @@ def archive(path, name):
 class SourceRetentionTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="source-retention-contract-")
-        self.base = Path(self.temporary.name)
+        # Match production ROOT: Windows TEMP may use an 8.3 directory alias,
+        # while the CLI resolves its output before checking containment.
+        self.base = Path(self.temporary.name).resolve(strict=True)
         self.root = self.base / "project"
         self.root.mkdir()
         self.root_patch = mock.patch.object(profile, "ROOT", self.root)
@@ -278,12 +280,18 @@ class SourceRetentionTests(unittest.TestCase):
 
         arguments = [str(SCRIPT), "--qt-prefix", str(self.root), "--source-commit", self.commit,
                      "--output", str(output), "--fetch-locked-sources"]
-        with mock.patch.object(profile.Retention, "run", retained_failure), \
+        stderr = io.StringIO()
+        with mock.patch.object(profile.Retention, "run", autospec=True, side_effect=retained_failure) as run, \
                 mock.patch.object(profile.platform, "system", return_value="Linux"), \
                 mock.patch.object(profile.platform, "machine", return_value="x86_64"), \
                 mock.patch.object(sys, "argv", arguments), \
-                mock.patch.object(sys, "stdout", io.StringIO()), mock.patch.object(sys, "stderr", io.StringIO()):
-            self.assertEqual(profile.main(), 1)
+                mock.patch.object(sys, "stdout", io.StringIO()), mock.patch.object(sys, "stderr", stderr):
+            result = profile.main()
+        self.assertEqual(result, 1, stderr.getvalue())
+        self.assertEqual(run.call_count, 1, stderr.getvalue())
+        self.assertIn("Locked Cargo fetch failed; verified incomplete bundle and actual logs are retained.",
+                      stderr.getvalue())
+        self.assertTrue((output / "retention-report.json").is_file(), stderr.getvalue())
         report = json.loads((output / "retention-report.json").read_text())
         self.assertEqual(report["status"], "incomplete-bundle-retained-fetch-failed")
         self.assertTrue(report["fetchLockedSources"])
