@@ -19,6 +19,15 @@
 using namespace HuhuCapture;
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void diagnose(const char* operation, const Desktop::RemovalResult& result)
+{
+    std::cout << "RESULT " << operation << " error=" << static_cast<int>(result.failure.code)
+        << " native=" << result.failure.nativeCode << " (0x" << std::hex
+        << static_cast<std::uint64_t>(result.failure.nativeCode) << std::dec << ") detail="
+        << result.failure.detail.toStdString() << " effect=" << static_cast<int>(result.effect)
+        << " permit=" << !!result.permanentPermit << " originalExists=" << QFile::exists(result.entry.path)
+        << " original=" << result.entry.path.toStdString() << " recycled=" << result.recycledPath.toStdString() << '\n';
+}
 Media::Entry saved(Media::MediaArchiveService& archive)
 {
     QImage image(32, 24, QImage::Format_ARGB32); image.fill(qRgba(33, 88, 156, 192));
@@ -43,6 +52,7 @@ void recycleContracts(const QString& root)
     result = worker([&] { return Desktop::recycle(archive, entry, stop.get_token()); });
     require(result.failure.code == Desktop::Error::Cancelled && QFile::exists(entry.path), "cancelled recycle keeps the actual file");
     result = worker([&] { return Desktop::recycle(archive, entry); });
+    diagnose("real recycle", result);
     require(result.completed() && result.effect == Desktop::RemovalEffect::Recycled && !QFile::exists(entry.path),
         "the real platform recycle operation removes the exact confirmed original");
 #ifndef Q_OS_WIN
@@ -69,6 +79,7 @@ void failedTrashContracts(const QString& root)
     require(locked != INVALID_HANDLE_VALUE, "hold an actual Windows file handle that denies deletion");
     const auto result = worker([&] { return Desktop::recycle(archive, entry); });
     CloseHandle(locked);
+    diagnose("sharing-violation recycle", result);
     require(result.failure.code == Desktop::Error::RecycleFailed && result.permanentPermit && QFile::exists(entry.path),
         "a real sharing violation must preserve the file and require a distinct permanent confirmation");
     require(archive.lease(entry).failure.code == Media::Error::Busy, "failed recycle permit keeps the exact exclusive reservation");
@@ -76,6 +87,7 @@ void failedTrashContracts(const QString& root)
     require(worker([&] { return Desktop::permanentlyRemove(result.permanentPermit, stop.get_token()); }).failure.code == Desktop::Error::Cancelled,
         "cancelling permanent removal does not consume its file");
     const auto removed = worker([&] { return Desktop::permanentlyRemove(result.permanentPermit); });
+    diagnose("separately confirmed permanent removal", removed);
     require(removed.completed() && !QFile::exists(entry.path), "separately confirmed deletion works after the external lock is released");
     require(!worker([&] { return Desktop::permanentlyRemove(result.permanentPermit); }).completed(), "the same confirmation permit cannot be replayed");
     std::cout << "PASS actual Windows sharing violation and separate permanent-confirmation permit\n";
@@ -92,6 +104,7 @@ void failedTrashContracts(const QString& root)
     Media::MediaArchiveService archive(root + QStringLiteral("/failed-recycle-archive"));
     auto entry = saved(archive);
     auto result = worker([&] { return Desktop::recycle(archive, entry); });
+    diagnose("unavailable-trash recycle", result);
     require(result.failure.code == Desktop::Error::RecycleFailed && result.permanentPermit && QFile::exists(entry.path),
         "a real unavailable trash keeps the file and returns only a separate confirmation permit");
     require(archive.lease(entry).failure.code == Media::Error::Busy, "the pending permanent question retains its exclusive reservation");
@@ -99,6 +112,7 @@ void failedTrashContracts(const QString& root)
     auto cancelled = worker([&] { return Desktop::permanentlyRemove(result.permanentPermit, stop.get_token()); });
     require(cancelled.failure.code == Desktop::Error::Cancelled && QFile::exists(entry.path), "cancelled permanent deletion keeps the file");
     const auto removed = worker([&] { return Desktop::permanentlyRemove(result.permanentPermit); });
+    diagnose("separately confirmed permanent removal", removed);
     require(removed.completed() && removed.effect == Desktop::RemovalEffect::PermanentlyRemoved && !QFile::exists(entry.path),
         "a separately confirmed permit removes only its exact original");
     require(!worker([&] { return Desktop::permanentlyRemove(result.permanentPermit); }).completed(), "a consumed permit cannot be replayed");
@@ -122,6 +136,7 @@ void failedOriginalUnlink(const QString& root)
     const auto originalPermissions = QFile::permissions(directory);
     require(QFile::setPermissions(directory, QFile::ReadOwner | QFile::ExeOwner), "remove directory write permission for a real unlink error");
     const auto result = worker([&] { return Desktop::recycle(archive, entry); });
+    diagnose("original-unlink failure", result);
     const bool retained = QFile::exists(entry.path);
     require(QFile::setPermissions(directory, originalPermissions), "restore the test's own directory permissions");
     require(!result.completed() && retained, "Qt's successful trash link must not hide a failed original unlink");

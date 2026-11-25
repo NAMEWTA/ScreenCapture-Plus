@@ -47,16 +47,28 @@ def safe_members(names):
             raise RuntimeError(f"Unsafe archive member: {name}")
 
 
-def msvc_environment():
+def msvc_environment(workspace):
     base = Path(os.environ["ProgramFiles(x86)"])
     vswhere = base / "Microsoft Visual Studio/Installer/vswhere.exe"
     installation = output(str(vswhere), "-latest", "-products", "*", "-requires",
                           "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath")
     developer = Path(installation) / "Common7/Tools/VsDevCmd.bat"
-    if not developer.is_file() or '"' in str(developer):
+    if not developer.is_file() or any(character in str(developer) for character in '"%\r\n'):
         raise RuntimeError("Cannot locate the real installed Visual Studio developer command")
-    command = f'call "{developer}" -no_logo -arch=x64 -host_arch=x64 >nul && set'
-    captured = output("cmd.exe", "/d", "/s", "/c", command)
+    # Python's Windows list2cmdline uses C-runtime quote escaping, whereas cmd
+    # parses /c with different rules. Pass only an unquoted fixed filename to
+    # cmd and let an actual batch file perform the quoted VsDevCmd invocation.
+    # Keep the discovered Unicode path in the child environment, not batch-file
+    # text interpreted through the runner's current console code page.
+    bootstrap = workspace / "load-msvc-environment.cmd"
+    with bootstrap.open("x", encoding="ascii", newline="\r\n") as stream:
+        stream.write('@echo off\nsetlocal DisableDelayedExpansion\n'
+                     'call "%HUHUCAPTURE_VSDEVCMD%" -no_logo -arch=x64 -host_arch=x64 >nul\n'
+                     'if errorlevel 1 exit /b %errorlevel%\nset\n')
+    child = os.environ.copy()
+    child["HUHUCAPTURE_VSDEVCMD"] = str(developer)
+    captured = subprocess.check_output(("cmd.exe", "/d", "/u", "/c", bootstrap.name),
+        cwd=workspace, env=child, text=True, encoding="utf-16-le", errors="strict")
     environment = {key.upper(): value for key, value in os.environ.items()}
     for line in captured.splitlines():
         if "=" in line and not line.startswith("="):
@@ -65,6 +77,7 @@ def msvc_environment():
     environment["VSLANG"] = "1033"
     environment.pop("CL", None)
     environment.pop("_CL_", None)
+    environment.pop("HUHUCAPTURE_VSDEVCMD", None)
     return environment
 
 
@@ -98,7 +111,7 @@ def main():
     bash = msys / "usr/bin/bash.exe"
     if not bash.is_file():
         raise SystemExit("The runner's official MSYS2 Bash/core utilities are required; no automatic system installation is performed")
-    environment = msvc_environment()
+    environment = msvc_environment(workspace)
     tools = workspace / "tools"
     tools.mkdir()
     nasm_archive = tools / "nasm.zip"

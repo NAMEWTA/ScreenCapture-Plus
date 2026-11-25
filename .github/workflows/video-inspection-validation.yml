@@ -94,9 +94,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.13.17'
       - name: Restore the matching Qt and MSVC ABI
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
         with:
@@ -109,6 +106,11 @@ jobs:
           py7zrversion: '==1.1.3'
           extra: '--external 7z'
           cache: false
+      # The Qt action selects its own Python; restore the script interpreter
+      # afterwards so the native build runs with this explicitly pinned version.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
       - name: Download the identical Linux-generated fixtures
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:

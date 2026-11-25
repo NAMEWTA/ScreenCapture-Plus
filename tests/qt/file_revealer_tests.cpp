@@ -17,6 +17,14 @@
 using namespace HuhuCapture;
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void diagnose(const char* operation, const Desktop::RevealResult& result)
+{
+    std::cout << "RESULT " << operation << " error=" << static_cast<int>(result.failure.code)
+        << " native=" << result.failure.nativeCode << " (0x" << std::hex
+        << static_cast<std::uint64_t>(result.failure.nativeCode) << std::dec << ") detail="
+        << result.failure.detail.toStdString() << " effect=" << static_cast<int>(result.effect)
+        << " path=" << result.path.toStdString() << " exists=" << QFile::exists(result.path) << '\n';
+}
 void events() { QCoreApplication::sendPostedEvents(); QApplication::processEvents(); }
 template<class Function> auto worker(Function function) { return std::async(std::launch::async, std::move(function)).get(); }
 void waitFor(const std::function<bool()>& predicate, const char* message)
@@ -62,6 +70,7 @@ int main(int argc, char** argv)
         // service, shell launch, response, or URI is simulated by the test.
         const auto directory = isolated.path() + QStringLiteral("/new archive folder");
         const auto opened = completed(revealer.openDirectory(directory, origin.windowHandle(), true));
+        diagnose("open actual directory", opened);
         require(opened.completed() && opened.effect == Desktop::RevealEffect::OpenedDirectory && QDir(directory).exists(),
             "the real desktop accepts opening the explicitly requested created archive directory");
         const auto second = worker([&] { return archive.archiveImage(image); }); require(second.durable(), "write real media for native file selection");
@@ -71,6 +80,7 @@ int main(int argc, char** argv)
         require(!selected.path.isEmpty(), "select the exact newly archived file");
         auto lease = worker([&] { return archive.lease(selected); }); require(!lease.failure, "reserve the selected original");
         const auto revealed = completed(revealer.revealFile(std::move(lease.lease), origin.windowHandle()));
+        diagnose("select actual history file", revealed);
         require(revealed.completed() && (revealed.effect == Desktop::RevealEffect::SelectedFile || revealed.effect == Desktop::RevealEffect::OpenedParent),
             "the real desktop accepts file selection or reports the actual parent-folder fallback");
 #ifdef Q_OS_WIN

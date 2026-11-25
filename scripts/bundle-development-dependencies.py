@@ -184,12 +184,15 @@ def make_bundle(options):
     (bundle / "tools/bin").mkdir(parents=True)
     tool_packages = set()
     for name in ("ninja", "pkg-config"):
-        executable = shutil.which(name)
-        if not executable:
-            raise RuntimeError(f"Required real runner tool is missing: {name}")
-        shutil.copy2(Path(executable).resolve(), bundle / "tools/bin" / name)
-        tool_packages.add(owner(Path(executable).resolve()))
-        metadata[name] = {"version": output(name, "--version"), "originalBinary": str(Path(executable).resolve())}
+        # GitHub's /usr/local/bin/ninja may precede the official Ubuntu package
+        # without belonging to dpkg. Select the installed package explicitly so
+        # its observed version, executable bytes and copyright share one source.
+        executable = Path("/usr/bin") / name
+        if not executable.is_file():
+            raise RuntimeError(f"Required official Ubuntu runner tool is missing: {executable}")
+        shutil.copy2(executable.resolve(), bundle / "tools/bin" / name)
+        tool_packages.add(owner(executable.resolve()))
+        metadata[name] = {"version": output(str(executable), "--version"), "originalBinary": str(executable.resolve())}
 
     modules = system_modules()
     metadata["systemModules"] = modules

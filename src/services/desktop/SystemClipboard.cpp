@@ -89,7 +89,7 @@ struct PreparedClipboard::State {
 #ifdef Q_OS_WIN
         native = {};
 #else
-        image = {}; png.clear(); file = {};
+        image = {}; png.clear(); file = QUrl{};
 #endif
     }
 };

@@ -110,8 +110,12 @@ DesktopFileResult recycleDesktopFiles(std::span<const std::filesystem::path> fil
     sink->policy = policy; sink->unchanged = &unchanged; sink->stop = stop;
     for (const auto& path : files) {
         if (!regularFile(path) || (unchanged && !unchanged(path))) return {DesktopFileError::Changed, HRESULT_FROM_WIN32(ERROR_FILE_INVALID), {}};
+        // Qt archive paths use '/', while the Shell parsing namespace expects
+        // native separators. Keep this at the OS boundary so the old native
+        // product and Qt callers use the same operation and identity checks.
+        auto shellPath = path; shellPath.make_preferred();
         ComPtr<IShellItem> item;
-        if (FAILED(status = SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(item.GetAddressOf()))) ||
+        if (FAILED(status = SHCreateItemFromParsingName(shellPath.c_str(), nullptr, IID_PPV_ARGS(item.GetAddressOf()))) ||
             FAILED(status = operation->DeleteItem(item.Get(), sink.Get()))) return {DesktopFileError::RecycleFailed, status, {}};
     }
     status = operation->PerformOperations();
@@ -132,7 +136,8 @@ DesktopFileResult revealDesktopFile(const std::filesystem::path& path)
     if (path.empty() || !regularFile(path)) return {DesktopFileError::InvalidInput, HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), {}};
     const ComApartment com(COINIT_APARTMENTTHREADED);
     if (FAILED(com.result())) return {DesktopFileError::Initialization, com.result(), {}};
-    auto* id = ILCreateFromPathW(path.c_str());
+    auto shellPath = path; shellPath.make_preferred();
+    auto* id = ILCreateFromPathW(shellPath.c_str());
     if (!id) return {DesktopFileError::System, E_FAIL, {}};
     const auto status = SHOpenFolderAndSelectItems(id, 0, nullptr, 0); ILFree(id);
     return {SUCCEEDED(status) ? DesktopFileError::None : DesktopFileError::System, status, {}};
@@ -145,9 +150,10 @@ DesktopFileResult openDesktopDirectory(const std::filesystem::path& path, HWND o
         return {DesktopFileError::InvalidInput, HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND), {}};
     const ComApartment com(COINIT_APARTMENTTHREADED);
     if (FAILED(com.result())) return {DesktopFileError::Initialization, com.result(), {}};
+    auto shellPath = path; shellPath.make_preferred();
     SHELLEXECUTEINFOW operation{}; operation.cbSize = sizeof(operation);
     operation.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC; operation.hwnd = owner;
-    operation.lpVerb = L"open"; operation.lpFile = path.c_str(); operation.nShow = SW_SHOWNORMAL;
+    operation.lpVerb = L"open"; operation.lpFile = shellPath.c_str(); operation.nShow = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&operation)) return {DesktopFileError::System, HRESULT_FROM_WIN32(GetLastError()), {}};
     return {};
 }
