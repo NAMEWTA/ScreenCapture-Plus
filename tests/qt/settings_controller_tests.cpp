@@ -523,13 +523,26 @@ int main(int argc, char** argv)
         QTemporaryDir directory; require(directory.isValid(), "Create actual isolated filesystem fixture");
         StartupIsolation startup(directory.path());
         QApplication application(argc, argv); application.setQuitOnLastWindowClosed(false);
-#ifndef _WIN32
-        initializationOwnerLifetime();
-#endif
         const auto arguments = application.arguments();
-        const bool unavailable = arguments.contains(QStringLiteral("--unavailable"));
-        const auto artifacts = arguments.size() > 1 && !arguments[1].startsWith(QStringLiteral("--")) ? arguments[1] :
-            QDir(directory.path()).filePath(QStringLiteral("render"));
+        bool unavailable{}, startupOnly{}, modeSpecified{};
+        QString artifacts;
+        for (qsizetype index = 1; index < arguments.size(); ++index) {
+            const auto& argument = arguments[index];
+            if (argument == QStringLiteral("--unavailable") || argument == QStringLiteral("--startup-only")) {
+                require(!modeSpecified, "Select exactly one settings regression mode");
+                modeSpecified = true;
+                unavailable = argument == QStringLiteral("--unavailable");
+                startupOnly = argument == QStringLiteral("--startup-only");
+            } else {
+                require(index == 1 && !argument.isEmpty() && !argument.startsWith(QChar(u'-')),
+                    "Unknown settings regression argument");
+                artifacts = argument;
+            }
+        }
+        if (artifacts.isEmpty()) artifacts = QDir(directory.path()).filePath(QStringLiteral("render"));
+#ifndef _WIN32
+        if (!startupOnly) initializationOwnerLifetime();
+#endif
         const auto folder = QDir(directory.path()).filePath(QStringLiteral("工具 files")); require(QDir().mkpath(folder), "Create real Unicode executable directory");
 #ifdef _WIN32
         const auto executable = QDir(folder).filePath(QStringLiteral("huhu capture.exe"));
@@ -539,7 +552,8 @@ int main(int argc, char** argv)
         require(QFile::copy(QCoreApplication::applicationFilePath(), executable), "Copy the actual executable to a spaced Unicode path");
         require(QFile::setPermissions(executable, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner), "Make the actual copied test executable runnable");
         require(desktop::persistentLaunchExecutable(executable), "Actual persistent executable validation succeeds");
-        if (unavailable) unavailableContracts(directory.path(), executable, artifacts);
+        if (startupOnly) startupContracts(directory.path(), executable);
+        else if (unavailable) unavailableContracts(directory.path(), executable, artifacts);
         else { nativeContracts(directory.path()); startupContracts(directory.path(), executable); controllerContracts(directory.path(), executable, artifacts); }
         settle(); return 0;
     } catch (const std::exception& error) { std::cerr << "settings_controller_tests: " << error.what() << '\n'; return 1; }

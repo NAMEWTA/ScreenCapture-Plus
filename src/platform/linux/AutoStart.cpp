@@ -136,7 +136,14 @@ AutoStartResult AutoStart::setEnabled(bool requested, const std::function<bool()
         g_key_file_set_string(document.get(), group, "Name", "huhucapture");
         g_key_file_set_string(document.get(), group, ownership, "1");
         const auto executable = d->executable.toUtf8();
-        const auto command = desktopExecCommand(d->executable, {QStringLiteral("--auto-start")}).toUtf8();
+        // GDesktopAppInfo checks the first Exec token before expanding %%.
+        // Keep literal '%' paths as an argument to the fixed system launcher,
+        // which forwards argv without a shell or an executable search in PATH.
+        // TryExec below still validates the actual application, not the helper.
+        const auto command = (d->executable.contains(QChar(u'%'))
+            ? desktopExecCommand(QStringLiteral("/usr/bin/env"),
+                {QStringLiteral("--"), d->executable, QStringLiteral("--auto-start")})
+            : desktopExecCommand(d->executable, {QStringLiteral("--auto-start")})).toUtf8();
         if (command.isEmpty()) return {AutoStartError::InvalidExecutable, snapshot()};
         g_key_file_set_string(document.get(), group, "Exec", command.constData());
         g_key_file_set_string(document.get(), group, "TryExec", executable.constData());

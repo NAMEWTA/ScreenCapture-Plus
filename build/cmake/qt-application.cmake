@@ -248,6 +248,8 @@ if(BUILD_TESTING)
             set_tests_properties(x11_capture_cancellation_tests PROPERTIES TIMEOUT 90)
         endif()
         target_link_libraries(qt_settings_controller PRIVATE PkgConfig::XCB_CAPTURE PkgConfig::XCB_SHORTCUT PkgConfig::GIO)
+        add_test(NAME qt_settings_autostart COMMAND qt_settings_controller --startup-only)
+        set_tests_properties(qt_settings_autostart PROPERTIES TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         add_test(NAME qt_settings_controller_unavailable COMMAND qt_settings_controller
             "${PROJECT_BINARY_DIR}/settings-unavailable-render/$<CONFIG>" --unavailable)
         set_tests_properties(qt_settings_controller_unavailable PROPERTIES TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

@@ -44,7 +44,9 @@
 
 MOV 已从 sample description 给出 codec parameters，因此本路径不在安装像素预算前调用可能自行探测解码的 `avformat_find_stream_info`。每条解码器在 open 前设置单线程、明确像素/音频样本预算、错误检查及关闭错误隐藏。包的物理范围、`AV_PKT_FLAG_CORRUPT`、解码帧的 corruption / decode error flags 都会检查；每条音频轨道的全部声道及浮点样本必须有效。
 
-完整检查要求每个被索引的样本范围位于已打开文件内；分片过程中增长的索引继续检查，EOF 后重新核对最终索引，并确认实际提交的包数量。空轨道、读取失败、解码失败、提前 EOF、结束排空后仍请求更多输入均失败。支持范围取决于锁定构建中实际存在的解码器；缺失返回 Unsupported，而不是把未检查的轨道当作成功。
+MOV 输入同时设置 `AVFMT_FLAG_NOPARSE | AVFMT_FLAG_NOFILLIN`，保持解复用包与物理容器 sample 的对应关系。一个 MP3 容器 sample 可以包含多个完整压缩音频帧；AVParser 拆分后的子包可能没有物理位置，数量也不再等于 MOV 索引项数。固定 [`avformat.h`](https://github.com/FFmpeg/FFmpeg/blob/946fcce07b6dcd0331c8cc609192aeff5e1924f8/libavformat/avformat.h) 要求这两个标志同时使用；[`avcodec.h`](https://github.com/FFmpeg/FFmpeg/blob/946fcce07b6dcd0331c8cc609192aeff5e1924f8/libavcodec/avcodec.h) 的 send/receive 合同允许一个包包含多个完整音频帧，现有 receive 循环会全部取出并逐帧检查。这里关闭的是解复用后的自动拆包，所有原始 sample 仍必须经过完整解码。
+
+完整检查要求每个被索引的样本范围位于已打开文件内；分片过程中增长的索引继续检查，EOF 后重新核对最终索引，并确认实际提交的原始容器 sample 数量等于索引项数。不放行 `pos == -1`，也不删除样本数量等式。空轨道、读取失败、解码失败、提前 EOF、结束排空后仍请求更多输入均失败。支持范围取决于锁定构建中实际存在的解码器；缺失返回 Unsupported，而不是把未检查的轨道当作成功。
 
 [`FfmpegVideoThumbnail.cpp`](../src/services/media/FfmpegVideoThumbnail.cpp) 复用原 Linux 封面实现，使用同一解码服务保留的首个 CPU AVFrame；其 AVBuffer 引用在 decoder/input 关闭后仍持有像素，然后通过 swscale 缩放到受限 QImage，保留 SDR 的颜色矩阵和 full/limited range。Linux 的薄适配层直接调用，Windows 在原生封面不支持时调用。未经验证的 PQ / HLG 色调映射明确 Unsupported。旋转元数据、非方形像素、HDR 显示一致性尚没有本批实测证据，不能作为已经完成的 UI 验收项。
 
@@ -96,7 +98,13 @@ MOV 已从 sample description 给出 codec parameters，因此本路径不在安
 | Unicode 路径、封面边长与不放大 | 使用真实文件并验证实际图像尺寸/像素变化 |
 | 文件/像素预算、预取消、运行中停止 | 显式正确失败，返回后文件句柄释放 |
 
-每轮测试在独占临时目录保留真实封面 PNG 和 JSON 结果，包括意外接受的文件。坏样本断言失败必须使测试进程失败；不得为了让 CI 变绿而把它们标为可接受。工作区缺少 Qt / FFmpeg 开发包，不能将本地源审当作编译或运行通过；实际平台证据以对应 CI commit、日志和 artifact 为准。
+每轮测试在独占临时目录保留真实封面 PNG 和 JSON 结果，包括意外接受的文件。坏样本断言失败必须使测试进程失败；不得为了让 CI 变绿而把它们标为可接受。本地源审不能代替编译或运行；实际平台证据以所用源码、固定依赖、日志和 artifact 为准。
+
+### Windows 原生 MP3 基线
+
+[`legacy_mp3_recording_tests.cpp`](../tests/qt/legacy_mp3_recording_tests.cpp) 使用实际 Windows MF 软件编码器生成 H.264 + 44.1 kHz 双声道 MP3，复用生产的独占文件句柄流适配器。真实 Windows 产物的 51 个 MP3 容器 sample 被默认 AVParser 拆成 80 个音频包，其中 29 个 `pos == -1`，导致定位器与生产检查器误拒绝有效文件。原始 sample 模式保留全部 51 个实际字节范围，每个范围均与文件内容核对；完整解码仍要处理 sample 中的全部音频帧。
+
+定位器使用独立的只读 `QFile` 核对每个音频 sample 的 `pos`、`size` 和实际字节，避免改变 custom AVIO 的读取位置。它保留至少 33 个 sample 的要求，在序列四分之三处选取真实范围，只破坏独占副本中的对应压缩字节。两平台必须对 manifest 指定的同一份 Windows 原始文件完整接受，并对实际后段音频损坏文件拒绝；文件 SHA-256、完整解码、EOF、物理范围及预算检查均保留。修复后的原生生成与同字节跨平台回归仍须以实际结果为准。
 
 ## 已取得的首轮反例证据
 

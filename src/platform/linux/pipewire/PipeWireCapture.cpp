@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <charconv>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <fcntl.h>
@@ -327,7 +328,21 @@ struct Capture {
             return {};
         }
         if (!data.data || data.maxsize == 0 || data.maxsize > options.pool.maximumBytes / options.pool.slotCount) {
-            fail(Code::InvalidBuffer, -EINVAL, "PipeWire did not provide a mapped CPU plane within its byte limit");
+            // Record only bounded scalar descriptors, never pixels, addresses or
+            // the FD number. Preserve the strict failure while diagnosing the
+            // actual producer/daemon/client mapping contract on a real desktop.
+            char detail[512]{};
+            std::snprintf(detail, sizeof(detail),
+                "PipeWire did not provide a mapped CPU plane within its byte limit "
+                "(type=%u flags=%u fdPresent=%u dataPresent=%u mapoffset=%u maxsize=%u "
+                "chunkOffset=%u chunkSize=%u chunkStride=%d chunkFlags=%d byteLimit=%zu)",
+                static_cast<unsigned>(data.type), static_cast<unsigned>(data.flags),
+                static_cast<unsigned>(data.fd >= 0), static_cast<unsigned>(data.data != nullptr),
+                static_cast<unsigned>(data.mapoffset), static_cast<unsigned>(data.maxsize),
+                static_cast<unsigned>(data.chunk->offset), static_cast<unsigned>(data.chunk->size),
+                static_cast<int>(data.chunk->stride), static_cast<int>(data.chunk->flags),
+                options.pool.maximumBytes / options.pool.slotCount);
+            fail(Code::InvalidBuffer, -EINVAL, detail);
             return {};
         }
         const auto offset = static_cast<std::size_t>(data.chunk->offset % data.maxsize);

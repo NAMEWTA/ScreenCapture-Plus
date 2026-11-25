@@ -125,6 +125,28 @@ DBus 单次请求两点五秒；与 Portal 一样复用 Qt 的 GLib 主上下文
 窗口呈现、文件是否高亮及窗口管理器的焦点行为。没有把后端受理等同于物理桌面
 已逐项验收。`Failure.detail` 用于诊断，产品提示由宿主根据错误类型本地化。
 
+## Linux 自启动路径与实际启动
+
+自启动仍先提交本应用的用户级 `.desktop` 项，再保存共享配置；配置保存失败时
+恢复提交前的准确字节或缺失状态。如果期间另一个写入者改变了该项，回滚不覆盖
+外部内容。设置页和独立服务使用相同的 `AutoStart` 实现。
+
+含字面 `%` 的应用路径有一个实际 GLib 兼容边界：`GDesktopAppInfo` 建立对象时先
+验证 `Exec` 的首个 token，启动时才展开 `%%`。因此直接将已按规范转义的路径放在
+首位，会在启动前被错误地当成不存在的双百分号文件名。仅对这一情况，使用固定
+绝对 `/usr/bin/env --` 把应用路径作为参数传递；全部参数继续由共享
+`desktopExecCommand` 转义，`TryExec` 保持真实应用路径。普通路径直接启动，
+该分支不调用 shell，也不通过 `PATH` 查找应用或转发程序。正常 GLib 校验仍完整
+执行，系统缺少转发程序时不会报告启用成功。依据为
+[GLib 2.80.0 的加载与启动实现](https://github.com/GNOME/glib/blob/2.80.0/gio/gdesktopappinfo.c)
+及 [Desktop Entry Exec 规则](https://specifications.freedesktop.org/desktop-entry/latest/exec-variables.html)。
+
+`qt_settings_controller --startup-only` 直接运行原有完整自启动回归，使用隔离的
+真实 XDG 目录、真实配置保存冲突和 GLib 启动的独立子进程。路径仍包含 Unicode、
+空格、`$` 和 `%`，子进程必须实际收到 `--auto-start`。该入口可以使用 offscreen
+运行，不依赖 X11 热键前序；默认的原生设置测试继续运行完整热键、自启动和控制器
+流程。它验证真实启动调用和回滚，不代表已测试用户登录时的自动启动。
+
 ## 复用来源
 
 完整来源与文件 SHA 记录在

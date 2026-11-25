@@ -134,7 +134,11 @@ struct Input {
         format = avformat_alloc_context();
         if (!format) return budget("Cannot allocate MP4 demuxer");
         format->pb = io;
-        format->flags |= AVFMT_FLAG_CUSTOM_IO;
+        // Validate physical MOV samples against their index entries. An AVParser
+        // can split one MP3 sample into several frames, whose synthetic packets
+        // no longer retain the original file position or sample count. Each raw
+        // sample still goes through the complete decoder send/receive/drain loop.
+        format->flags |= AVFMT_FLAG_CUSTOM_IO | AVFMT_FLAG_NOPARSE | AVFMT_FLAG_NOFILLIN;
         format->interrupt_callback = {interrupted, this};
         format->io_open = denyExternal;
         format->max_streams = 16;

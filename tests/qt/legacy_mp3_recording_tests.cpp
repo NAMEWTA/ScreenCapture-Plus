@@ -99,7 +99,12 @@ struct Input {
         io = avio_alloc_context(buffer, 32768, 0, this, read, nullptr, seek);
         if (!io) { av_free(buffer); throw std::runtime_error("Allocate local fixture IO state"); }
         context = avformat_alloc_context(); require(context, "Allocate the real MOV demuxer");
-        context->pb = io; context->flags |= AVFMT_FLAG_CUSTOM_IO; context->io_open = denyExternal;
+        context->pb = io;
+        // Locate physical MOV samples, which may contain multiple MP3 frames.
+        // Parser-created subpackets can have pos == -1 and cannot identify the
+        // exact file bytes to corrupt. Full decoding remains the inspector's job.
+        context->flags |= AVFMT_FLAG_CUSTOM_IO | AVFMT_FLAG_NOPARSE | AVFMT_FLAG_NOFILLIN;
+        context->io_open = denyExternal;
         // The Windows production inspection profile intentionally contains no
         // file or network protocol. Use the same local QFile AVIO boundary as
         // the real inspector, including Unicode paths and denied external IO.
@@ -111,6 +116,10 @@ struct Input {
 std::pair<qint64, int> lateMp3Packet(const QString& path)
 {
     Input input; input.open(path);
+    // Keep this seek position independent of the custom AVIO reader's buffers.
+    QFile physical(path);
+    require(physical.open(QIODevice::ReadOnly) && physical.size() == input.size,
+        "Open the same complete fixture for independent physical sample verification");
     unsigned audio{}, video{}; int audioIndex = -1;
     for (unsigned index = 0; index < input.context->nb_streams; ++index) {
         const auto* parameters = input.context->streams[index]->codecpar;
@@ -127,7 +136,14 @@ std::pair<qint64, int> lateMp3Packet(const QString& path)
     int status{};
     while ((status = av_read_frame(input.context, input.packet)) >= 0) {
         if (input.packet->stream_index == audioIndex) {
-            require(input.packet->pos >= 0 && input.packet->size > 4, "Locate actual compressed MP3 samples in the container");
+            require(input.packet->pos >= 0 && input.packet->pos <= input.size && input.packet->size > 4 &&
+                input.packet->size <= input.size - input.packet->pos && input.packet->data,
+                "Locate complete physical MP3 samples within the actual container");
+            require(physical.seek(input.packet->pos), "Seek the independently located physical MP3 sample");
+            const auto bytes = physical.read(input.packet->size);
+            require(bytes.size() == input.packet->size &&
+                std::memcmp(bytes.constData(), input.packet->data, static_cast<std::size_t>(input.packet->size)) == 0,
+                "The located MP3 sample must match the exact physical bytes before corruption");
             packets.emplace_back(input.packet->pos, input.packet->size);
         }
         av_packet_unref(input.packet);

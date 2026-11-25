@@ -193,6 +193,58 @@ Linux AppImage runtime 除自己的固定源码外，必须包括 `appimage-musl
 
 目前没有通过此工具产生并审核一份实际双平台完整对应源码包。完整原始 Qt/发行版/Rust/runtime 源码和匹配构建记录未全部供应时，工具应报告未完成；这是预期行为。它不解除 P11/P12 的正式发行、干净机器安装、实际桌面和长期录制验收门槛。
 
+### 保留现有 Linux 应用 CI 的真实来源
+
+`scripts/retain-development-sources.py` 是当前完整 Linux 应用 job 的固定编排入口，调用上面的收集器。它不负责下载或构建依赖，也不提供任意组件/profile 扩展。应在 `build-native-rust.py`、`build-portal.py`、`build-pipewire.py`、`build-software-media.py` 已成功之后运行；可以安排在应用测试和打包之后、最终上传之前，使前面的测试失败也不丢失已经取得的来源材料。
+
+```sh
+python scripts/retain-development-sources.py \
+  --qt-prefix "$QT_ROOT_DIR" \
+  --source-commit "$GITHUB_SHA" \
+  --output artifacts/source-retention/linux-incomplete
+```
+
+`--source-commit` 必须等于真正的 checkout HEAD。PR 工作流的合并检出不能替换成 PR 分支的 `head_sha`。脚本开始和结束都检查干净工作树，并确认自身已属于该提交；新脚本尚未提交时不能执行这个 CI profile。所有生成物只能进入该项目忽略的 `artifacts/`，输出目录必须是新的，旧结果不会被覆盖。
+
+固定输入包括以下实际路径：
+
+| 来源 | 原始输入 |
+| --- | --- |
+| libportal | `.deps/portal-validation/source` 与同 workspace 的 `build-info.json` |
+| PipeWire | `.deps/pipewire-validation/source` 与同 workspace 的 `build-info.json` |
+| x264、FFmpeg | `.deps/media-validation/x264-source`、`ffmpeg-source` 与 `build-info.json` |
+| 聚合 Rust | `artifacts/native-rust/build-info.json`、`cargo-metadata.json`、`build.log`，以及记录指向的实际静态库 |
+| Cargo 锁 | `third_party/localsend/Cargo.lock`，核对主锁、实际构建记录及当前源码文件身份 |
+| gifski | 从本次 Cargo metadata 的精确 Git source 和 `manifest_path` 定位实际 checkout |
+| Qt 来源材料 | `--qt-prefix` 下确实存在的 `sbom/` 文件，保留原文件名和字节 |
+
+原始构建记录以校验后的副本参与后续判断，并作为 `materials` 保存，不改写成严格构建 receipt。脚本核对四个 native 记录的固定提交、补丁和已有配置字段，以及 Rust 构建记录中的锁、源码文件和实际静态库哈希。Qt SBOM 只作为来源材料，不被声明为 Qt 完整源码。
+
+Cargo 的 metadata、锁、原始档案及 vendor 是四个分别记录的集合。脚本遍历锁中的全部 registry 包，从实际 metadata 路径推导本次 cache 目录，只保留整个 `.crate` SHA256 与 Cargo.lock 一致的公开 registry 档案。找不到的包进入 `missingRegistryArchives`；字节不符直接失败。缺少某个 metadata 条目不意味着该包一定不在缓存中，metadata 里有某个条目也不等于已经提供其原始档案。
+
+gifski 的实际 checkout 先使用收集器已有的 Git 对象与逐字节检查，只额外识别 Cargo 自己的 `.cargo-ok` 完成标记，其他未记录源码仍会拒绝。之后从这个已核对的本地 checkout 建立干净对象副本，禁用 hooks、fsmonitor、签名自动展示、外部 Git 配置及懒加载；不访问远端。实际原始 checkout 不会被清理或重置，最终由主收集器再次核对固定源码。
+
+vendor 使用确实已安装的 Rust/Cargo 1.97.1，先记录实际程序版本与哈希，然后执行 `vendor --locked --offline --versioned-dirs`。所有相关子进程都设置 `RUSTUP_AUTO_INSTALL=0` 和 `CARGO_NET_OFFLINE=true`。一次性私有 cache 只复制本次 registry index、对应 gifski Git database 和已验证的锁定 `.crate`；不复制整个 Cargo home、配置或 credentials，完成后删除此次临时 cache。
+
+vendor 的真实退出码、命令及 stdout/stderr 都会保留。退出码为 0 才把实际目录和配置传给 `rustVendor`；完整锁覆盖仍由主收集器逐项检查。vendor 非零时保留已验证的原始 `.crate` 和原始日志，省略 `rustVendor`，继续生成明确缺项的档案。安装工具链、联网补齐、生成虚假 vendor/checksum 或把失败改成成功都不属于此 profile。
+
+新输出目录包含：
+
+| 路径 | 含义 |
+| --- | --- |
+| `bundle/` | 主收集器真实生成的源码档案与 `source-manifest.json`；本 profile 要求实际结果为 `complete: false` |
+| `collection-plan.json` | 实际提供给收集器的固定来源计划 |
+| `cargo-coverage.json` | 完整锁与实际 metadata 集合、原始档案及缺项、vendor 真退出码和实际输出包集合 |
+| `retention-report.json` | 实际 checkout SHA、执行命令、退出码、材料哈希、最终失败原因或未完成归档结果 |
+| `logs/`、`vendor-config.toml` | 实际命令输出；vendor 失败时 stdout 文件可能为空或不构成配置 |
+| `materials/` | 复制并校验后的原始记录及 Qt SBOM |
+| `inputs/registry-cache/` | 仅发布校验成功的原始 `.crate`，失败的复制不会冒充已验证材料 |
+| `inputs/gifski/` | 核对过的本地干净 checkout，供主收集器导出 |
+
+上传应使用 `if: always()`，保留 `bundle/`、两份报告、计划、日志、`materials/` 和 `inputs/registry-cache/`。需要保留 collector 失败时的 gifski 源文件时也可上传 `inputs/gifski/`，排除其 `.git/` 管理目录。`inputs/rust-vendor/` 是中间产物，vendor 非零时可能只写入一部分；有效源码以主收集器完成的档案为准。
+
+本 profile 故意不供应严格 build receipts、最终部署映射、Rust 标准库及完整 Qt/发行版/AppImage 来源闭包，因此正常产物仍未完成。vendor 缺缓存是可记录的材料缺口；源码、锁、已有档案或主收集器发现真实矛盾时，脚本仍以非零退出，已经校验的输入及诊断文件留在新目录。它不把一次离线编排或组件检查表述为完整应用流水线、源码完备性或发布验收通过。
+
 ## 自动化验证
 
 ```sh
