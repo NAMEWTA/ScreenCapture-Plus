@@ -26,6 +26,9 @@ if ($tag -isnot [string] -or $tag -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)
     throw 'The declared tag must be a stable canonical vMAJOR.MINOR.PATCH version.'
 }
 $expectedVersion = (Get-ReleaseVersion $tag) -join '.'
+if ($expectedVersion -cne "$(Get-ProductVersion).0") {
+    throw 'The declared release does not match the repository VERSION.'
+}
 if ($declaration.notes -isnot [string] -or $declaration.notes -cne "releases/$tag.md") {
     throw 'The declared notes must be the matching releases/<tag>.md file.'
 }

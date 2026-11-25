@@ -517,6 +517,19 @@ void SettingsWindow::endShortcutCapture()
     Q_EMIT shortcutCaptureActive(false);
 }
 
+bool SettingsWindow::event(QEvent* event)
+{
+    // QWidget delivers WindowDeactivate through event(), not changeEvent().
+    // Restore the host binding before QWidget forwards the event to children;
+    // that direct signal may legitimately destroy this entire view.
+    if (event->type() == QEvent::WindowDeactivate) {
+        const QPointer<SettingsWindow> lifetime(this);
+        endShortcutCapture();
+        if (!lifetime) return true;
+    }
+    return QWidget::event(event);
+}
+
 bool SettingsWindow::eventFilter(QObject* watched, QEvent* event)
 {
     if (state_->captureActive && event->type() == QEvent::MouseButtonPress) {
@@ -550,11 +563,6 @@ void SettingsWindow::moveEvent(QMoveEvent* event)
 void SettingsWindow::changeEvent(QEvent* event)
 {
     if (event->type() == QEvent::LanguageChange && state_->about) refreshLanguage();
-    if (event->type() == QEvent::WindowDeactivate) {
-        const QPointer<SettingsWindow> lifetime(this);
-        endShortcutCapture();
-        if (!lifetime) return;
-    }
     if (event->type() == QEvent::FontChange && state_->language) state_->language->hidePopup();
     QWidget::changeEvent(event);
 }

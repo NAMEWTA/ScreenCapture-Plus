@@ -8,6 +8,10 @@ $executable = Join-Path $binaryDirectory 'huhucapture.exe'
 if (-not (Test-Path $executable)) { throw 'Build the Release configuration before packaging.' }
 $versionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
 $fileVersion = $versionInfo.FileVersion
+$productVersion = Get-ProductVersion
+if ($fileVersion -cne "$productVersion.0") {
+    throw "Executable version $fileVersion does not match the repository VERSION ($productVersion)."
+}
 $expectedIdentity = @{
     ProductName = 'huhucapture'
     FileDescription = 'huhucapture'
@@ -23,7 +27,7 @@ if ($Version) {
     $expected = (Get-ReleaseVersion $Version) -join '.'
     if ($fileVersion -ne $expected) { throw "Executable version $fileVersion does not match release $Version ($expected)." }
 } else {
-    $Version = 'v' + (($fileVersion -split '\.')[0..2] -join '.')
+    $Version = 'v' + $productVersion
 }
 
 # A single executable must not acquire a dependency on the Visual C++ redistributable

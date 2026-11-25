@@ -12,9 +12,11 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -303,10 +305,19 @@ struct TransferService::Impl {
         if (nextRequest == std::numeric_limits<RequestId>::max() ||
             (enabling && nextGeneration == std::numeric_limits<std::uint64_t>::max()))
             return {HUHU_INVALID_STATE, 0};
-        startWorkerLocked();
         command.request = nextRequest;
         command.generation = enabling ? nextGeneration + 1 : nextGeneration;
-        commands.push_back(std::move(command));
+        try {
+            startWorkerLocked();
+            commands.push_back(std::move(command));
+        } catch (const std::bad_alloc&) {
+            return {HUHU_LIMIT_EXCEEDED, 0};
+        } catch (const std::system_error&) {
+            return {HUHU_IO, 0};
+        }
+        // Thread or queue allocation failure cannot admit a command or consume
+        // its terminal budget/identity. A newly created idle actor owns no
+        // native engine and can serve a later retry or the final join.
         reserveLocked(count, amount);
         if (enabling) {
             ++nextGeneration;

@@ -54,6 +54,7 @@ licenses apply independently of the root application license.
 | libportal 0.11.0 | `flatpak/libportal` `fc4d62cfe131e8494c82f597f92b2234d584c367` | LGPL-3.0-only; [COPYING](patches/libportal/COPYING) and [GPL text](patches/libportal/COPYING.GPL3) retained with the [reviewed patch](patches/libportal/0001-capture-request-lifetime-and-async-fd.patch). |
 | PipeWire 1.6.11 client | `PipeWire/pipewire` `4287f31510771fc999f8a58a024c81ca10b8d55f` | MIT for the selected client/examples, Wim Taymans and PipeWire contributors; [original COPYING](patches/pipewire/COPYING), [exact source blobs and controlled patches](../docs/linux-pipewire.md). The host daemon is not an application deployment dependency. |
 | FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Software validation configured with GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The mux example retains Fabrice Bellard's MIT notice and recorded frame-duration / finalization-error fixes. |
+| FFmpeg MOV box traversal | Same FFmpeg 9.0.2 commit, `libavformat/mov.c` | LGPL-2.1-or-later, Fabrice Bellard, Baptiste Coudurier and the named original contributors; [exact source and adaptation](ffmpeg-mov/upstream.json), [full LGPL text](ffmpeg-mov/COPYING.LGPLv2.1). Only top-level physical bounds are reused in the shared MP4 preflight. |
 | x264 API build 164 | VideoLAN x264 commit `3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3`, fetched from `mirror/x264` | GPL-2.0-or-later, x264 project; [license text](ffmpeg-examples/COPYING.x264). Runtime use through FFmpeg's existing libx264 adapter. |
 | KWindowSystem 6.32.0 | `KDE/kwindowsystem` `870fed584663656db8b5e3d4ec1a7048b5eff25f` | LGPL-2.0-or-later, Kai Uwe Broulik; only the two asynchronous xdg-foreign export classes are adapted. [Exact source blobs and changes](kwayland-parent/upstream.md), [license](kwayland-parent/LICENSES/LGPL-2.0-or-later.txt). |
 | xdg-foreign unstable v2 protocol | QtBase `5af1a37e31a869cd6eb8a73d82e2c71a450e6634`, source blob `cc3271dca4d6211bf6d04c34c0ca973c52f9b552` | MIT, Red Hat Inc. 2015–2016; the complete notice is retained in the unmodified [protocol XML](wayland-protocols/xdg-foreign-unstable-v2.xml). |
@@ -70,7 +71,7 @@ an explicit CI gate.
 The software-codec probe also adapts the decode/drain API flow from FFmpeg's
 `doc/examples/demux_decode.c`, Copyright (c) 2012 Stefano Sabatini; the
 [full MIT notice](ffmpeg-examples/demux-decode-license.txt) and exact source blob
-are retained. This is dependency validation, not a production Linux recorder;
+are retained. The complete-file inspection and fixture remux flow additionally retain Stefano Sabatini's [remux notice](ffmpeg-examples/remux-license.txt) and [exact source records](ffmpeg-examples/video-inspection-upstream.json). These media service candidates are subject to the actual [malformed-file gates](../docs/video-inspection.md). This is dependency validation, not a production Linux recorder;
 see [scope and reproducible inputs](../docs/software-codecs.md).
 
 LocalSend's application UI and Flutter/Dart runtime are not included. Unselected

@@ -326,6 +326,23 @@ void closeWhileWaiting()
 
 void destroyOnCaptureDeactivation()
 {
+    {
+        UIQ::SettingsWindow retained;
+        retained.setTranslator(translated); retained.setSnapshot(settingsSnapshot());
+        retained.setPage(UIQ::SettingsWindow::Page::Shortcut); show(retained);
+        int cancellations = 0;
+        QObject::connect(&retained, &UIQ::SettingsWindow::shortcutCaptureActive, &retained,
+            [&cancellations](bool active) { if (!active) ++cancellations; });
+        click(*child<QPushButton>(retained, "settingsCaptureShortcut"));
+        require(retained.capturingShortcut(), "retained-window deactivation starts with actual shortcut capture");
+        QEvent deactivate(QEvent::WindowDeactivate);
+        QApplication::sendEvent(&retained, &deactivate);
+        require(!retained.capturingShortcut() && cancellations == 1 && retained.isVisible(),
+            "WindowDeactivate restores the binding once while preserving an open settings view");
+        QApplication::sendEvent(&retained, &deactivate);
+        require(cancellations == 1, "repeated WindowDeactivate cannot restore the same capture twice");
+        retained.close(); settle();
+    }
     auto* window = new UIQ::SettingsWindow;
     window->setTranslator(translated); window->setSnapshot(settingsSnapshot());
     window->setPage(UIQ::SettingsWindow::Page::Shortcut); show(*window);
@@ -342,6 +359,7 @@ void destroyOnCaptureDeactivation()
     require(!lifetime && cancellations == 1,
         "a synchronous host may destroy settings when deactivation restores its shortcut without a second widget dispatch");
     settle();
+    std::cout << "PASS actual WindowDeactivate dispatch, idempotent capture release and synchronous host destruction\n";
 }
 }
 

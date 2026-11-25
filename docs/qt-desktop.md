@@ -28,11 +28,16 @@ Qt 组合键输入直接使用 `QKeySequenceEdit`，语言弹层直接使用 `QC
 
 - [qkeysequenceedit.cpp](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/widgets/widgets/qkeysequenceedit.cpp)
 - [qcombobox.cpp](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/widgets/widgets/qcombobox.cpp)
+- [qwidget.cpp](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/widgets/kernel/qwidget.cpp)
 
 本组件通过公开 API 调用 Qt，没有复制 Qt 私有实现。Qt 自身的版本、许可证和
 分发义务由依赖锁与第三方许可清单统一记录。适配保留原项目的交互：语言方向键
 只移动高亮，点击或 Enter 提交，Esc 取消；“获取更多语言”是独立动作。键盘捕获
 以一个组合为单位，首次释放按键后提交候选；Esc、切页和失焦退出捕获。
+
+`WindowDeactivate` 在 `QWidget::event()` 分发，不能放进只接收状态变化的
+`changeEvent()`。设置窗口在 Qt 向子控件转发失活前恢复宿主快捷键，并在直连信号
+返回后检查窗口是否仍然存在；宿主同步关闭或销毁视图时不能继续调用基类或子控件。
 
 ## 设置与更新的真实状态
 

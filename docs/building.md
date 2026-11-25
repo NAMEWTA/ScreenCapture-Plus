@@ -47,7 +47,9 @@ ctest --preset qt-validation
 
 ## 现有 Windows 生产构建
 
-本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。版本号来自 [Version.props](../build/windows/Version.props)，发布意图来自 [publish.json](../releases/publish.json)。
+本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。唯一版本号来自根目录 [VERSION](../VERSION)，发布意图来自 [publish.json](../releases/publish.json)。
+
+CMake 从同一个 `VERSION` 设置 `PROJECT_VERSION` 并生成 `app/Version.h`；Qt 应用层通过 `huhucapture_version` 目标使用该头。保留的 Windows 工程通过 `Version.props` 读取相同值，资源的第四段固定为零。`build.ps1 -Version`、打包及发布声明只核对版本，不再覆盖资源值；不同标签或陈旧 EXE 会明确失败。版本格式为无前导零的 `MAJOR.MINOR.PATCH`，每段不超过 65535，以匹配 Windows 资源格式。修改 `VERSION` 会触发 CMake 重新配置。迁移分支保持当前正式版本号，只有发布门槛满足后才执行规定的 Patch 递增。
 
 ## 环境与依赖决策
 
@@ -115,7 +117,7 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 
 发行所指向的提交必须同时包含相互匹配的：
 
-1. `build/windows/Version.props` 默认版本；
+1. 根目录 `VERSION` 中的产品版本；
 2. `releases/publish.json` 的稳定 tag 与说明路径；
 3. `releases/<tag>.md`、更新记录和当前下载说明。
 

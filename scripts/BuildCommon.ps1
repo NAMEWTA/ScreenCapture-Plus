@@ -26,6 +26,16 @@ function Initialize-WindowsToolchain {
     if (-not (Get-Command MSBuild.exe -ErrorAction SilentlyContinue)) { throw 'MSBuild is unavailable after initializing Visual Studio.' }
 }
 
+function Get-ProductVersion {
+    $value = (Get-Content (Join-Path $RepoRoot 'VERSION') -Raw -Encoding utf8).Trim()
+    if ($value -cnotmatch '^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$') {
+        throw 'VERSION must contain one canonical MAJOR.MINOR.PATCH value.'
+    }
+    $parts = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
+    if ($parts.Where({ $_ -gt 65535 }).Count) { throw 'VERSION components must be between 0 and 65535.' }
+    return $value
+}
+
 function Get-ReleaseVersion([string] $Value) {
     # Tags are data, never executable shell text. Keep all resource components within WORD.
     if ($Value -notmatch '^v?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {

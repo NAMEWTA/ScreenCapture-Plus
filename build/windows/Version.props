@@ -1,12 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <!-- huhucapture has its own release sequence. Release tags override these values. -->
+  <!-- Both build systems read VERSION; a tag checks it rather than overriding it. -->
   <PropertyGroup>
-    <VersionMajor Condition="'$(VersionMajor)'==''">0</VersionMajor>
-    <VersionMinor Condition="'$(VersionMinor)'==''">0</VersionMinor>
-    <VersionPatch Condition="'$(VersionPatch)'==''">5</VersionPatch>
+    <_HuhuProductVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</_HuhuProductVersion>
+    <_HuhuVersionValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(_HuhuProductVersion)', '\A(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\z'))</_HuhuVersionValid>
+    <VersionMajor Condition="'$(VersionMajor)'=='' and '$(_HuhuVersionValid)'=='True'">$([System.Version]::Parse('$(_HuhuProductVersion)').Major)</VersionMajor>
+    <VersionMinor Condition="'$(VersionMinor)'=='' and '$(_HuhuVersionValid)'=='True'">$([System.Version]::Parse('$(_HuhuProductVersion)').Minor)</VersionMinor>
+    <VersionPatch Condition="'$(VersionPatch)'=='' and '$(_HuhuVersionValid)'=='True'">$([System.Version]::Parse('$(_HuhuProductVersion)').Build)</VersionPatch>
     <VersionRevision Condition="'$(VersionRevision)'==''">0</VersionRevision>
   </PropertyGroup>
+  <Target Name="ValidateHuhuProductVersion" BeforeTargets="PrepareForBuild;ResourceCompile">
+    <Error Condition="'$(_HuhuVersionValid)'!='True'" Text="VERSION must contain one canonical MAJOR.MINOR.PATCH value." />
+    <Error Condition="'$(VersionMajor).$(VersionMinor).$(VersionPatch)'!='$(_HuhuProductVersion)' or '$(VersionRevision)'!='0'" Text="Build version overrides must match the repository VERSION with revision zero." />
+    <Error Condition="$(VersionMajor) &gt; 65535 or $(VersionMinor) &gt; 65535 or $(VersionPatch) &gt; 65535" Text="VERSION components must fit Windows resource WORD values." />
+  </Target>
   <ItemDefinitionGroup>
     <ResourceCompile>
       <PreprocessorDefinitions>HUHU_VERSION_MAJOR=$(VersionMajor);HUHU_VERSION_MINOR=$(VersionMinor);HUHU_VERSION_PATCH=$(VersionPatch);HUHU_VERSION_REVISION=$(VersionRevision);%(PreprocessorDefinitions)</PreprocessorDefinitions>

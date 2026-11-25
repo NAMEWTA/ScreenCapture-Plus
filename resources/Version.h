@@ -1,7 +1,7 @@
 #ifndef HUHU_RESOURCE_VERSION_H
 #define HUHU_RESOURCE_VERSION_H
 
-// Version.props is the single source of defaults; build.ps1 overrides it for release tags.
+// Version.props supplies these values from the repository VERSION.
 #define HUHU_STRINGIFY_IMPL(value) #value
 #define HUHU_STRINGIFY(value) HUHU_STRINGIFY_IMPL(value)
 #define HUHU_VERSION_NUMBER HUHU_VERSION_MAJOR,HUHU_VERSION_MINOR,HUHU_VERSION_PATCH,HUHU_VERSION_REVISION
