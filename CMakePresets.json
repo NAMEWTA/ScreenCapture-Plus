@@ -1,0 +1,28 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "core",
+      "displayName": "Shared C++20 contracts (no Qt, no product executable)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/artifacts/cmake/core",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "BUILD_TESTING": "ON" }
+    },
+    {
+      "name": "qt-validation",
+      "displayName": "Pinned Qt 6.12.1 migration validation",
+      "inherits": "core",
+      "binaryDir": "${sourceDir}/artifacts/cmake/qt-validation",
+      "cacheVariables": { "HUHUCAPTURE_QT_VALIDATION": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "core", "configurePreset": "core" },
+    { "name": "qt-validation", "configurePreset": "qt-validation" }
+  ],
+  "testPresets": [
+    { "name": "core", "configurePreset": "core", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "qt-validation", "configurePreset": "qt-validation", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
+  ]
+}
