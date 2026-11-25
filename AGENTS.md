@@ -40,6 +40,10 @@ ToolSub/toolPin fields and shared ToolSettings ranges instead of another store
 or defaults table. Native recording controls must remain excluded, unmapped or
 verified outside every real readback. Hiding controls requires an actually
 available stop route; a saved shortcut string is not native registration.
+Desktop finish actions must use the existing primary-instance IPC and real
+GIO registration/launch confirmation. Control errors must not start a capture
+or open a new product window. A verified command path is not evidence of
+GNOME menu reachability or clean captured pixels; keep those acceptance gates.
 
 Reuse existing production behavior first, pinned cited upstream second, then
 mature libraries. Keep pure editor models free of Qt/Win32 and use them in the

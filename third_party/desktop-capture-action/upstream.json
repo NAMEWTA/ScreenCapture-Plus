@@ -1,0 +1,159 @@
+{
+  "scope": "Desktop finish action for the existing primary instance; Issue #5 sections 8.3 and 8.4",
+  "implementation": "Reuse the existing Startup, SingleInstance, FileIdentity and shared stop actions. Use public Qt/GIO/GLib APIs. Do not introduce a second capture/IPC implementation.",
+  "projectReuse": {
+    "repository": "NAMEWTA/huhucapture",
+    "baseline": "11c6033e51a26cd8dda5a403da239ccd5953fe72",
+    "license": "MIT",
+    "files": [
+      "src/core/Startup.h",
+      "src/app/SingleInstance.cpp",
+      "src/services/desktop/LaunchCommand.cpp",
+      "src/platform/FileIdentity.h"
+    ]
+  },
+  "sources": [
+    {
+      "repository": "GNOME/gnome-shell",
+      "ref": "46.0",
+      "path": "js/ui/appDisplay.js",
+      "sha": "aca6002eb2d74b6970bcee8865c1d42d99739da3",
+      "license": "GPL-2.0-or-later",
+      "attribution": "GNOME Shell contributors",
+      "use": "Review of application actions, public ShellVersion property and native action launch; no source copied.",
+      "url": "https://github.com/GNOME/gnome-shell/blob/46.0/js/ui/appDisplay.js"
+    },
+    {
+      "repository": "GNOME/gnome-shell",
+      "ref": "46.0",
+      "path": "js/ui/appMenu.js",
+      "sha": "1569aa6cef9ee7a29cf88f1fbccd34e612d92e4c",
+      "license": "GPL-2.0-or-later",
+      "attribution": "GNOME Shell contributors",
+      "use": "Review of application actions, public ShellVersion property and native action launch; no source copied.",
+      "url": "https://github.com/GNOME/gnome-shell/blob/46.0/js/ui/appMenu.js"
+    },
+    {
+      "repository": "GNOME/gnome-shell",
+      "ref": "46.0",
+      "path": "src/shell-app.c",
+      "sha": "3b5df0aabbac4e07705f831d9cbe9cc28e1e8494",
+      "license": "GPL-2.0-or-later",
+      "attribution": "GNOME Shell contributors",
+      "use": "Review of application actions, public ShellVersion property and native action launch; no source copied.",
+      "url": "https://github.com/GNOME/gnome-shell/blob/46.0/src/shell-app.c"
+    },
+    {
+      "repository": "GNOME/gnome-shell",
+      "ref": "46.0",
+      "path": "data/dbus-interfaces/org.gnome.Shell.xml",
+      "sha": "3ffb5c3742cfe13cdd5906c89a81fd5ef2434831",
+      "license": "GPL-2.0-or-later",
+      "attribution": "GNOME Shell contributors",
+      "use": "Review of application actions, public ShellVersion property and native action launch; no source copied.",
+      "url": "https://github.com/GNOME/gnome-shell/blob/46.0/data/dbus-interfaces/org.gnome.Shell.xml"
+    },
+    {
+      "repository": "GNOME/gnome-shell",
+      "ref": "50.0",
+      "path": "js/ui/appMenu.js",
+      "sha": "b8d8f64a1ba7eea1cc756a8c3d6064f705656734",
+      "license": "GPL-2.0-or-later",
+      "attribution": "GNOME Shell contributors",
+      "use": "Review of application actions, public ShellVersion property and native action launch; no source copied.",
+      "url": "https://github.com/GNOME/gnome-shell/blob/50.0/js/ui/appMenu.js"
+    },
+    {
+      "repository": "GNOME/gnome-shell",
+      "ref": "50.0",
+      "path": "data/dbus-interfaces/org.gnome.Shell.xml",
+      "sha": "7d14c16b6a177fc76460705713d148aec703a39e",
+      "license": "GPL-2.0-or-later",
+      "attribution": "GNOME Shell contributors",
+      "use": "Review of application actions, public ShellVersion property and native action launch; no source copied.",
+      "url": "https://github.com/GNOME/gnome-shell/blob/50.0/data/dbus-interfaces/org.gnome.Shell.xml"
+    },
+    {
+      "repository": "GNOME/glib",
+      "ref": "2.80.0",
+      "path": "gio/gcontextspecificgroup.c",
+      "sha": "41a35de86e38853e4f800e5632c81927e623adc6",
+      "license": "LGPL-2.1-or-later",
+      "attribution": "2015 Canonical Limited; Ryan Lortie; GLib contributors",
+      "use": "Reviewed the public monitor's queued GSource emission, context-specific ownership and finalization/removal; no source copied.",
+      "url": "https://github.com/GNOME/glib/blob/2.80.0/gio/gcontextspecificgroup.c"
+    },
+    {
+      "repository": "GNOME/glib",
+      "ref": "2.80.0",
+      "path": "gio/gappinfo.c",
+      "sha": "652cae6e1a944c110d4f10adf198d462d4ed438f",
+      "license": "LGPL-2.1-or-later",
+      "attribution": "2006-2007 Red Hat, Inc.; Alexander Larsson; GLib contributors",
+      "use": "Public GAppInfoMonitor::changed on the actual Qt GLib context, subscribed before desktop-ID lookup; reviewed notification re-arming, context ownership and cache invalidation. No source copied.",
+      "url": "https://github.com/GNOME/glib/blob/2.80.0/gio/gappinfo.c"
+    },
+    {
+      "repository": "GNOME/glib",
+      "ref": "2.80.0",
+      "path": "gio/gdesktopappinfo.c",
+      "sha": "87db7a97a1eb8e99a659de0e4acbb2ace67e8d83",
+      "license": "LGPL-2.1-or-later",
+      "attribution": "2006-2007 Red Hat, Inc.; 2007 Ryan Lortie; GLib contributors",
+      "use": "Direct system GIO/GLib APIs; reviewed effective desktop lookup, Exec parsing, launch context environment and launch_action return semantics.",
+      "url": "https://github.com/GNOME/glib/blob/2.80.0/gio/gdesktopappinfo.c"
+    },
+    {
+      "repository": "flameshot-org/flameshot",
+      "ref": "dcc3bd3175495e04832c4aac0868f1dd15aba2ca",
+      "path": "data/desktopEntry/package/org.flameshot.Flameshot.desktop",
+      "sha": "346895c13414153b7a3d7aef838c06c49c6b0711",
+      "license": "GPL-3.0-or-later",
+      "attribution": "2017-2019 Alejandro Sirgo Rica & Contributors",
+      "use": "Issue R03 action/daemon and StartupNotify behavior reference; no source copied.",
+      "url": "https://github.com/flameshot-org/flameshot/blob/dcc3bd3175495e04832c4aac0868f1dd15aba2ca/data/desktopEntry/package/org.flameshot.Flameshot.desktop"
+    },
+    {
+      "repository": "flameshot-org/flameshot",
+      "ref": "dcc3bd3175495e04832c4aac0868f1dd15aba2ca",
+      "path": "src/core/flameshotdbusadapter.cpp",
+      "sha": "87187057399808933d74943279b7fc46dbed27cb",
+      "license": "GPL-3.0-or-later",
+      "attribution": "2017-2019 Alejandro Sirgo Rica & Contributors",
+      "use": "Issue R03 action/daemon and StartupNotify behavior reference; no source copied.",
+      "url": "https://github.com/flameshot-org/flameshot/blob/dcc3bd3175495e04832c4aac0868f1dd15aba2ca/src/core/flameshotdbusadapter.cpp"
+    },
+    {
+      "repository": "flameshot-org/flameshot",
+      "ref": "dcc3bd3175495e04832c4aac0868f1dd15aba2ca",
+      "path": "src/utils/desktopfileparse.cpp",
+      "sha": "b6ad9a3c89d2b044fddb93386ee96628721222ce",
+      "license": "GPL-3.0-or-later",
+      "attribution": "2017-2019 Alejandro Sirgo Rica & Contributors",
+      "use": "Issue R03 action/daemon and StartupNotify behavior reference; no source copied.",
+      "url": "https://github.com/flameshot-org/flameshot/blob/dcc3bd3175495e04832c4aac0868f1dd15aba2ca/src/utils/desktopfileparse.cpp"
+    },
+    {
+      "repository": "ksnip/ksnip",
+      "ref": "059f022cb9c4bdd30d3e8311eb9199ca92fed4f3",
+      "path": "desktop/org.ksnip.ksnip.desktop",
+      "sha": "eb2f0b06dca9d1822fcd25351729350896759a58",
+      "license": "GPL-2.0-or-later",
+      "attribution": "Damir Porobic and ksnip contributors",
+      "use": "Issue R04 desktop-action and StartupNotify behavior reference; no source copied.",
+      "url": "https://github.com/ksnip/ksnip/blob/059f022cb9c4bdd30d3e8311eb9199ca92fed4f3/desktop/org.ksnip.ksnip.desktop"
+    }
+  ],
+  "specifications": [
+    {
+      "url": "https://specifications.freedesktop.org/desktop-entry/latest/extra-actions.html",
+      "scope": "Actions and Desktop Action groups; desktop implementations may omit this optional feature, so file presence alone is insufficient."
+    },
+    {
+      "url": "https://help.gnome.org/gnome-help/shell-apps-open.html",
+      "scope": "GNOME application launch and desktop entry user flow; real shell presentation still requires target-desktop validation."
+    }
+  ],
+  "runtimeDependencies": "Existing Qt and system GIO/GLib; exact packaged/runtime versions remain in the dependency/build manifests. Reviewed GNOME/Flameshot/ksnip sources are not shipped implementation dependencies.",
+  "verificationBoundary": "A real GIO action/child/IPC acknowledgment establishes that route only. Actual GNOME menu visibility, interactive stop, source pixels and final manual-scroll result are separate required tests."
+}

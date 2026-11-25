@@ -111,8 +111,12 @@ def checked_vendor(api, directory, locked, metadata, output):
         package = actual.get(key)
         declaration = package.get('license') if package else manifest.get('license')
         declared_file = package.get('license_file') if package else manifest.get('license-file')
-        notice_paths = {path for path in present if re.match(r'(?i)^(?:licen[cs]e|copying|copyright|notice|unlicen[cs]e)(?:[._-].*)?$',
-                                                            Path(path).name)}
+        # REUSE-style crates retain SPDX-named texts such as LICENSES/MIT.txt.
+        # They are original Cargo-verified files, not synthesized from a license expression.
+        notice_paths = {path for path in present
+                        if re.match(r'(?i)^(?:licen[cs]e|copying|copyright|notice|unlicen[cs]e)(?:[._-].*)?$',
+                                    Path(path).name) or
+                        any(part.casefold() in {'licenses', 'licences'} for part in Path(path).parts[:-1])}
         if declared_file:
             relative = api.meta.safe_relative(declared_file)
             api.meta.require(relative in present, 'The declared crate license file was not vendored')

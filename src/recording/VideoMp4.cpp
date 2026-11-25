@@ -2001,10 +2001,54 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     DWORD VideoBufferSize = cbWidth * he;
     LONGLONG lastSubmittedVideoTime = 0;
     LONGLONG lastSubmittedVideoDuration = 0;
+    LONGLONG submittedVideoDuration = 0;
+    std::uint64_t capturedVideoFrames = 0;
+    CComPtr<IMFSample> pendingVideoSample;
+    LONGLONG pendingVideoTime = 0;
+    bool pendingVideoSubmissionAttempted = false;
+
+    // A capture's duration is known when the next image arrives or capture
+    // stops. Hold only that one immutable sample; the sink may retain earlier
+    // samples independently. Do not predict a future duration from the previous
+    // interval, which creates gaps/overlaps when capture timing changes.
+    const auto submitPendingVideo = [&](LONGLONG end) -> HRESULT {
+        if (!pendingVideoSample) return S_OK;
+        if (pendingVideoSubmissionAttempted) return MF_E_INVALIDREQUEST;
+        pendingVideoSubmissionAttempted = true;
+        if (pendingVideoTime < 0 || end <= pendingVideoTime ||
+            pendingVideoTime != submittedVideoDuration)
+            return MF_E_INVALID_TIMESTAMP;
+        const auto duration = end - pendingVideoTime;
+        auto status = pendingVideoSample->SetSampleTime(pendingVideoTime);
+        if (FAILED(status)) return status;
+        status = pendingVideoSample->SetSampleDuration(duration);
+        if (FAILED(status)) return status;
+
+        CComPtr<IMFSample> sample = pendingVideoSample;
+        if (VideoTransformMFT) {
+            CComPtr<IMFSample> converted;
+            status = MFTrs(0, 0, 0, VideoTransformMFT, sample, &converted);
+            if (FAILED(status)) return status;
+            if (converted) sample = converted;
+            status = sample->SetSampleTime(pendingVideoTime);
+            if (FAILED(status)) return status;
+            status = sample->SetSampleDuration(duration);
+            if (FAILED(status)) return status;
+        }
+        status = pSinkWriter->WriteSample(OutVideoStreamIndex, sample);
+        if (FAILED(status)) return status;
+        ++dp.result.framesWritten;
+        lastSubmittedVideoTime = pendingVideoTime;
+        lastSubmittedVideoDuration = duration;
+        submittedVideoDuration = end;
+        pendingVideoSample.Release();
+        pendingVideoSubmissionAttempted = false;
+        return S_OK;
+    };
 
     unsigned long long rtA = 0;
     unsigned long long rtV = 0;
-    HuhuCapture::Core::MediaClock::time_point last_frame_time_point;
+    HuhuCapture::Core::MediaClock::time_point firstFrameTime;
     bool isFirstFrame = true;
     auto failureStage = RecordingStage::Capture;
 
@@ -2030,7 +2074,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             dp.DurationLimitReached = true;
             return true;
         }
-        if (dp.HasVideo && !dp.Framer && dp.FirstFrameTimeoutMS && dp.result.framesWritten == 0 &&
+        if (dp.HasVideo && !dp.Framer && dp.FirstFrameTimeoutMS && isFirstFrame &&
             static_cast<unsigned long long>(elapsed) >= dp.FirstFrameTimeoutMS) {
             hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
             return true;
@@ -2055,7 +2099,6 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             break;
 
         unsigned long long ThisDurA = 0;
-        unsigned long long ThisDurV = 0;
         size_t FinalAudioBytes = 0;
 
         bool DirectAudioCopy = false;
@@ -2247,10 +2290,6 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 */
         }
 
-        ThisDurV = 10 * 1000 * 1000 / dp.fps;
-        if (ThisDurA)
-            ThisDurV = ThisDurA;
-
         if (dp.HasAudio && ThisDurA == 0)
             continue;
 
@@ -2335,22 +2374,21 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 hr = HRESULT_FROM_WIN32(ERROR_INVALID_STATE); break;
             }
 
+            const auto capturedAt = HuhuCapture::Core::MediaClock::now();
             if (isFirstFrame)
             {
                 isFirstFrame = false;
                 rtV = 0;
-                last_frame_time_point = HuhuCapture::Core::MediaClock::now();
+                firstFrameTime = capturedAt;
             }
             else
             {
-                // Time stamp of current frame.
-                // Calculate the dt with last frame. and set to the frame property.
-                auto current_frameTimePoint = HuhuCapture::Core::MediaClock::now();
-                auto frameDuration = current_frameTimePoint - last_frame_time_point;
-                last_frame_time_point = current_frameTimePoint;
-                ThisDurV = static_cast<unsigned long long>((std::max)(std::int64_t{1},
-                    HuhuCapture::Core::mediaTicks(frameDuration)));
-                rtV += ThisDurV;
+                const auto timestamp = HuhuCapture::Core::mediaTicks(capturedAt - firstFrameTime);
+                if (timestamp <= static_cast<LONGLONG>(rtV)) {
+                    hr = MF_E_INVALID_TIMESTAMP;
+                    break;
+                }
+                rtV = static_cast<unsigned long long>(timestamp);
             }
 
             failureStage = RecordingStage::Encode;
@@ -2449,36 +2487,13 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
 
 
-            hr = pVideoSample->SetSampleTime(rtV);
-            if (FAILED(hr)) break;
-
-            hr = pVideoSample->SetSampleDuration(ThisDurV);
-            if (FAILED(hr)) break;
-
-
-            // Video Transform MFT
-            if (VideoTransformMFT)
-            {
-                CComPtr<IMFSample> s2;
-                hr = MFTrs(0, 0, 0, VideoTransformMFT, pVideoSample, &s2);
-                if (FAILED(hr)) break;
-                if (s2)
-                    pVideoSample = s2;
-            }
-
             if (pVideoSample && dp.HasVideo && !dp.Framer)
             {
-                hr = pVideoSample->SetSampleTime(rtV);
+                ++capturedVideoFrames;
+                hr = submitPendingVideo(static_cast<LONGLONG>(rtV));
                 if (FAILED(hr)) break;
-
-                hr = pVideoSample->SetSampleDuration(ThisDurV);
-                if (FAILED(hr)) break;
-                hr = pSinkWriter->WriteSample(OutVideoStreamIndex, pVideoSample);
-                if (FAILED(hr))
-                    break;
-                dp.result.framesWritten++;
-                lastSubmittedVideoTime = static_cast<LONGLONG>(rtV);
-                lastSubmittedVideoDuration = static_cast<LONGLONG>(ThisDurV);
+                pendingVideoSample = pVideoSample;
+                pendingVideoTime = static_cast<LONGLONG>(rtV);
             }
         }
 
@@ -2548,12 +2563,26 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             break;
     }
 
+    // Freeze the media endpoint on the same clock as capture, before audio
+    // joins or sink drain can add shutdown latency to the recorded interval.
+    const auto captureStopped = HuhuCapture::Core::MediaClock::now();
+    const auto captureEnd = isFirstFrame ? LONGLONG{0} :
+        HuhuCapture::Core::mediaTicks(captureStopped - firstFrameTime);
+
     // Audio off
     for (auto& audio : ains) audio->Stop();
 
     if (FAILED(hr)) dp.result.fail(failureStage, static_cast<std::int64_t>(hr));
     const auto audioError = firstAudioError.load();
     if (FAILED(audioError)) dp.result.fail(RecordingStage::Capture, audioError);
+    // A failure while capturing/preparing the next image or writing audio can
+    // still preserve this last valid, unsubmitted image. Never repeat a failed
+    // video submission/transform or clear the original capture/encoding error.
+    if (pendingVideoSample && !pendingVideoSubmissionAttempted) {
+        const auto tailResult = submitPendingVideo(captureEnd);
+        if (FAILED(tailResult)) dp.result.fail(RecordingStage::Encode, tailResult);
+    }
+    pendingVideoSample.Release();
     if (pSinkWriter) {
         if (dp.Finalizing) {
             try { dp.Finalizing(); }
@@ -2573,7 +2602,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 statistics.qwNumSamplesEncoded, statistics.qwNumSamplesProcessed,
                 statistics.llLastTimestampReceived, statistics.llLastTimestampEncoded,
                 statistics.llLastTimestampProcessed, lastSubmittedVideoTime,
-                lastSubmittedVideoDuration, statistics.dwByteCountQueued};
+                lastSubmittedVideoDuration, statistics.dwByteCountQueued,
+                capturedVideoFrames, submittedVideoDuration, captureEnd};
         }
     }
     if (dp.result.firstError)

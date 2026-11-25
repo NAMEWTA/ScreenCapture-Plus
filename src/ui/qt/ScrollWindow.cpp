@@ -120,7 +120,7 @@ struct ScrollWindow::State {
     QTimer frameDeadline;
     quint64 nextOutput{}, outputToken{}, captureToken{}, sample{}, capturingSample{};
     std::optional<OutputIntent> afterStop;
-    QString outputFailure;
+    QString outputFailure, externalStopHint;
     bool opened{}, closing{}, reportedClosed{}, pending{}, excluded{}, hiddenForCapture{};
     bool externalStopAvailable{}, pendingLiveStart{};
 
@@ -264,10 +264,11 @@ void ScrollWindow::activate(const QString& token)
     if (state_->closing) return;
     if (!state_->hiddenForCapture) { show(); raise(); if (windowHandle()) state_->activation.request(windowHandle(), token); }
 }
-void ScrollWindow::setExternalStopAvailable(bool available)
+void ScrollWindow::setExternalStopAvailable(bool available, const QString& hint)
 {
-    if (state_->externalStopAvailable == available) return;
+    if (state_->externalStopAvailable == available && state_->externalStopHint == hint) return;
     state_->externalStopAvailable = available;
+    state_->externalStopHint = hint;
     if (!available && state_->hiddenForCapture && state_->manual()) stopCapture();
     refresh();
 }
@@ -327,8 +328,9 @@ void ScrollWindow::refresh()
     else if (state_->manual()) status = state_->text(u"long.manualCapturing", "Scroll the authorized source manually; stop when finished.");
     state_->status->setText(status); state_->status->setVisible(!status.isEmpty());
     state_->notice->setText(state_->externalStopAvailable ?
-        state_->text(u"long.controlsHidden", "Controls hide during capture. Use the tray or registered global shortcut to stop.") :
-        state_->text(u"long.stopUnavailable", "A working tray or global stop action is required before these controls can be hidden for capture."));
+        (state_->externalStopHint.isEmpty() ? state_->text(u"long.controlsHidden",
+            "Controls hide during capture. Use the available finish action to stop.") : state_->externalStopHint) :
+        state_->text(u"capture.stopUnavailable", "A working tray, shortcut or desktop finish action is required before controls can hide."));
     state_->notice->setVisible(state_->manual());
     state_->setup->refreshTextWidths(); state_->actions->refreshTextWidths();
     if (phase != ScrollPhase::Ready) for (const auto& surface : state_->surfaces)

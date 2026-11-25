@@ -127,6 +127,10 @@ if(HUHUCAPTURE_QT_VALIDATION)
     add_library(huhucapture_startup STATIC src/app/SingleInstance.h src/app/SingleInstance.cpp)
     set_target_properties(huhucapture_startup PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
     target_link_libraries(huhucapture_startup PUBLIC huhucapture_core Qt6::Core Qt6::Network)
+    add_library(huhucapture_launch_command STATIC
+        src/services/desktop/LaunchCommand.h src/services/desktop/LaunchCommand.cpp)
+    target_link_libraries(huhucapture_launch_command PUBLIC huhucapture_core Qt6::Core)
+    set_target_properties(huhucapture_launch_command PROPERTIES CXX_EXTENSIONS OFF)
     add_library(huhucapture_capture STATIC src/capture/CaptureTypes.h
         src/capture/CaptureSession.h src/capture/CaptureSession.cpp)
     set_target_properties(huhucapture_capture PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
@@ -186,13 +190,14 @@ if(HUHUCAPTURE_QT_VALIDATION)
         find_package(Qt6 6.12.1 EXACT REQUIRED COMPONENTS Concurrent)
         add_library(huhucapture_desktop_services STATIC
             src/services/desktop/DesktopResult.h
+            src/services/desktop/DesktopCaptureAction.h src/services/desktop/DesktopCaptureAction.cpp
             src/services/desktop/CaptureExclusion.h src/services/desktop/CaptureExclusion.cpp
             src/services/desktop/SystemClipboard.h src/services/desktop/SystemClipboard.cpp
             src/services/desktop/DesktopFiles.h src/services/desktop/DesktopFiles.cpp
             src/services/desktop/FileRevealer.h src/services/desktop/FileRevealer.cpp)
         set_target_properties(huhucapture_desktop_services PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
         target_link_libraries(huhucapture_desktop_services PUBLIC huhucapture_media_archive Qt6::Gui
-            PRIVATE Qt6::Concurrent)
+            PRIVATE huhucapture_launch_command Qt6::Concurrent)
         if(WIN32)
             target_sources(huhucapture_desktop_services PRIVATE
                 src/platform/windows/DesktopClipboard.h src/platform/windows/DesktopClipboard.cpp
@@ -207,6 +212,7 @@ if(HUHUCAPTURE_QT_VALIDATION)
             pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client>=1.22)
             pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.80)
             target_sources(huhucapture_desktop_services PRIVATE
+                src/platform/linux/DesktopCaptureAction.h src/platform/linux/DesktopCaptureAction.cpp
                 src/platform/linux/DesktopClipboard.h src/platform/linux/DesktopClipboard.cpp
                 src/platform/linux/DesktopFiles.h src/platform/linux/DesktopFiles.cpp)
             target_link_libraries(huhucapture_desktop_services PRIVATE
@@ -522,12 +528,12 @@ if(HUHUCAPTURE_QT_VALIDATION)
         add_library(huhucapture_settings_controller STATIC
             src/app/SettingsController.h src/app/SettingsController.cpp
             src/services/desktop/GlobalShortcut.h src/services/desktop/GlobalShortcut.cpp
-            src/services/desktop/LaunchCommand.h src/services/desktop/LaunchCommand.cpp
             src/services/desktop/AutoStart.h src/platform/GlobalShortcutBackend.h)
         set_target_properties(huhucapture_settings_controller PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
         target_compile_definitions(huhucapture_settings_controller PRIVATE QT_NO_KEYWORDS)
         target_link_libraries(huhucapture_settings_controller PUBLIC
-            huhucapture_desktop huhucapture_settings huhucapture_languages Qt6::Widgets)
+            huhucapture_desktop huhucapture_settings huhucapture_languages Qt6::Widgets
+            PRIVATE huhucapture_launch_command)
         if(WIN32)
             target_sources(huhucapture_settings_controller PRIVATE
                 src/platform/windows/GlobalShortcut.cpp src/platform/windows/AutoStart.cpp)

@@ -24,7 +24,13 @@ def digest_file(path, algorithm):
 
 
 def sdk_spdx(api, prefix, version):
-    """Index original SPDX file records, retaining each module's own policy."""
+    """Index original files without discarding Qt's multi-config SPDX IDs.
+
+    QtPublicSbomFileHelpers adds a distinct ID for each installed build
+    configuration even when its custom file is identical (for example a QM).
+    Only same-document records with every non-ID field and owning package in
+    agreement may share one path. The original document and all IDs remain.
+    """
     documents, by_file = {}, {}
     for path in sorted((prefix / 'sbom').glob('*.spdx.json')):
         value = api.meta.json_read(path, 32 * 1024 * 1024)
@@ -46,18 +52,31 @@ def sdk_spdx(api, prefix, version):
                 containers.setdefault(relation['relatedSpdxElement'], set()).add(relation['spdxElementId'])
         document = {'name': name, 'path': path, 'value': value, 'package': roots[0], 'packages': packages}
         documents[name] = document
+        seen_ids = set(packages)
         for entry in value.get('files', []):
+            spdx_id = entry['SPDXID']
+            api.meta.require(isinstance(spdx_id, str) and spdx_id.startswith('SPDXRef-') and
+                             spdx_id not in seen_ids,
+                             'Repeated or invalid original Qt SPDX ID in ' + path.name)
+            seen_ids.add(spdx_id)
             relative = api.meta.safe_relative(entry['fileName'].removeprefix('./'))
             checksums = [item['checksumValue'].lower() for item in entry.get('checksums', [])
                          if item.get('algorithm') == 'SHA1']
             api.meta.require(len(checksums) == 1 and re.fullmatch(r'[0-9a-f]{40}', checksums[0]),
                              'An original Qt file lacks one exact SPDX checksum')
-            record = {'module': name, 'document': path.name, 'spdxId': entry['SPDXID'],
+            record = {'module': name, 'document': path.name,
                       'sha1': checksums[0], 'licenseConcluded': entry.get('licenseConcluded', 'NOASSERTION'),
                       'copyrightText': entry.get('copyrightText', 'NOASSERTION'),
-                      'packageIds': sorted(containers.get(entry['SPDXID'], set()))}
-            api.meta.require(relative not in by_file, 'Ambiguous original Qt SPDX file: ' + relative)
-            by_file[relative] = record
+                      'packageIds': sorted(containers.get(spdx_id, set())),
+                      'fileProperties': {key: item for key, item in entry.items() if key != 'SPDXID'}}
+            previous = by_file.get(relative)
+            if previous is None:
+                by_file[relative] = {**record, 'spdxIds': [spdx_id]}
+            else:
+                api.meta.require(record == {key: item for key, item in previous.items() if key != 'spdxIds'},
+                                 'Conflicting original Qt SPDX records for file: ' + relative)
+                previous['spdxIds'].append(spdx_id)
+                previous['spdxIds'].sort()
     api.meta.require({'qtbase', 'qtsvg', 'qttranslations'} <= documents.keys(),
                      'The actual SDK lacks the required original Qt SPDX documents')
     return documents, by_file
@@ -289,7 +308,7 @@ def collect(api, options):
     version = api.meta.json_read(api.ROOT / 'build/dependencies.lock.json')['qtMigration']['qt']['version']
     api.meta.require(build.get('qtVersion') == version, 'Actual installed Qt version differs from the dependency lock')
     records, failures, sources = [], [], []
-    report = {'schemaVersion': 1, 'scope': 'Original Qt SPDX files and actual installed Qt bytes before packaging transforms',
+    report = {'schemaVersion': 2, 'scope': 'Original Qt SPDX files and actual installed Qt bytes before packaging transforms',
               'buildIdentity': build, 'qtVersion': version, 'binaryBindingComplete': False,
               'correspondingSourceComplete': False, 'files': records, 'sourceModules': sources, 'failures': failures,
               'outstandingSourceFamilies': ['qt-sdk-icu', 'exact-sdk-configuration-and-source-closure']}

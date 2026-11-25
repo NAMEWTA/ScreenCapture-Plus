@@ -134,6 +134,21 @@ if(HUHUCAPTURE_QT_VALIDATION)
         target_link_options(qt_media_archive PRIVATE -Wl,--wrap=fsync)
     endif()
     if(HUHUCAPTURE_DESKTOP_VALIDATION)
+        huhucapture_test(desktop_capture_action_tests tests/qt/desktop_capture_action_tests.cpp)
+        target_link_libraries(desktop_capture_action_tests PRIVATE huhucapture_desktop_services)
+        set_tests_properties(desktop_capture_action_tests PROPERTIES TIMEOUT 30
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            huhucapture_test(desktop_capture_action_probe tests/platform/desktop_capture_action_probe.cpp)
+            target_link_libraries(desktop_capture_action_probe PRIVATE huhucapture_desktop_services
+                huhucapture_startup huhucapture_launch_command Qt6::Concurrent PkgConfig::GIO)
+            add_test(NAME desktop_capture_action_monitor COMMAND desktop_capture_action_probe --monitor-override)
+            set_tests_properties(desktop_capture_action_monitor PROPERTIES TIMEOUT 30)
+            find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
+            add_test(NAME desktop_capture_action_roundtrip COMMAND "${DBUS_RUN_SESSION}" --
+                $<TARGET_FILE:desktop_capture_action_probe> --gio-roundtrip)
+            set_tests_properties(desktop_capture_action_roundtrip PROPERTIES TIMEOUT 40)
+        endif()
         huhucapture_test(qt_media_workspace tests/qt/media_workspace_tests.cpp)
         target_link_libraries(qt_media_workspace PRIVATE huhucapture_media_workspace huhucapture_languages)
         set_tests_properties(qt_media_workspace PROPERTIES TIMEOUT 180

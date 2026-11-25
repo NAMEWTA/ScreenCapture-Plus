@@ -16,6 +16,7 @@
 | --- | --- | --- |
 | `src/core/` | 无 Qt / Win32 的像素、批注排版、活动历史、归档命名、录制结果和时间合同 | 会话、能力与跨屏坐标的完整产品合同 |
 | `src/app/QtApplication.*`、`SingleInstance.*` 与 `src/core/Startup.h` | 同一 QApplication / 托盘 / 可见后备入口、配置和服务所有者；既有 CLI、非阻塞动作转发、录制/滚动/更新接线及真实关闭屏障；旧产品复用启动规则 | 完整双端 IPC / 托盘、真实桌面启动与退出旅程 |
+| `src/services/desktop/DesktopCaptureAction.*` | 已安装 GNOME 完成动作的真实 GIO 查找、进程/既有 IPC 验证及注册变化撤回；共享录屏/长截图继续拥有停止业务 | 正向子进程 IPC、真实 GNOME 菜单可达性及无托盘完整采集验收 |
 | `src/editor/` 的模型与 `EditorDocument.h` | 共用几何、拖动、文字、编号、批注、工具参数与唯一活动历史；原 Windows 工具和 Qt 工作区直接复用 | 完整产品的物理输入与长期会话验收 |
 | `src/ui/qt/Editor*` 与 `MediaWorkspace` | 共用九工具画布、单一文字输入、完整批注面板、原图马赛克及带令牌的异步归档 / 剪贴板 / 贴图输出；双平台组件构建与受控交互测试 | 真实 IME、混合 DPI、完整桌面字体和导出旅程 |
 | `src/services/rendering/` | Qt 字体测量、完整备注排版和离屏合图，保留原图像素与失败时旧输出；共享编辑器使用同一导出路径 | 真实桌面字体 / IME 与大图资源验收 |
@@ -63,7 +64,7 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 | P08 | 旧产品和共享滚动会话共用长截图模型；原生持续帧源、授权源和控制窗口已装配 | 真实滚动、窗体遮挡、Wayland 手动滚动与完整输出验收 |
 | P09 | 共用录制会话 / 工具条、Windows 原生后端、X11 / 授权 PipeWire 消费者及真实音频适配已接入并分层验证 | 控件排除、真实音源四组合、长时同步、完整原生时间线与恢复 |
 | P10 | 上游 core、聚合 C ABI、真实 TLS 归档和取消、共享任务 / 设备 UI 与应用身份 / 网卡装配已接入；聚合验证双端通过 | 完整应用身份与界面回归、P10a 物理双平台互传；P10b 独立记录 |
-| P11 | 完整包更新、旧 Windows 流式桥接、实际安装树与四种开发包流水线已接入；旧桥接 Debug / Release 原生受控检查通过，安装生命周期检查已接入 | 真实完整 Qt 包升级契约、四包安装生命周期执行、干净机器跨版本升级卸载和对应源码审核 |
+| P11 | 完整包更新、旧 Windows 流式桥接、实际安装树与四种开发包流水线已接入；旧桥接原生受控检查、Linux 两包安装/重装/移除及数据保护通过 | Windows 两包安装生命周期、真实完整包跨版本升级、干净机器卸载和对应源码审核 |
 | P12 | 未验收 | F01–F15、真实双屏 / IME / 音视频、性能、稳定性和干净机器升级卸载 |
 | P13 | 等待 P12 | 删除旧生产架构后从干净检出重新验证 |
 | P14 | 文档随实现更新，未进入发布 | 许可证 / 对应源码与同 SHA 全部发行资产、必要验收 |
@@ -72,13 +73,17 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 
 提交 `11c6033e51a26cd8dda5a403da239ccd5953fe72` 的 [Qt 验证](https://github.com/NAMEWTA/huhucapture/actions/runs/45629021964) 已完成：Windows Debug / Release 各 66 项、Linux 各 75 项通过。真实锁定 Sway / Portal / PipeWire 的两个配置均收到并逐像素核对实际 MemFd 帧，完成尺寸变化、服务断开、缓冲归还和共享来源排空。[Windows / Linux 聚合运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45629019877) 也通过。这些结果确认已有采流与释放路径，不代替新加入的隐藏控件后首帧刷新探针，也不覆盖 GNOME / Plasma 或物理桌面。
 
-相同提交的 [完整应用运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45629019826) 中，Linux 89 项集成检查和六种真实 PipeWire 音频图全部通过。系统、麦克风、混音和限幅混音各处理 144,000 个样本帧；服务/来源断开均按故障合同退出，六种场景的 FD 增量与清理错误均为零。这是实际隔离音频图的短程验证，`physicalDevices` 与 `longRunningAvDrift` 均未验证。
+加入刷新和更完整关闭门槛后的 `24f94d403acfe82212c955729e6e34de16bce5b4` [Qt 运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885852) 中，Windows 两配置各 67 项通过，Linux Debug 79 项与直接 PipeWire 三个场景通过；随后共享来源探针在刷新后的第一消费帧像素断言失败。该 Linux job 失败，新的专用刷新探针和 Release 后续检查没有执行。旧配置通过不能覆盖这个新失败，首帧门槛保持不变，实际原因仍须结合失败帧与原生日志验证。
 
-该轮也实际生成、安装 DEB 并打开产品截图界面，但安装探针仍因错误匹配未附品牌的窗口标题在拖选前失败；Windows 完整构建仍被探针内部名称与 WRL 命名空间冲突阻塞，后续安装链没有执行。代码已修正这两处探针问题，新的完整包安装结果仍须重新取得；不得把组件成功或已出现窗口记为安装、升级、卸载全通过。
+同一 `24f94d4` 的 [完整应用运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885695) 中，Linux 93 项、Windows 79 项集成检查通过，两平台完整应用及 `BUILD_TESTING=OFF` 生产配置均实际编译、安装运行时并通过原生 TLS 检查。Linux 六种真实 PipeWire 音频图通过：系统、麦克风、混音和限幅混音各处理 144,000 个样本帧；服务/来源断开均按故障合同退出，六种场景 FD 增量与清理错误均为零。这是实际隔离音频图的短程验证，`physicalDevices` 与 `longRunningAvDrift` 均未验证。Windows 生成的原 H264 / MP3 文件也由独立 Linux job 按原始字节完整解码通过。
+
+Linux DEB 和 AppImage 已完成真实产品拖选、像素检查、正常退出、同包重装和移除，并保留原配置与媒体字节；详见[安装证据边界](installation-validation.md)。AppImage 使用官方免 FUSE 路径，不能据此声明 FUSE 挂载或跨版本升级通过。Windows 材料校验遇到 Qt 官方多配置 SPDX 的同路径重复记录，NSIS 生成器另有 `/oname` 参数引号错误；该轮安装器与安装旅程未通过。两项已据原始产物和固定官方实现修正，仍待下一轮原生 CI。
+
+该提交的[原生聚合运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885748)和[保留的 Windows 产品回归](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885799)通过。独立[视频验证](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885690)中 Linux 两配置通过，Windows Debug 的视频/HEVC 检查通过，但真实录制尾时间线断言失败，Release 未执行；该失败仍需修复重验，不能被完整应用的另一场录制通过覆盖。
 
 ## 平台支持与验证口径
 
-v0.0.5 的下载、单 EXE 与 Windows 10 1803 支持说明只适用于旧产品。Qt 6.12.1 迁移目标采用 Windows 10 **1809** 及以上 x64；新 Qt 包不能标为支持 1803，旧系统仍需使用旧版本。Linux 目标为 amd64，最终发行基线和依赖打包须经 P00 / P11 验证后公布，当前 CI 所用 Ubuntu 24.04 不是已经完成安装验收的承诺。
+v0.0.5 的下载、单 EXE 与 Windows 10 1803 支持说明只适用于旧产品。Qt 6.12.1 迁移目标采用 Windows 10 **1809** 及以上 x64；新 Qt 包不能标为支持 1803，旧系统仍需使用旧版本。Linux 目标为 amd64，当前 Ubuntu 24.04 CI 已有受控安装旅程证据；最终发行基线、干净机器和桌面支持范围仍须经 P00 / P11 / P12 验证后公布。
 
 `qt_image_contract` 验证真实 Qt 像素与导出边界，Windows 另链接保留的原生媒体后端；`qt_annotation_render` 写出完整 PNG 并检查字体和像素；`qt_settings_store` 操作真实文件系统；`windows_audio_format` 用保护页验证格式读取边界。Linux 的 Portal 故障测试使用真实 D-Bus 和不存在的服务，证明错误、取消、晚到回调与释放，不替代授权对话框或 PipeWire 帧采集。
 

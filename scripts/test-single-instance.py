@@ -125,6 +125,32 @@ def main() -> int:
             expect(independent, INDEPENDENT); independent.wait()
             assert not absent.exists(), "one-shot startup must not create IPC files"
 
+            empty_runtime = root / "control-without-primary"
+            empty_runtime.mkdir()
+            finish = spawn("absent-control", "--action=finish-capture", "--auto-quit", runtime=empty_runtime)
+            remote = expect(finish, FAILED, UNAVAILABLE)
+            assert remote["action"] == 1 and not remote["oneShot"] and not remote["background"]
+            finish.wait(2)
+            assert list(empty_runtime.iterdir()) == [], "a control request must not create a primary or IPC files"
+
+            controller = spawn("control", "--hold=12000", "--exit-after=2")
+            expect(controller, PRIMARY)
+            finish = spawn("control", "--action=finish-capture", "--auto-quit", "--enter=long")
+            expect(finish, FORWARDED); finish.wait()
+            action = controller.event("activation")
+            assert action["action"] == 1 and action["entry"] == 0 and not action["oneShot"] and not action["background"]
+            assert action["verification"] == "00" * 16
+            proof = "75cdac4873324fc18010a139f4b0d25b"
+            verify = spawn("control", f"--verification={proof}")
+            expect(verify, FORWARDED); verify.wait()
+            action = controller.event("activation")
+            assert action["action"] == 2 and action["verification"] == proof and action["count"] == 2
+            controller.wait()
+            # A finish request must not recover an exited owner as a new
+            # ordinary capture, even if a lock or endpoint was left behind.
+            finished_owner = spawn("control", "--action=finish-capture")
+            expect(finished_owner, FAILED, UNAVAILABLE); finished_owner.wait(2)
+
             if os.name != "nt":
                 private = root / "huhucapture"
                 private.mkdir(mode=0o700, exist_ok=True)
@@ -177,7 +203,7 @@ def main() -> int:
 
             bounded = spawn("bounded", "--hold=15000", "--exit-after=1")
             endpoint = expect(bounded, PRIMARY)["endpoint"]
-            for mode in ("oversized", "partial"):
+            for mode in ("oversized", "partial", "control-v1", "control-v2-flags", "control-v2-launch"):
                 raw = spawn("ignored", f"--raw={mode}", f"--endpoint={endpoint}")
                 assert raw.event("raw")["passed"] is True
                 raw.wait()
@@ -192,7 +218,7 @@ def main() -> int:
             assert sorted(event["role"] for event in outcomes) == [PRIMARY, FORWARDED]
             assert all(event["failure"] == 0 for event in outcomes)
             print("PASS real cross-process startup forwarding, one-shot isolation, rejection, lost acknowledgment, "
-                  "crash recovery, shutdown exclusion, malformed peers and GUI heartbeat", flush=True)
+                  "crash recovery, shutdown exclusion, remote-only finish/proof routing, malformed peers and GUI heartbeat", flush=True)
         finally:
             for probe in reversed(probes):
                 probe.close()

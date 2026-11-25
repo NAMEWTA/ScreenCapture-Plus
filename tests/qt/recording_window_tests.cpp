@@ -138,6 +138,15 @@ void capabilitiesAndLanguage(HuhuCapture::Localization::LanguageCatalog& languag
         require(window.pos() == position, "Translation refresh does not recenter a user-positioned recording control");
         require(!window.windowTitle().isEmpty() && window.windowTitle() != QStringLiteral("video.recordingTitle"),
             "Every shipped language has an actual recording title");
+        const auto hint = language.text(u"capture.desktopFinishHint").arg(QStringLiteral("Stop and finish capture"));
+        require(!hint.contains(QStringLiteral("capture.desktopFinishHint")) && !hint.contains(QStringLiteral("%1")),
+            "Every shipped language explains the actual desktop completion action");
+        window.setExternalStopHint(hint); window.setCaptureExcluded(false); events();
+        require(child<QLabel>(window, "recordingCaptureNotice")->text() == hint &&
+            child<QLabel>(window, "recordingCaptureNotice")->isVisible(),
+            "The shared controls show the host's available completion route before hiding");
+        save(window, artifacts, QStringLiteral("recording-desktop-action-") + entry.code);
+        window.setExternalStopHint({}); window.setCaptureExcluded(true); events();
     }
     save(window, artifacts, QStringLiteral("recording-capabilities"));
     window.close();

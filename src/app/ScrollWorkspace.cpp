@@ -23,6 +23,7 @@ struct ScrollWorkspace::State {
     QPointer<cap::ScrollCaptureSession> session;
     QPointer<ui::ScrollWindow> view;
     quint64 captureToken{};
+    QString externalStopHint;
     bool stopping{}, shutdownReported{}, externalStopAvailable{};
 
     State(ScrollWorkspace* parent, MediaWorkspace& workspace, CaptureWorkspace& source)
@@ -80,7 +81,7 @@ struct ScrollWorkspace::State {
             if (error) { capture.completeLiveAction(request.token, cap::ActionResult::Failed, error.detail); return; }
             auto controls = std::make_unique<ui::ScrollWindow>(*controller);
             controls->setTranslator(translator);
-            controls->setExternalStopAvailable(externalStopAvailable);
+            controls->setExternalStopAvailable(externalStopAvailable, externalStopHint);
             error = controls->open();
             if (!alive) return;
             if (error) { capture.completeLiveAction(request.token, cap::ActionResult::Failed, error.detail); return; }
@@ -152,11 +153,12 @@ ScrollWorkspace::~ScrollWorkspace()
 void ScrollWorkspace::setTranslator(ui::DesktopTranslator translator)
 { state_->translator = std::move(translator); if (state_->view) state_->view->setTranslator(state_->translator); }
 bool ScrollWorkspace::busy() const noexcept { return state_->busy(); }
-void ScrollWorkspace::setExternalStopAvailable(bool available)
+void ScrollWorkspace::setExternalStopAvailable(bool available, const QString& hint)
 {
-    if (state_->externalStopAvailable == available) return;
+    if (state_->externalStopAvailable == available && state_->externalStopHint == hint) return;
     state_->externalStopAvailable = available;
-    if (state_->view) state_->view->setExternalStopAvailable(available);
+    state_->externalStopHint = hint;
+    if (state_->view) state_->view->setExternalStopAvailable(available, hint);
     state_->changed();
 }
 bool ScrollWorkspace::canStop() const noexcept

@@ -13,6 +13,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QUuid>
+#include <algorithm>
 #include <filesystem>
 #include <utility>
 
@@ -35,13 +36,29 @@ bool validEntry(Core::CaptureEntry entry)
     return false;
 }
 
+bool controlRequest(const Core::StartupRequest& request)
+{
+    return request.action == Core::StartupAction::FinishCapture ||
+        request.action == Core::StartupAction::VerifyCaptureAction;
+}
+
+bool validRequest(const Core::StartupRequest& request)
+{
+    const bool proof = std::any_of(request.verification.begin(), request.verification.end(),
+        [](auto byte) { return byte != 0; });
+    if (!validEntry(request.entry) || (request.oneShot && request.background)) return false;
+    if (request.action == Core::StartupAction::Launch) return !proof;
+    if (!controlRequest(request) || request.entry != Core::CaptureEntry::Capture || request.oneShot || request.background) return false;
+    return proof == (request.action == Core::StartupAction::VerifyCaptureAction);
+}
+
 QByteArray encodeRequest(const Core::StartupRequest& request, const QByteArray& id)
 {
     QByteArray bytes("HHCP", 4);
-    bytes.append(char(1));
+    bytes.append(controlRequest(request) ? char(2) : char(1));
     bytes.append(static_cast<char>(request.entry));
     bytes.append(request.background ? char(1) : char(0));
-    bytes.append(char(0));
+    bytes.append(static_cast<char>(request.action));
     bytes.append(id);
     return bytes;
 }
@@ -143,7 +160,7 @@ struct SingleInstance::State {
     void begin()
     {
         if (shuttingDown || role != InstanceRole::Pending) return;
-        if (!validEntry(initial.entry) || (initial.oneShot && initial.background)) {
+        if (!validRequest(initial)) {
             fail(InstanceFailure::InvalidScope, QStringLiteral("Invalid startup request")); return;
         }
         if (initial.oneShot) { finish({InstanceRole::Independent, {}, {}}); return; }
@@ -157,11 +174,15 @@ struct SingleInstance::State {
             fail(InstanceFailure::RuntimeDirectory, QStringLiteral("The user runtime directory is unavailable")); return;
         }
         const auto privateDirectory = QDir(root).filePath(QStringLiteral("huhucapture"));
-        if (QFileInfo(privateDirectory).isSymLink() || !QDir().mkpath(privateDirectory)) {
+        const bool remoteOnly = controlRequest(initial);
+        if (remoteOnly && !QFileInfo(privateDirectory).isDir()) {
+            fail(InstanceFailure::PrimaryUnavailable, QStringLiteral("There is no running capture instance to control")); return;
+        }
+        if (QFileInfo(privateDirectory).isSymLink() || (!remoteOnly && !QDir().mkpath(privateDirectory))) {
             fail(InstanceFailure::RuntimeDirectory, QStringLiteral("Cannot create the private startup directory")); return;
         }
 #ifndef Q_OS_WIN
-        if (!QFile::setPermissions(privateDirectory, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) {
+        if (!remoteOnly && !QFile::setPermissions(privateDirectory, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) {
             fail(InstanceFailure::RuntimeDirectory, QStringLiteral("Cannot protect the startup directory")); return;
         }
 #endif
@@ -176,18 +197,28 @@ struct SingleInstance::State {
             fail(InstanceFailure::RuntimeDirectory, QStringLiteral("The local socket path exceeds the platform limit")); return;
         }
 #endif
-        lock = std::make_unique<QLockFile>(QDir(privateDirectory).filePath(base + QStringLiteral(".lock")));
+        if (!remoteOnly) lock = std::make_unique<QLockFile>(QDir(privateDirectory).filePath(base + QStringLiteral(".lock")));
         // A slow but living process never becomes stale just because time has
         // elapsed. Qt may still recover a lock after its process has exited.
-        lock->setStaleLockTime(0);
-        requestId = QUuid::createUuid().toRfc4122();
+        if (lock) lock->setStaleLockTime(0);
+        requestId = initial.action == Core::StartupAction::VerifyCaptureAction
+            ? QByteArray(reinterpret_cast<const char*>(initial.verification.data()), initial.verification.size())
+            : QUuid::createUuid().toRfc4122();
         deadline.start(); retry.start();
         attempt();
     }
 
     void attempt()
     {
-        if (role != InstanceRole::Pending || shuttingDown || submitted || !lock) return;
+        if (role != InstanceRole::Pending || shuttingDown || submitted) return;
+        if (controlRequest(initial)) {
+            // A finish/probe request cannot recover a stale owner, remove an
+            // endpoint, create a lock, or fall back to an ordinary capture.
+            if (client.state() == QLocalSocket::UnconnectedState)
+                client.connectToServer(name, QIODevice::ReadWrite);
+            return;
+        }
+        if (!lock) return;
         if (lock->tryLock(0)) {
 #ifndef Q_OS_WIN
             std::error_code pathError;
@@ -278,13 +309,21 @@ struct SingleInstance::State {
         bytes += socket->read(requestBytes + 1 - bytes.size());
         if (bytes.size() < requestBytes) return;
         const auto entry = static_cast<Core::CaptureEntry>(static_cast<unsigned char>(bytes[5]));
+        const auto action = static_cast<Core::StartupAction>(static_cast<unsigned char>(bytes[7]));
         if (bytes.size() != requestBytes || bytes.first(4) != QByteArrayLiteral("HHCP") ||
-            bytes[4] != char(1) || !validEntry(entry) || (bytes[6] != char(0) && bytes[6] != char(1)) ||
-            bytes[7] != char(0) || QUuid::fromRfc4122(bytes.sliced(8, 16)).isNull()) {
+            (bytes[4] != char(1) && bytes[4] != char(2)) || !validEntry(entry) ||
+            (bytes[6] != char(0) && bytes[6] != char(1)) ||
+            (bytes[4] == char(1) ? action != Core::StartupAction::Launch :
+                (action != Core::StartupAction::FinishCapture && action != Core::StartupAction::VerifyCaptureAction)) ||
+            QUuid::fromRfc4122(bytes.sliced(8, 16)).isNull()) {
             retire(socket); return;
         }
         const auto id = bytes.sliced(8, 16);
-        const Core::StartupRequest request{entry, false, bytes[6] == char(1)};
+        Core::StartupRequest request{entry, false, bytes[6] == char(1)};
+        request.action = action;
+        if (action == Core::StartupAction::VerifyCaptureAction)
+            std::copy(id.begin(), id.end(), request.verification.begin());
+        if (!validRequest(request)) { retire(socket); return; }
         found->processed = true;
         QPointer<SingleInstance> alive(q);
         bool accepted = false;

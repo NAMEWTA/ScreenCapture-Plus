@@ -127,7 +127,7 @@ struct RecordingWorkspace::State {
     rec::StopIntent intent{rec::StopIntent::Save};
     QRect region;
     quint64 captureToken{}, recordingToken{}, sourceId{}, generation{}, outputToken{}, nextOutputToken{1}, refreshToken{};
-    QString sourceFailure;
+    QString sourceFailure, externalStopHint;
     std::stop_source producerStop{std::nostopstate};
     std::shared_ptr<Core::CaptureControls> controls;
     QVector<cap::ScreenBinding> screens;
@@ -220,7 +220,8 @@ struct RecordingWorkspace::State {
         if (!excluded && !outside) {
             window->setCaptureSafeAreas({});
             if (!externalStopAvailable) {
-                showFailure(QStringLiteral("No recording control fits outside the selected pixels, and no tray or global stop action is currently available."));
+                showFailure(translator ? translator(u"capture.stopUnavailable") :
+                    QStringLiteral("A working tray, shortcut or desktop finish action is required before controls can hide."));
                 return false;
             }
             window->setHiddenForCapture(true);
@@ -447,6 +448,7 @@ struct RecordingWorkspace::State {
         window = new ui::RecordingWindow;
         window->installEventFilter(owner);
         window->setTranslator(translator); window->setCapabilities(capabilities);
+        window->setExternalStopHint(externalStopHint);
         const cap::ScreenBinding* placement{}; qint64 largest{};
         for (const auto& binding : snapshot.screens) {
             if (fromLive) break; // No inferred global outline for a Portal source.
@@ -619,10 +621,12 @@ RecordingWorkspace::~RecordingWorkspace()
 void RecordingWorkspace::setTranslator(ui::DesktopTranslator translator)
 { state_->translator = std::move(translator); if (state_->window) state_->window->setTranslator(state_->translator); }
 bool RecordingWorkspace::busy() const noexcept { return state_->busy(); }
-void RecordingWorkspace::setExternalStopAvailable(bool available)
+void RecordingWorkspace::setExternalStopAvailable(bool available, const QString& hint)
 {
-    if (state_->externalStopAvailable == available) return;
+    if (state_->externalStopAvailable == available && state_->externalStopHint == hint) return;
     state_->externalStopAvailable = available;
+    state_->externalStopHint = hint;
+    if (state_->window) state_->window->setExternalStopHint(hint);
     if (!available && controlsHiddenForCapture() && canStop())
         stopActive(rec::StopIntent::Save);
     state_->changed();

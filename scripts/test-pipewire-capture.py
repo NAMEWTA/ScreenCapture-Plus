@@ -254,7 +254,9 @@ def run_case(probe: Path, prefix: Path, desktop: Path, mode: str, artifacts: Pat
             daemon = start("pipewire", [programs["pipewire"]])
             wait_socket(runtime, "pipewire-0", children)
             start("wireplumber", [programs["wireplumber"]])
-            start("portal-wlr", [programs["xdg-desktop-portal-wlr"], "--loglevel=DEBUG"])
+            # Preserve the producer's actual dequeue/capture/ready/enqueue
+            # order when diagnosing first-frame or reconnect regressions.
+            start("portal-wlr", [programs["xdg-desktop-portal-wlr"], "--loglevel=TRACE"])
             wait_bus_name("org.freedesktop.impl.portal.desktop.wlr", env, children)
             start("portal", [programs["xdg-desktop-portal"], "--verbose"])
             wait_bus_name("org.freedesktop.portal.Desktop", env, children)

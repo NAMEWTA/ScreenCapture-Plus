@@ -7,6 +7,7 @@
 | Qt 重构完成到哪里，哪些能力尚不能当作产品交付？ | [迁移状态与保护边界](qt-migration.md) |
 | 启动参数、一次性实例与主实例动作转发怎样保留原有语义？ | [共享启动与本地 IPC](qt-startup.md) |
 | 主程序如何装配服务、处理无托盘桌面并等待真实退出？ | [Qt 应用生命周期](qt-application.md) |
+| GNOME 桌面完成动作怎样确认能到达当前采集实例？ | [桌面完成动作](desktop-capture-action.md) |
 | 完整包如何选择、校验、流式下载并保护现有安装？ | [Qt 更新服务](qt-updates.md) |
 | 同一 Qt 程序如何部署成 Windows 安装包/ZIP 和 Linux DEB/AppImage？ | [Qt 安装树与打包](qt-packaging.md) |
 | 怎样实际安装、启动、重装和卸载四种包并核对用户数据保留？ | [安装生命周期验证](installation-validation.md) |
@@ -28,8 +29,10 @@
 | 长截图测试怎样区分控件 paint 与屏幕实际呈现？ | [原生读屏测试证据](scroll-test-evidence.md) |
 | Linux Portal 如何与 Qt 共用上下文，怎样验证取消与父窗？ | [Linux Portal 控制面](linux-portal.md) |
 | 怎样固定真实 Wayland 测试桌面的协议与库，又不打包进应用？ | [受控采流测试桌面](validation-desktop.md) |
+| 测试桌面的 Portal 生产者为何需要重连修复，证明范围是什么？ | [Portal-wlr 上游修复](portal-wlr-validation.md) |
 | PipeWire 帧如何归还、跨线程持有并验证实际采流？ | [Linux PipeWire 数据面](linux-pipewire.md) |
 | 已授权视频源怎样重选、交接消费者并排空？ | [共享实时采集源](live-capture-source.md) |
+| 隐藏控件后怎样刷新同次授权并检查替代首帧？ | [Wayland 采流刷新](wayland-capture-refresh.md) |
 | 裁剪、方向和 stride 怎样统一进入真实编码器？ | [帧规范化](frame-normalization.md) |
 | 软件 H.264 / AAC 如何固定构建，API 探针能证明什么？ | [软件编码依赖](software-codecs.md) |
 | Linux 编码器怎样完整保留视频与 AAC 尾样本并保护输出身份？ | [Linux 录制编码](linux-recording.md) |
@@ -37,6 +40,7 @@
 | MP4 完整检查为何区别于首帧封面，坏样本怎样跨平台验证？ | [视频检查与封面](video-inspection.md) |
 | 怎样用固定源码生成实际 HEVC Main / Main10 回归输入？ | [HEVC 样本与复用记录](hevc-fixtures.md) |
 | 项目继承自哪里，如何保留上游归属与许可？ | [上游致谢](upstream.md) |
+| 实际运行文件怎样绑定原始通知和完整对应源码材料？ | [发行材料](distribution-materials.md)、[原生源码材料](native-source-materials.md)、[Rust 工具链材料](rust-toolchain-materials.md) |
 | 一个需求应该放在哪个模块、由谁拥有资源？ | [架构与扩展](architecture.md) |
 | 文件、目录、代码与文档应该怎样命名和组织？ | [工程约定](conventions.md) |
 | 截图与视频如何长期保存，历史操作影响哪些文件？ | [媒体历史](media-history.md) |

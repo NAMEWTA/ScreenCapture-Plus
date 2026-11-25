@@ -192,6 +192,32 @@ jobs:
           shutil.copytree(source/'notices', target)
           shutil.copyfile(source/'rust-materials.json', target/'rust-materials.json')
           PY
+      - name: Retain original native source, controlled patches and actual build configuration
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        run: |
+          python scripts/collect-native-source-materials.py --installed artifacts/install/linux --output artifacts/runtime-materials-native-linux --source-output artifacts/corresponding-sources-native-linux
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          source = Path('artifacts/runtime-materials-native-linux')
+          target = Path('artifacts/install/linux/share/huhucapture/licenses/collected-native')
+          shutil.copytree(source/'notices', target)
+          shutil.copyfile(source/'native-materials.json', target/'native-materials.json')
+          PY
+      - name: Verify the actual Rust standard library and official toolchain notices
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        run: |
+          rust_toolchain_version="$(python -c 'import json; print(json.load(open("build/dependencies.lock.json"))["qtMigration"]["rustToolchain"])')"
+          rustup component add rust-src --toolchain "$rust_toolchain_version"
+          python scripts/collect-rust-toolchain-materials.py --native-receipt artifacts/native-rust/build-info.json --output artifacts/runtime-materials-rust-toolchain-linux --source-output artifacts/corresponding-sources-rust-toolchain-linux
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          source = Path('artifacts/runtime-materials-rust-toolchain-linux')
+          target = Path('artifacts/install/linux/share/huhucapture/licenses/collected-rust-toolchain')
+          shutil.copytree(source/'notices', target)
+          shutil.copyfile(source/'rust-toolchain-materials.json', target/'rust-toolchain-materials.json')
+          PY
       - name: Verify actual development packages from the installed runtime
         id: packages
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
@@ -231,13 +257,18 @@ jobs:
             artifacts/cmake/application-linux/package/
             artifacts/cmake/application-linux/package-runtime.json
             artifacts/cmake/application-linux/installation/
+            !artifacts/cmake/application-linux/installation/**/runtime-temp/**
             artifacts/runtime-materials-linux/
             artifacts/runtime-materials-qt-linux/
             artifacts/runtime-materials-rust-linux/
+            artifacts/runtime-materials-native-linux/
+            artifacts/runtime-materials-rust-toolchain-linux/
             artifacts/qt-module-sources/restore-info.json
             artifacts/qt-module-sources/*.git.log
             artifacts/corresponding-sources-qt-linux/
             artifacts/corresponding-sources-rust-linux/
+            artifacts/corresponding-sources-native-linux/
+            artifacts/corresponding-sources-rust-toolchain-linux/
             artifacts/native-rust/build-info.json
             .deps/portal-validation/build-info.json
             .deps/pipewire-validation/build-info.json
@@ -374,6 +405,40 @@ jobs:
           shutil.copyfile(source/'rust-materials.json', target/'rust-materials.json')
           '@ | python
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Retain the original Windows codec source and actual Release CRT configuration
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python scripts/collect-native-source-materials.py --installed artifacts/install/windows --output artifacts/runtime-materials-native-windows --source-output artifacts/corresponding-sources-native-windows
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          @'
+          from pathlib import Path
+          import shutil
+          source = Path('artifacts/runtime-materials-native-windows')
+          target = Path('artifacts/install/windows/licenses/collected-native')
+          shutil.copytree(source/'notices', target)
+          shutil.copyfile(source/'native-materials.json', target/'native-materials.json')
+          '@ | python
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Verify the actual Rust standard library and official toolchain notices
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $rustToolchainVersion = python -c 'import json; print(json.load(open("build/dependencies.lock.json"))["qtMigration"]["rustToolchain"])'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          rustup component add rust-src --toolchain $rustToolchainVersion
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python scripts/collect-rust-toolchain-materials.py --native-receipt artifacts/native-rust/build-info.json --output artifacts/runtime-materials-rust-toolchain-windows --source-output artifacts/corresponding-sources-rust-toolchain-windows
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          @'
+          from pathlib import Path
+          import shutil
+          source = Path('artifacts/runtime-materials-rust-toolchain-windows')
+          target = Path('artifacts/install/windows/licenses/collected-rust-toolchain')
+          shutil.copytree(source/'notices', target)
+          shutil.copyfile(source/'rust-toolchain-materials.json', target/'rust-toolchain-materials.json')
+          '@ | python
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Verify complete portable and per-user development setup packages
         id: packages
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
@@ -400,10 +465,14 @@ jobs:
             artifacts/packages/windows/
             artifacts/runtime-materials-qt-windows/
             artifacts/runtime-materials-rust-windows/
+            artifacts/runtime-materials-native-windows/
+            artifacts/runtime-materials-rust-toolchain-windows/
             artifacts/qt-module-sources/restore-info.json
             artifacts/qt-module-sources/*.git.log
             artifacts/corresponding-sources-qt-windows/
             artifacts/corresponding-sources-rust-windows/
+            artifacts/corresponding-sources-native-windows/
+            artifacts/corresponding-sources-rust-toolchain-windows/
             artifacts/cmake/application-windows/CMakeCache.txt
             artifacts/cmake/application-windows/Testing/Temporary/
             artifacts/cmake/application-windows/editor-render/

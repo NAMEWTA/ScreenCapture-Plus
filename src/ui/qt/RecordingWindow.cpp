@@ -43,7 +43,7 @@ struct RecordingWindow::State {
     QLabel *timer{}, *status{}, *captureNotice{};
     QWidget *statusPanel{}, *grip{};
     QVBoxLayout* layout{};
-    QString failure, retainedPath;
+    QString failure, retainedPath, externalStopHint;
     QPointer<QScreen> placementScreen;
     QRectF selection, workArea;
     QVector<QRect> safeAreas;
@@ -198,6 +198,11 @@ bool RecordingWindow::setCaptureSafeAreas(QVector<QRect> areas)
     refresh();
     return !state_->safePlacement || safeGeometry(size(), pos()).has_value();
 }
+void RecordingWindow::setExternalStopHint(const QString& hint)
+{
+    if (state_->externalStopHint == hint) return;
+    state_->externalStopHint = hint; refresh();
+}
 void RecordingWindow::setHiddenForCapture(bool hidden)
 {
     if (state_->captureHidden == hidden) return;
@@ -272,7 +277,8 @@ void RecordingWindow::refresh()
     DesktopTheme::repolish(state_->status); state_->status->setVisible(!status.isEmpty());
     const bool showCaptureNotice = !state_->captureExcluded && !state_->safePlacement && !state_->captureHidden &&
         (setup || working(state_->phase));
-    state_->captureNotice->setText(state_->text(u"video.controlsVisible"));
+    state_->captureNotice->setText(state_->externalStopHint.isEmpty() ?
+        state_->text(u"video.controlsVisible") : state_->externalStopHint);
     state_->captureNotice->setVisible(showCaptureNotice);
     state_->statusPanel->setVisible(!status.isEmpty() || showCaptureNotice);
     const auto moveText = state_->text(u"video.moveControls");

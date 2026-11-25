@@ -35,6 +35,8 @@ public:
     ~SingleInstance() override;
     // One asynchronous attempt per object. Independent --auto-quit requests do
     // not read/write a lock, bind an endpoint, or contact an existing instance.
+    // Finish/verification requests only contact an existing primary. They never
+    // elect a new primary and never fall back to the default capture action.
     bool start(Core::StartupRequest request);
     // Called before application shutdown. Keep the primary lock until this
     // coordinator is destroyed, so a second app cannot overlap resource exit.

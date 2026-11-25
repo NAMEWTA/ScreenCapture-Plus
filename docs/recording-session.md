@@ -93,12 +93,46 @@ Save / Copy 停止后先完整收尾、关闭、检查和归档；`Completed` �
 
 同一 GIF 用例也实际通过了 C++ AddressSanitizer / UndefinedBehaviorSanitizer 构建与执行；Qt 和已构建的 Rust archive 未重新插桩。LeakSanitizer 在当前受跟踪的执行环境中报 `does not work under ptrace`，没有取得泄漏检测结果；随后仅关闭该不可运行的检查，保留地址与未定义行为检查运行通过。不能据此声称 Rust 内部、整个进程或长时间录制无泄漏。
 
-首次 Windows 实采（commit `51eabbfd6e56b23a4b924618bfcccc4b1d810bcb`，workflow `45588774226`，job `139129028534`）在输入/输出帧数相等断言失败，不能登记为录屏通过。实际 artifact 的 MP4 SHA256 为 `dea3e12af4f244cc4b4ad0652ce27cabe051fe3e58033f14603c33a81f1a0d65`：记录器报告 16 次输入提交，本地固定 FFmpeg 对实际文件逐包、逐帧解码得到 21 个 H.264 包和 21 帧，尺寸 252×190，time base 1/30000，PTS 从 0 到 20000、每步 1000，完整媒体时间轴为 700 ms。此时只知道数量不同，因此保留原断言，先修复样本所有权并收集官方阶段统计。
+## MF 输入区间与输出阶段的验收
 
-第二次实采在 [workflow 45596538455 / job 139150279329](https://github.com/NAMEWTA/huhucapture/actions/runs/45596538455/job/139150279329)、commit `e23d0bf66854e2e8b67f23b8c8b4a92dc67066a6` 上，真实统计明确显示 **15 submitted = 15 received；21 encoded = 21 processed = 21 decoded；queuedBytes = 0**，GetStatistics HRESULT 为零。最后输入 PTS/时长为 6,399,810 / 484,322（100 ns），最后 encoded/processed PTS 均为 6,666,667。完整再解码得到连续 30 FPS 输出，最终结束时间为 7,000,000，覆盖最后输入区间 6,884,132，超出量小于一个输出帧。实际媒体 SHA256 为 `d26237fb1affe30101ce00b53a2f917ae9875c084a7b19f5af125301f869f208`，下载的 Windows ZIP digest 为 `823a9329b78ac5c27c48fb012a74ff18752d2f49f01d5bdce3d6d1ea21e7b289`。这些实际阶段证据与官方默认帧率转换合同一致，定位的是处理阶段的帧数变化，不能把它称为编码尾帧丢失。
+Microsoft 的[媒体样本合同](https://learn.microsoft.com/en-us/windows/win32/medfound/working-with-media-samples)
+将 PTS 定义为样本开始呈现的时刻，duration 定义为它应持续呈现的时间。
+因此当前图像的持续时间必须由下一次实际采样或实际停止点确定，不能把上一次
+采样间隔再加到当前 PTS，推算一个尚未发生的末端；采样间隔变化时，后者会使
+相邻输入区间重叠或留空。
 
-因此 [`recording_timeline.h`](../tests/qt/recording_timeline.h) 采用以下更精确的严格合同：submitted 必须等于 received，encoded 必须等于 processed 及完整解码帧数，末次接收必须等于末次提交，排队字节必须为零；逐个真实解码帧必须具有从零开始、连续的标称 FPS PTS/duration；最后解码 PTS 必须匹配 MF，完整输出槽数必须等于实际输入末端在标称 FPS 上的最近整数槽数。这里没有把数量断言改成 `>=`，也没有改变原有 30 FPS、FRC 或编码器选择。这个 helper 已在本地固定 SDK 上实际编译，并针对 e23 和以下 8e 的原始 Windows 文件及真实统计分别重放；故意不一致的阶段计数、排队状态和尾区间必须被拒绝。所有 Windows Save/Copy/Discard/关闭旅程仍等待修正后实际 CI，不能由重放两个文件宣称整套桌面探针通过。
+现有 Windows 后端只暂持一个已经采集、独占缓冲的 `IMFSample`。下一张图像到达
+时，以同一 `MediaClock` 的真实采样时间闭合并提交前一张；停止循环时，在音频
+停止和 writer 排空之前记录真实停止点，闭合最后一张。这个变化增加一个样本
+引用而不再复制像素，仍使用既有 DXGI / GDI、30 FPS、帧率转换及编码器。下一次
+采集、帧准备或音频写入失败时，仍可提交尚未尝试的有效待处理图像以保留恢复
+文件；实际失败的视频转换或提交不重试，首个失败仍保留。全部有效输入提交后，
+继续使用原有同步
+[`Finalize`](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsinkwriter-finalize)。
 
-第三次实采 [workflow 45603219018 / job 139182210720](https://github.com/NAMEWTA/huhucapture/actions/runs/45603219018/job/139182210720)、commit `8e21da0fffad8df77b96b7fec85b20010691ff2e` 在首个 Save 的尾时间断言失败。真实结果为 **16 submitted = 16 received；22 encoded = 22 processed = 22 decoded；queuedBytes = 0**；完整归档检查已经通过。输入末端为 7,338,865（100 ns），输出末端为 7,333,333，最后编码/解码 PTS 均为 7,000,000。原单向条件要求输出只能向上覆盖，错误拒绝了这次向下 5,532 ticks（0.5532 ms）的整帧量化。实际 MP4 SHA256 为 `faeabad89d7a5c38f96659658dfd1d02b5c40a6937ad3dbd8e01385e261c78ae`，Windows artifact ZIP digest 为 `c30c4b8204f6f10c1fe41ef3627ff46be91f411b944db21bfae1c2940749ffe6`。QtConcurrent 的 `QUnhandledException` 又将原始断言显示为 `Unknown exception`；探针现在重抛其保留的原始 exception_ptr，失败仍失败，同时输出真实断言和尾数值。
+`RecordingSinkStatistics` 和原生探针现在分别保留实际捕获数、成功提交数、连续
+输入区间总时长、实际停止点，以及 MF 自身 received / encoded / processed 数据。
+[`recording_timeline.h`](../tests/qt/recording_timeline.h) 要求：
 
-Microsoft [时间戳与时长规则](https://learn.microsoft.com/windows/win32/medfound/time-stamps-and-durations) 说明转换阶段可能改变时间划分及产生舍入；它没有公开保证上述最近整数槽的具体 FRC 算法。这里的精确量化条件来自这两次实际阶段/文件证据，是待持续验证的探针约定，不是对所有硬件转换器的未经验证承诺。它同时拒绝多出或缺少一个完整输出槽，并保留每个实际编码输出必须进入文件的精确数量关系；没有以毫秒容差吞掉未知尾帧损失。新的帧率、编码器、音轨或驱动仍需自己的实际证据。
+- 捕获数、提交数和 MF received 相等；输入区间连续覆盖从首帧到实际停止点，最后
+  PTS 加 duration 必须精确等于该停止点。
+- MF encoded、processed 与完整解码帧数相等；末次接收等于末次提交，排队字节为零；
+  逐个解码帧具有从零开始的连续标称 FPS 时间轴，最后解码 PTS 匹配 MF 实测值。
+- 保留完整输出槽数等于输入末端在标称 FPS 上最近整数槽数的现有断言。官方
+  [时间戳与时长规则](https://learn.microsoft.com/windows/win32/medfound/time-stamps-and-durations)
+  没有保证这个具体 FRC 算法，因此它仍是待真实结果裁决的探针条件，不能通过
+  放宽为任意一帧容差宣告成功。
+
+阶段数量不同本身并不证明编码尾帧丢失。此前
+[e23 的实际结果](https://github.com/NAMEWTA/huhucapture/actions/runs/45596538455/job/139150279329)
+是 15 submitted = 15 received、21 encoded = 21 processed = 21 decoded、排队为零；
+这区分了真实帧率转换和未写出的编码结果。
+[24f 的 Windows Debug 结果](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885690/job/139293311262)
+同样显示 17 submitted = 17 received、22 encoded = 22 processed = 22 decoded、排队为零，
+原文件完整检查通过，但尾槽断言失败：输入末端为 7,500,967 ticks，输出末端为
+7,333,333 ticks，原条件要求 23 个输出槽而实际是 22 个。原产物和失败结果保留，
+没有把它归因为尚未证实的 encoder drain 丢帧。
+
+输入区间修复及新增统计仍须经过新的真实 Windows Debug / Release 录制旅程；
+本地共享头文件编译、旧文件重放和源码审查都不能替代它。四音源、长时同步、
+实体桌面和最终产品旅程仍按 P12 单独验收。

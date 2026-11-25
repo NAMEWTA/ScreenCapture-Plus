@@ -76,8 +76,16 @@ App::App()
     Ling::init();
     auto app = Ling::App::get();
     app->initArgs();
+    const bool actionProvided = app->args.find(L"--action") != app->args.end();
     startup_ = HuhuCapture::Core::startupRequestFromValues<wchar_t>(
-        app->args[L"--auto-quit"], app->args[L"--auto-start"], app->args[L"--enter"]);
+        app->args[L"--auto-quit"], app->args[L"--auto-start"], app->args[L"--enter"], app->args[L"--action"]);
+    if (actionProvided && app->args[L"--action"].empty()) startup_.action = HuhuCapture::Core::StartupAction::Invalid;
+    if (startup_.action != HuhuCapture::Core::StartupAction::Launch) {
+        // The retained Windows baseline does not implement the Qt owner's
+        // control IPC. A new control command must not become a screenshot.
+        app->quit(2);
+        return;
+    }
     Ling::D2D::addFonts({ L"icon.ttf" });
     // 录制中直接退出会让编码线程和 D3D 设备一起卡住，退出前先把录制停掉
     app->onBeforeQuit.add([]() { WinCap::stopIfRecording(); });

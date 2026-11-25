@@ -1,0 +1,222 @@
+{
+  "scope": "CI-owned validation desktop only; never installed into the user's Portal or included as an application capture implementation",
+  "repository": "https://github.com/emersion/xdg-desktop-portal-wlr",
+  "base": {
+    "version": "0.8.1",
+    "commit": "e1d5d16f0e064a0b788c5d70c11461b15ee7a4af"
+  },
+  "license": {
+    "spdx": "MIT",
+    "copyright": "Copyright (c) 2018 emersion",
+    "file": "license.txt",
+    "upstreamPath": "LICENSE",
+    "upstreamBlob": "4ee43a41d1b137a8c425cc444c1ce47fd306d0b2"
+  },
+  "fixedSources": [
+    {
+      "path": "include/ext_image_copy.h",
+      "blob": "f90cfcdd2470a6d33f12c52ed3b7147df22d5bb3"
+    },
+    {
+      "path": "include/wlr_screencast.h",
+      "blob": "4ec56dc63c906ffd602f53d86165d606e8ac0294"
+    },
+    {
+      "path": "include/wlr_screencopy.h",
+      "blob": "c2bb3207be0ac0ca9f97fe245c2efdfab2fcfb40"
+    },
+    {
+      "path": "include/screencast_common.h",
+      "blob": "bccedc1f099a1adb98db6eb3aabc2cc4fe8cc07d"
+    },
+    {
+      "path": "src/screencast/ext_image_copy.c",
+      "blob": "8ce264cfc9895e4dd9d4f2fef8e123f850674923"
+    },
+    {
+      "path": "src/screencast/pipewire_screencast.c",
+      "blob": "603c9e0138f9960fa34dfc0928e38ff5ee9701b9"
+    },
+    {
+      "path": "src/screencast/wlr_screencast.c",
+      "blob": "0c8aad75341e2e603f3d6a026b13530674dcedcb"
+    },
+    {
+      "path": "src/screencast/wlr_screencopy.c",
+      "blob": "d4d0eb93c9307d4cb739c63292ff8948884e63ab"
+    },
+    {
+      "path": "src/core/timer.c",
+      "blob": "4d21d29eac46eafeeec118178937a4c46ceb6388"
+    },
+    {
+      "path": "include/pipewire_screencast.h",
+      "blob": "f8cd88e918160d8eda7572847eb31949124f7880"
+    },
+    {
+      "path": "src/screencast/screencast.c",
+      "blob": "448f2b20500e2c5d096445bfcbcc06a5dca34703"
+    },
+    {
+      "path": "src/screencast/screencast_common.c",
+      "blob": "721da038d7164c2671f4316fd8c2c58877289198"
+    },
+    {
+      "path": "src/core/main.c",
+      "blob": "e27d261c12f1e0817fbd2ff307b045bdce73bce9"
+    },
+    {
+      "path": "protocols/wlr-screencopy-unstable-v1.xml",
+      "blob": "b60ae2c14f48fc4b5fb3199deb290b7c15376900"
+    }
+  ],
+  "patches": [
+    {
+      "file": "0001-include-posix-close-declaration.patch",
+      "sha256": "b0bfc62f8204e0df4630fe4938a2c7894d57939f9d7a50975822b34a86693764",
+      "purpose": "Existing fixed-source POSIX header declaration fix; unchanged."
+    },
+    {
+      "file": "0002-backport-frame-buffer-lifetime.patch",
+      "sha256": "b91a3ea0c1d07ad9170bf05b45b64bf47ab8358cc7fab506519fcd9ff28e6ebc",
+      "upstream": [
+        {
+          "commit": "5724a432fc95690aef19e55e62178d71b60d0cbb",
+          "author": {
+            "name": "Jihyeon Gim",
+            "email": "potatogim@gluesys.com",
+            "date": "2026-11-07T11:14:47Z"
+          },
+          "message": "screencast: tie frame lifetime to the buffer\n\nTwo places clear current_frame.pw_buffer without destroying an\nin-flight capture frame: the xdpw_pwr_enqueue_buffer() cleanup on the\nPW_STREAM_STATE_PAUSED transition, and pwr_handle_stream_remove_buffer()\nwhen a renegotiation removes the buffer we hold, which leaves the frame\nattached to freed memory (introduced in 18d4238). In both cases the next\ncapture calls create_frame() while the previous frame object is still\nalive, which wlroots-based compositors reject with a fatal\n\"session already has a frame object\" protocol error, killing the\nportal.\n\nDestroy the frame wherever the buffer is dropped. The new\nxdpw_wlr_frame_cancel() mirrors the xdpw_wlr_session_close() dispatch\nand is called from both buffer-clearing spots. The capture session\nsurvives and the next capture creates a fresh frame.",
+          "url": "https://github.com/emersion/xdg-desktop-portal-wlr/commit/5724a432fc95690aef19e55e62178d71b60d0cbb"
+        }
+      ],
+      "adaptation": "Context-only backport: 0.8.1 has no later remove-buffer log. Preserve the upstream ext/wlr cancellation dispatch and both enqueue/removal cleanup sites."
+    },
+    {
+      "file": "0003-backport-producer-driven-frame-scheduling.patch",
+      "sha256": "f2eb12eab9a97d97b50a88eb7350d0794c04a9b1e70b04f2d2a7b0911de498b9",
+      "upstream": [
+        {
+          "commit": "c613a8bc7cfbcf5615b59906e247b30b190c8662",
+          "author": {
+            "name": "CToID",
+            "email": "37492766+funk443@users.noreply.github.com",
+            "date": "2026-06-18T15:15:41Z"
+          },
+          "message": "screencast: drive the Pipewire graph by ourselves\n\nCloses: https://github.com/emersion/xdg-desktop-portal-wlr/issues/351",
+          "url": "https://github.com/emersion/xdg-desktop-portal-wlr/commit/c613a8bc7cfbcf5615b59906e247b30b190c8662"
+        },
+        {
+          "commit": "544e11481338a3784a11cb30561f06982fc0a158",
+          "author": {
+            "name": "Simon Ser",
+            "email": "contact@emersion.fr",
+            "date": "2026-07-02T14:14:59Z"
+          },
+          "message": "screencast: guard xdpw_pwr_enqueue_buffer() in PAUSED\n\nAvoids printing a warning when there is no current buffer.",
+          "url": "https://github.com/emersion/xdg-desktop-portal-wlr/commit/544e11481338a3784a11cb30561f06982fc0a158"
+        },
+        {
+          "commit": "d24d6a1b726352eb2645c38416b76e214e54a7c0",
+          "author": {
+            "name": "Scott Leggett",
+            "email": "scott@sl.id.au",
+            "date": "2026-07-21T08:00:28Z"
+          },
+          "message": "screencast: fix stream freezing on PipeWire buffer starvation\n\nCurrently, when the stream runs out of buffers, PipeWire's graph\niteration fails and freezes the stream.\n\nThis commit introduces a repeating timer to call\npw_stream_trigger_process at the negotiated frame rate when starved of\nbuffers to ensure recovery once a buffer becomes available.",
+          "url": "https://github.com/emersion/xdg-desktop-portal-wlr/commit/d24d6a1b726352eb2645c38416b76e214e54a7c0"
+        },
+        {
+          "commit": "ccd8e629f49e65e401a977525593e80767ccdfb0",
+          "author": {
+            "name": "Ismael Luceno",
+            "email": "iluceno@suse.de",
+            "date": "2026-08-11T17:12:13Z"
+          },
+          "message": "screencast: Factor out wlr_frame_done\n\nFour locations end a capture cycle with the same enqueue-then-finish\npair.",
+          "url": "https://github.com/emersion/xdg-desktop-portal-wlr/commit/ccd8e629f49e65e401a977525593e80767ccdfb0"
+        },
+        {
+          "commit": "c0255d7b047b7263629ab5a314661045ff7f65e3",
+          "author": {
+            "name": "Ismael Luceno",
+            "email": "iluceno@suse.de",
+            "date": "2026-08-11T17:12:36Z"
+          },
+          "message": "screencast: Trigger the graph from the wlr-screencopy backend\n\nThe stream is connected with PW_STREAM_FLAG_DRIVER, so .process only\nruns in reply to pw_stream_trigger_process(). Only ext_image_copy calls\nit; wlr-screencopy never does, so capture delivers the frame primed at\nPW_STREAM_STATE_STREAMING and then stalls forever. The retry timer does\nnot help: it is armed only when a dequeue fails.\n\nAffects compositors that expose zwlr_screencopy_manager_v1 but not\next-image-copy-capture-v1, i.e. wlroots <= 0.18.\n\nFixes: c613a8bc7 (\"screencast: drive the Pipewire graph by ourselves\")",
+          "url": "https://github.com/emersion/xdg-desktop-portal-wlr/commit/c0255d7b047b7263629ab5a314661045ff7f65e3"
+        },
+        {
+          "commit": "162463aba4f0e97b7003f5a9b4b6b9080897c134",
+          "author": {
+            "name": "Will",
+            "email": "will@bogusz.co",
+            "date": "2026-11-04T18:00:21Z"
+          },
+          "message": "screencast: start the first frame through pw_stream_trigger_process\n\nOn STREAMING we dequeued a buffer and started a capture directly, and\nthe stream only called pw_stream_trigger_process once that first frame\nwas ready. Until a stream calls it, PipeWire also runs a graph cycle\nfrom pw_stream_queue_buffer, so the first frame is queued in that\ncompat mode and then triggered again right after. On a still output\nthe consumer often never gets that frame, and nothing replaces it\nuntil the output is damaged.\n\nCall pw_stream_trigger_process at STREAMING instead and let the process\ncallback dequeue and capture, like it does for every later frame. It\nalready skips when a buffer is held and retries when dequeue fails. A\nresume from PAUSED now goes through the same path.\n\nSigned-off-by: Will <will@bogusz.co>\nAssisted-by: oh-my-pi:claude-opus-5-5\nAssisted-by: oh-my-pi:gpt-6.1-sol",
+          "url": "https://github.com/emersion/xdg-desktop-portal-wlr/commit/162463aba4f0e97b7003f5a9b4b6b9080897c134"
+        }
+      ],
+      "adaptation": "Backport the complete scheduling fixes without unrelated damage/serial changes: driver flag, ext ready and initial/resume trigger, PAUSED guard, bounded-rate starvation retry with disarm, plus both official legacy wlr-frame-done dependency commits. Preserve the original d24d6a1 void dequeue/current-buffer check."
+    },
+    {
+      "file": "0004-close-retry-and-frame-ownership-gaps.patch",
+      "sha256": "8baf3c40500f949526061979f7dd494e38fbdb19758866c4cec7f067fe07bc81",
+      "origin": "Project-local correctness patch from the fixed-source lifetime audit; not an upstream commit or verbatim backport.",
+      "changes": [
+        "Enter terminal state before normal destruction; clear process_retry after removing owned timers and before synchronous PipeWire disconnect callbacks.",
+        "Own the legacy frame proxy immediately after capture_output; cancel therefore covers pre-buffer failure and v3 dmabuf-only sequences.",
+        "Only trigger an existing streaming legacy node. Failed initial display dispatch, roundtrip or incomplete buffer constraints returns failure and releases the pending frame and constraints without destroying the caller-owned instance.",
+        "Return an explicit terminal outcome from enqueue to all continuing callers. Unsupported Y_INVERT cancels frame/retry and marks the instance terminal; the existing main loop reclaims it only after native callbacks return. State, format, process, retry and FPS callbacks cannot restart terminal work; buffer removal keeps normal cleanup.",
+        "The two existing add_buffer failure paths use the same deferred terminal cleanup. Later add_buffer callbacks allocate nothing, keep user_data null, and leave remove_buffer cleanup active."
+      ],
+      "unchanged": "No new capture backend, synthetic image, fixed frame drop, codec, application frame-rate choice or weakened pixel/metadata assertion."
+    }
+  ],
+  "validation": {
+    "before": {
+      "applicationCommit": "24f94d403acfe82212c955729e6e34de16bce5b4",
+      "job": 139288150686,
+      "artifact": 15035151530,
+      "artifactSha256": "b14e46723b2b9b59ff4f419db7a4074d6fe7e77401dc812ab8f923ad99cd0372",
+      "observed": "Initial 800x600 preview matched; first consumer frame after same-session refresh failed the actual pattern assertion. Backend logged started frame without buffer. No failed PNG was preserved in that run, so the exact invalid pixels and patch causality are not yet proven."
+    },
+    "local": [
+      "Every fixed-source Git blob checked",
+      "Patches applied in order with git apply --check and resulting bytes compared to the reviewed backport",
+      "Strict fixed Qt/GCC build of the independent first-mismatch evidence probe; pixel checks unchanged",
+      "PipeWire 1.6.11 native client/socketpair experiment observed CONNECTING then UNCONNECTED within the pw_stream_disconnect call; it sent no fabricated daemon response and did not exercise capture."
+    ],
+    "notRun": [
+      "Local validation-desktop C compilation (host libdrm/gbm/systemd/inih development packages unavailable)",
+      "Native compositor behavior after these patches; CI must run the first-frame pixel probe",
+      "GNOME, Plasma, physical displays and a user's external Portal installation",
+      "Native legacy pre-buffer close, initial failed/dmabuf-only events, unsupported Y_INVERT, add-buffer failure and retry-starvation destruction under an actual compositor"
+    ]
+  },
+  "runtimeDependencies": "No added runtime or protocol dependency. Reuses the validation desktop's existing PipeWire and timer APIs; application dependencies and producer frame-rate choice are unchanged.",
+  "lifetimeAuditSources": [
+    {
+      "repository": "https://github.com/emersion/xdg-desktop-portal-wlr",
+      "commit": "162463aba4f0e97b7003f5a9b4b6b9080897c134",
+      "path": "src/screencast/screencast.c",
+      "blob": "567bcac533828c85e4278fec0d4437b72c6b64a9",
+      "purpose": "The later upstream destructor still removes timers before disconnect without clearing the retry member."
+    },
+    {
+      "repository": "https://github.com/emersion/xdg-desktop-portal-wlr",
+      "commit": "162463aba4f0e97b7003f5a9b4b6b9080897c134",
+      "path": "src/screencast/wlr_screencopy.c",
+      "blob": "d109f8ce7b60f30d1e463c18f579d889d5acc9c1",
+      "purpose": "Later upstream still registers the proxy only on the shm buffer event and triggers from initial failure without checking stream creation."
+    },
+    {
+      "repository": "https://github.com/PipeWire/pipewire",
+      "commit": "4287f31510771fc999f8a58a024c81ca10b8d55f",
+      "path": "src/pipewire/stream.c",
+      "blob": "a4f96cff2b4b2127901b15822c1b5c94665b3c98",
+      "purpose": "Real disconnect emits UNCONNECTED synchronously. impl_send_command still uses its stream after invoking a state callback, requiring deferred instance destruction outside that native stack. Read-only evidence, not copied."
+    }
+  ]
+}

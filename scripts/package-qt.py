@@ -149,7 +149,7 @@ def windows_installer(prefix: Path, output: Path, workspace: Path, version: str,
         install.extend(['    StrCpy $OperationTarget "'+output_dir+'"', '    ClearErrors',
                         '    SetOutPath "'+output_dir+'"', '    IfErrors install_failed',
                         '    StrCpy $OperationTarget "'+target+'"',
-                        '    File /oname="'+nsi_escape(relative.name)+'" "'+nsi_escape(prefix/relative)+'"',
+                        '    File "/oname='+nsi_escape(relative.name)+'" "'+nsi_escape(prefix/relative)+'"',
                         '    IfErrors install_failed'])
         remove.extend(['    StrCpy $OperationTarget "'+target+'"', '    ClearErrors',
                        '    Delete "$OperationTarget"', '    IfErrors uninstall_failed',
@@ -268,6 +268,17 @@ def linux_deb(appdir: Path, output: Path, workspace: Path, version: str):
     (root/'usr/bin/huhucapture').chmod(0o755)
     for folder in ('applications','icons'):
         shutil.copytree(root/'opt/huhucapture/share'/folder,root/'usr/share'/folder,symlinks=True)
+    # The control action must resolve to the primary's exact persistent binary.
+    # Its IPC-only child needs no PipeWire setup; ordinary startup retains the
+    # existing /usr/bin launcher. Never relax identity checks for arbitrary
+    # shell wrappers or hard-code this DEB path in the shared AppImage entry.
+    for base in (root/'opt/huhucapture/share', root/'usr/share'):
+        desktop = base/'applications/io.github.NAMEWTA.huhucapture.desktop'
+        text = desktop.read_text(encoding='utf-8')
+        action = 'Exec=huhucapture --action=finish-capture\n'
+        meta.require(text.count(action) == 1, 'The installed desktop finish action is missing or ambiguous')
+        desktop.write_text(text.replace(action, 'Exec=/opt/huhucapture/bin/huhucapture --action=finish-capture\n'),
+                           encoding='utf-8', newline='\n')
     config = workspace/'CPackDEBConfig.cmake'
     settings = {
         'CPACK_GENERATOR':'DEB', 'CPACK_PACKAGE_NAME':'huhucapture', 'CPACK_PACKAGE_VERSION':version,

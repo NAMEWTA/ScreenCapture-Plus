@@ -109,7 +109,8 @@
       "reviewedSources": [
         {"path": "Examples/makensis.nsi", "blob": "7bf8f94d0e1d521890db89926f3732f902a8755f", "scope": "The official setup installs the launcher at the root and the actual compiler under Bin."},
         {"path": "Contrib/SubStart/substart.c", "blob": "03b445a7d8b68f02ed346426fe192abef8bbae3c", "scope": "The root executable starts the identically named executable under Bin and returns its result."},
-        {"path": "Source/build.cpp", "blob": "bbea0fe868b5edf9b03923114deff045701044c1", "scope": "Compiler include and stub directories use the explicit NSISDIR or the parent of the compiler directory."}
+        {"path": "Source/build.cpp", "blob": "bbea0fe868b5edf9b03923114deff045701044c1", "scope": "Compiler include and stub directories use the explicit NSISDIR or the parent of the compiler directory."},
+        {"path": "Source/script.cpp", "blob": "ea6e1b45a8677a3a882351451a7c93317084d208", "scope": "The File parser requires quoting the complete /oname=value token; a quote immediately after the equals sign is rejected."}
       ],
       "license": "zlib/libpng; retain included component licenses"
     }

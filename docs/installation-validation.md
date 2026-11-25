@@ -42,16 +42,32 @@ Windows 和 DEB 检查拒绝覆盖已有安装、注册表登记或不明安装�
 这条旅程使用真实安装包及真实桌面输入/读回；不向产品加入测试窗口、Mock
 采集源或跳过初始化的命令行分支。
 
+同一独立探针还先启动四个真实已安装控制进程：没有匹配主实例的 Finish、
+动作前后两种顺序的缺失/空便携目录，以及畸形验证环境。每个都必须在期限内
+正常返回 2，且从未观察到其原生产品窗口；错误对话框、选主后开始截图、崩溃
+或超时均失败。`controlRejections` 保留各自 PID、返回码和诊断，然后才继续
+原本的截图拖选与关闭旅程。此检查不代替成功的主实例控制或 GNOME 菜单验收。
+
 探针读取系统的原生窗口标题。产品显式设置 `applicationDisplayName` 后，固定
 Qt 6.12.1 的 [`QPlatformWindow::formatWindowTitle`](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/gui/kernel/qplatformwindow.cpp)
 附加产品名；XCB 使用 ` — `，Windows 使用 ` - `。因此逻辑 QWidget 标题
 `Screen capture` 不是实际系统标题。探针精确匹配平台格式，并继续核对进程归属、
 原始可执行文件 hash、包内模块和拖选后的像素；不以标题前缀接受任何产品窗口。
-首次实际 DEB 检查已成功安装并呈现该窗口，但旧探针错误地要求无品牌后缀，
-在拖选前失败。修正后的完整安装、重装和卸载仍须以新的原生 CI 结果为准。
-同期 Windows 原生构建指出探针内部 `Windows` 类名与 WRL 的 `::Windows`
-命名空间冲突；探针改用明确的 `DesktopWindows`。该轮构建失败后的安装链
-没有执行，不能引用 Linux 或组件通过状态替代 Windows 完整包验收。
+
+提交 `24f94d403acfe82212c955729e6e34de16bce5b4` 的
+[完整应用 CI](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885695)
+已在 Ubuntu X11 runner 完成两种 Linux 包的上述旅程：DEB 安装、同包重装、
+移除与 purge，AppImage 免 FUSE 运行、同文件替换与移除；每种包首次和重装后
+均通过真实截图拖选、像素核对和正常退出。DEB 六个、AppImage 五个数据检查点
+保留原配置、未知字段及 PNG / MP4 字节。证据归档为该次运行的
+`qt-application-linux`，其中 `installation-results.json` 保留全部实际路径和 hash。
+该 CI 的合并提交身份为 `59f4ae3b0444537d35b30b98dc9a7c3595e64538`，
+源码树与上述分支提交相同；没有改写产物中的真实构建身份。
+
+同轮 Windows 完整产品和独立 GUI 探针已编译，但 Qt 原 SPDX 多配置重复记录
+校验、NSIS `File /oname` 参数语法使材料和安装器步骤失败，安装旅程未执行。
+修复后仍须在新的 Windows CI 执行。上文新增的四个控制进程拒绝检查也尚未
+包含在这轮已通过的 Linux 结果中，不能以旧旅程代替其新验收。
 
 ## 与完整应用 CI 相同的入口
 

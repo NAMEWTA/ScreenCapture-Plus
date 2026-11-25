@@ -146,6 +146,81 @@ class QtOriginals(unittest.TestCase):
             record = qt_materials.original_sdk_file(materials, self.prefix, relative, files)
             self.assertEqual(record['sha256'], materials.sdk.digest(self.prefix / relative))
             self.assertTrue(record['packageIds'] and record['copyrightText'])
+            self.assertTrue(record['spdxIds'])
+
+    def test_actual_config_aliases_preserve_all_original_ids_and_properties(self):
+        version = materials.meta.json_read(ROOT / 'build/dependencies.lock.json')['qtMigration']['qt']['version']
+        documents, files = qt_materials.sdk_spdx(materials, self.prefix, version)
+        aliases = {path: record for path, record in files.items() if len(record['spdxIds']) > 1}
+        if os.name == 'nt':
+            self.assertTrue(aliases, 'The selected real Windows SDK contains multi-config QM records')
+        for path, record in aliases.items():
+            value = documents[record['module']]['value']
+            entries = [entry for entry in value['files']
+                       if entry['fileName'].removeprefix('./') == path]
+            self.assertEqual(record['spdxIds'], sorted(entry['SPDXID'] for entry in entries))
+            for entry in entries:
+                self.assertEqual(record['fileProperties'],
+                                 {key: item for key, item in entry.items() if key != 'SPDXID'})
+                parents = {relation['spdxElementId'] for relation in value['relationships']
+                           if relation['relationshipType'] == 'CONTAINS' and
+                           relation['relatedSpdxElement'] == entry['SPDXID'] and
+                           relation['spdxElementId'] in documents[record['module']]['packages']}
+                self.assertEqual(record['packageIds'], sorted(parents))
+            actual = qt_materials.original_sdk_file(materials, self.prefix, path, files)
+            self.assertEqual(actual['sha256'], materials.sdk.digest(self.prefix / path))
+        if not aliases:
+            print('NOT PRESENT: this original Qt SDK has no duplicate configuration file records.', flush=True)
+
+    def test_conflicting_copies_of_real_spdx_evidence_are_rejected(self):
+        version = materials.meta.json_read(ROOT / 'build/dependencies.lock.json')['qtMigration']['qt']['version']
+        documents, _ = qt_materials.sdk_spdx(materials, self.prefix, version)
+        document = documents['qttranslations']
+        entry = next(value for value in document['value']['files']
+                     if value['fileName'].removeprefix('./') == 'translations/assistant_ar.qm')
+        original_documents = {name: materials.unchanged_digest(value['path']) for name, value in documents.items()}
+        for changed_field in ('checksums', 'licenseConcluded', 'copyrightText', 'licenseInfoInFiles',
+                              'packageIds', 'repeatedId'):
+            with self.subTest(changed_field=changed_field), tempfile.TemporaryDirectory() as directory:
+                prefix = Path(directory); (prefix / 'sbom').mkdir()
+                changed = copy.deepcopy(document['value'])
+                duplicate = copy.deepcopy(entry)
+                if changed_field != 'repeatedId':
+                    duplicate['SPDXID'] += '-conflicting-evidence-test'
+                if changed_field == 'checksums':
+                    checksum = next(value for value in duplicate['checksums'] if value['algorithm'] == 'SHA1')
+                    checksum['checksumValue'] = ('1' if checksum['checksumValue'][0] == '0' else '0') + \
+                        checksum['checksumValue'][1:]
+                elif changed_field == 'licenseConcluded':
+                    duplicate[changed_field] = 'NOASSERTION'
+                elif changed_field == 'copyrightText':
+                    duplicate[changed_field] += ' changed evidence'
+                elif changed_field == 'licenseInfoInFiles':
+                    duplicate[changed_field] = ['LicenseRef-conflicting-evidence-test']
+                changed['files'].append(duplicate)
+                parents = [copy.deepcopy(relation) for relation in document['value']['relationships']
+                           if relation['relationshipType'] == 'CONTAINS' and
+                           relation['relatedSpdxElement'] == entry['SPDXID']]
+                self.assertTrue(parents)
+                for relation in parents:
+                    relation['relatedSpdxElement'] = duplicate['SPDXID']
+                if changed_field == 'packageIds':
+                    original_parent = parents[0]['spdxElementId']
+                    parents[0]['spdxElementId'] = document['package']['SPDXID']
+                    self.assertNotEqual(original_parent, parents[0]['spdxElementId'])
+                changed['relationships'].extend(parents)
+                for name, source in documents.items():
+                    target = prefix / 'sbom' / source['path'].name
+                    if name == 'qttranslations':
+                        materials.meta.json_write(target, changed)
+                    else:
+                        shutil.copyfile(source['path'], target)
+                error = 'Repeated or invalid original Qt SPDX ID' if changed_field == 'repeatedId' else \
+                    'Conflicting original Qt SPDX records'
+                with self.assertRaisesRegex(ValueError, error):
+                    qt_materials.sdk_spdx(materials, prefix, version)
+        for name, document in documents.items():
+            self.assertEqual(materials.unchanged_digest(document['path']), original_documents[name])
 
     def test_changed_real_plugin_and_missing_spdx_entry_are_rejected(self):
         version = materials.meta.json_read(ROOT / 'build/dependencies.lock.json')['qtMigration']['qt']['version']

@@ -1,17 +1,25 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <span>
 #include <string_view>
 
 namespace HuhuCapture::Core {
 
 enum class CaptureEntry { Capture, Pin, Scroll, Recording, Qr };
+// Control requests target an existing owner. They never create a capture or
+// acquire the primary-instance lock, including when --auto-quit is present.
+enum class StartupAction : std::uint8_t { Launch, FinishCapture, VerifyCaptureAction, Invalid = 255 };
 
 struct StartupRequest {
     CaptureEntry entry{CaptureEntry::Capture};
     bool oneShot{};
     bool background{};
+    StartupAction action{StartupAction::Launch};
+    // Only the bounded, one-use desktop-action verification handshake uses
+    // this field. It occupies the existing IPC request UUID, not a new channel.
+    std::array<std::uint8_t, 16> verification{};
     friend constexpr bool operator==(const StartupRequest&, const StartupRequest&) = default;
 };
 
@@ -31,10 +39,15 @@ constexpr bool startupEquals(std::basic_string_view<Character> value, std::strin
 // Unknown entry names retain the ordinary screenshot workflow.
 template<class Character>
 constexpr StartupRequest startupRequestFromValues(std::basic_string_view<Character> autoQuit,
-    std::basic_string_view<Character> autoStart, std::basic_string_view<Character> entry) noexcept
+    std::basic_string_view<Character> autoStart, std::basic_string_view<Character> entry,
+    std::basic_string_view<Character> action = {}) noexcept
 {
     using Detail::startupEquals;
     StartupRequest result;
+    if (!action.empty()) {
+        result.action = startupEquals(action, "finish-capture") ? StartupAction::FinishCapture : StartupAction::Invalid;
+        return result;
+    }
     result.oneShot = startupEquals(autoQuit, "true");
     result.background = !result.oneShot &&
         (startupEquals(autoStart, "true") || startupEquals(entry, "tray"));
@@ -54,9 +67,9 @@ constexpr StartupRequest parseStartupArguments(
     std::span<const std::basic_string_view<Character>> arguments) noexcept
 {
     using View = std::basic_string_view<Character>;
-    constexpr std::array<std::string_view, 3> keys{"--auto-quit", "--auto-start", "--enter"};
-    std::array<View, 3> values{};
-    std::array<bool, 3> present{};
+    constexpr std::array<std::string_view, 4> keys{"--auto-quit", "--auto-start", "--enter", "--action"};
+    std::array<View, 4> values{};
+    std::array<bool, 4> present{};
     constexpr Character trueText[]{'t', 'r', 'u', 'e'};
     for (const auto argument : arguments) {
         const auto separator = argument.find(static_cast<Character>('='));
@@ -71,7 +84,9 @@ constexpr StartupRequest parseStartupArguments(
             break;
         }
     }
-    return startupRequestFromValues(values[0], values[1], values[2]);
+    auto result = startupRequestFromValues(values[0], values[1], values[2], values[3]);
+    if (present[3] && values[3].empty()) result.action = StartupAction::Invalid;
+    return result;
 }
 
 } // namespace HuhuCapture::Core

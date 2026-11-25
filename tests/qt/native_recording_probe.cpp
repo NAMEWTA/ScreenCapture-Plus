@@ -168,6 +168,9 @@ QJsonObject resultJson(const recording::SessionResult& result)
         sink[QStringLiteral("lastSubmitted100ns")] = static_cast<qint64>(statistics.lastSubmitted);
         sink[QStringLiteral("lastSubmittedDuration100ns")] = static_cast<qint64>(statistics.lastSubmittedDuration);
         sink[QStringLiteral("queuedBytes")] = static_cast<qint64>(statistics.queuedBytes);
+        sink[QStringLiteral("framesCaptured")] = static_cast<qint64>(statistics.captured);
+        sink[QStringLiteral("submittedDuration100ns")] = static_cast<qint64>(statistics.submittedDuration);
+        sink[QStringLiteral("captureEnd100ns")] = static_cast<qint64>(statistics.captureEnd);
         item[QStringLiteral("sinkStatistics")] = sink;
     }
     item[QStringLiteral("finalized")] = result.backend.media.finalized;
@@ -343,7 +346,7 @@ int main(int argc, char** argv)
         require(run.isValid(), "Claim an exclusively owned recording evidence directory");
         run.setAutoRemove(false);
         reportPath = run.path() + (gifProbe ? QStringLiteral("/native-gif-recording.json") : QStringLiteral("/native-recording.json"));
-        report[QStringLiteral("schema")] = 1;
+        report[QStringLiteral("schema")] = gifProbe ? 1 : 2;
         report[QStringLiteral("status")] = QStringLiteral("running");
         report[QStringLiteral("scope")] = gifProbe
             ? QStringLiteral("Actual visible Windows desktop -> retained full-region GDI -> shared fixed gifski -> strict complete GIF decode, actual pixels and timeline. No audio exists in GIF. No physical multi-monitor, mixed-DPI, HDR, sustained-performance or installation acceptance is claimed.")

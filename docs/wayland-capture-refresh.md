@@ -60,13 +60,16 @@ and `consumerFinished` handshake remain unchanged.
 
 Manual scrolling hides its complete window, rather than warning users to move
 it outside an unmapped source coordinate system. Both workspaces use actual
-tray/registered-shortcut capability provided by the host. Without a reachable
+tray/registered-shortcut capability or a verified installed desktop action
+provided by the host. Without a reachable
 stop route they refuse hidden Start and retain visible instructions. A saved
 shortcut preference or desktop command is not a registered stop action.
-GNOME sessions without either usable route still lack the complete Issue #5
-§8.4 manual-scrolling workflow; a verified installed desktop-action/IPC path
-or another actual control mechanism remains required. This is a release gate,
-not a claim that reduced functionality is complete.
+The [GNOME desktop action](desktop-capture-action.md) uses real GIO registration
+and a one-use round trip through the existing primary-instance IPC. Controls
+show the available completion route in the selected language before hiding.
+An unregistered AppImage or independent one-shot instance does not acquire
+this capability. Actual GNOME menu reachability, shell UI in captured pixels,
+and the complete Issue #5 §8.4 journey remain release gates.
 
 Native X11 continues through the existing guarded XCB implementation and
 Windows continues through its native affinity/capture adapters. An XWayland
@@ -130,4 +133,12 @@ offscreen scrolling controls still pass their no-source/no-output/drain checks.
 Local positive compositor execution is **not run**. Sway pixel acceptance must
 come from the dedicated CI result, and that result cannot replace GNOME,
 Plasma, physical displays, mixed DPI, remote desktop policy or long-run gates.
+
+The first integrated shared-owner CI run (`24f94d4`, job `139288150686`) failed
+the actual pattern assertion on its first consumed frame after refresh. The
+initial preview passed and all owners drained; fresh-frame acceptance is still
+open. [The validation backend record](portal-wlr-validation.md) preserves this
+failure, the new actual-pixel diagnostics and the narrowly selected upstream
+producer fixes. Those fixes belong only to the owned validation desktop and
+cannot establish that the user's system Portal has equivalent behavior.
 

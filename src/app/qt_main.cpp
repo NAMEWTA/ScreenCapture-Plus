@@ -1,6 +1,7 @@
 #include "app/QtApplication.h"
 #include "app/Brand.h"
 #include "app/Version.h"
+#include "services/desktop/DesktopCaptureAction.h"
 #ifdef Q_OS_WIN
 #include "platform/windows/NativeGifRecording.h"
 #include "platform/windows/NativeMp4Recording.h"
@@ -10,12 +11,14 @@
 #endif
 
 #include <QApplication>
+#include <QDebug>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QMessageBox>
 #include <QResource>
 #include <QTimer>
 #include <exception>
+#include <utility>
 
 // Retain the existing editor/brand qrc object in the static UI library even
 // when background startup has not constructed an editor yet.
@@ -89,15 +92,29 @@ int main(int argc, char** argv)
         icon.addFile(QStringLiteral(":/huhucapture/brand/icon-%1.png").arg(edge), QSize(edge, edge));
     application.setWindowIcon(icon);
 
-    const auto arguments = HuhuCapture::Application::parseApplicationArguments(application.arguments().mid(1));
-    if (!arguments.failure.isEmpty()) return startupError(application, arguments.failure);
+    auto arguments = HuhuCapture::Application::parseApplicationArguments(application.arguments().mid(1));
+    const auto proof = HuhuCapture::Desktop::DesktopCaptureAction::applyProbeEnvironment(arguments.startup);
+    const bool control = arguments.startup.action != HuhuCapture::Core::StartupAction::Launch;
+    if (proof || !arguments.failure.isEmpty()) {
+        const auto detail = proof ? proof.detail : arguments.failure;
+        if (control || proof) { qWarning().noquote() << detail; return 2; }
+        return startupError(application, detail);
+    }
     try {
-        HuhuCapture::Application::QtApplication host(application, applicationOptions(arguments.portableDirectory));
+        // An action child only forwards through existing IPC. It never creates
+        // media backends or initializes the primary's application services.
+        auto options = control ? HuhuCapture::Application::ApplicationOptions{} : applicationOptions(arguments.portableDirectory);
+        options.portableDirectory = arguments.portableDirectory;
+        HuhuCapture::Application::QtApplication host(application, std::move(options));
         QObject::connect(&host, &HuhuCapture::Application::QtApplication::exitReady, &application,
             [&application](int code) { application.exit(code); });
-        if (!host.start(arguments.startup)) return startupError(application, QStringLiteral("The application could not accept its startup request"));
+        if (!host.start(arguments.startup)) {
+            if (control) { qWarning("The application control request was rejected"); return 2; }
+            return startupError(application, QStringLiteral("The application could not accept its startup request"));
+        }
         return application.exec();
     } catch (const std::exception& error) {
+        if (control) { qWarning("The application control request failed: %s", error.what()); return 2; }
         return startupError(application, QStringLiteral("The application could not initialize: ") + QString::fromUtf8(error.what()));
     }
 }

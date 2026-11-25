@@ -491,8 +491,40 @@ int main(int argc, char** argv)
             }, 5000), "Actual desktop pixels contain the presented independent pattern");
             require(before.image.save(QDir(artifacts).filePath(QStringLiteral("before-launch.png")), "PNG"), "Retain actual pre-launch desktop pixels");
             RestoreCursor restoreCursor{backend, before.desktop};
-            product.setProcessEnvironment(productEnvironment(temporary, parser.isSet(QStringLiteral("appimage"))));
+            const auto launchEnvironment = productEnvironment(temporary, parser.isSet(QStringLiteral("appimage")));
+            product.setProcessEnvironment(launchEnvironment);
             product.setWorkingDirectory(profile);
+            product.setProgram(launch);
+            // These are real packaged control processes. A malformed request
+            // or absent primary must exit without a dialog, capture, or a new
+            // owner. In particular, an early profile-parser error must still
+            // retain the action even when its argument appears later.
+            const std::array<QStringList, 4> controlArguments{{
+                {QStringLiteral("--action=finish-capture"), QStringLiteral("--portable-dir=") + profile},
+                {QStringLiteral("--action=finish-capture"), QStringLiteral("--portable-dir=")},
+                {QStringLiteral("--portable-dir"), QStringLiteral("--action=finish-capture")},
+                {QStringLiteral("--action=finish-capture"), QStringLiteral("--portable-dir=") + profile},
+            }};
+            QJsonArray controlResults;
+            for (std::size_t index = 0; index < controlArguments.size(); ++index) {
+                auto environment = launchEnvironment;
+                if (index == 3) environment.insert(QStringLiteral("HUHUCAPTURE_DESKTOP_CAPTURE_PROBE"), QStringLiteral("invalid"));
+                product.setProcessEnvironment(environment); product.setArguments(controlArguments[index]);
+                product.start(); require(product.waitForStarted(15000), "Start the real installed control process");
+                const auto controlPid = product.processId(); bool mappedWindow{};
+                const bool finished = observe([&] {
+                    if (!windows.visible(controlPid).empty()) mappedWindow = true;
+                    return product.state() == QProcess::NotRunning;
+                }, 15000);
+                controlResults.append(QJsonObject{{QStringLiteral("case"), static_cast<int>(index)},
+                    {QStringLiteral("pid"), controlPid}, {QStringLiteral("exitCode"), product.exitCode()},
+                    {QStringLiteral("mappedWindow"), mappedWindow}, {QStringLiteral("finished"), finished},
+                    {QStringLiteral("diagnostic"), QString::fromUtf8(product.readAllStandardError()).left(4096)}});
+                evidence.insert(QStringLiteral("controlRejections"), controlResults);
+                require(finished && !mappedWindow && product.exitStatus() == QProcess::NormalExit && product.exitCode() == 2,
+                    "An invalid or unavailable control must exit 2 without opening any native product window");
+            }
+            product.setProcessEnvironment(launchEnvironment);
             product.setProgram(launch); product.setArguments({QStringLiteral("--auto-quit"), QStringLiteral("--portable-dir=") + profile});
             product.start();
             require(product.waitForStarted(15000), "Start the real packaged product using its normal one-shot CLI");

@@ -82,7 +82,9 @@ Qt SDK 和 Rust 依赖的逐项来源及对应源码核对。
 核对原始前缀及系统包的完整字节、真实 source package 版本和原版权文本。
 两平台另对实际 Qt 库、插件及 QM 执行原 SDK SPDX 与官方部署字节比对，取得
 固定模块源码及原许可；Rust 则核对本次静态库、原解析图和 Cargo 自己产生的
-完整 vendor。运行包只加入原通知和小型来源记录，完整源码作为独立 CI 产物。
+完整 vendor。另一个[标准库步骤](rust-toolchain-materials.md)使用同一锁定工具链的
+官方 rust-src/std/compiler 原档逐字节核对实际 sysroot 和通知，不把 vendor 当作
+标准库来源。运行包只加入原通知和小型来源记录，完整源码作为独立 CI 产物。
 材料检查独立保留失败状态与报告；已经安装成功的开发树仍继续接受包和安装生命周期
 检查，以取得具体故障证据。开发包不会因此取得正式源码完整性声明。
 
@@ -118,6 +120,11 @@ python scripts/package-qt.py package `
 
 两个包从同一实际安装目录复制得到，每一份目录独立审计。ZIP 重新打开后校验 CRC、条目集合、长度和每个条目的 SHA256。受控 NSIS 模板使用 `RequestExecutionLevel user`、LocalAppData、HKCU 的安装/卸载登记及当前用户开始菜单。它检查 x64 和 Windows 10 build 17763 下限，安装/卸载前提示关闭正在使用的可执行文件，不杀进程、不自动启动应用。
 
+NSIS 的 `File` 指令将完整的 `"/oname=目标文件名"` 作为一个参数引用，源文件路径
+另行引用。不能生成 `/oname="目标文件名"`：固定 3.11 解析器会把其中的引号当成
+输出名首字符并拒绝编译。依据为打包锁记录的原 `Source/script.cpp`；包含空格和
+非 ASCII 字符的语言及许可文件沿用同一规则，不通过重命名用户可见文件规避。
+
 同路径升级先调用已登记的旧用户级卸载器，移除旧版明确列出的程序文件，从而退休过期 DLL 和插件。卸载器只删除本次安装清单中的文件，不递归移除用户的 Documents、媒体、配置或任意自选目录。原生 Windows 还必须验证交互安装、运行中提示、重复安装、升级、静默卸载、中文/空格路径和重新安装；脚本生成 installer 成功不等于这些交互场景已通过。
 
 ### Linux DEB 与 AppImage
@@ -129,6 +136,12 @@ linuxdeploy 使用固定 Qt 插件、匹配的 `qmake`、实际 Wayland 插件�
 所有输出目录必须为空，已存在结果不会被覆盖。中途失败保留已经写出的输出和日志，成功清理的只是在任务中创建的临时打包树。脚本不执行生成的应用或安装器。
 
 ## 正式聚合与对应源码
+
+原始材料在同次 CMake 安装后、打包变换前收集。Qt、系统库和 Cargo 的入口见
+[发行材料](distribution-materials.md)；[原生依赖收集器](native-source-materials.md)
+保留实际源码、补丁与配置，[Rust 工具链收集器](rust-toolchain-materials.md)
+核对官方标准库输入。运行目录只接收原通知和来源记录，完整源码单独保存。
+各组件成功结果须经过实际两端 CI 和组合审核，不能自动等同于正式源码门槛。
 
 正式包去掉 `--development`，必须来自干净且匹配的源提交，并提供 `--source-bundle` 与 `--source-manifest`。源清单必须指向实际档案的名称、字节数、SHA256，标明同产品/仓库/版本/提交、`complete: true` 和所含组件。至少包括 huhucapture、Qt、gifski、LocalSend、FFmpeg、Rust vendor；Linux 还必须包括 libportal、PipeWire、x264 和 AppImage runtime。需要保存匹配的补丁、构建参数、许可证及重建方式；不可以只附一个 upstream URL 就宣称已经准备对应源码。
 

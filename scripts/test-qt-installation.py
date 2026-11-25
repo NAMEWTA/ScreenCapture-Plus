@@ -332,6 +332,10 @@ class Validation:
         observed = self.probe_call(arguments, tag=kind + '-' + stage)
         meta.require(observed.get('nativeSelectionObserved') is True and observed.get('exitCode') == 0,
                      'The package did not complete a real selection-and-close GUI journey')
+        controls = observed.get('controlRejections', [])
+        meta.require(len(controls) == 4 and all(value.get('finished') is True and value.get('mappedWindow') is False and
+                     value.get('exitCode') == 2 for value in controls),
+                     'The real packaged controls did not reject invalid or unavailable requests without a product window')
         return {'evidence': str(directory.relative_to(self.output)), 'runtime': observed}
 
     def checkpoint(self, case, stage, protected):

@@ -9,6 +9,7 @@
 #include "app/SettingsController.h"
 #include "app/Version.h"
 #include "services/config/SettingsStore.h"
+#include "services/desktop/DesktopCaptureAction.h"
 #include "services/desktop/FileRevealer.h"
 #include "services/desktop/SystemClipboard.h"
 #include "services/desktop/WindowActivation.h"
@@ -32,6 +33,7 @@
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -69,18 +71,22 @@ ApplicationArguments parseApplicationArguments(const QStringList& arguments)
     for (const auto& argument : arguments) {
         encoded.push_back(argument.toUtf8());
         if (argument == QStringLiteral("--portable-dir")) {
-            result.failure = QStringLiteral("Use --portable-dir=/absolute/path to select a portable profile"); return result;
+            if (result.failure.isEmpty())
+                result.failure = QStringLiteral("Use --portable-dir=/absolute/path to select a portable profile");
+            continue;
         }
         if (argument.startsWith(QStringLiteral("--portable-dir="))) {
             result.portableDirectory = argument.mid(15);
             if (result.portableDirectory.isEmpty()) {
-                result.failure = QStringLiteral("The portable profile directory cannot be empty"); return result;
+                if (result.failure.isEmpty()) result.failure = QStringLiteral("The portable profile directory cannot be empty");
             }
         }
     }
     std::vector<std::string_view> values; values.reserve(encoded.size());
     for (const auto& argument : encoded) values.emplace_back(argument.constData(), static_cast<std::size_t>(argument.size()));
     result.startup = Core::parseStartupArguments<char>(values);
+    if (result.startup.action == Core::StartupAction::Invalid && result.failure.isEmpty())
+        result.failure = QStringLiteral("The requested application control action is not supported");
     return result;
 }
 
@@ -230,6 +236,7 @@ struct QtApplication::State {
     std::unique_ptr<RecordingWorkspace> recording;
     std::unique_ptr<ScrollWorkspace> scroll;
     std::unique_ptr<Desktop::WindowActivation> activation;
+    std::unique_ptr<Desktop::DesktopCaptureAction> desktopAction;
     std::unique_ptr<Updates::UpdateService> updates;
     std::unique_ptr<QMenu> trayMenu;
     std::unique_ptr<QSystemTrayIcon> tray;
@@ -244,10 +251,12 @@ struct QtApplication::State {
     qint64 updateAttemptedDay{(std::numeric_limits<qint64>::min)()};
     QString promptedUpdateVersion;
     quint64 activationRequest{};
+    quint64 desktopActionVerification{};
     bool checkQueued{}, journeyFinished{}, trayAvailable{};
     bool entryAfterCapture{}, entryAfterCaptureActivation{};
     bool settingsStopped{true}, lanStopped{true}, recordingStopped{true}, scrollStopped{true}, captureStopped{true}, mediaStopping{};
     bool updatesStopped{true};
+    bool desktopActionStopped{true}, desktopActionRetry{};
     bool clipboardStopping{}, clipboardStopped{true};
     bool errorQueued{}, exitEmitted{}, keepClipboard{};
     int exitCode{};
@@ -303,6 +312,12 @@ struct QtApplication::State {
     }
     void fatal(const QString& message)
     {
+        // A desktop control process owns no capture, settings or UI journey.
+        // Failure must not open a new window over the primary's live pixels.
+        if (initial.action != Core::StartupAction::Launch) {
+            qWarning().noquote() << message;
+            exitCode = 2; finishExit(true); return;
+        }
         exitCode = 1;
         report(message);
         owner->requestQuit(exitCode);
@@ -310,7 +325,19 @@ struct QtApplication::State {
 
     bool admit(const Core::StartupRequest& request)
     {
-        if (phase != ApplicationPhase::Running || !capture) return false;
+        if (phase != ApplicationPhase::Running) return false;
+        switch (request.action) {
+        case Core::StartupAction::VerifyCaptureAction:
+            return desktopAction && desktopAction->acceptVerification(request);
+        case Core::StartupAction::FinishCapture:
+            if (recording && recording->canStop()) return recording->stopActive(Recording::StopIntent::Save);
+            return scroll && scroll->canStop() && scroll->stopActive();
+        case Core::StartupAction::Invalid:
+            return false;
+        case Core::StartupAction::Launch:
+            break;
+        }
+        if (!capture) return false;
         // A second explicit background launch is a successful no-capture
         // activation, matching --auto-start and --enter=tray semantics.
         if (request.background) { if (!trayAvailable) showEntry(); return true; }
@@ -319,6 +346,7 @@ struct QtApplication::State {
     bool startJourney(Core::CaptureEntry entryPoint, const QString& token = {})
     {
         if (phase != ApplicationPhase::Running || !capture) return false;
+        verifyDesktopCaptureAction();
         const bool wasVisible = entry && entry->isVisible();
         if (wasVisible) entry->hide();
         const bool accepted = capture->start(entryPoint, token);
@@ -552,9 +580,13 @@ struct QtApplication::State {
         const bool nativeTray = tray && tray->isVisible() && trayAvailable &&
             QSystemTrayIcon::isSystemTrayAvailable();
         const bool nativeShortcut = settings && settings->captureShortcutAvailable();
-        const bool stopAvailable = phase == ApplicationPhase::Running && (nativeTray || nativeShortcut);
-        if (recording) recording->setExternalStopAvailable(stopAvailable);
-        if (scroll) scroll->setExternalStopAvailable(stopAvailable);
+        const bool nativeAction = desktopAction && desktopAction->available();
+        const bool stopAvailable = phase == ApplicationPhase::Running && (nativeTray || nativeShortcut || nativeAction);
+        const auto stopHint = !stopAvailable ? QString() : nativeTray ? text(u"capture.trayFinishHint") :
+            nativeShortcut ? text(u"capture.shortcutFinishHint") :
+            text(u"capture.desktopFinishHint").arg(desktopAction->actionName());
+        if (recording) recording->setExternalStopAvailable(stopAvailable, stopHint);
+        if (scroll) scroll->setExternalStopAvailable(stopAvailable, stopHint);
     }
     void setupTray()
     {
@@ -588,6 +620,37 @@ struct QtApplication::State {
         QObject::connect(&trayWatch, &QTimer::timeout, owner, [this] { inspectTray(); scheduleCheck(); });
         trayWatch.start();
         if (!trayAvailable) showEntry();
+    }
+
+    void verifyDesktopCaptureAction()
+    {
+        if (!desktopAction || desktopActionVerification || phase != ApplicationPhase::Running ||
+            desktopAction->available() || (recording && recording->busy()) || (scroll && scroll->busy())) return;
+        desktopActionRetry = false;
+        desktopActionVerification = desktopAction->verify();
+    }
+    void setupDesktopCaptureAction()
+    {
+        // A one-shot process deliberately has no primary IPC endpoint. Only
+        // the normal persistent owner may offer this desktop completion route.
+        if (initial.oneShot || !instance || instance->role() != InstanceRole::Primary ||
+            !QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) return;
+        desktopAction = std::make_unique<Desktop::DesktopCaptureAction>(paths.executable,
+            options.portableDirectory, owner);
+        QObject::connect(desktopAction.get(), &Desktop::DesktopCaptureAction::availabilityChanged, owner,
+            [this](bool available) {
+                desktopActionRetry = !available;
+                refreshCaptureStopActions(); scheduleCheck();
+            });
+        QObject::connect(desktopAction.get(), &Desktop::DesktopCaptureAction::verified, owner,
+            [this](quint64 token, const Desktop::Failure&) {
+                if (token != desktopActionVerification) return;
+                desktopActionVerification = 0;
+                refreshCaptureStopActions(); scheduleCheck();
+            });
+        QObject::connect(desktopAction.get(), &Desktop::DesktopCaptureAction::shutdownFinished, owner,
+            [this] { desktopActionStopped = true; scheduleCheck(); });
+        verifyDesktopCaptureAction();
     }
 
     bool loadServices()
@@ -709,7 +772,7 @@ struct QtApplication::State {
             setPhase(ApplicationPhase::Running);
             if (!initial.oneShot) {
                 settings->initialize(); lan->initialize(); media->setSendAvailable(lan->available());
-                setupTray(); refreshLanguage();
+                setupTray(); setupDesktopCaptureAction(); refreshLanguage();
                 scheduleCheck();
             }
             if (!initial.background) {
@@ -744,6 +807,7 @@ struct QtApplication::State {
     void check()
     {
         if (phase == ApplicationPhase::Running) {
+            if (desktopActionRetry) verifyDesktopCaptureAction();
             if (entryAfterCapture && (!recording || !recording->busy()) && (!scroll || !scroll->busy())) {
                 entryAfterCapture = false;
                 const bool activateEntry = std::exchange(entryAfterCaptureActivation, false);
@@ -757,7 +821,7 @@ struct QtApplication::State {
             return;
         }
         if (phase != ApplicationPhase::Draining) return;
-        if (!settingsStopped || !lanStopped || !recordingStopped || !scrollStopped || !captureStopped || !updatesStopped) return;
+        if (!settingsStopped || !lanStopped || !recordingStopped || !scrollStopped || !captureStopped || !updatesStopped || !desktopActionStopped) return;
         if ((media && media->busy()) || (revealer && revealer->busy())) return;
         if (clipboard && !clipboardStopping) {
             clipboardStopping = true; clipboardStopped = false;
@@ -792,6 +856,8 @@ struct QtApplication::State {
         if (activation && activationRequest) activation->cancel(activationRequest);
         refreshEntry();
         settingsStopped = !settings; lanStopped = !lan; recordingStopped = !recording; scrollStopped = !scroll; updatesStopped = !updates;
+        desktopActionStopped = !desktopAction;
+        if (desktopAction) desktopAction->shutdown();
         if (settings) settings->shutdown();
         if (lan) lan->shutdown();
         if (updates) updates->shutdown();
@@ -846,6 +912,8 @@ QtApplication::~QtApplication()
 bool QtApplication::start(Core::StartupRequest request)
 {
     if (QThread::currentThread() != thread() || state_->phase != ApplicationPhase::Dormant) return false;
+    if (request.action == Core::StartupAction::Invalid) return false;
+    if (request.action != Core::StartupAction::Launch) { request.oneShot = false; request.background = false; }
     state_->initial = request; state_->setPhase(ApplicationPhase::Starting);
     state_->paths = applicationPaths(state_->options.portableDirectory, request.oneShot);
     if (!state_->paths.failure.isEmpty()) { state_->fatal(state_->paths.failure); return true; }

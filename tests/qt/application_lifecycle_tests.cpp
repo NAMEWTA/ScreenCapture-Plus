@@ -154,6 +154,14 @@ void argumentContracts()
     require(!app::parseApplicationArguments({QStringLiteral("--portable-dir")}).failure.isEmpty() &&
         !app::parseApplicationArguments({QStringLiteral("--portable-dir=")}).failure.isEmpty(),
         "An incomplete explicit profile never silently selects another configuration");
+    for (const auto& profile : {QStringLiteral("--portable-dir"), QStringLiteral("--portable-dir=")}) {
+        for (const auto& arguments : {QStringList{profile, QStringLiteral("--action=finish-capture")},
+            QStringList{QStringLiteral("--action=finish-capture"), profile}}) {
+            const auto rejected = app::parseApplicationArguments(arguments);
+            require(!rejected.failure.isEmpty() && rejected.startup.action == core::StartupAction::FinishCapture,
+                "A malformed control profile must retain its control action and cannot open an ordinary startup dialog");
+        }
+    }
 }
 
 void invalidProfile(QApplication& application)

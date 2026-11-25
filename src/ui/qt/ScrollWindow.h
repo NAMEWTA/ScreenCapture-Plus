@@ -19,7 +19,7 @@ public:
     void refreshLanguage();
     Capture::Failure open();
     void activate(const QString& activationToken = {});
-    void setExternalStopAvailable(bool available);
+    void setExternalStopAvailable(bool available, const QString& hint = {});
     bool canStop() const noexcept;
     bool stopCapture();
     bool hiddenForCapture() const noexcept;

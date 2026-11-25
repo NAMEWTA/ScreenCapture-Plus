@@ -57,5 +57,16 @@ int main()
         CHECK(parse({argument}) == StartupRequest{});
     CHECK(parse({"--auto-start=false", "--enter=tray"}).background);
     CHECK(!parse({"--auto-quit", "--enter=tray"}).background);
-    std::cout << "startup_tests: existing parameter, precedence, duplicate and one-shot contracts passed\n";
+    const auto finish = parse({"--action=finish-capture"});
+    CHECK(finish.action == StartupAction::FinishCapture);
+    CHECK(!finish.oneShot && !finish.background && finish.entry == CaptureEntry::Capture);
+    CHECK(parse({"--auto-quit", "--auto-start", "--enter=long", "--action=finish-capture"}) == finish);
+    CHECK(parse({"--action=finish-capture", "--action"}) == finish);
+    CHECK(parse({"--action", "--action=finish-capture"}) == finish);
+    CHECK(parse({"--action=finish-capture", "--action=unknown"}).action == StartupAction::Invalid);
+    CHECK(parse({"--action=Finish-Capture"}).action == StartupAction::Invalid);
+    CHECK(parse({"--action=verify-capture"}).action == StartupAction::Invalid);
+    CHECK(parse({"--action="}).action == StartupAction::Invalid);
+    CHECK(parse({"--action=finish-capture", "--action="}).action == StartupAction::Invalid);
+    std::cout << "startup_tests: existing parameters, precedence, one-shot isolation and remote-only finish action passed\n";
 }

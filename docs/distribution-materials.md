@@ -45,6 +45,13 @@ Windows 使用实际安装目录、Visual Studio 构建目录和该次应用的�
 
 `build/package/qt_materials.py` 读取 SDK 原 `*.spdx.json`，对实际部署的 Qt 库、插件、编译翻译逐一核对其原输入 SHA1 和完整 SHA256。SPDX 原声明、包关系、作者、许可表达式及完整原文继续保留；不会将所有 Qt 文件统一宣称为单一许可。平台库和插件还必须与一次真实官方部署重放的完整字节相符，翻译目录因部署命令使用 `NO_TRANSLATIONS`，按原始官方 QM 文件校验。
 
+官方 Windows 多配置 SBOM 可为同一路径生成 Debug / RelWithDebInfo 的不同 SPDXID。
+报告 schemaVersion 2 仅在同模块、同文档、全部原非 ID 字段及 `CONTAINS` 包归属
+一致时合并路径；`spdxIds` 保留所有原 ID，`fileProperties` 保留共同原字段。
+不同校验值、许可、版权、包关系或重复 ID 均拒绝，不能按配置名任取一条。
+这是固定 Qt 的 [`_handle_multi_config_custom_file` / `_add_custom_file`](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/cmake/QtPublicSbomFileHelpers.cmake)
+实际生成方式；合并元数据后仍核实原 SHA1 和实际完整 SHA256。
+
 重放仅接受本项目当前生成的公开 `qt_deploy_runtime_dependencies` 调用及相对目的目录。收集器不执行生成目录里的任意 include、可选插件脚本或 hooks；它只读取生成 support 中的字面量设置，核对原 SDK / 工具路径，然后调用同一 SDK 的 `Qt6CoreDeploySupport.cmake`。CMake 与 `windeployqt` 负责所有实际变换，没有自行编写 ELF / PE 归一化。`CMAKE_INSTALL_PREFIX` 和 `QT_DEPLOY_PREFIX` 均指向收集器独占的临时目录，子进程移除 `DESTDIR`，不会以安装脚本向用户目录或原安装树写入。记录实际脚本、工具哈希、stdout/stderr 和输出匹配，并复核原安装清单及原构建/SDK 输入未变。部署选项变化时必须重新审查，不能扩大接受范围来跳过失败。
 
 `qt-materials.json` 的 `binaryBindingComplete` 只表示这些实际 Qt 文件已完成原始 SBOM 和部署字节绑定。`sourceModulesNotCollected` 说明尚无完整源码的模块。需要收集源码与许可全文时，在独立目录取得固定、干净的原 Git checkout，再重复传入，例如：
@@ -93,9 +100,26 @@ python3 scripts/collect-runtime-materials.py rust \
 
 源码由真正的 `cargo vendor --locked --versioned-dirs` 产生。收集器不重新解析依赖版本，也不生成或修正 Cargo 校验数据：每个 registry package checksum 必须等于原锁，Git 来源必须带固定 commit，每个 vendored 文件必须与 Cargo 自己的 `.cargo-checksum.json` 一致，缺少或额外文件都拒绝。保留官方生成的 `.cargo/config.toml`、完整 vendor 树和原生 workspace 源码。Cargo metadata / vendor 同时包含构建与目标平台依赖；报告不把它们冒充为精确链接符号列表。
 
-原始 `LICENSE`、`COPYING`、`COPYRIGHT`、`NOTICE`、`UNLICENSE` 和 crate 声明的许可文件复制到 `notices/rust/`；SPDX 表达式、作者、源地址和版本保留在 `rust-materials.json`。找不到原许可全文的 crate 列入 `missingCrateNoticeTexts`，不能根据一个表达式伪造作者文本。实际 Rust 工具链提供的版权文本另行保留；Cargo vendor 不包含 Rust 标准库完整源码，报告中的这项状态仍为 `not-collected`。
+原始 `LICENSE`、`COPYING`、`COPYRIGHT`、`NOTICE`、`UNLICENSE` 和 crate 声明的许可文件复制到 `notices/rust/`；SPDX 表达式、作者、源地址和版本保留在 `rust-materials.json`。找不到原许可全文的 crate 列入 `missingCrateNoticeTexts`，不能根据一个表达式伪造作者文本。Cargo vendor 不包含 Rust 标准库完整源码，因此 vendor 报告中的这项状态仍为 `not-collected`。独立的[标准库与工具链材料](rust-toolchain-materials.md)步骤核对实际 rustup 原清单、官方 rust-src/std/compiler 档案和 sysroot 字节，保留标准库源码及完整通知；只有该步骤实际完成才具备相应组件证据。
 
 `vendorSourceComplete` 表示原 receipt/解析图所需的 vendored crates 和 workspace 已确实收集并核验；`licenseTextCoverageComplete` 还要求原 crate / 工具链通知齐全。二者均不能替代组合发行的许可与完整对应源码门槛。普通运行包只加入本次 `notices/` 和 `rust-materials.json`；完整 vendor、源码和命令日志保存在独立 CI 产物中。
+
+## 原生依赖的源码、补丁与真实配置
+
+`scripts/collect-native-source-materials.py` 在原构建 runner 上核对 libportal、
+PipeWire、x264 与 FFmpeg 的固定 checkout、原 receipt、有序补丁和实际配置。
+Windows 使用同一入口，只收集真正链接的 Release/MD FFmpeg 检查与封面库。
+它在自己的 Git 对象目录和索引中重放受控补丁，再对比原工作树的完整内容；
+原依赖源码、索引、构建结果和安装前缀保持只读。
+
+每个实际部署文件必须完整匹配同次原安装前缀，Windows 还核对原构建时的
+DLL/导入库哈希。完整源码 tar、构建脚本、原 lock、receipt、配置和来源清单
+作为独立材料保存，运行包只加入通知与小型报告。包含整个 shell 环境的
+FFmpeg `config.log` 不发布。运行方法、精确证明范围和 Linux 尚无构建时
+输出哈希的限制见[原生源码材料](native-source-materials.md)。
+
+该组件报告不会把 `correspondingSourceComplete` 改成 `true`。源码收集和运行
+文件的同次字节关联必须由双平台真实 CI 完成，也不能代替完整组合发行检查。
 
 ## 项目通知的独立留存
 
@@ -112,6 +136,6 @@ python3 scripts/collect-runtime-materials.py notices \
 
 `python3 tests/runtime_materials_tests.py --cargo-metadata artifacts/native-rust/cargo-metadata.json` 在原构建 runner 验证原始通知复制、真正的纯 CMake 通知安装、真实 Qt 平台/TLS/QM 的 SPDX 字节与损坏拒绝，以及实际 Cargo 图的缺项/许可错配拒绝。Qt SDK 取 `QT_ROOT_DIR` 或显式 `--qt-prefix`；没有对应真实输入会打印未执行范围。Linux 另验真实系统 ELF、字节改变拒绝、实际 dpkg source/version。Windows 会明确跳过 Linux 专属项。没有包数据库的本地容器只能显式使用 `--without-dpkg` 运行有限检查；此选项不用于 CI 的完整门槛。完整 Qt 重放、Cargo vendor、源码归档仍由上述真实收集入口分别验收。
 
-完整材料仍需要：同提交项目源码与构建脚本；所有 Qt 模块/ICU 的精确对应来源、许可全文及原 SDK 配置；本次 CI 真正完成的 Cargo vendor 和缺失通知处理；Rust 标准库源码；libportal/PipeWire/FFmpeg/x264 的精确源码、补丁和真实配置；实际系统 source package 档案；AppImage runtime 的已锁来源。这些材料的集合必须覆盖实际 payload，不能仅凭几个组件名字或一个 `complete: true` 字段确认。
+完整材料仍需要：同提交项目源码与构建脚本；所有 Qt 模块/ICU 的精确对应来源、许可全文及原 SDK 配置；本次 CI 真正完成的 Cargo vendor 和缺失通知处理；独立 Rust 标准库及原生源码收集器的实际结果；系统 source package 档案；AppImage runtime 的已锁来源。这些材料的集合必须覆盖实际 payload，不能仅凭几个组件名字或一个 `complete: true` 字段确认。
 
 官方工具依据：[dpkg-query](https://manpages.debian.org/bookworm/dpkg/dpkg-query.1.en.html)、[Qt SBOM](https://doc.qt.io/qt-6/sbom.html)、[Qt 6.12.1 deployment 实现](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/Qt6CoreDeploySupport.cmake)、[Cargo metadata](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html)、[Cargo vendor](https://doc.rust-lang.org/cargo/commands/cargo-vendor.html) 及其 [0.98.0 源实现](https://github.com/rust-lang/cargo/blob/0.98.0/src/cargo/ops/vendor.rs)。源码材料尚未全部收集及验证，开发包不代表组合发行许可审核通过。

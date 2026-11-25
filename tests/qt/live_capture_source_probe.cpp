@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QFutureWatcher>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPainter>
@@ -52,13 +53,38 @@ int inspect(const QImage& image)
     }
     return -1;
 }
+QJsonArray samplePixels(const QImage& image)
+{
+    QJsonArray pixels;
+    if (image.width() < 8 || image.height() < 1) return pixels;
+    for (int column = 0; column < 4; ++column)
+        pixels.append(QStringLiteral("%1").arg(image.pixel((2 * column + 1) * image.width() / 8,
+            image.height() / 2), 8, 16, QChar(u'0')));
+    return pixels;
+}
+QJsonObject frameEvidence(const Core::FrameLease& frame)
+{
+    const auto& format = frame.format();
+    const auto& metadata = frame.metadata();
+    QJsonObject result{{"width", format.width}, {"height", format.height}, {"pixelFormat", int(format.pixelFormat)},
+        {"alpha", int(format.alpha)}, {"stride", qint64(format.planes[0].stride)}, {"rowBytes", qint64(format.planes[0].rowBytes)},
+        {"poolGeneration", QString::number(frame.formatGeneration())}, {"transform", int(metadata.transform)},
+        {"sourceId", QString::number(metadata.sourceId)}, {"sessionId", QString::number(metadata.sessionId)},
+        {"sourceClock", int(metadata.timing.sourceClock)}, {"discontinuity", metadata.timing.discontinuity}};
+    if (metadata.timing.sourcePts) result.insert(QStringLiteral("sourcePtsNs"), QString::number(metadata.timing.sourcePts->count()));
+    if (metadata.timing.sourceSequence) result.insert(QStringLiteral("sourceSequence"), QString::number(*metadata.timing.sourceSequence));
+    if (metadata.crop) result.insert(QStringLiteral("crop"), QJsonObject{{"x", int(metadata.crop->x)}, {"y", int(metadata.crop->y)},
+        {"width", int(metadata.crop->width)}, {"height", int(metadata.crop->height)}});
+    return result;
+}
 struct ConsumerResult {
     quint64 matched{};
     unsigned phases{};
     bool timestamp{}, streaming{}, identity{};
     Core::FrameSourceTerminal terminal;
     Core::FrameQueueStatistics queue;
-    QImage last;
+    QImage last, failedFrame;
+    QJsonObject failedNative;
     QString failure;
 };
 class Probe final : public QObject {
@@ -138,7 +164,8 @@ public:
         }
         sourceId = snapshot.sourceId; generation = snapshot.generation; originalSize = snapshot.image.size();
         record({{"event", "prepared"}, {"sourceId", QString::number(sourceId)}, {"generation", QString::number(generation)},
-            {"width", originalSize.width()}, {"height", originalSize.height()}, {"globalCoordinates", false}});
+            {"width", originalSize.width()}, {"height", originalSize.height()}, {"globalCoordinates", false},
+            {"samplesArgb", samplePixels(snapshot.image)}, {"pngSaved", snapshot.image.save(path + QStringLiteral(".prepared.png"))}});
         // This generic stream probe exercises the shared refresh handoff; the
         // separate controls probe checks exact before/after native pixels.
         refresh = source.refreshForCapture(sourceId, generation);
@@ -176,7 +203,14 @@ public:
                 const QImage view(frame.row(0, 0).data(), frame.format().width, frame.format().height,
                     frame.format().planes[0].stride, QImage::Format_ARGB32);
                 const int phase = inspect(view);
-                if (phase < 0) throw std::runtime_error("The live source no longer contains the actual painted surface");
+                if (phase < 0) {
+                    output.failedFrame = view.copy();
+                    output.failedNative = frameEvidence(read.frame);
+                    output.failedNative.insert(QStringLiteral("normalized"), frameEvidence(frame));
+                    output.failedNative.insert(QStringLiteral("samplesArgb"), samplePixels(view));
+                    output.failedNative.insert(QStringLiteral("streamingAtFailure"), handle.streaming());
+                    throw std::runtime_error("The live source no longer contains the actual painted surface");
+                }
                 ++output.matched; output.phases |= 1u << static_cast<unsigned>(phase);
                 output.timestamp |= frame.metadata().timing.sourcePts.has_value() &&
                     frame.metadata().timing.sourceClock == Core::FrameClockDomain::PipeWire;
@@ -192,12 +226,15 @@ public:
                     last.format().planes[0].stride, QImage::Format_ARGB32);
                 output.last = view.copy();
             }
-            output.queue = handle.frames->statistics();
         } catch (const std::exception& error) {
             output.failure = QString::fromUtf8(error.what()); handle.stop.request_stop();
             // Observe actual producer completion before releasing this consumer.
-            while (true) { const auto read = handle.frames->waitNext(); if (read.terminal) break; }
+            while (true) {
+                auto read = handle.frames->waitNext();
+                if (read.terminal) { output.terminal = std::move(*read.terminal); break; }
+            }
         }
+        output.queue = handle.frames->statistics();
         return output;
     }
     void fail(QString message)
@@ -210,6 +247,7 @@ public:
     void finish()
     {
         const bool saved = !result.last.isNull() && result.last.save(path);
+        const bool failureSaved = !result.failedFrame.isNull() && result.failedFrame.save(path + QStringLiteral(".failure.png"));
         const bool expectedEnd = mode == QStringLiteral("capture") ? result.terminal.reason == Core::FrameSourceEnd::Stopped && !sourceFailure :
             mode == QStringLiteral("resize") ? result.terminal.reason == Core::FrameSourceEnd::SourceClosed &&
                 sourceFailure.code == Capture::Failure::Code::SourceChanged :
@@ -228,6 +266,8 @@ public:
             {"preparations", int(preparations)}, {"refreshTerminals", int(refreshCompletions)},
             {"singleConsumer", consumed}, {"allSourceOwnersDrained", stopped}, {"qtHeartbeat", beats},
             {"pngSaved", saved}, {"physicalDisplay", false}, {"userSelectionUiTested", false}});
+        if (!result.failedNative.isEmpty()) record({{"event", "firstFrameMismatch"}, {"native", result.failedNative},
+            {"pngSaved", failureSaved}, {"matchedBeforeFailure", qint64(result.matched)}});
         QCoreApplication::exit(passed ? 0 : 1);
     }
 };

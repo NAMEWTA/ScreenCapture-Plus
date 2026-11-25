@@ -37,6 +37,7 @@ public:
     void setElapsed(Core::MediaTime elapsed);
     void setOutputPending(bool pending);
     void setCaptureExcluded(bool excluded);
+    void setExternalStopHint(const QString& hint);
     void showFailure(const QString& detail, const QString& retainedPath, bool canRetryOutput);
     // An explicit, already converted screen binding. No global DPR conversion.
     // Used only for first placement; language/scale refresh never recenters.

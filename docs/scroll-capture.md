@@ -144,7 +144,8 @@ Before each native readback the controls acknowledge actual hidden/exposed
 state or a real Windows capture-exclusion result, within a bounded wait. An old
 start surface must be unexposed before its interior mask changes to an outside
 outline. Wayland manual capture hides the complete controls and requires a
-currently reachable tray or actually registered global stop action. The host
+currently reachable tray, actually registered global stop action, or verified
+installed desktop action. The host
 uses the same `setExternalStopAvailable` / `canStop` / `stopActive` contract as
 recording; losing the last entry requests stop and retains any complete image.
 The view returns only after the consumer or canceled refresh has ended. The
@@ -159,13 +160,14 @@ controls and then inspect the exact first replacement lease. `receivedAt`, an
 arbitrary delay, or discarding a fixed number of frames cannot establish that
 guarantee. GNOME/Plasma and physical-desktop evidence remain a P08/P09 gate.
 
-When no real tray/global stop action exists, Start remains disabled with an
+When no real completion action exists, Start remains disabled with an
 explicit reason; the application must not hide the only completion control.
-This includes affected GNOME sessions without a tray or GlobalShortcuts portal.
-That environment does not yet meet Issue #5 §8.4's complete manual-scrolling
-workflow. A future desktop-action/IPC alternative must demonstrate a reachable
-installed entry and an acknowledged host stop; saving a command string is not
-registration or acceptance evidence.
+The [GNOME desktop action](desktop-capture-action.md) checks the effective GIO
+registration and an actual child-process/primary-IPC round trip. The shared
+controls describe that action instead of referring to an unavailable tray or
+shortcut. One-shot instances and unregistered AppImages cannot claim it.
+Real GNOME menu reachability, shell UI capture, actual stop and complete
+stitching remain acceptance gates; saving a command string is insufficient.
 
 ## Actual validation and remaining gates
 

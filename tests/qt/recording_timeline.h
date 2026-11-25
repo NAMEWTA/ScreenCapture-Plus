@@ -112,6 +112,10 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
     require(sink.lastSubmitted >= 0 && sink.lastSubmittedDuration > 0 &&
         sink.lastSubmittedDuration <= (std::numeric_limits<std::int64_t>::max)() - sink.lastSubmitted,
         "The real final submitted sample has a valid bounded interval");
+    require(sink.captured == result.framesWritten && sink.captureEnd > 0 &&
+        sink.submittedDuration == sink.captureEnd &&
+        sink.lastSubmitted + sink.lastSubmittedDuration == sink.captureEnd,
+        "Every captured sample must be submitted and the input intervals must end at the actual observed stop");
     Input input; input.open(path);
     const auto timeBase = input.format->streams[0]->time_base;
     require(timeBase.num > 0 && timeBase.den > 0, "Read a positive actual output time base");
@@ -175,6 +179,8 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
         {QStringLiteral("lastDecoded100ns"), static_cast<qint64>(decodedLast)},
         {QStringLiteral("decodedEnd100ns"), static_cast<qint64>(decodedEnd)},
         {QStringLiteral("submittedEnd100ns"), static_cast<qint64>(inputEnd)},
+        {QStringLiteral("captureEnd100ns"), static_cast<qint64>(sink.captureEnd)},
+        {QStringLiteral("framesCaptured"), static_cast<qint64>(sink.captured)},
         {QStringLiteral("expectedOutputSlots"), static_cast<qint64>(expectedSlots)},
         {QStringLiteral("quantizedSubmittedEnd100ns"), static_cast<qint64>(expectedEnd)},
         {QStringLiteral("tailRounding100ns"), static_cast<qint64>(decodedEnd - inputEnd)},

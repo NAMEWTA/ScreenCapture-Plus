@@ -6,5 +6,11 @@ Exec=huhucapture
 Icon=io.github.NAMEWTA.huhucapture
 Terminal=false
 Categories=Graphics;Utility;
-StartupNotify=true
+StartupNotify=false
 StartupWMClass=io.github.NAMEWTA.huhucapture
+Actions=FinishCapture;
+
+[Desktop Action FinishCapture]
+Name=Stop and finish capture
+Name[zh_CN]=停止并完成捕获
+Exec=huhucapture --action=finish-capture

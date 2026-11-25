@@ -265,6 +265,18 @@
           {
             "path": "third_party/patches/portal-wlr/0001-include-posix-close-declaration.patch",
             "sha256": "b0bfc62f8204e0df4630fe4938a2c7894d57939f9d7a50975822b34a86693764"
+          },
+          {
+            "path": "third_party/patches/portal-wlr/0002-backport-frame-buffer-lifetime.patch",
+            "sha256": "b91a3ea0c1d07ad9170bf05b45b64bf47ab8358cc7fab506519fcd9ff28e6ebc"
+          },
+          {
+            "path": "third_party/patches/portal-wlr/0003-backport-producer-driven-frame-scheduling.patch",
+            "sha256": "f2eb12eab9a97d97b50a88eb7350d0794c04a9b1e70b04f2d2a7b0911de498b9"
+          },
+          {
+            "path": "third_party/patches/portal-wlr/0004-close-retry-and-frame-ownership-gaps.patch",
+            "sha256": "8baf3c40500f949526061979f7dd494e38fbdb19758866c4cec7f067fe07bc81"
           }
         ]
       },
