@@ -8,9 +8,18 @@
 
 namespace HuhuCapture::Platform {
 
-ReadFileHandle::~ReadFileHandle() { if (value_ >= 0) ::close(value_); }
+FileHandle::~FileHandle() { std::error_code ignored; close(ignored); }
 
-ReadFileHandle openRegularFileReadOnly(const std::filesystem::path& path, std::error_code& error)
+bool FileHandle::close(std::error_code& error) noexcept
+{
+    error.clear();
+    const auto fd = std::exchange(value_, -1);
+    // Never retry close(EINTR) on Linux: the descriptor can already be reused.
+    if (fd >= 0 && ::close(fd) != 0) { error = {errno, std::generic_category()}; return false; }
+    return true;
+}
+
+FileHandle openRegularFileReadOnly(const std::filesystem::path& path, std::error_code& error)
 {
     error.clear();
     if (path.empty() || path.native().find('\0') != std::string::npos) {
@@ -18,8 +27,26 @@ ReadFileHandle openRegularFileReadOnly(const std::filesystem::path& path, std::e
     }
     const auto descriptor = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (descriptor < 0) { error = {errno, std::generic_category()}; return {}; }
-    ReadFileHandle owner(descriptor);
+    FileHandle owner(descriptor);
     if (!readFileDescriptorSnapshot(descriptor, error)) return {};
+    return owner;
+}
+
+FileHandle openOwnedEmptyFileForWrite(const std::filesystem::path& path,
+    FileIdentity expected, std::error_code& error)
+{
+    error.clear();
+    if (path.empty() || path.native().find('\0') != std::string::npos) {
+        error = std::make_error_code(std::errc::invalid_argument); return {};
+    }
+    const auto fd = ::open(path.c_str(), O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) { error = {errno, std::generic_category()}; return {}; }
+    FileHandle owner(fd);
+    const auto opened = readFileDescriptorSnapshot(fd, error);
+    if (!opened) return {};
+    if (opened->identity != expected || opened->bytes != 0) {
+        error = std::make_error_code(std::errc::state_not_recoverable); return {};
+    }
     return owner;
 }
 

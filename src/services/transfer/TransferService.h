@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace HuhuCapture::Transfer {
@@ -31,8 +32,9 @@ struct TransferLimits {
     static constexpr std::size_t maximumSmallJsonBytes = 4096;
     static constexpr std::size_t maximumFiles = 64;
     static constexpr std::size_t maximumNativeOperations = 3;
+    static constexpr std::size_t maximumReceiveProgress = 16;
     static constexpr std::size_t maximumSnapshotBytes = maximumControlJsonBytes +
-        maximumNativeOperations * maximumSmallJsonBytes;
+        (maximumNativeOperations + maximumReceiveProgress) * maximumSmallJsonBytes;
     static constexpr std::uint32_t nativePollMilliseconds = 20;
     static constexpr int notificationMilliseconds = 100;
 };
@@ -78,6 +80,7 @@ enum class EventKind : std::uint32_t {
     Enabled = 100,
     Disabled = 101,
     CommandFinished = 102,
+    ReceiveProgress = 103,
 };
 
 struct Event {
@@ -90,6 +93,7 @@ struct Event {
     // failed. CommandFinished describes only command acceptance, never a save.
     QJsonObject data;
     std::vector<ReceiveResult> receivedFiles;
+    std::optional<ReceiveProgress> receiveProgress;
 };
 
 struct Submission {

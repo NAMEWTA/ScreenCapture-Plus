@@ -169,6 +169,13 @@ void huhu_event_free(HuhuEvent* event);
  */
 int32_t huhu_transfer_accept(HuhuTransfer* transfer, const uint8_t* session,
     size_t session_length, const uint8_t* accepted_ids, size_t ids_length);
+/* Refuse an unanswered offer before receiving a body. Only LIMIT_EXCEEDED
+ * (HTTP 413), IO (HTTP 507: receiver storage unavailable), and CANCELLED
+ * (HTTP 403: user decline) are accepted; other codes do not consume the offer.
+ * The native sender preserves both this status and the actual httpStatus.
+ */
+int32_t huhu_transfer_reject(HuhuTransfer* transfer, const uint8_t* session,
+    size_t session_length, int32_t reason);
 int32_t huhu_transfer_cancel_receive(HuhuTransfer* transfer,
     const uint8_t* session, size_t session_length);
 

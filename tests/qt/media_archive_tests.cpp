@@ -111,6 +111,11 @@ void archiveAndLeases(const QTemporaryDir& root)
     require(one.snapshot.identity == other.snapshot.identity, "hard links share actual OS identity");
     auto leased = archive.lease(one);
     require(!leased.failure && leased.lease && leased.lease->unchanged(), "history lease pins the selected identity");
+    {
+        const auto validated = archive.validatedLease(one);
+        require(!validated.failure && validated.lease && validated.lease->unchanged(),
+            "send preparation validates the actual complete media while holding its history lease");
+    }
     require(archive.reserveRemoval(other).failure.code == media::Error::Busy, "sending also prevents removal through a hard-link alias");
     {
         std::jthread release([token = std::move(leased.lease)]() mutable { token.reset(); });
@@ -209,10 +214,41 @@ void completeValidationAndOwnership(const QTemporaryDir& root)
         replaced = temporary.file.path();
         require(QFile::rename(replaced, replaced + ".original"), "move the owned empty inode aside");
         write(replaced, "another file");
+        std::error_code writerError;
+        const auto refusedWriter = temporary.file.openWriter(writerError);
+        require(!refusedWriter && writerError && read(replaced) == "another file",
+            "a substituted staging file is refused before any writer can truncate its contents");
         require(archive.commitStaged(temporary.file, media::Kind::Png).failure.code == media::Error::ChangedOnDisk,
             "staging identity is checked before decode");
     }
     require(read(replaced) == "another file", "staging destructor never deletes a substituted inode");
+    {
+        auto temporary = archive.createStaging();
+        std::error_code error;
+        auto handle = temporary.file.openWriter(error);
+        require(handle && !error, "open the actual owned empty staging inode without truncation");
+        QFile writer;
+        require(writer.open(handle.get(), QIODevice::ReadWrite, QFileDevice::DontCloseHandle),
+            "adopt the checked writer without reopening its path");
+        const auto originalPath = temporary.file.path() + ".retained-inode";
+        require(QFile::rename(temporary.file.path(), originalPath), "retain the actual writer's inode under another name");
+        write(temporary.file.path(), "preserved substitute");
+        require(writer.write(png) == png.size() && writer.flush(), "continue writing the same owned open file");
+        writer.close();
+        require(handle.close(error), "close the owned writer before attempting publication");
+        require(read(originalPath) == png && read(temporary.file.path()) == "preserved substitute",
+            "a renamed writer never redirects bytes into the replacement path");
+        require(archive.commitStaged(temporary.file, media::Kind::Png).failure.code == media::Error::ChangedOnDisk,
+            "a substituted staging pathname cannot be published even after the original inode was written");
+    }
+    {
+        const auto invalidPath = QDir(directory).filePath("20260101-010203.png");
+        write(invalidPath, png.first(png.size() - 1));
+        const auto invalid = find(archive, invalidPath);
+        require(archive.validatedLease(invalid).failure.code == media::Error::InvalidMedia,
+            "an externally inserted managed filename is not proof of complete sendable media");
+        require(QFile::remove(invalidPath), "remove only the explicitly owned invalid fixture");
+    }
     media::MediaArchiveService bounded(QDir(root.path()).filePath("bounded"), {}, {64, 64});
     require(bounded.archiveImage(pixels()).failure.code == media::Error::Budget, "image byte budget is enforced before writing");
     require(!QFileInfo::exists(bounded.directory()), "rejected input does not create an archive directory");

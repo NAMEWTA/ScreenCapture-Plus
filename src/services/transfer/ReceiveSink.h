@@ -33,6 +33,14 @@ struct ReceiveResult {
     bool published{};
 };
 
+struct ReceiveProgress {
+    QString sessionId;
+    QString fileId;
+    std::uint64_t attempt{};
+    std::uint64_t bytes{};
+    std::uint64_t total{};
+};
+
 // Implemented by the shared media service, never by a window. Every method is
 // called on the TransferService actor. A sink owns a bounded independent worker
 // queue; workers consume each ReceiveHandle exclusively and never wait for GUI
@@ -43,7 +51,9 @@ public:
 
     // Before the protocol accept: validate the selected metadata and reserve
     // its aggregate disk/concurrency budget. Failure must roll back its partial
-    // reservations. Return a HuhuStatus; no input bytes have been accepted yet.
+    // reservations. Return OK, LIMIT_EXCEEDED (policy/concurrency budget), IO
+    // (storage unavailable), or CANCELLED. No body bytes are accepted yet; these
+    // errors remain distinct standard 413/507/403 responses to the sender.
     virtual int reserve(const QString& sessionId, const QJsonArray& acceptedFiles) = 0;
 
     // Takes the only body consumer. Return OK only after an actual bounded
@@ -62,6 +72,11 @@ public:
     // actor drains these bounded values and delays ReceiveFinished until every
     // handed-off attempt has an outcome, retaining published recovery paths.
     virtual std::vector<ReceiveResult> takeResults() = 0;
+
+    // Optional-in-time snapshots of actual bytes already written, coalesced in
+    // the existing bounded outcome slots. Return only changed values. Counts
+    // reaching total never authorize success; decoding/commit still follow.
+    virtual std::vector<ReceiveProgress> takeProgress() = 0;
 
     // Cancel work and release unstarted reservations. These must not require
     // a running Qt event loop; finish releases the unused session reservation

@@ -88,6 +88,9 @@ public:
     StagingFile& operator=(const StagingFile&) = delete;
     const QString& path() const noexcept { return path_; }
     explicit operator bool() const noexcept { return !path_.isEmpty(); }
+    // Adopt with QFile::DontCloseHandle and ReadWrite; identity is checked on
+    // this nontruncating writer. Close it explicitly before media publication.
+    Platform::FileHandle openWriter(std::error_code& error) const;
     QString retainForRecovery() noexcept;
 private:
     friend class MediaArchiveService;
@@ -133,6 +136,10 @@ public:
     // The native send lease additionally holds the actual open OS file object.
     // Hold this shared token through SEND_END, never only through admission.
     LeaseResult lease(const Entry& entry) const;
+    // Send preparation calls this on a worker, then retains the returned lease
+    // through the native send terminal. A plausible history filename alone is
+    // not proof that an externally modified file is complete media.
+    LeaseResult validatedLease(const Entry& entry, std::stop_token stop = {}) const;
     // Call only after the UI's actual clear confirmation. The caller owns this
     // exclusive reservation through the platform recycle operation. It must
     // recheck unchanged() immediately before using the path, and must never

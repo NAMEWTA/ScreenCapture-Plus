@@ -56,6 +56,7 @@ impl From<ClientError> for Error {
                 403 => CANCELLED,
                 409 | 429 => BUSY,
                 413 => LIMIT_EXCEEDED,
+                507 => IO,
                 415 => INVALID_MEDIA,
                 422 => CHECKSUM_MISMATCH,
                 _ => PROTOCOL,

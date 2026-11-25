@@ -119,6 +119,44 @@ impl Event {
 }
 impl Drop for Event { fn drop(&mut self) { unsafe { huhu_event_free(self.0); } } }
 
+#[test]
+fn prepare_refusal_preserves_budget_storage_and_user_reasons_without_receiving_a_body() {
+    let receiver = Engine::new();
+    let sender = Engine::new();
+    let lease = Lease::new();
+    for (reason, http_status) in [(LIMIT_EXCEEDED, 413), (IO, 507), (CANCELLED, 403)] {
+        let operation = sender.send(&receiver, &lease);
+        let offer = receiver.next(1);
+        let json = offer.json();
+        let session = json["sessionId"].as_str().unwrap();
+        // Unsupported reasons must not consume the pending decision.
+        for invalid in [OK, TIMEOUT, END, INVALID_STATE, CHECKSUM_MISMATCH] {
+            assert_eq!(unsafe { huhu_transfer_reject(receiver.0, session.as_ptr(), session.len(), invalid) }, INVALID_ARGUMENT);
+        }
+        assert_eq!(unsafe { huhu_transfer_reject(receiver.0, session.as_ptr(), session.len(), reason) }, OK);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let terminal = loop {
+            assert!(Instant::now() < deadline, "Receive refusal terminal did not arrive");
+            if let Some(event) = receiver.event() {
+                assert_ne!(event.view().kind, 2, "A rejected prepare must never hand a body to the receiver");
+                if event.view().kind == 3 { break event; }
+            }
+        };
+        assert_eq!(terminal.view().status, reason);
+        assert_eq!(terminal.json()["files"], json!({}));
+        let terminal = sender.next(5);
+        assert_eq!((terminal.view().operation, terminal.view().status), (operation, reason));
+        assert_eq!(terminal.json()["httpStatus"], http_status);
+        assert_eq!(unsafe { huhu_transfer_reject(receiver.0, session.as_ptr(), session.len(), reason) }, CLOSED);
+        while let Some(event) = receiver.event() {
+            assert_ne!(event.view().kind, 2, "A rejected prepare must never hand a body to the receiver");
+        }
+    }
+    assert_eq!(std::fs::read(&lease.1).unwrap(), PNG);
+    sender.stop();
+    receiver.stop();
+}
+
 struct Lease(*mut HuhuMediaLease, std::path::PathBuf);
 impl Lease {
     fn new() -> Self {

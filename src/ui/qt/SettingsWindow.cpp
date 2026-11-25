@@ -550,7 +550,11 @@ void SettingsWindow::moveEvent(QMoveEvent* event)
 void SettingsWindow::changeEvent(QEvent* event)
 {
     if (event->type() == QEvent::LanguageChange && state_->about) refreshLanguage();
-    if (event->type() == QEvent::WindowDeactivate) endShortcutCapture();
+    if (event->type() == QEvent::WindowDeactivate) {
+        const QPointer<SettingsWindow> lifetime(this);
+        endShortcutCapture();
+        if (!lifetime) return;
+    }
     if (event->type() == QEvent::FontChange && state_->language) state_->language->hidePopup();
     QWidget::changeEvent(event);
 }

@@ -68,9 +68,17 @@ std::optional<FileSnapshot> readFileDescriptorSnapshot(int descriptor, std::erro
     return snapshot(reinterpret_cast<HANDLE>(handle), error);
 }
 
-ReadFileHandle::~ReadFileHandle() { if (value_ >= 0) _close(value_); }
+FileHandle::~FileHandle() { std::error_code ignored; close(ignored); }
 
-ReadFileHandle openRegularFileReadOnly(const std::filesystem::path& path, std::error_code& error)
+bool FileHandle::close(std::error_code& error) noexcept
+{
+    error.clear();
+    const auto fd = std::exchange(value_, -1);
+    if (fd >= 0 && _close(fd) != 0) { error = {errno, std::generic_category()}; return false; }
+    return true;
+}
+
+FileHandle openRegularFileReadOnly(const std::filesystem::path& path, std::error_code& error)
 {
     error.clear();
     if (path.empty() || path.native().find(L'\0') != std::wstring::npos ||
@@ -88,7 +96,33 @@ ReadFileHandle openRegularFileReadOnly(const std::filesystem::path& path, std::e
     if (descriptor == -1) {
         error = {errno, std::generic_category()}; CloseHandle(file); return {};
     }
-    return ReadFileHandle(descriptor);
+    return FileHandle(descriptor);
+}
+
+FileHandle openOwnedEmptyFileForWrite(const std::filesystem::path& path,
+    FileIdentity expected, std::error_code& error)
+{
+    error.clear();
+    if (path.empty() || path.native().find(L'\0') != std::wstring::npos ||
+        path.filename().native().find(L':') != std::wstring::npos) {
+        error = std::make_error_code(std::errc::invalid_argument); return {};
+    }
+    const auto file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        error = {static_cast<int>(GetLastError()), std::system_category()}; return {};
+    }
+    const auto opened = snapshot(file, error);
+    if (!opened || opened->identity != expected || opened->bytes != 0) {
+        if (opened) error = std::make_error_code(std::errc::state_not_recoverable);
+        CloseHandle(file); return {};
+    }
+    const auto descriptor = _open_osfhandle(reinterpret_cast<intptr_t>(file), _O_RDWR | _O_BINARY);
+    if (descriptor == -1) {
+        error = {errno, std::generic_category()}; CloseHandle(file); return {};
+    }
+    return FileHandle(descriptor);
 }
 
 } // namespace HuhuCapture::Platform

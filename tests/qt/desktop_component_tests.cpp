@@ -323,6 +323,26 @@ void closeWhileWaiting()
     show(*window); require(window->requestReload(), "lifetime test reload");
     QPointer<UIQ::HistoryWindow> lifetime(window); delete window; settle(); require(!lifetime, "queued completion is dropped with its window context");
 }
+
+void destroyOnCaptureDeactivation()
+{
+    auto* window = new UIQ::SettingsWindow;
+    window->setTranslator(translated); window->setSnapshot(settingsSnapshot());
+    window->setPage(UIQ::SettingsWindow::Page::Shortcut); show(*window);
+    click(*child<QPushButton>(*window, "settingsCaptureShortcut"));
+    require(window->capturingShortcut(), "deactivation lifetime check starts with actual shortcut capture");
+    QPointer<UIQ::SettingsWindow> lifetime(window);
+    int cancellations = 0;
+    QObject::connect(window, &UIQ::SettingsWindow::shortcutCaptureActive, qApp,
+        [window, &cancellations](bool active) {
+            if (!active) { ++cancellations; delete window; }
+        });
+    QEvent deactivate(QEvent::WindowDeactivate);
+    QApplication::sendEvent(window, &deactivate);
+    require(!lifetime && cancellations == 1,
+        "a synchronous host may destroy settings when deactivation restores its shortcut without a second widget dispatch");
+    settle();
+}
 }
 
 int main(int argc, char** argv)
@@ -333,7 +353,7 @@ int main(int argc, char** argv)
         if (!directory.isEmpty()) require(QDir().mkpath(directory), "create desktop evidence directory");
         const QFontInfo font(app.font());
         std::cout << "FONT desktop platform default: " << font.family().toStdString() << ", pixel=" << font.pixelSize() << '\n';
-        historyContracts(directory); settingsContracts(directory); closeWhileWaiting();
+        historyContracts(directory); settingsContracts(directory); closeWhileWaiting(); destroyOnCaptureDeactivation();
         std::cout << "PASS real Qt desktop component contracts (service assembly and physical desktop acceptance remain separate)\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }

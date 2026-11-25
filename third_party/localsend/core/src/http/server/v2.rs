@@ -152,6 +152,16 @@ pub enum PrepareUploadDecisionV2 {
 
     /// Decline the request (403).
     Decline,
+
+    /// Refuse before accepting any body because a local budget/storage check
+    /// failed. These standard HTTP errors remain distinct from a user decline.
+    Reject(PrepareUploadRejectionV2),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrepareUploadRejectionV2 {
+    LimitExceeded,
+    StorageUnavailable,
 }
 
 /// Why an upload session ended.
@@ -371,6 +381,16 @@ pub(crate) async fn prepare_upload(
                 StatusCode::FORBIDDEN,
                 "Rejected".to_string(),
             ));
+        }
+        PrepareUploadDecisionV2::Reject(reason) => {
+            pending_guard.clear().await;
+            let (code, message) = match reason {
+                PrepareUploadRejectionV2::LimitExceeded =>
+                    (StatusCode::PAYLOAD_TOO_LARGE, "Receiver transfer budget exceeded"),
+                PrepareUploadRejectionV2::StorageUnavailable =>
+                    (StatusCode::INSUFFICIENT_STORAGE, "Receiver storage unavailable"),
+            };
+            return Err(AppError::Message(code, message.to_owned()));
         }
         PrepareUploadDecisionV2::Accept(ids) => ids,
     };

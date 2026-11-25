@@ -37,25 +37,33 @@ std::optional<FileSnapshot> readFileSnapshot(const std::filesystem::path& path,
 std::optional<FileSnapshot> readFileDescriptorSnapshot(int descriptor,
     std::error_code& error);
 
-class ReadFileHandle final {
+class FileHandle final {
 public:
-    ReadFileHandle() noexcept = default;
-    ~ReadFileHandle();
-    ReadFileHandle(ReadFileHandle&& other) noexcept : value_(std::exchange(other.value_, -1)) {}
-    ReadFileHandle& operator=(ReadFileHandle&&) = delete;
-    ReadFileHandle(const ReadFileHandle&) = delete;
-    ReadFileHandle& operator=(const ReadFileHandle&) = delete;
+    FileHandle() noexcept = default;
+    ~FileHandle();
+    FileHandle(FileHandle&& other) noexcept : value_(std::exchange(other.value_, -1)) {}
+    FileHandle& operator=(FileHandle&&) = delete;
+    FileHandle(const FileHandle&) = delete;
+    FileHandle& operator=(const FileHandle&) = delete;
     int get() const noexcept { return value_; }
+    bool close(std::error_code& error) noexcept;
     explicit operator bool() const noexcept { return value_ >= 0; }
 private:
-    explicit ReadFileHandle(int value) noexcept : value_(value) {}
+    explicit FileHandle(int value) noexcept : value_(value) {}
     int value_{-1};
-    friend ReadFileHandle openRegularFileReadOnly(const std::filesystem::path&, std::error_code&);
+    friend FileHandle openRegularFileReadOnly(const std::filesystem::path&, std::error_code&);
+    friend FileHandle openOwnedEmptyFileForWrite(const std::filesystem::path&, FileIdentity, std::error_code&);
 };
 
 // Opens once without following the final symlink/reparse point or blocking on
 // a FIFO. Windows denies content writers for the lifetime of this handle.
 // QFile may borrow get() with DontCloseHandle; it must not reopen the path.
-ReadFileHandle openRegularFileReadOnly(const std::filesystem::path& path, std::error_code& error);
+FileHandle openRegularFileReadOnly(const std::filesystem::path& path, std::error_code& error);
+
+// Opens an already-claimed empty file read/write WITHOUT truncating or following
+// links. The same opened object's identity and empty length must match before
+// any caller may write. A substituted path is never truncated as a side effect.
+FileHandle openOwnedEmptyFileForWrite(const std::filesystem::path& path,
+    FileIdentity expected, std::error_code& error);
 
 } // namespace HuhuCapture::Platform

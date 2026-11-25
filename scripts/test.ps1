@@ -19,8 +19,16 @@ if ($tests.Count -eq 0) { throw 'No C++ regression tests were found.' }
 foreach ($test in $tests) {
     $executable = Join-Path $testDirectory "$($test.BaseName).exe"
     $object = Join-Path $testDirectory "$($test.BaseName).obj"
+    $extraObjects = @()
+    if ($test.BaseName -eq 'media_frame_tests') {
+        $frameObject = Join-Path $testDirectory 'MediaFrame.obj'
+        & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /MT /O2 /c "/I$(Join-Path $RepoRoot 'src')" `
+            (Join-Path $RepoRoot 'src/core/MediaFrame.cpp') "/Fo$frameObject"
+        Assert-NativeSuccess 'Compiling shared media frame implementation'
+        $extraObjects = @($frameObject)
+    }
     & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /MT /O2 "/I$(Join-Path $RepoRoot 'src')" `
-        $test.FullName "/Fo$object" "/Fe$executable"
+        $test.FullName @extraObjects "/Fo$object" "/Fe$executable"
     Assert-NativeSuccess "Compiling $($test.Name)"
     & $executable
     Assert-NativeSuccess "Running $($test.Name)"

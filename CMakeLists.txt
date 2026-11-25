@@ -262,11 +262,23 @@ if(HUHUCAPTURE_QT_VALIDATION)
         set_target_properties(huhucapture_transfer PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
         target_link_libraries(huhucapture_transfer PUBLIC huhucapture_core Qt6::Core
             PRIVATE huhucapture_rust Threads::Threads)
+        add_library(huhucapture_receive_archive STATIC
+            src/services/transfer/ReceiveArchiveSink.h
+            src/services/transfer/ReceiveArchiveSink.cpp)
+        target_link_libraries(huhucapture_receive_archive PUBLIC huhucapture_media_archive
+            huhucapture_transfer PRIVATE huhucapture_rust Threads::Threads)
+        set_target_properties(huhucapture_receive_archive PROPERTIES CXX_EXTENSIONS OFF)
         huhucapture_test(qt_rust_bridge tests/qt/rust_bridge_probe.cpp
             "${PROJECT_BINARY_DIR}/rust-bridge/$<CONFIG>")
         target_link_libraries(qt_rust_bridge PRIVATE huhucapture_gif_inspection)
+        huhucapture_test(qt_transfer_service tests/qt/transfer_service_tests.cpp)
+        target_link_libraries(qt_transfer_service PRIVATE huhucapture_receive_archive
+            huhucapture_gif_inspection Qt6::Network)
+        set_tests_properties(qt_transfer_service PROPERTIES TIMEOUT 240
+            ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
         if(MSVC)
             target_link_options(qt_rust_bridge PRIVATE /WX)
+            target_link_options(qt_transfer_service PRIVATE /WX)
         endif()
         set_tests_properties(qt_rust_bridge PROPERTIES TIMEOUT 180
             ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
@@ -366,7 +378,7 @@ if(HUHUCAPTURE_QT_VALIDATION)
         add_executable(pipewire_capture_probe tests/platform/pipewire_capture_probe.cpp)
         target_compile_definitions(pipewire_capture_probe PRIVATE QT_NO_KEYWORDS)
         target_link_libraries(pipewire_capture_probe PRIVATE huhucapture_pipewire
-            huhucapture_portal Qt6::Widgets)
+            huhucapture_portal Qt6::Widgets PkgConfig::PIPEWIRE)
         # Actual Portal/PipeWire frames require an owned compositor and daemon;
         # the isolated wrapper in CI produces the corresponding evidence.
     endif()

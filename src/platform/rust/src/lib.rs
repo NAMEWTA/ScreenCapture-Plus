@@ -220,6 +220,15 @@ pub unsafe extern "C" fn huhu_transfer_accept(transfer: *mut HuhuTransfer, sessi
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn huhu_transfer_reject(transfer: *mut HuhuTransfer, session: *const u8,
+    length: usize, reason: i32) -> i32 {
+    boundary(|| {
+        let transfer = unsafe { reference(transfer) }?;
+        transfer.shared.reject(unsafe { text(session, length, 128) }?, reason)
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn huhu_transfer_cancel_receive(transfer: *mut HuhuTransfer, session: *const u8, length: usize) -> i32 {
     boundary(|| {
         let transfer = unsafe { reference(transfer) }?;

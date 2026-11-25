@@ -21,11 +21,12 @@
 | `src/services/config/` | UTF-8 / UTF-16 JSON 读取、未知字段保留、首次迁移备份、路径选择与原子替换 | 设置页面、运行时效果、系统自启与快捷键接入 |
 | `src/services/localization/` | 六份原语言、同一 BOM 解析器、英语回退、目录优先级和缓存刷新 | 正式窗口语言切换、长译文与 IME 验收 |
 | `src/services/media/` | 共用受管文件命名、PNG 编码 / 完整解码、流式导入、身份租约与持久化结果 | 服务实际验证、完整 GIF / MP4 接入、缩略图缓存、回收及历史 UI 装配 |
+| `src/services/transfer/` | 有界 Qt actor 与独立接收 worker，接受前空间预留、完整校验后统一归档、持久化结果与已发布路径 | 真实服务集成测试、设备 / 确认 / 进度 UI、物理双端与性能门槛 |
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
 | `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；KWindowSystem 异步父窗导出已通过指定 Sway 生命周期测试 | PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
 | `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease 与 CPU / MemFd 数据面，固定客户端和受控失败路径补丁 | 实际采流 CI、X11 / GNOME / Plasma、音频及完整录制接线 |
-| `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭 | 双平台同进程 ABI 与依赖锁验证、Qt 设备和任务服务、完整媒体解码及两端互传 |
+| `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭 | Qt 设备和任务服务、完整 MP4 解码及两端互传；聚合 ABI 和一致锁已通过指定双平台 CI |
 
 同一工具的交互规则不能因为平台迁移而被“统一”成不同语义。例如普通矩形越过对边时可以翻转，批注范围则限制在原图内；普通序号按活动最大值加一，批注高水位编号永不复用。移动、文字与样式修改仍遵循现有历史语义，不借模型抽取改变撤销行为。
 
@@ -47,9 +48,9 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 
 | 工作包 | 当前状态 | 尚未解除的主要门槛 |
 | --- | --- | --- |
-| P00 | 实施与验证中 | Qt / 原生媒体 / Rust 同进程、Portal 三类接口、Linux 软件编码与许可、固定机器性能基线 |
+| P00 | 实施与验证中；Qt / gifski / TLS 同进程已在双平台通过 | 完整原生媒体组合、Portal 三类接口实际授权、Linux 音源与许可分发、固定机器性能基线 |
 | P01 | CMake 与双平台组件 CI 已接入 | 唯一产品版本、完整固定恢复、正式最小 Qt 壳与安装链 |
-| P02 | 未验收 | 真实共用控件、字体 / 弹层 / 密度样例、混合 DPI 拖动 |
+| P02 | 共享设置 / 历史 / 关于窗口已进入真实组件测试 | Linux 桌面完整交互、真实弹层与混合 DPI 拖动 |
 | P03 | 九工具模型、工具参数、马赛克与 EditorDocument 已由旧产品和 Qt 编辑器共用 | 会话及正式 Qt 产品集成 |
 | P04 | 原生媒体 / 文件边界解耦中 | 截图、热键、窗口 / 光标、COM 与录制全生命周期 |
 | P05 | Portal 控制面实施与验证中 | X11、PipeWire、全局键及真实桌面能力矩阵 |

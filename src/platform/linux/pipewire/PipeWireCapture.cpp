@@ -161,10 +161,13 @@ struct Capture {
 
     void changeFormat(const spa_pod* parameter)
     {
-        format.reset();
-        pool.clear();
-        firstInFormat = true;
-        if (!armFirstFrame() || !parameter) return;
+        if (!parameter) {
+            format.reset();
+            pool.clear();
+            firstInFormat = true;
+            armFirstFrame();
+            return;
+        }
         std::uint32_t type{}, subtype{};
         spa_video_info_raw raw{};
         if (spa_format_parse(parameter, &type, &subtype) < 0 || type != SPA_MEDIA_TYPE_video ||
@@ -209,19 +212,27 @@ struct Capture {
             fail(Code::Budget, -EOVERFLOW, "Negotiated frame size cannot be represented safely");
             return;
         }
-        const auto status = pool.configure(*next);
-        if (status != FramePoolStatus::Ready) {
-            fail(status == FramePoolStatus::AllocationFailed ? Code::Allocation : Code::Budget,
-                 status == FramePoolStatus::AllocationFailed ? -ENOMEM : -ENOBUFS,
-                 "Cannot allocate the new frame generation within the live-lease budget");
-            return;
-        }
-        format = *next;
-        ++result.stats.formatChanges;
-        result.stats.peakPoolBytes = (std::max)(result.stats.peakPoolBytes, pool.allocatedBytes());
-        if (callbacks.formatChanged && !callbacks.formatChanged(*format, pool.formatGeneration())) {
-            fail(Code::Consumer, -ENOTSUP, "The consumer rejected the newly negotiated format");
-            return;
+        // Repeated identical Format notifications do not retire a live pool or
+        // create an artificial second-generation budget/first-frame deadline.
+        if (!format || *format != *next) {
+            format.reset();
+            pool.clear();
+            firstInFormat = true;
+            if (!armFirstFrame()) return;
+            const auto status = pool.configure(*next);
+            if (status != FramePoolStatus::Ready) {
+                fail(status == FramePoolStatus::AllocationFailed ? Code::Allocation : Code::Budget,
+                     status == FramePoolStatus::AllocationFailed ? -ENOMEM : -ENOBUFS,
+                     "Cannot allocate the new frame generation within the live-lease budget");
+                return;
+            }
+            format = *next;
+            ++result.stats.formatChanges;
+            result.stats.peakPoolBytes = (std::max)(result.stats.peakPoolBytes, pool.allocatedBytes());
+            if (callbacks.formatChanged && !callbacks.formatChanged(*format, pool.formatGeneration())) {
+                fail(Code::Consumer, -ENOTSUP, "The consumer rejected the newly negotiated format");
+                return;
+            }
         }
         std::uint8_t bytes[1024];
         spa_pod_builder builder{};

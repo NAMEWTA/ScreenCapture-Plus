@@ -121,6 +121,12 @@ peer 参数必须带真实 TLS 发现得到的 fingerprint，alias 不参与认�
 新接收必须经过显式确认。选择 LAN 网卡、网络类型许可、持久身份、历史删除租约
 以及任务 UI 都由应用服务负责，bridge 不另建平台业务规则。
 
+接受前的空间/策略预留失败使用窄 `huhu_transfer_reject`：只允许限额 413、存储
+不可用 507 和用户拒绝 403。发送方保留实际 HTTP 状态，并分别映射 LIMIT、IO、
+CANCELLED；无效错误码不消耗待决确认。这里复用标准 v2 错误响应，不添加私有
+协议字段，也不让磁盘不足退化为“对方主动拒绝”。接收终态的决策所有权在唤醒
+HTTP worker 前移出共享 slot，避免并发 abort 覆盖应用已经确定的拒绝原因。
+
 接收顺序是：消费 `RECEIVE_FILE` → caller 写排他暂存 → read 到 `END` →
 `verify` 返回实际长度、SHA 和取消许可 → 完整 codec/probe 检查 → 发布前检查
 取消 → 共享 FileCommitter 无覆盖持久提交 → `complete(OK, kind)`。

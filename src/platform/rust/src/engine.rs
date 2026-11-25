@@ -7,7 +7,7 @@ use localsend::discovery::{self, DeviceChannel, DeviceIdentity, DiscoveredDevice
     DiscoveryConfig, DiscoveryEvent, DiscoveryHandle, HttpChannel, StatefulDevice};
 use localsend::http::dto_v2::RegisterDtoV2;
 use localsend::http::server::common::verified_upload::verified_upload_channel;
-use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2, SessionEndReasonV2};
+use localsend::http::server::v2::{PrepareUploadDecisionV2, PrepareUploadRejectionV2, ServerEventV2, SessionEndReasonV2};
 use localsend::http::server::{self, ServerConfigV2, ServerHandle, TlsConfig};
 use localsend::model::discovery::ProtocolType;
 use localsend::model::transfer::FileDto;
@@ -127,6 +127,10 @@ impl Shared {
             else { None }
         };
         let Some(incoming) = incoming else { return; };
+        Self::publish_incoming_end(incoming, reason);
+    }
+
+    fn publish_incoming_end(incoming: Incoming, reason: i32) {
         let mut report = incoming.report.lock().unwrap_or_else(|error| error.into_inner()).statuses();
         for file in &incoming.accepted { report.entry(file.clone()).or_insert(status::IO); }
         let code = if reason != status::OK { reason }
@@ -137,6 +141,31 @@ impl Shared {
         if code != status::OK { incoming.cancel.cancel(); }
         incoming.terminal.send(HuhuEvent::new(event::RECEIVE_END, code, 0,
             json!({"sessionId": incoming.id, "files": report})));
+    }
+
+    pub fn reject(&self, session: &str, reason: i32) -> Result<()> {
+        let decision_value = match reason {
+            status::CANCELLED => PrepareUploadDecisionV2::Decline,
+            status::LIMIT_EXCEEDED => PrepareUploadDecisionV2::Reject(PrepareUploadRejectionV2::LimitExceeded),
+            status::IO => PrepareUploadDecisionV2::Reject(PrepareUploadRejectionV2::StorageUnavailable),
+            _ => return Err(Error::new(status::INVALID_ARGUMENT, "Unsupported receive refusal reason")),
+        };
+        self.live()?;
+        let mut incoming = {
+            let mut slot = self.incoming.lock().map_err(|_| Error::new(status::PANIC, "Receive session lock was poisoned"))?;
+            let incoming = slot.as_ref().filter(|incoming| incoming.id == session)
+                .ok_or_else(|| Error::new(status::CLOSED, "Receive offer no longer exists"))?;
+            if incoming.decision.is_none() {
+                return Err(Error::new(status::INVALID_STATE, "Receive offer was already answered"));
+            }
+            // Remove ownership before waking HTTP. A concurrent abort event
+            // cannot overwrite this exact application's terminal reason.
+            slot.take().ok_or_else(|| Error::new(status::INVALID_STATE, "Receive offer disappeared"))?
+        };
+        let sent = incoming.decision.take()
+            .ok_or_else(|| Error::new(status::INVALID_STATE, "Receive decision disappeared"))?.send(decision_value);
+        Self::publish_incoming_end(incoming, if sent.is_ok() { reason } else { status::CANCELLED });
+        sent.map_err(|_| Error::new(status::CLOSED, "Sender stopped waiting for the receive decision"))
     }
 
     pub fn accept(&self, session: &str, ids: Vec<String>) -> Result<()> {

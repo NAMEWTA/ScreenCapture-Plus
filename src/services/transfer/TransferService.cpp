@@ -65,7 +65,7 @@ Parsed takeBuffer(HuhuBuffer* raw, bool array = false)
 Event makeEvent(EventKind kind, int status, RequestId request, std::uint64_t generation,
     QJsonObject data = {})
 {
-    return {kind, status, request, generation, std::move(data), {}};
+    return {kind, status, request, generation, std::move(data), {}, {}};
 }
 
 QJsonObject errorData(const char* message)
@@ -80,6 +80,10 @@ std::size_t eventBytes(const Event& event)
     for (const auto& result : event.receivedFiles) {
         count += sizeof(ReceiveResult) + sizeof(QChar) * static_cast<std::size_t>(
             result.sessionId.size() + result.fileId.size() + result.path.size());
+    }
+    if (event.receiveProgress) {
+        count += sizeof(ReceiveProgress) + sizeof(QChar) * static_cast<std::size_t>(
+            event.receiveProgress->sessionId.size() + event.receiveProgress->fileId.size());
     }
     return count;
 }
@@ -153,6 +157,7 @@ struct TransferService::Impl {
     std::deque<Command> commands;
     std::deque<Notice> notifications;
     std::map<RequestId, Notice> progress;
+    std::map<std::uint64_t, Notice> receiveProgress;
     std::optional<Notice> devices;
     std::size_t notificationBytes{};
     std::size_t reservedNotifications{};
@@ -206,7 +211,7 @@ struct TransferService::Impl {
         reservedBytes -= amount;
     }
 
-    void publish(Event event, std::size_t budget)
+    void publish(Event event, std::size_t budget, bool disabled = false)
     {
         const auto amount = eventBytes(event);
         if (amount > budget)
@@ -218,12 +223,33 @@ struct TransferService::Impl {
         --reservedNotifications;
         reservedBytes -= budget;
         notificationBytes += amount;
+        if (disabled) {
+            // The state transition and its final notice are one observation.
+            // A GUI callback may immediately re-enable; it must never observe
+            // Stopping after Disabled, or stop its timer before this notice.
+            nativeRunning = false;
+            progress.clear();
+            receiveProgress.clear();
+            devices.reset();
+            stopRequested = false;
+            serviceState = closing ? ServiceState::Closed : ServiceState::Disabled;
+        }
     }
 
     void eraseProgress(RequestId request)
     {
         std::lock_guard lock(mutex);
         progress.erase(request);
+    }
+
+    void eraseReceiveProgress(const QString& session, std::optional<std::uint64_t> attempt = {})
+    {
+        std::lock_guard lock(mutex);
+        for (auto it = receiveProgress.begin(); it != receiveProgress.end();) {
+            if (it->second.event.receiveProgress->sessionId == session && (!attempt || it->first == *attempt))
+                it = receiveProgress.erase(it);
+            else ++it;
+        }
     }
 
     void snapshot(Event event, bool deviceList)
@@ -233,6 +259,11 @@ struct TransferService::Impl {
         if (amount > budget) { fail(HUHU_LIMIT_EXCEEDED, "Transfer snapshot exceeds its byte budget"); return; }
         std::lock_guard lock(mutex);
         if (deviceList) devices = Notice{std::move(event), amount};
+        else if (event.receiveProgress) {
+            const auto attempt = event.receiveProgress->attempt;
+            if (receiveProgress.contains(attempt) || receiveProgress.size() < TransferLimits::maximumReceiveProgress)
+                receiveProgress.insert_or_assign(attempt, Notice{std::move(event), amount});
+        }
         else if (progress.contains(event.request) || progress.size() < TransferLimits::maximumNativeOperations) {
             const auto request = event.request;
             progress.insert_or_assign(request, Notice{std::move(event), amount});
@@ -326,8 +357,8 @@ struct TransferService::Impl {
             if (command.kind == CommandKind::Enable) {
                 command.sink->cancelAndJoin();
                 publish(makeEvent(EventKind::Enabled, HUHU_CANCELLED, command.request, command.generation), smallBudget);
-                publish(makeEvent(EventKind::Disabled, HUHU_CANCELLED, command.request, command.generation), receiveBudget);
                 release(1, terminalBudget);
+                publish(makeEvent(EventKind::Disabled, HUHU_CANCELLED, command.request, command.generation), receiveBudget, true);
             } else commandEnd(command, HUHU_CANCELLED);
         }
     }
@@ -422,16 +453,27 @@ struct TransferService::Impl {
                 if (result != HUHU_OK) {
                     session->second.localStatus = result;
                     sink->cancel(command.text);
-                    // A local refusal is explicit and distinct from a user
-                    // decline in the eventual ReceiveFinished.localStatus.
                     const auto sessionBytes = command.text.toUtf8();
-                    (void)huhu_transfer_accept(native, bytes(sessionBytes), static_cast<std::size_t>(sessionBytes.size()),
-                        reinterpret_cast<const std::uint8_t*>("[]"), 2);
+                    if (result == HUHU_LIMIT_EXCEEDED || result == HUHU_IO || result == HUHU_CANCELLED) {
+                        (void)huhu_transfer_reject(native, bytes(sessionBytes), static_cast<std::size_t>(sessionBytes.size()), result);
+                    } else {
+                        fail(result, "Receive reservation returned an invalid refusal status");
+                        (void)huhu_transfer_cancel_receive(native, bytes(sessionBytes), static_cast<std::size_t>(sessionBytes.size()));
+                    }
                     session->second.answered = true;
                     break;
                 }
             }
             const auto sessionBytes = command.text.toUtf8();
+            bool stopping{};
+            { std::lock_guard lock(mutex); stopping = stopRequested || closing; }
+            if (stopping) {
+                sink->cancel(command.text);
+                (void)huhu_transfer_reject(native, bytes(sessionBytes), static_cast<std::size_t>(sessionBytes.size()), HUHU_CANCELLED);
+                session->second.answered = true;
+                result = HUHU_CANCELLED;
+                break;
+            }
             const auto selected = QJsonDocument(ids).toJson(QJsonDocument::Compact);
             result = huhu_transfer_accept(native, bytes(sessionBytes), static_cast<std::size_t>(sessionBytes.size()),
                 bytes(selected), static_cast<std::size_t>(selected.size()));
@@ -476,6 +518,7 @@ struct TransferService::Impl {
                 fail(HUHU_PROTOCOL, "Receive sink returned an unknown or duplicate attempt");
                 continue;
             }
+            eraseReceiveProgress(result.sessionId, result.attempt);
             if (result.status > HUHU_OK || (result.status == HUHU_OK && !result.published)) {
                 result.status = HUHU_PROTOCOL;
                 session->second.localStatus = HUHU_PROTOCOL;
@@ -490,6 +533,31 @@ struct TransferService::Impl {
             } else if (result.published) recovery.push_back(std::move(result));
         }
         finishReadySessions();
+    }
+
+    void collectProgress()
+    {
+        if (!sink) return;
+        std::vector<ReceiveProgress> values;
+        try { values = sink->takeProgress(); }
+        catch (...) { fail(HUHU_PANIC, "Receive progress collection failed"); return; }
+        for (auto& value : values) {
+            const auto session = incoming.find(value.sessionId);
+            if (session == incoming.end() || session->second.terminal) continue;
+            const auto pending = session->second.pending.find(value.attempt);
+            if (pending == session->second.pending.end() || pending->second != value.fileId) continue;
+            const auto offered = std::find_if(session->second.offered.cbegin(), session->second.offered.cend(),
+                [&value](const QJsonValue& file) { return file.toObject().value(QStringLiteral("id")).toString() == value.fileId; });
+            const auto declared = offered == session->second.offered.cend() ? qint64{-1} :
+                (*offered).toObject().value(QStringLiteral("size")).toInteger(-1);
+            if (declared <= 0 || value.total != static_cast<std::uint64_t>(declared) || value.bytes > value.total) {
+                fail(HUHU_PROTOCOL, "Receive progress differs from its admitted file length");
+                continue;
+            }
+            auto event = makeEvent(EventKind::ReceiveProgress, HUHU_OK, 0, generation);
+            event.receiveProgress = std::move(value);
+            snapshot(std::move(event), false);
+        }
     }
 
     void finishReadySessions()
@@ -528,9 +596,11 @@ struct TransferService::Impl {
         auto event = makeEvent(EventKind::ReceiveOffer, HUHU_OK, 0, generation, std::move(data));
         const auto amount = eventBytes(event);
         bool admitted{};
+        int refusal = HUHU_LIMIT_EXCEEDED;
         {
             std::lock_guard lock(mutex);
             admitted = !stopping && !stopRequested && !closing && roomLocked(2, amount + receiveBudget);
+            if (stopping || stopRequested || closing) refusal = HUHU_CANCELLED;
             if (admitted) reserveLocked(2, amount + receiveBudget);
         }
         if (!admitted) {
@@ -539,8 +609,7 @@ struct TransferService::Impl {
             }
             declined.insert(id);
             const auto session = id.toUtf8();
-            (void)huhu_transfer_accept(native, bytes(session), static_cast<std::size_t>(session.size()),
-                reinterpret_cast<const std::uint8_t*>("[]"), 2);
+            (void)huhu_transfer_reject(native, bytes(session), static_cast<std::size_t>(session.size()), refusal);
             return;
         }
         incoming.emplace(id, Incoming{files, {}, {}, {}, {}, false});
@@ -595,6 +664,7 @@ struct TransferService::Impl {
                 break;
             }
             if (view.status != HUHU_OK) sink->cancel(id);
+            eraseReceiveProgress(id);
             sink->finish(id);
             session->second.terminal = makeEvent(EventKind::ReceiveFinished, view.status, 0, generation, std::move(parsed.data));
             collectResults();
@@ -698,16 +768,8 @@ struct TransferService::Impl {
         if (stopped != HUHU_OK && firstFailure == HUHU_OK) firstFailure = stopped;
         auto disabled = makeEvent(EventKind::Disabled, firstFailure, enablingRequest, generation);
         disabled.receivedFiles = std::move(recovery);
-        publish(std::move(disabled), receiveBudget);
+        publish(std::move(disabled), receiveBudget, true);
         disabledReserved = false;
-        {
-            std::lock_guard lock(mutex);
-            nativeRunning = false;
-            progress.clear();
-            devices.reset();
-            stopRequested = false;
-            serviceState = closing ? ServiceState::Closed : ServiceState::Disabled;
-        }
     }
 
     void run()
@@ -730,16 +792,12 @@ struct TransferService::Impl {
             if (stop) {
                 cancelQueued();
                 stopNative();
-                {
-                    std::lock_guard lock(mutex);
-                    stopRequested = false;
-                    if (!native) serviceState = closing ? ServiceState::Closed : ServiceState::Disabled;
-                }
                 if (close) break;
                 continue;
             }
             if (command) execute(std::move(*command));
             if (!native) continue;
+            collectProgress();
             collectResults();
             // Drain bursts without delaying every file chunk; cap each burst
             // so a queued cancellation/stop gets another scheduling opportunity.
@@ -885,6 +943,7 @@ Statistics TransferService::statistics() const
     std::lock_guard lock(impl_->mutex);
     auto bytes = impl_->notificationBytes;
     for (const auto& [request, notice] : impl_->progress) { (void)request; bytes += notice.bytes; }
+    for (const auto& [attempt, notice] : impl_->receiveProgress) { (void)attempt; bytes += notice.bytes; }
     if (impl_->devices) bytes += impl_->devices->bytes;
     return {impl_->commands.size(), impl_->notifications.size(), bytes,
         impl_->reservedNotifications, impl_->reservedBytes, impl_->nativeRunning};
@@ -902,12 +961,15 @@ void TransferService::drainNotifications()
     std::vector<Event> pending;
     {
         std::lock_guard lock(impl_->mutex);
-        pending.reserve(impl_->notifications.size() + impl_->progress.size() + (impl_->devices ? 1 : 0));
+        pending.reserve(impl_->notifications.size() + impl_->progress.size() + impl_->receiveProgress.size() +
+            (impl_->devices ? 1 : 0));
         for (auto& notice : impl_->notifications) pending.push_back(std::move(notice.event));
         impl_->notifications.clear();
         impl_->notificationBytes = 0;
         for (auto& [request, notice] : impl_->progress) { (void)request; pending.push_back(std::move(notice.event)); }
         impl_->progress.clear();
+        for (auto& [attempt, notice] : impl_->receiveProgress) { (void)attempt; pending.push_back(std::move(notice.event)); }
+        impl_->receiveProgress.clear();
         if (impl_->devices) { pending.push_back(std::move(impl_->devices->event)); impl_->devices.reset(); }
         if ((impl_->serviceState == ServiceState::Disabled || impl_->serviceState == ServiceState::Closed) &&
             impl_->commands.empty()) notifications_.stop();

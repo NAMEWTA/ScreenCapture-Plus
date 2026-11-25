@@ -204,6 +204,13 @@ QString StagingFile::retainForRecovery() noexcept
 {
     owner_.reset(); return std::exchange(path_, {});
 }
+Platform::FileHandle StagingFile::openWriter(std::error_code& error) const
+{
+    if (!owner_ || path_.isEmpty()) {
+        error = std::make_error_code(std::errc::invalid_argument); return {};
+    }
+    return Platform::openOwnedEmptyFileForWrite(nativePath(path_), identity_, error);
+}
 
 MediaArchiveService::MediaArchiveService(QString directory, FullMediaInspector inspector, Limits limits)
     : state_(std::make_shared<Detail::ArchiveState>()), inspectOther_(std::move(inspector)), limits_(limits)
@@ -325,8 +332,12 @@ ArchiveResult MediaArchiveService::archiveImage(const QImage& image, std::stop_t
     if (stop.stop_requested()) return failed(cancelled());
     auto staging = createStaging();
     if (staging.failure) return failed(std::move(staging.failure));
-    QFile file(staging.file.path());
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return failed({Error::Write, file.errorString()});
+    std::error_code error;
+    auto writerHandle = staging.file.openWriter(error);
+    if (!writerHandle) return failed(systemFailure(Error::Write, error));
+    QFile file;
+    if (!file.open(writerHandle.get(), QIODevice::ReadWrite, QFileDevice::DontCloseHandle))
+        return failed({Error::Write, file.errorString()});
     {
         QImageWriter writer(&file, "png");
         if (!writer.write(image)) return failed({Error::Write, writer.errorString()});
@@ -334,6 +345,7 @@ ArchiveResult MediaArchiveService::archiveImage(const QImage& image, std::stop_t
     if (!file.flush()) return failed({Error::Write, file.errorString()});
     file.close();
     if (file.error() != QFileDevice::NoError) return failed({Error::Write, file.errorString()});
+    if (!writerHandle.close(error)) return failed(systemFailure(Error::Write, error));
     return commitStaged(staging.file, Kind::Png, stop);
 }
 
@@ -355,8 +367,11 @@ ArchiveResult MediaArchiveService::importFile(const QString& source, Kind kind, 
         return failed({Error::Budget, QStringLiteral("Source exceeds the media byte budget")});
     auto staging = createStaging();
     if (staging.failure) return failed(std::move(staging.failure));
-    QFile output(staging.file.path());
-    if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate)) return failed({Error::Write, output.errorString()});
+    auto writerHandle = staging.file.openWriter(error);
+    if (!writerHandle) return failed(systemFailure(Error::Write, error));
+    QFile output;
+    if (!output.open(writerHandle.get(), QIODevice::ReadWrite, QFileDevice::DontCloseHandle))
+        return failed({Error::Write, output.errorString()});
     std::array<char, 64 * 1024> buffer{};
     std::uint64_t total{};
     for (;;) {
@@ -375,7 +390,29 @@ ArchiveResult MediaArchiveService::importFile(const QString& source, Kind kind, 
     if (!output.flush()) return failed({Error::Write, output.errorString()});
     output.close(); input.close();
     if (output.error() != QFileDevice::NoError) return failed({Error::Write, output.errorString()});
+    if (!writerHandle.close(error)) return failed(systemFailure(Error::Write, error));
     return commitStaged(staging.file, kind, stop);
+}
+
+LeaseResult MediaArchiveService::validatedLease(const Entry& entry, std::stop_token stop) const
+{
+    if (stop.stop_requested()) return {cancelled(), {}};
+    auto reserved = lease(entry);
+    if (reserved.failure) return reserved;
+    Inspection inspection;
+    try {
+        if (entry.kind == Kind::Png) inspection = inspectPng(entry.path, limits_, stop);
+        else if (inspectOther_) inspection = inspectOther_(entry.path, entry.kind, stop);
+        else return {{Error::Unsupported, QStringLiteral("No complete decoder is available for this media")}, {}};
+    } catch (const std::bad_alloc&) { return {{Error::Budget, QStringLiteral("Insufficient decoder memory")}, {}}; }
+    catch (...) { return {{Error::InvalidMedia, QStringLiteral("The complete media decoder failed")}, {}}; }
+    if (inspection.failure) return {inspection.failure, {}};
+    if (inspection.kind != entry.kind || inspection.dimensions.isEmpty() || !inspection.frames)
+        return {{Error::InvalidMedia, QStringLiteral("Decoder did not validate a complete media stream")}, {}};
+    if (stop.stop_requested()) return {cancelled(), {}};
+    if (!reserved.lease->unchanged())
+        return {{Error::ChangedOnDisk, QStringLiteral("The selected media changed during validation")}, {}};
+    return reserved;
 }
 
 LeaseResult MediaArchiveService::reserve(const Entry& entry, bool removal) const
