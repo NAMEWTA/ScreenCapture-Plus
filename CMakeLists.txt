@@ -18,6 +18,9 @@ endif()
 add_library(huhucapture_core INTERFACE)
 target_include_directories(huhucapture_core INTERFACE "${PROJECT_SOURCE_DIR}/src")
 target_compile_features(huhucapture_core INTERFACE cxx_std_20)
+if(MSVC)
+    target_compile_options(huhucapture_core INTERFACE /utf-8 /permissive-)
+endif()
 
 # Filesystem publication is an OS seam; the archive naming/ownership rules stay
 # shared. This target never depends on Qt or the presentation layer.
@@ -103,13 +106,21 @@ if(HUHUCAPTURE_QT_VALIDATION)
         set_tests_properties(qt_annotation_missing_font PROPERTIES TIMEOUT 60
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_FONTDIR=${PROJECT_BINARY_DIR}/intentionally-empty-fonts")
     endif()
-    add_library(huhucapture_settings STATIC
-        src/services/config/JsonText.cpp
-        src/services/config/SettingsStore.cpp)
-    target_link_libraries(huhucapture_settings PUBLIC huhucapture_core Qt6::Core
+    add_library(huhucapture_json STATIC src/services/config/JsonText.cpp)
+    target_link_libraries(huhucapture_json PUBLIC huhucapture_core Qt6::Core)
+    add_library(huhucapture_settings STATIC src/services/config/SettingsStore.cpp)
+    target_link_libraries(huhucapture_settings PUBLIC huhucapture_json
         PRIVATE huhucapture_file_committer)
     huhucapture_test(qt_settings_store tests/qt/settings_store_tests.cpp)
     target_link_libraries(qt_settings_store PRIVATE huhucapture_settings)
+    add_library(huhucapture_languages STATIC
+        src/services/localization/LanguageCatalog.h
+        src/services/localization/LanguageCatalog.cpp
+        resources/qt/huhucapture_languages.qrc)
+    set_target_properties(huhucapture_languages PROPERTIES AUTOMOC ON AUTORCC ON CXX_EXTENSIONS OFF)
+    target_link_libraries(huhucapture_languages PUBLIC huhucapture_json)
+    huhucapture_test(qt_language_catalog tests/qt/language_catalog_tests.cpp)
+    target_link_libraries(qt_language_catalog PRIVATE huhucapture_languages)
     if(WIN32)
         huhucapture_test(windows_audio_format tests/platform/windows_audio_format_tests.cpp)
         # Compile the retained native backends without Ling, its PCH, or /MT.
