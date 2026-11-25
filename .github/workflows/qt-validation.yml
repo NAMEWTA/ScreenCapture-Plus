@@ -51,7 +51,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus nasm
       - name: Restore the exact Qt validation toolchain
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
@@ -73,9 +73,15 @@ jobs:
         run: |
           python3 scripts/build-portal.py
           echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.deps/portal-validation/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+      - name: Build the pinned software H.264 and native AAC dependency set
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/build-software-media.py
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.deps/media-validation/install/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.deps/media-validation/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
       - name: Configure Linux Qt validation
         if: runner.os == 'Linux'
-        run: cmake --preset qt-validation -DHUHUCAPTURE_PORTAL_VALIDATION=ON
+        run: cmake --preset qt-validation -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON
       - name: Configure Windows Qt validation with the matching v143 CRT
         if: runner.os == 'Windows'
         shell: pwsh
@@ -87,7 +93,7 @@ jobs:
           ctest --test-dir artifacts/cmake/qt-validation -C Debug --output-on-failure --no-tests=error
       - name: Configure Linux Release
         if: runner.os == 'Linux'
-        run: cmake --preset qt-validation -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_PORTAL_VALIDATION=ON
+        run: cmake --preset qt-validation -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON
       - name: Build and validate Release
         shell: bash
         run: |
@@ -105,6 +111,10 @@ jobs:
             artifacts/cmake/qt-validation/annotation-render/
             .deps/portal-validation/build-info.json
             .deps/portal-validation/build/meson-logs/
+            .deps/media-validation/build-info.json
+            .deps/media-validation/x264-build/config.log
+            .deps/media-validation/ffmpeg-build/ffbuild/config.log
+            artifacts/cmake/qt-validation/software-codec/
           if-no-files-found: warn
           retention-days: 14
           include-hidden-files: true

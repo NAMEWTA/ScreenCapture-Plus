@@ -1,0 +1,24 @@
+{
+  "repository": "https://github.com/FFmpeg/FFmpeg.git",
+  "version": "9.0.2",
+  "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+  "files": [
+    {
+      "upstream": "doc/examples/mux.c",
+      "local": "mux.c",
+      "blob": "e037bc7815ef5b9f218b3a688b7525445dc89c42",
+      "sha256": "7ea79dc87031e872fb1f27e190f71da6e67ca78056a6957f1561af76aa8ee96d",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2003 Fabrice Bellard",
+      "modifications": "None; validation target renames main at compile time."
+    }
+  ],
+  "use": "Directly compile the upstream API example for P00 software-codec validation; not the product recording implementation.",
+  "reference": {
+    "file": "doc/examples/demux_decode.c",
+    "blob": "5c38742e7f76555923f5433f3cff93270d1cc747",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2012 Stefano Sabatini",
+    "use": "Decoder and drain API flow adapted in tests/qt/software_codec_probe.cpp; full original license retained."
+  }
+}

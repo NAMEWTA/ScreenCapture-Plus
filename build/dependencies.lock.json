@@ -44,6 +44,58 @@
       "license": "LGPL-3.0-only",
       "patch": "third_party/patches/libportal/0001-capture-request-lifetime-and-async-fd.patch",
       "patchSha256": "5fa507079a165e5a65d3f178173c18953465e0a66cd5c6660b0df809dc291cc7"
+    },
+    "softwareMedia": {
+      "status": "P00 API and distribution-input validation; not desktop recording acceptance",
+      "x264": {
+        "repository": "https://github.com/mirror/x264.git",
+        "upstreamRepository": "https://code.videolan.org/videolan/x264.git",
+        "commit": "3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3",
+        "apiBuild": 164,
+        "license": "GPL-2.0-or-later",
+        "selectionSource": "VLC contrib/src/x264/rules.mak blob e0194f468c74f59f99d14775308942184481df12",
+        "configure": [
+          "--enable-shared",
+          "--enable-pic",
+          "--disable-cli",
+          "--disable-opencl",
+          "--disable-avs",
+          "--disable-lavf",
+          "--disable-ffms",
+          "--bit-depth=8",
+          "--chroma-format=420"
+        ]
+      },
+      "ffmpeg": {
+        "repository": "https://github.com/FFmpeg/FFmpeg.git",
+        "version": "9.0.2",
+        "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+        "configuredLicense": "GPL-3.0-or-later",
+        "configure": [
+          "--enable-shared",
+          "--disable-static",
+          "--disable-programs",
+          "--disable-doc",
+          "--disable-autodetect",
+          "--disable-network",
+          "--disable-everything",
+          "--disable-avdevice",
+          "--disable-avfilter",
+          "--enable-gpl",
+          "--enable-version3",
+          "--enable-libx264",
+          "--enable-encoder=libx264,aac",
+          "--enable-decoder=h264,aac",
+          "--enable-parser=h264,aac",
+          "--enable-muxer=mp4",
+          "--enable-demuxer=mov",
+          "--enable-protocol=file",
+          "--enable-swscale",
+          "--enable-swresample",
+          "--enable-debug=3",
+          "--disable-stripping"
+        ]
+      }
     }
   }
 }

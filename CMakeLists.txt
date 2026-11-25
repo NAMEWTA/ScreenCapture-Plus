@@ -7,8 +7,12 @@ project(huhucapture LANGUAGES CXX)
 include(CTest)
 option(HUHUCAPTURE_QT_VALIDATION "Build the pinned Qt migration validation targets" OFF)
 option(HUHUCAPTURE_PORTAL_VALIDATION "Build the real Linux Portal control-plane validation" OFF)
+option(HUHUCAPTURE_FFMPEG_VALIDATION "Build the pinned software-codec API validation" OFF)
 if(HUHUCAPTURE_PORTAL_VALIDATION AND NOT HUHUCAPTURE_QT_VALIDATION)
     message(FATAL_ERROR "Portal validation requires HUHUCAPTURE_QT_VALIDATION=ON")
+endif()
+if(HUHUCAPTURE_FFMPEG_VALIDATION AND NOT HUHUCAPTURE_QT_VALIDATION)
+    message(FATAL_ERROR "Software-codec validation requires HUHUCAPTURE_QT_VALIDATION=ON")
 endif()
 
 add_library(huhucapture_core INTERFACE)
@@ -152,5 +156,23 @@ if(HUHUCAPTURE_QT_VALIDATION)
         target_link_libraries(portal_capture_probe PRIVATE huhucapture_portal)
         # This executable requires a real desktop and user authorization. It is
         # deliberately not reported as a passing offscreen CTest capture test.
+    endif()
+    if(HUHUCAPTURE_FFMPEG_VALIDATION)
+        if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            message(FATAL_ERROR "The software-codec validation dependency build currently targets Linux")
+        endif()
+        enable_language(C)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+            libavcodec=63.1.102 libavformat=63.1.102 libavutil=61.1.102
+            libswscale=10.1.102 libswresample=7.1.102)
+        add_library(ffmpeg_mux_example OBJECT third_party/ffmpeg-examples/mux.c)
+        target_compile_definitions(ffmpeg_mux_example PRIVATE main=huhucapture_ffmpeg_mux_example_main)
+        target_link_libraries(ffmpeg_mux_example PRIVATE PkgConfig::FFMPEG)
+        huhucapture_test(qt_software_codec tests/qt/software_codec_probe.cpp
+            "${PROJECT_BINARY_DIR}/software-codec/$<CONFIG>")
+        target_link_libraries(qt_software_codec PRIVATE Qt6::Gui PkgConfig::FFMPEG
+            huhucapture_file_committer ffmpeg_mux_example m)
+        set_tests_properties(qt_software_codec PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endif()
 endif()

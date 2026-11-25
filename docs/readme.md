@@ -7,6 +7,7 @@
 | Qt 重构完成到哪里，哪些能力尚不能当作产品交付？ | [迁移状态与保护边界](qt-migration.md) |
 | 如何构建固定 LocalSend core，验证真实 TLS 与文件提交？ | [LocalSend core 适配](localsend-core.md) |
 | Linux Portal 如何与 Qt 共用上下文，怎样验证取消与父窗？ | [Linux Portal 控制面](linux-portal.md) |
+| 软件 H.264 / AAC 如何固定构建，API 探针能证明什么？ | [软件编码依赖](software-codecs.md) |
 | 项目继承自哪里，如何保留上游归属与许可？ | [上游致谢](upstream.md) |
 | 一个需求应该放在哪个模块、由谁拥有资源？ | [架构与扩展](architecture.md) |
 | 文件、目录、代码与文档应该怎样命名和组织？ | [工程约定](conventions.md) |
