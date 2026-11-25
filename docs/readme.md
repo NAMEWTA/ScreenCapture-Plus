@@ -5,8 +5,10 @@
 | 想解决的问题 | 阅读入口 |
 | --- | --- |
 | Qt 重构完成到哪里，哪些能力尚不能当作产品交付？ | [迁移状态与保护边界](qt-migration.md) |
+| 启动参数、一次性实例与主实例动作转发怎样保留原有语义？ | [共享启动与本地 IPC](qt-startup.md) |
 | Qt 编辑器怎样保留九工具与原版焦点、参数和输出语义？ | [共享编辑器合同](qt-editor.md) |
 | 设置、历史、关于页怎样共用控件并等待真实服务结果？ | [共享桌面窗口](qt-desktop.md) |
+| 剪贴板如何确认发布，回收和文件定位如何保留真实结果？ | [桌面系统服务](desktop-integration.md) |
 | 如何构建固定 LocalSend core，验证真实 TLS 与文件提交？ | [LocalSend core 适配](localsend-core.md) |
 | GIF 与 LocalSend 怎样只链接一个 Rust 库，CRT 和线程如何约束？ | [Rust 聚合库与原生 ABI](rust-bridge.md) |
 | 文件传输如何预留空间、展示进度并等待真实归档终态？ | [共享传输服务](transfer-service.md) |

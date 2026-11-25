@@ -53,7 +53,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus nasm libwayland-dev libwayland-bin sway pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr libglib2.0-bin libpipewire-0.3-dev libinih-dev libgbm-dev libdrm-dev libsystemd-dev fuse3
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus nasm libwayland-dev libwayland-bin sway pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr libglib2.0-bin libpipewire-0.3-dev libinih-dev libgbm-dev libdrm-dev libsystemd-dev fuse3 wtype xvfb xauth libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0
       - name: Build the locked Portal backend for the owned CPU desktop
         if: runner.os == 'Linux'
         run: python3 scripts/build-validation-desktop.py
@@ -95,11 +95,11 @@ jobs:
           echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.deps/media-validation/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
       - name: Configure Linux Qt validation
         if: runner.os == 'Linux'
-        run: cmake --preset qt-validation -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON
+        run: cmake --preset qt-validation -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON -DHUHUCAPTURE_DESKTOP_VALIDATION=ON
       - name: Configure Windows Qt validation with the matching v143 CRT
         if: runner.os == 'Windows'
         shell: pwsh
-        run: cmake -S . -B artifacts/cmake/qt-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON
+        run: cmake -S . -B artifacts/cmake/qt-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_DESKTOP_VALIDATION=ON
       - name: Build and validate Debug
         shell: bash
         run: |
@@ -109,12 +109,15 @@ jobs:
       - name: Exercise real Wayland parent ownership and GUI responsiveness (Debug)
         if: runner.os == 'Linux'
         run: python3 scripts/test-wayland-parent.py artifacts/cmake/qt-validation/portal_parent_probe --artifacts artifacts/cmake/qt-validation/wayland-parent/Debug
+      - name: Verify real Wayland clipboard ownership and independent reception (Debug)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-wayland-clipboard.py artifacts/cmake/qt-validation/desktop_clipboard_tests --artifacts artifacts/cmake/qt-validation/wayland-clipboard/Debug
       - name: Capture real PipeWire frames, resize and daemon loss (Debug)
         if: runner.os == 'Linux'
         run: python3 scripts/test-pipewire-capture.py artifacts/cmake/qt-validation/pipewire_capture_probe --pipewire-prefix .deps/pipewire-validation/install --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr --backend-build-info .deps/validation-desktop/build-info.json --artifacts artifacts/cmake/qt-validation/pipewire/Debug
       - name: Configure Linux Release
         if: runner.os == 'Linux'
-        run: cmake --preset qt-validation -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON
+        run: cmake --preset qt-validation -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON -DHUHUCAPTURE_DESKTOP_VALIDATION=ON
       - name: Build and validate Release
         shell: bash
         run: |
@@ -123,6 +126,9 @@ jobs:
       - name: Exercise real Wayland parent ownership and GUI responsiveness (Release)
         if: runner.os == 'Linux'
         run: python3 scripts/test-wayland-parent.py artifacts/cmake/qt-validation/portal_parent_probe --artifacts artifacts/cmake/qt-validation/wayland-parent/Release
+      - name: Verify real Wayland clipboard ownership and independent reception (Release)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-wayland-clipboard.py artifacts/cmake/qt-validation/desktop_clipboard_tests --artifacts artifacts/cmake/qt-validation/wayland-clipboard/Release
       - name: Capture real PipeWire frames, resize and daemon loss (Release)
         if: runner.os == 'Linux'
         run: python3 scripts/test-pipewire-capture.py artifacts/cmake/qt-validation/pipewire_capture_probe --pipewire-prefix .deps/pipewire-validation/install --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr --backend-build-info .deps/validation-desktop/build-info.json --artifacts artifacts/cmake/qt-validation/pipewire/Release
@@ -139,6 +145,7 @@ jobs:
             artifacts/cmake/qt-validation/editor-render/
             artifacts/cmake/qt-validation/desktop-render/
             artifacts/cmake/qt-validation/wayland-parent/
+            artifacts/cmake/qt-validation/wayland-clipboard/
             artifacts/cmake/qt-validation/pipewire/
             .deps/pipewire-validation/build-info.json
             .deps/pipewire-validation/build/meson-logs/

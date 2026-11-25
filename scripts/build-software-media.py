@@ -2,6 +2,7 @@
 """Build the pinned, distributable software-codec validation dependency set."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -44,12 +45,19 @@ def main():
         source = workspace / (name + "-source")
         build = workspace / (name + "-build")
         checkout(package, source)
+        for patch in package.get("patches", []):
+            path = root / patch["path"]
+            if hashlib.sha256(path.read_bytes()).hexdigest() != patch["sha256"]:
+                raise SystemExit(f"Controlled codec patch checksum mismatch: {path.name}")
+            run("git", "apply", "--check", str(path), cwd=source)
+            run("git", "apply", str(path), cwd=source)
         build.mkdir()
         arguments = [str(source / "configure"), "--prefix=" + str(prefix), *package["configure"]]
         run(*arguments, cwd=build, env=env)
         run("make", "-j" + str(options.jobs), cwd=build, env=env)
         run("make", "install", cwd=build, env=env)
-        metadata["components"][name] = {"repository": package["repository"], "commit": package["commit"], "configure": arguments}
+        metadata["components"][name] = {"repository": package["repository"], "commit": package["commit"],
+            "patches": package.get("patches", []), "configure": arguments}
     metadata["pkgConfig"] = subprocess.check_output(
         ["pkg-config", "--modversion", "x264", "libavcodec", "libavformat", "libavutil", "libswscale", "libswresample"],
         env=env, text=True).splitlines()

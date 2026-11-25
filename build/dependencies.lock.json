@@ -97,8 +97,8 @@
           "--enable-version3",
           "--enable-libx264",
           "--enable-encoder=libx264,aac",
-          "--enable-decoder=h264,aac",
-          "--enable-parser=h264,aac",
+          "--enable-decoder=h264,hevc,aac",
+          "--enable-parser=h264,hevc,aac",
           "--enable-muxer=mp4",
           "--enable-demuxer=mov",
           "--enable-protocol=file",
@@ -106,6 +106,12 @@
           "--enable-swresample",
           "--enable-debug=3",
           "--disable-stripping"
+        ],
+        "patches": [
+          {
+            "path": "third_party/patches/ffmpeg/0001-strict-mov-validation.patch",
+            "sha256": "8d459a15f6659b16ebd6d81dab8f177623fc5096eb6307704f82ffce8b803a6f"
+          }
         ]
       }
     },
@@ -211,6 +217,12 @@
           "-Dsd-bus-provider=libsystemd",
           "-Dsystemd=disabled",
           "-Dman-pages=disabled"
+        ],
+        "patches": [
+          {
+            "path": "third_party/patches/portal-wlr/0001-include-posix-close-declaration.patch",
+            "sha256": "b0bfc62f8204e0df4630fe4938a2c7894d57939f9d7a50975822b34a86693764"
+          }
         ]
       },
       "waylandProtocols": {
@@ -221,6 +233,57 @@
         "license": "MIT",
         "scope": "Protocol XML build input, with per-protocol copyright notices retained"
       }
+    },
+    "videoInspectionWindows": {
+      "source": "qtMigration.softwareMedia.ffmpeg",
+      "purpose": "Shared strict local-MP4 inspection only; Windows capture, encoding and covers retain MF",
+      "configurations": {
+        "Debug": "MDd",
+        "Release": "MD"
+      },
+      "configure": [
+        "--toolchain=msvc",
+        "--target-os=win64",
+        "--arch=x86_64",
+        "--enable-shared",
+        "--disable-static",
+        "--disable-programs",
+        "--disable-doc",
+        "--disable-autodetect",
+        "--disable-network",
+        "--disable-everything",
+        "--disable-avdevice",
+        "--disable-avfilter",
+        "--disable-swscale",
+        "--disable-swresample",
+        "--enable-avcodec",
+        "--enable-avformat",
+        "--enable-avutil",
+        "--enable-decoder=h264,hevc,aac",
+        "--enable-parser=h264,hevc,aac",
+        "--enable-demuxer=mov",
+        "--enable-debug=3",
+        "--disable-stripping"
+      ],
+      "nasm": {
+        "version": "3.01",
+        "urls": [
+          "https://www.nasm.us/pub/nasm/releasebuilds/3.01/win64/nasm-3.01-win64.zip",
+          "https://www.nasm.dev/pub/nasm/releasebuilds/3.01/win64/nasm-3.01-win64.zip"
+        ],
+        "sha512": "771c238ddb17c98d5736ccaba4ade1d1601d896f09e588489cb43a4f6381bc0ae14d1869f5316fe94f847f54867e65cf12665529b1e7ad88e5e7d3e162719a4f",
+        "source": "microsoft/vcpkg scripts/cmake/vcpkg_find_acquire_program(NASM).cmake blob eda7b5d97fe3c51b47f1058a6ec06df3ec60e028"
+      },
+      "make": {
+        "version": "4.4.1-3",
+        "urls": [
+          "https://mirror.msys2.org/msys/x86_64/make-4.4.1-3-x86_64.pkg.tar.zst",
+          "https://repo.msys2.org/msys/x86_64/make-4.4.1-3-x86_64.pkg.tar.zst"
+        ],
+        "sha512": "52c08ceb977109570a97fe32a934a4bd27d471de4d7c53259cbdf9902706261bb771ebad9978d122f3498d1634d170da7ef378fd33592a4fec489a8710198677",
+        "source": "microsoft/vcpkg scripts/cmake/vcpkg_acquire_msys.cmake blob 81b027d78e3c5c19c8573ab8b1f80a8706a606eb"
+      },
+      "configuredLicense": "LGPL-2.1-or-later"
     }
   }
 }

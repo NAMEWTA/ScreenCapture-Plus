@@ -82,18 +82,21 @@ jobs:
 
   windows:
     needs: linux
-    # A Linux rejection mismatch must not hide the independent MF result. The
+    # A Linux rejection mismatch must not hide the independent Windows result. The
     # failed Linux job still fails this workflow; only real generated files allow
     # this job to run. No synthetic replacement or missing-fixture skip is used.
     if: ${{ always() && needs.linux.outputs.fixture_id != '' }}
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
       - name: Restore the matching Qt and MSVC ABI
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
         with:
@@ -112,7 +115,10 @@ jobs:
           artifact-ids: ${{ needs.linux.outputs.fixture_id }}
           path: artifacts/video-fixtures
           merge-multiple: true
-      - name: Configure the native Windows media adapter
+      - name: Build the pinned inspection DLLs with matching Debug and Release CRTs
+        shell: pwsh
+        run: python scripts/build-windows-video-inspection.py
+      - name: Configure shared inspection and the retained Windows cover adapter
         shell: pwsh
         run: cmake -S . -B artifacts/cmake/video-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_VIDEO_VALIDATION=ON
       - name: Validate Windows Debug against every fixture
@@ -134,5 +140,9 @@ jobs:
             artifacts/cmake/video-validation/video-inspection/
             artifacts/cmake/video-validation/Testing/Temporary/
             artifacts/cmake/video-validation/CMakeCache.txt
+            .deps/video-inspection-windows/build-info.json
+            .deps/video-inspection-windows/build-Debug/ffbuild/config.log
+            .deps/video-inspection-windows/build-Release/ffbuild/config.log
+            .deps/video-inspection-windows/install/*/licenses/
           if-no-files-found: warn
           retention-days: 14

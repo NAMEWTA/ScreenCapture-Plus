@@ -50,7 +50,10 @@ struct Limits {
 // input, including stream completion, with bounded memory and cancellation.
 // A missing decoder returns Unsupported; it can never authorize publication.
 using FullMediaInspector = std::function<Inspection(const QString&, Kind, std::stop_token)>;
-Inspection inspectPng(const QString& path, const Limits& limits, std::stop_token stop = {});
+// Optional pixels come from this same complete decode, avoiding a second read
+// for clipboard/export consumers. Failure leaves an existing output unchanged.
+Inspection inspectPng(const QString& path, const Limits& limits, std::stop_token stop = {},
+    QImage* decoded = nullptr);
 
 namespace Detail { struct ArchiveState; struct LeaseTicket; }
 

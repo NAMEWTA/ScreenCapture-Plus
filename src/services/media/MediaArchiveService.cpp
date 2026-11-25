@@ -114,12 +114,17 @@ bool writeAll(QFile& destination, const char* bytes, qint64 length)
 }
 } // namespace
 
-Inspection inspectPng(const QString& path, const Limits& limits, std::stop_token stop)
+Inspection inspectPng(const QString& path, const Limits& limits, std::stop_token stop, QImage* decoded)
 {
     Inspection result;
     if (stop.stop_requested()) { result.failure = cancelled(); return result; }
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
+    std::error_code openError;
+    auto handle = Platform::openRegularFileReadOnly(nativePath(path), openError);
+    if (!handle) {
+        result.failure = systemFailure(Error::Read, openError); return result;
+    }
+    QFile file;
+    if (!file.open(handle.get(), QIODevice::ReadOnly, QFileDevice::DontCloseHandle)) {
         result.failure = {Error::Read, file.errorString()}; return result;
     }
     if (file.size() <= 0 || static_cast<std::uint64_t>(file.size()) > limits.maximumFileBytes) {
@@ -149,7 +154,7 @@ Inspection inspectPng(const QString& path, const Limits& limits, std::stop_token
     // Qt then calls png_read_image AND png_read_end; short body reads still
     // reach libpng's error path. The physical IEND check above closes Qt's
     // documented-in-source truncated-final-CRC compatibility exception.
-    const auto image = reader.read();
+    auto image = reader.read();
     if (image.isNull() || image.size() != size || reader.error() != QImageReader::UnknownError) {
         result.failure = {Error::InvalidMedia, reader.errorString()}; return result;
     }
@@ -165,6 +170,7 @@ Inspection inspectPng(const QString& path, const Limits& limits, std::stop_token
     if (stop.stop_requested()) { result.failure = cancelled(); return result; }
     result.dimensions = size;
     result.frames = 1;
+    if (decoded) *decoded = std::move(image);
     return result;
 }
 

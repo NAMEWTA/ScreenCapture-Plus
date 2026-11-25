@@ -6,6 +6,7 @@
 #include "core/MediaFileName.h"
 #include "core/PixelBuffer.h"
 #include "platform/FileCommitter.h"
+#include "platform/windows/DesktopFiles.h"
 
 #include <shobjidl.h>
 #include <wincodec.h>
@@ -357,13 +358,8 @@ bool reveal(HWND owner, const fs::path& path)
     if (path == directory()) fs::create_directories(path, error);
     if (error) return false;
     if (fs::is_directory(path, error) && !error)
-        return reinterpret_cast<INT_PTR>(ShellExecuteW(owner, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
-    if (!regularFile(path)) return false;
-    auto id = ILCreateFromPathW(path.c_str());
-    if (!id) return false;
-    const auto result = SHOpenFolderAndSelectItems(id, 0, nullptr, 0);
-    ILFree(id);
-    return SUCCEEDED(result);
+        return Platform::Windows::openDesktopDirectory(path, owner).completed();
+    return Platform::Windows::revealDesktopFile(path).completed();
 }
 
 bool clear(HWND owner)
@@ -371,22 +367,11 @@ bool clear(HWND owner)
     std::error_code error;
     const auto entries = list(&error);
     if (error) return false;
-    if (entries.empty()) return true;
-    ComPtr<IFileOperation> operation;
-    if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_INPROC_SERVER,
-            IID_PPV_ARGS(operation.GetAddressOf()))) ||
-        FAILED(operation->SetOwnerWindow(owner)) ||
-        FAILED(operation->SetOperationFlags(FOFX_RECYCLEONDELETE | FOFX_ADDUNDORECORD |
-            FOFX_EARLYFAILURE | FOF_NOERRORUI | FOF_NOCONFIRMATION | FOF_WANTNUKEWARNING | FOF_NO_CONNECTED_ELEMENTS | FOF_NORECURSION))) return false;
-    for (const auto& entry : entries) {
-        if (!regularFile(entry.path)) continue;
-        ComPtr<IShellItem> item;
-        if (FAILED(SHCreateItemFromParsingName(entry.path.c_str(), nullptr, IID_PPV_ARGS(item.GetAddressOf()))) ||
-            FAILED(operation->DeleteItem(item.Get(), nullptr))) return false;
-    }
-    if (FAILED(operation->PerformOperations())) return false;
-    BOOL aborted = FALSE;
-    return SUCCEEDED(operation->GetAnyOperationsAborted(&aborted)) && !aborted;
+    std::vector<fs::path> files;
+    files.reserve(entries.size());
+    for (const auto& entry : entries) if (regularFile(entry.path)) files.push_back(entry.path);
+    return Platform::Windows::recycleDesktopFiles(files, owner,
+        Platform::Windows::RecyclePolicy::AllowSystemPermanentConfirmation, regularFile).completed();
 }
 
 HBITMAP loadThumbnail(const fs::path& path, unsigned maximumEdge)

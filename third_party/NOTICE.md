@@ -55,11 +55,17 @@ licenses apply independently of the root application license.
 | PipeWire 1.6.11 client | `PipeWire/pipewire` `4287f31510771fc999f8a58a024c81ca10b8d55f` | MIT for the selected client/examples, Wim Taymans and PipeWire contributors; [original COPYING](patches/pipewire/COPYING), [exact source blobs and controlled patches](../docs/linux-pipewire.md). The host daemon is not an application deployment dependency. |
 | Portal-wlr 0.8.1, validation desktop only | `emersion/xdg-desktop-portal-wlr` `e1d5d16f0e064a0b788c5d70c11461b15ee7a4af` | MIT, emersion and source-file contributors. The original LICENSE is preserved by the private build and in CI evidence. This real desktop backend is not shipped with the application. |
 | Wayland protocols 1.40, validation build input | `wayland-mirror/wayland-protocols` `c7b582cb71ec145026a547dcd8abb9dfeba40541`; upstream `gitlab.freedesktop.org/wayland/wayland-protocols` | MIT / Expat, with original COPYING and per-XML copyright notices retained. Only the CI Portal-wlr backend uses this separate protocol definition prefix; [scope](../docs/linux-pipewire.md). |
-| FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Software validation configured with GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The mux example retains Fabrice Bellard's MIT notice and recorded frame-duration / finalization-error fixes. |
+| FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Linux software validation enables GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The Windows inspection-only profile disables encoders, x264 and network and retains LGPL-2.1-or-later. Both apply the recorded [strict MOV patch](patches/ffmpeg/upstream.json); the mux example retains Fabrice Bellard's MIT notice and frame-duration / finalization-error fixes. |
 | FFmpeg MOV box traversal | Same FFmpeg 9.0.2 commit, `libavformat/mov.c` | LGPL-2.1-or-later, Fabrice Bellard, Baptiste Coudurier and the named original contributors; [exact source and adaptation](ffmpeg-mov/upstream.json), [full LGPL text](ffmpeg-mov/COPYING.LGPLv2.1). Only top-level physical bounds are reused in the shared MP4 preflight. |
 | x264 API build 164 | VideoLAN x264 commit `3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3`, fetched from `mirror/x264` | GPL-2.0-or-later, x264 project; [license text](ffmpeg-examples/COPYING.x264). Runtime use through FFmpeg's existing libx264 adapter. |
 | KWindowSystem 6.32.0 | `KDE/kwindowsystem` `870fed584663656db8b5e3d4ec1a7048b5eff25f` | LGPL-2.0-or-later, Kai Uwe Broulik; only the two asynchronous xdg-foreign export classes are adapted. [Exact source blobs and changes](kwayland-parent/upstream.md), [license](kwayland-parent/LICENSES/LGPL-2.0-or-later.txt). |
 | xdg-foreign unstable v2 protocol | QtBase `5af1a37e31a869cd6eb8a73d82e2c71a450e6634`, source blob `cc3271dca4d6211bf6d04c34c0ca973c52f9b552` | MIT, Red Hat Inc. 2015–2016; the complete notice is retained in the unmodified [protocol XML](wayland-protocols/xdg-foreign-unstable-v2.xml). |
+
+The shared clipboard, recycle and file-reveal services reuse the existing native
+Windows implementation and public Qt/GIO APIs. Their exact audited source files,
+license identities and distinction between reference and copied code are in
+[desktop/upstream.json](desktop/upstream.json). The old Windows application also
+uses the extracted native helpers; it does not link the new Qt service library.
 
 The Qt migration aggregate in `src/platform/rust` links the same fixed gifski
 source with the controlled LocalSend core into one Rust static library. It does

@@ -1,6 +1,7 @@
 // Native SourceReader, media-type and RGB-buffer flow reused from the shipping
 // services/MediaHistory.cpp videoThumbnail. Keep recording on the existing MF
-// backend; these worker APIs inspect local files and produce Qt-owned covers.
+// backend; complete inspection uses the common strict FFmpeg service. This
+// platform adapter only produces Qt-owned covers from the native first frame.
 #define NOMINMAX
 #include <Windows.h>
 #include <mfapi.h>
@@ -16,13 +17,11 @@
 #include "core/PixelBuffer.h"
 
 #include <QSize>
-#include <algorithm>
 #include <climits>
-#include <cmath>
 #include <cstring>
 #include <limits>
 #include <new>
-#include <vector>
+#include <optional>
 
 namespace HuhuCapture::Media {
 namespace {
@@ -49,18 +48,13 @@ struct MediaSession {
     HRESULT result{MFStartup(MF_VERSION, MFSTARTUP_LITE)};
     ~MediaSession() { if (SUCCEEDED(result)) MFShutdown(); }
 };
-struct Stream {
-    DWORD index{};
-    bool video{};
-};
-
 struct NativeReader {
     // Destruction order keeps the original read-only stream and its sharing
     // reservation alive until the SourceReader and byte-stream wrapper stop.
     ComPtr<IStream> file;
     ComPtr<IMFByteStream> bytes;
     ComPtr<IMFSourceReader> reader;
-    std::vector<Stream> streams;
+    std::optional<DWORD> videoStream;
 
     Failure open(const QString& path, const Limits& limits, std::stop_token stop)
     {
@@ -113,33 +107,31 @@ struct NativeReader {
             GUID major{};
             if (FAILED(hr = type->GetGUID(MF_MT_MAJOR_TYPE, &major)))
                 return nativeFailure(hr, "Read stream media kind");
-            if (major != MFMediaType_Video && major != MFMediaType_Audio) continue;
-            streams.push_back({index, major == MFMediaType_Video});
-            if (major == MFMediaType_Video) {
-                UINT32 width{}, height{};
-                if (FAILED(hr = MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &width, &height)))
-                    return nativeFailure(hr, "Read declared video dimensions");
-                if (width > INT_MAX || height > INT_MAX) return budget("Video dimensions overflow the pixel layout");
-                const auto layout = Core::pixelLayout(static_cast<int>(width), static_cast<int>(height), 4);
-                if (!layout || layout->bytes > limits.maximumImageBytes)
-                    return budget("Declared video dimensions exceed the decoded-frame budget");
-            }
+            if (major != MFMediaType_Video) continue;
+            UINT32 width{}, height{};
+            if (FAILED(hr = MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &width, &height)))
+                return nativeFailure(hr, "Read declared video dimensions");
+            if (width > INT_MAX || height > INT_MAX) return budget("Video dimensions overflow the pixel layout");
+            const auto layout = Core::pixelLayout(static_cast<int>(width), static_cast<int>(height), 4);
+            if (!layout || layout->bytes > limits.maximumImageBytes)
+                return budget("Declared video dimensions exceed the decoded-frame budget");
+            videoStream = index;
+            break;
         }
-        if (std::ranges::none_of(streams, [](const Stream& item) { return item.video; }))
-            return invalid("MP4 contains no declared video track");
+        if (!videoStream) return invalid("MP4 contains no declared video track");
         return {};
     }
 
-    Failure select(const Stream& stream)
+    Failure select()
     {
         HRESULT hr = reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE);
-        if (FAILED(hr) || FAILED(hr = reader->SetStreamSelection(stream.index, TRUE)))
+        if (FAILED(hr) || FAILED(hr = reader->SetStreamSelection(*videoStream, TRUE)))
             return nativeFailure(hr, "Select the declared media track");
         ComPtr<IMFMediaType> type;
         if (FAILED(hr = MFCreateMediaType(type.GetAddressOf())) ||
-            FAILED(hr = type->SetGUID(MF_MT_MAJOR_TYPE, stream.video ? MFMediaType_Video : MFMediaType_Audio)) ||
-            FAILED(hr = type->SetGUID(MF_MT_SUBTYPE, stream.video ? MFVideoFormat_RGB32 : MFAudioFormat_Float)) ||
-            FAILED(hr = reader->SetCurrentMediaType(stream.index, nullptr, type.Get())))
+            FAILED(hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video)) ||
+            FAILED(hr = type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32)) ||
+            FAILED(hr = reader->SetCurrentMediaType(*videoStream, nullptr, type.Get())))
             return nativeFailure(hr, "Configure a real uncompressed decoder output");
         PROPVARIANT start{};
         start.vt = VT_I8;
@@ -185,43 +177,6 @@ Failure checkSample(IMFSample* sample, const Limits& limits, DWORD& length)
     if (!length) return invalid("Decoder produced an empty media sample");
     if (length > limits.maximumImageBytes) return budget("Decoded sample exceeds the byte budget");
     return {};
-}
-
-Failure validateAudio(IMFSourceReader* reader, DWORD index, IMFSample* sample, DWORD length, std::stop_token stop)
-{
-    ComPtr<IMFMediaType> type;
-    HRESULT hr = reader->GetCurrentMediaType(index, type.GetAddressOf());
-    GUID subtype{};
-    UINT32 channels{}, alignment{}, rate{}, bits{};
-    if (FAILED(hr) || FAILED(hr = type->GetGUID(MF_MT_SUBTYPE, &subtype)) ||
-        FAILED(hr = type->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels)) ||
-        FAILED(hr = type->GetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, &alignment)) ||
-        FAILED(hr = type->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &rate)) ||
-        FAILED(hr = type->GetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, &bits)))
-        return nativeFailure(hr, "Read decoded audio format");
-    if (subtype != MFAudioFormat_Float || bits != 32 || !channels || channels > 32 || !rate ||
-        alignment != channels * sizeof(float) || length % alignment != 0)
-        return invalid("Decoded audio has an invalid float sample layout");
-    ComPtr<IMFMediaBuffer> buffer;
-    if (FAILED(hr = sample->ConvertToContiguousBuffer(buffer.GetAddressOf())))
-        return nativeFailure(hr, "Access complete decoded audio");
-    BYTE* pixels{};
-    DWORD current{};
-    if (FAILED(hr = buffer->Lock(&pixels, nullptr, &current))) return nativeFailure(hr, "Lock decoded audio");
-    bool valid = pixels && current == length;
-    bool wasCancelled = false;
-    if (valid) {
-        for (DWORD offset = 0; offset < length; offset += sizeof(float)) {
-            if (offset % 16384 == 0 && stop.stop_requested()) { wasCancelled = true; break; }
-            float value;
-            std::memcpy(&value, pixels + offset, sizeof(value));
-            if (!std::isfinite(value)) { valid = false; break; }
-        }
-    }
-    hr = buffer->Unlock();
-    if (FAILED(hr)) return nativeFailure(hr, "Release decoded audio");
-    if (wasCancelled) return cancelled();
-    return valid ? Failure{} : invalid("Decoded audio contains incomplete or nonfinite samples");
 }
 
 VideoThumbnailResult copyCover(IMFSample* sample, const VideoDescription& description,
@@ -287,72 +242,7 @@ VideoThumbnailResult copyCover(IMFSample* sample, const VideoDescription& descri
     return result;
 }
 
-Inspection inspectNative(const QString& path, const Limits& limits, std::stop_token stop)
-{
-    Inspection result;
-    result.kind = Kind::Mp4;
-    if (stop.stop_requested()) { result.failure = cancelled(); return result; }
-    Apartment apartment;
-    if (FAILED(apartment.result)) { result.failure = nativeFailure(apartment.result, "Initialize worker COM apartment"); return result; }
-    MediaSession session;
-    if (FAILED(session.result)) { result.failure = nativeFailure(session.result, "Initialize Media Foundation"); return result; }
-    NativeReader input;
-    if ((result.failure = input.open(path, limits, stop))) return result;
-    for (const auto& stream : input.streams) {
-        if (stop.stop_requested()) { result.failure = cancelled(); return result; }
-        if ((result.failure = input.select(stream))) return result;
-        std::uint64_t frames{};
-        unsigned empty{};
-        for (;;) {
-            if (stop.stop_requested()) { result.failure = cancelled(); return result; }
-            ComPtr<IMFSample> sample;
-            DWORD flags{}, actual{};
-            const auto hr = input.reader->ReadSample(stream.index, 0, &actual, &flags, nullptr, sample.GetAddressOf());
-            if (FAILED(hr) || (flags & MF_SOURCE_READERF_ERROR)) {
-                result.failure = nativeFailure(FAILED(hr) ? hr : E_FAIL, "Fully decode the selected track"); return result;
-            }
-            if (flags & MF_SOURCE_READERF_NEWSTREAM) {
-                result.failure = invalid("Track set changed during complete file inspection"); return result;
-            }
-            if (sample) {
-                if (actual != stream.index) { result.failure = invalid("Decoder returned the wrong track"); return result; }
-                DWORD length{};
-                if ((result.failure = checkSample(sample.Get(), limits, length))) return result;
-                if (stream.video) {
-                    VideoDescription description;
-                    if ((result.failure = describeVideo(input.reader.Get(), stream.index, limits, description))) return result;
-                    if (length < description.layout.bytes) { result.failure = invalid("Decoded video frame is incomplete"); return result; }
-                    if (result.dimensions.isEmpty()) result.dimensions = description.dimensions;
-                    if (result.frames == (std::numeric_limits<std::uint64_t>::max)()) {
-                        result.failure = budget("Decoded frame count overflows"); return result;
-                    }
-                    ++result.frames;
-                } else if ((result.failure = validateAudio(input.reader.Get(), stream.index, sample.Get(), length, stop))) return result;
-                ++frames;
-                empty = 0;
-            } else if (++empty > 4096) {
-                result.failure = budget("Decoder did not progress through the selected track"); return result;
-            }
-            if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
-        }
-        if (!frames) { result.failure = invalid("A declared audio/video track contains no complete decoded sample"); return result; }
-    }
-    if (!result.frames) result.failure = invalid("MP4 contains no complete video frame");
-    if (stop.stop_requested()) result.failure = cancelled();
-    return result;
-}
 } // namespace
-
-Inspection inspectVideo(const QString& path, const Limits& limits, std::stop_token stop)
-{
-    try { return inspectNative(path, limits, stop); }
-    catch (const std::bad_alloc&) {
-        Inspection result;
-        result.kind = Kind::Mp4;
-        result.failure = budget("Cannot allocate native video inspection state");
-        return result;
-    }
-}
 
 VideoThumbnailResult videoThumbnail(const QString& path, unsigned edge, const Limits& limits, std::stop_token stop)
 {
@@ -365,20 +255,19 @@ VideoThumbnailResult videoThumbnail(const QString& path, unsigned edge, const Li
         if (FAILED(session.result)) return {nativeFailure(session.result, "Initialize Media Foundation"), {}};
         NativeReader input;
         if (auto error = input.open(path, limits, stop)) return {std::move(error), {}};
-        const auto found = std::ranges::find_if(input.streams, [](const Stream& stream) { return stream.video; });
-        if (auto error = input.select(*found)) return {std::move(error), {}};
+        if (auto error = input.select()) return {std::move(error), {}};
         for (unsigned attempt = 0; attempt < 4096; ++attempt) {
             if (stop.stop_requested()) return {cancelled(), {}};
             ComPtr<IMFSample> sample;
             DWORD flags{};
-            auto hr = input.reader->ReadSample(found->index, 0, nullptr, &flags, nullptr, sample.GetAddressOf());
+            auto hr = input.reader->ReadSample(*input.videoStream, 0, nullptr, &flags, nullptr, sample.GetAddressOf());
             if (FAILED(hr) || (flags & MF_SOURCE_READERF_ERROR))
                 return {nativeFailure(FAILED(hr) ? hr : E_FAIL, "Decode native video cover"), {}};
             if (sample) {
                 DWORD length{};
                 if (auto error = checkSample(sample.Get(), limits, length)) return {std::move(error), {}};
                 VideoDescription description;
-                if (auto error = describeVideo(input.reader.Get(), found->index, limits, description))
+                if (auto error = describeVideo(input.reader.Get(), *input.videoStream, limits, description))
                     return {std::move(error), {}};
                 return copyCover(sample.Get(), description, edge, limits, stop);
             }

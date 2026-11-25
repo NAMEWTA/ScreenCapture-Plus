@@ -9,7 +9,7 @@
       "copyright": "Copyright (c) 2012 Stefano Sabatini",
       "license": "MIT",
       "notice": "demux-decode-license.txt",
-      "local": "src/platform/linux/VideoInspection.cpp",
+      "local": "src/services/media/FfmpegVideoInspection.cpp",
       "use": "Decoder allocation, codec-parameter transfer, packet submission, frame receive, final null-packet drain and ownership cleanup. Application code validates every audio/video track, bounds indexed physical file ranges, rejects corrupt/concealed frames, supplies local-only cancellable AVIO and returns Qt-owned thumbnails."
     },
     {
@@ -23,10 +23,30 @@
     }
   ],
   "reviewedImplementation": [
-    {"path": "libavformat/mov.c", "blob": "e7e29d7f92de8d8324fa78a24312864ec4dcebc1", "license": "LGPL-2.1-or-later", "focus": "Atom-size tolerance, full sample index, partial packet reads and EOF."},
-    {"path": "libavformat/demux.c", "blob": "99029d422142850b1fec9d3779c7c5d4bfb18344", "license": "LGPL-2.1-or-later", "focus": "Packet corruption, parser packet forwarding and I/O error propagation at EOF."},
-    {"path": "libavformat/avformat.h", "blob": "ef2b08c4f3fc2ea73712b20c4a0e391adabc6fa7", "license": "LGPL-2.1-or-later", "focus": "Custom AVIO, stream/index APIs, maximum streams and limitations of max_index_size."},
-    {"path": "libavcodec/avcodec.h", "blob": "6bce0d388d809e981d8247a25397843824769616", "license": "LGPL-2.1-or-later", "focus": "Decoder error recognition, pixel/sample limits and send/receive semantics."}
+    {
+      "path": "libavformat/mov.c",
+      "blob": "e7e29d7f92de8d8324fa78a24312864ec4dcebc1",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Atom-size tolerance, full sample index, partial packet reads and EOF."
+    },
+    {
+      "path": "libavformat/demux.c",
+      "blob": "99029d422142850b1fec9d3779c7c5d4bfb18344",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Packet corruption, parser packet forwarding and I/O error propagation at EOF."
+    },
+    {
+      "path": "libavformat/avformat.h",
+      "blob": "ef2b08c4f3fc2ea73712b20c4a0e391adabc6fa7",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Custom AVIO, stream/index APIs, maximum streams and limitations of max_index_size."
+    },
+    {
+      "path": "libavcodec/avcodec.h",
+      "blob": "6bce0d388d809e981d8247a25397843824769616",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Decoder error recognition, pixel/sample limits and send/receive semantics."
+    }
   ],
   "generatedSignals": "The real H.264/AAC fixture encoder directly compiles the pinned mux.c and its documented duration/trailer fix from upstream.json; no decoder result or media packet is mocked.",
   "libraryLicense": "The examples' MIT notices do not replace the linked FFmpeg/x264 build's GPL-3.0-or-later license. See docs/software-codecs.md and build/dependencies.lock.json."

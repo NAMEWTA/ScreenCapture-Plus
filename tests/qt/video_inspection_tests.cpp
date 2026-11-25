@@ -113,7 +113,7 @@ int main(int argc, char** argv)
 
         QJsonObject report;
 #ifdef _WIN32
-        report[QStringLiteral("backend")] = QStringLiteral("Windows Media Foundation SourceReader");
+        report[QStringLiteral("backend")] = QStringLiteral("Pinned strict FFmpeg 9.0.2 full inspection; Windows Media Foundation cover");
 #else
         report[QStringLiteral("backend")] = QStringLiteral("Pinned FFmpeg 9.0.2 MOV + H.264/AAC software decoders");
 #endif
@@ -146,7 +146,7 @@ int main(int argc, char** argv)
         limits.maximumFileBytes = 8;
         require(inspectVideo(local, limits).failure.code == Error::Budget, "File bytes must obey the configured budget");
         limits = {};
-        limits.maximumImageBytes = 128 * 1024;
+        limits.maximumImageBytes = 256 * 1024;
         require(inspectVideo(local, limits).failure.code == Error::Budget, "Declared decoded pixels must obey their budget");
         require(videoThumbnail(local, 0).failure.code == Error::Budget, "Zero-sized cover request must fail explicitly");
         std::stop_source before;

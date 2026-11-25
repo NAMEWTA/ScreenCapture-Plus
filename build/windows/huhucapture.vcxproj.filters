@@ -114,6 +114,12 @@
     <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp">
       <Filter>src\platform\windows</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\DesktopClipboard.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\DesktopFiles.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
       <Filter>src\platform\windows</Filter>
     </ClCompile>
@@ -303,6 +309,12 @@
       <Filter>src\platform</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\windows\DesktopClipboard.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\windows\DesktopFiles.h">
       <Filter>src\platform\windows</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\recording\CapVideo.h">

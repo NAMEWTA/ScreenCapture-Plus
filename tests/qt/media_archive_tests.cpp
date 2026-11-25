@@ -174,6 +174,11 @@ void completeValidationAndOwnership(const QTemporaryDir& root)
     media::MediaArchiveService archive(directory);
     const auto good = archive.archiveImage(pixels());
     require(good.durable(), "create complete decoder reference");
+    QImage decoded;
+    require(!media::inspectPng(good.path, {}, {}, &decoded).failure &&
+        decoded.size() == pixels().size() && decoded.pixelColor(0, 0) == pixels().pixelColor(0, 0),
+        "complete PNG decode supplies the same verified pixels for desktop consumers");
+    const auto verifiedPixels = decoded;
     const auto png = read(good.path);
     std::vector<qsizetype> cuts{0, 8, png.size() / 2};
     for (qsizetype missing = 1; missing <= 12; ++missing) cuts.push_back(png.size() - missing);
@@ -181,6 +186,8 @@ void completeValidationAndOwnership(const QTemporaryDir& root)
         auto temporary = archive.createStaging();
         require(!temporary.failure, "create isolated incomplete receive");
         write(temporary.file.path(), png.first(cut));
+        require(media::inspectPng(temporary.file.path(), {}, {}, &decoded).failure && decoded == verifiedPixels,
+            "an incomplete PNG does not replace previously verified output pixels");
         const auto result = archive.commitStaged(temporary.file, media::Kind::Png);
         require(result.failure && result.state == HuhuCapture::Platform::CommitState::NotCommitted && result.path.isEmpty(),
             "truncated PNG cannot be acknowledged or published");

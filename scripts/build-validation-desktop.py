@@ -75,6 +75,12 @@ def main() -> None:
     source = workspace / "portal-wlr-source"
     build = workspace / "portal-wlr-build"
     checkout(backend, source, env)
+    for patch in backend.get("patches", []):
+        path = root / patch["path"]
+        if hashlib.sha256(path.read_bytes()).hexdigest() != patch["sha256"]:
+            raise RuntimeError(f"Validation backend patch checksum mismatch: {path.name}")
+        run("git", "apply", "--check", str(path), cwd=source, env=env)
+        run("git", "apply", str(path), cwd=source, env=env)
     run("meson", "setup", str(build), str(source), "--wrap-mode=nodownload",
         "--prefix=" + str(prefix), "--libexecdir=libexec", *backend["mesonOptions"], env=env)
     run("meson", "compile", "-C", str(build), "-j", str(args.jobs), env=env)

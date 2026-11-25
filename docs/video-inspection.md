@@ -1,7 +1,7 @@
 # MP4 完整检查与历史封面
 
 本页对应 Issue #5 的 P06 媒体归档接缝。接口位于
-[`VideoInspection.h`](../src/services/media/VideoInspection.h)。本批仍是等待真实 Windows / Linux CI 裁决的服务候选；未通过本页列出的全部有效文件及坏样本前，不得将它登记为已经完成的归档验收门槛。
+[`VideoInspection.h`](../src/services/media/VideoInspection.h)。完整文件检查现在由两平台共用的严格 FFmpeg 服务执行；Windows 保留原生 MF 录制与封面。首轮真实反例已证实默认 MF 检查不可作为完整归档门槛，严格共享实现仍需通过同一批全部坏样本后才能登记验收完成。
 
 ## 两种操作的不同责任
 
@@ -18,7 +18,7 @@
 [`platform/windows/VideoInspection.cpp`](../src/platform/windows/VideoInspection.cpp)
 复用当前生产版 [`MediaHistory.cpp`](../src/services/MediaHistory.cpp) 的 Media Foundation SourceReader、RGB32 媒体类型、CPU 像素复制流程。录制后端仍为现有 MF / WASAPI 路径，没有添加第二个 Windows 录制器。
 
-调用以 MTA 初始化当前工作线程的 COM，以平衡的 MFStartup/MFShutdown 管理媒体运行期。文件由只读、拒绝并发写入的 IStream 持有，再包装为 IMFByteStream。检查逐条选中音视频轨道、回到起点并解码，避免为每条轨道同时持有原生解码队列。视频检查实际 RGB32 尺寸和 sample 长度；音频检查 float PCM 的声道、块对齐、完整样本及有限数值。
+封面调用以 MTA 初始化当前工作线程的 COM，以平衡的 MFStartup/MFShutdown 管理媒体运行期。文件由只读、拒绝并发写入的 IStream 持有，再包装为 IMFByteStream。只选择第一条视频轨道，检查实际 RGB32 尺寸和 sample 长度；首帧即能返回，不再保留已经被反例证伪的原生全轨完整性实现。
 
 封面优先采用 `IMF2DBuffer2::Lock2DSize`，用它返回的实际 buffer 起点、长度、scanline 和带符号 stride 检查全部行是否位于持有的分配内；不能获得该接口时，才使用普通 IMFMediaBuffer 锁定和当前媒体类型的默认 stride。成功与所有失败路径均释放锁。负 stride 的首行定位复用纯核心 `validFramePlane` 规则；不会因步幅符号不同就越界访问。
 
@@ -29,11 +29,11 @@
 `MFSampleExtension_FrameCorruption` 的非零值必须失败，但值为零可能表示“未发现”，不是 bitstream 完整证明；来源是
 [官方属性说明](https://learn.microsoft.com/en-us/windows/win32/medfound/mfsampleextension-framecorruption)。
 [官方 H.264 解码器说明](https://learn.microsoft.com/en-us/windows/win32/medfound/h-264-video-decoder)
-也没有提供一个可据以宣称完整文件严格验证的公开模式。本批必须用实际迟段损坏及额外轨道样本检验 MF 是否会宽容接受；如出现意外接受，保留成熟 MF 封面/录制路径，并为完整检查选择最窄的成熟共用实现，不能删掉反例或将它标记通过。
+也没有提供一个可据以宣称完整文件严格验证的公开模式。首轮真实 CI 已用实际后段损坏及额外轨道文件证实 MF 会忽略损坏：两个视频反例分别只产生 250 / 501 帧但仍返回成功，两个音频反例也返回成功。因此完整检查迁移到共用 FFmpeg 路径，MF 仅用于成熟的首帧封面和录制；没有删除反例或放宽拒绝条件。
 
-### Linux
+### 两平台共用的完整检查
 
-[`platform/linux/VideoInspection.cpp`](../src/platform/linux/VideoInspection.cpp)
+[`services/media/FfmpegVideoInspection.cpp`](../src/services/media/FfmpegVideoInspection.cpp)
 复用锁定的 FFmpeg 9.0.2 `demux_decode.c` 与现有
 [`software_codec_probe.cpp`](../tests/qt/software_codec_probe.cpp) 的真实 send/receive/drain 流程。
 每条声明的音视频轨道都有真实解码器；不使用 `av_find_best_stream` 跳过其余轨道。
@@ -44,7 +44,7 @@ MOV 已从 sample description 给出 codec parameters，因此本路径不在安
 
 完整检查要求每个被索引的样本范围位于已打开文件内；分片过程中增长的索引继续检查，EOF 后重新核对最终索引，并确认实际提交的包数量。空轨道、读取失败、解码失败、提前 EOF、结束排空后仍请求更多输入均失败。支持范围取决于锁定构建中实际存在的解码器；缺失返回 Unsupported，而不是把未检查的轨道当作成功。
 
-封面直接把实际解码帧缩放到受限 QImage，保留 SDR 的颜色矩阵和 full/limited range。未经验证的 PQ / HLG 色调映射明确 Unsupported。旋转元数据、非方形像素、HDR 显示一致性尚没有本批实测证据，不能作为已经完成的 UI 验收项。
+Linux 的薄适配层 [`platform/linux/VideoInspection.cpp`](../src/platform/linux/VideoInspection.cpp) 使用同一解码服务保留的首个 CPU AVFrame；其 AVBuffer 引用在 decoder/input 关闭后仍持有像素，然后通过 swscale 缩放到受限 QImage，保留 SDR 的颜色矩阵和 full/limited range。未经验证的 PQ / HLG 色调映射明确 Unsupported。旋转元数据、非方形像素、HDR 显示一致性尚没有本批实测证据，不能作为已经完成的 UI 验收项。
 
 ## 共用的物理容器前置检查
 
@@ -62,13 +62,13 @@ MOV 已从 sample description 给出 codec parameters，因此本路径不在安
 [`mov.c`](https://github.com/FFmpeg/FFmpeg/blob/946fcce07b6dcd0331c8cc609192aeff5e1924f8/libavformat/mov.c)
 在 `mov_read_default` 中把超出父 box 的尺寸夹到剩余范围，并对部分 overread 只警告后回退。上游
 [`a9901840`](https://github.com/FFmpeg/FFmpeg/commit/a9901840079b156c88c6d9ad4a61bc6e7e9c6235)
-还特意将部分 STSZ 截断改为警告后成功。这些播放恢复策略不能直接成为“收到的原文件完整”的证据。本批有实际内部表多声明一项、子 box 尺寸溢出的反例；如默认严格参数仍未拒绝，应在固定上游实现中做受控窄修复，而不是继续扩展自有解析器。
+还特意将部分 STSZ 截断改为警告后成功。这些播放恢复策略不能直接成为“收到的原文件完整”的证据。实际 STSZ 多声明一项的反例已在未打补丁的 Linux 检查中被错误接受。受控 [`0001-strict-mov-validation.patch`](../third_party/patches/ffmpeg/0001-strict-mov-validation.patch) 只为明确请求 AV_EF_EXPLODE 的调用者拒绝内部 box 尺寸夹断、parser overread、采样表 payload/count 不符及 STSZ short-read；默认播放恢复策略不变。它还在 STSZ/TRUN 展开分配前执行显式采样索引预算。没有继续扩展自有 MOV 语义解析器。
 
 ## 预算的实际边界
 
 当前明确核对文件字节数、顶层元数据字节数、最多 16 条轨道、声明/解码后的像素、组合视频轨道像素、压缩包大小、音频样本/声道、物理采样索引范围。Qt 图像仅在 worker 内创建并通过拥有像素的值返回。
 
-这些检查不是媒体库所有内部堆分配的操作系统硬上限。尤其
+这些检查不是媒体库所有内部堆分配的操作系统硬上限。受控补丁为明确的 STSZ/TRUN 展开施加 `maximumImageBytes / 16` 的每轨采样索引预算，默认每轨 32 MiB；它与 decoder 私有工作集、其他 metadata 类型的展开不同。上游未打补丁的
 [`AVFormatContext::max_index_size`](https://github.com/FFmpeg/FFmpeg/blob/946fcce07b6dcd0331c8cc609192aeff5e1924f8/libavformat/avformat.h)
 的官方注释明确说明，必须保留完整索引的解复用器可以忽略它；小的 STSZ 头也能声明很大的表。不能把事后索引检查或顶层 moov 大小限制描述为已经证明所有元数据展开分配有界。内部表展开、极端动态尺寸与总解码器内存仍需严格补丁/实测证据；没有满足必要预算与完整性门槛前，不得发布。
 
@@ -94,11 +94,28 @@ MOV 已从 sample description 给出 codec parameters，因此本路径不在安
 | Unicode 路径、封面边长与不放大 | 使用真实文件并验证实际图像尺寸/像素变化 |
 | 文件/像素预算、预取消、运行中停止 | 显式正确失败，返回后文件句柄释放 |
 
-每轮测试在独占临时目录保留真实封面 PNG 和 JSON 结果，包括意外接受的文件。坏样本断言失败必须使测试进程失败；不得为了让 CI 变绿而把它们标为可接受。工作区缺少 Qt / FFmpeg 开发包，当前尚不能将这里的源审当作已在本地编译或运行通过；实际平台证据以对应 CI commit、日志和 artifact 为准。
+每轮测试在独占临时目录保留真实封面 PNG 和 JSON 结果，包括意外接受的文件。坏样本断言失败必须使测试进程失败；不得为了让 CI 变绿而把它们标为可接受。工作区缺少 Qt / FFmpeg 开发包，不能将本地源审当作编译或运行通过；实际平台证据以对应 CI commit、日志和 artifact 为准。
+
+## 已取得的首轮反例证据
+
+[commit 38e3906](https://github.com/NAMEWTA/huhucapture/commit/38e3906a219d7efedd51d39f1c318c168a66bdc3) 的独立
+[视频检查 workflow 45569261154](https://github.com/NAMEWTA/huhucapture/actions/runs/45569261154) 已实际构建并执行相同 15 个文件：
+
+- [Linux job 139051576055](https://github.com/NAMEWTA/huhucapture/actions/runs/45569261154/job/139051576055)：14 个预期符合；`stsz-extra-entry.mp4` 被默认 MOV 恢复后解出 251 帧并误接受，因此 job 正确失败。
+- [Windows job 139053165531](https://github.com/NAMEWTA/huhucapture/actions/runs/45569261154/job/139053165531)：4 个 late/second 音视频损坏被 MF 误接受，视频帧数为 250 / 251 / 501 / 502，因此 job 正确失败。
+- 实际共享 fixture artifact ID 为 15000868614，上传与 Windows 下载 ZIP SHA-256 均为 `a23116f8d4ff3056079f948fdcdebf58b1005d977a5012c4705a65a731851f58`。每个媒体文件自身还由 manifest 的 SHA-256 再检查。
+
+这些是选择共同严格检查路径的已观测依据，不是重构完成或新实现通过的证据。两平台在修复后仍须用同一套拒绝断言重跑，不能把失败 CI 改写成成功。
 
 ## 构建接线与来源
 
-共同服务源为 `src/services/media/Mp4Envelope.cpp` 加一个平台的 `VideoInspection.cpp`，需要现有 core、Qt6::Gui。Windows 还需 `huhucapture_media_frames` 的真实 plane 范围实现，以及现有 MF、COM、SHCreateStream 链接库；Linux 需同源固定 `PkgConfig::FFMPEG`。fixture generator 使用 Qt6::Core、固定 FFmpeg 和现有 `ffmpeg_mux_example` object；共同测试使用服务库，不在 Windows 为测试再次实现编码器。
+共同服务源是 `Mp4Envelope.cpp` 与 `FfmpegVideoInspection.cpp`，再加一个平台的 `VideoInspection.cpp` 封面适配。共同代码需要 core、Qt6::Gui、固定 AVCodec/AVFormat/AVUtil。Linux 封面另需现有固定 swscale；Windows 封面另需 `huhucapture_media_frames` 及 MF、COM、SHCreateStream 库。
+
+Windows 使用 [`build-windows-video-inspection.py`](../scripts/build-windows-video-inspection.py) 从同一固定 FFmpeg commit 与同一严格补丁构建，只有 H.264/AAC 软件解码器、MOV demuxer 与所需 AVUtil；不加入 x264、录制编码器、swscale、网络协议或新 GUI 运行时。脚本采用官方 MSVC `configure --toolchain=msvc` 路径，保留 x64 NASM 优化，明确构建 `install/Debug` 的 `/MDd` 和 `install/Release` 的 `/MD`，各自对应相同 Qt/应用配置。不得把两个配置的 DLL 混入同一测试 PATH。原生 `.lib` 导入库与带 major 的 DLL 均由固定上游安装到各配置的 `bin/`；链接 PDB 保存在 `symbols/`。
+
+只读取真实 VSDevCmd 的编译环境，不把 MinGW 库混入 MSVC。NASM 3.01 与 GNU Make 4.4.1-3 从官方固定 URL 下载并逐个核对 Microsoft vcpkg 源码记录的 SHA-512，在私有 workspace 解压；Bash/coreutils 使用 Windows runner 已有 MSYS2，记录其实际 runtime。不会安装或覆盖系统文件。构建元数据保留源 commit、补丁 SHA、实际 CFLAGS、工具来源、DLL/导入库 SHA；缺少文件、PDB 或实际 CRT 不符均失败。
+
+fixture generator 仍只在 Linux 使用固定完整软件编码链与 `ffmpeg_mux_example` 生成一次。Windows 使用同一 artifact，不另写或模拟编码器。
 
 精确来源、blob、改动范围及完整许可证位于：
 

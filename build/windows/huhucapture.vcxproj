@@ -91,6 +91,12 @@
     <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\DesktopClipboard.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\DesktopFiles.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -203,6 +209,8 @@
     <ClInclude Include="..\..\src\platform\windows\AudioFormat.h" />
     <ClInclude Include="..\..\src\platform\FileCommitter.h" />
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h" />
+    <ClInclude Include="..\..\src\platform\windows\DesktopClipboard.h" />
+    <ClInclude Include="..\..\src\platform\windows\DesktopFiles.h" />
     <ClInclude Include="..\..\src\recording\CapVideo.h" />
     <ClInclude Include="..\..\src\recording\VideoGif.h" />
     <ClInclude Include="..\..\src\recording\VideoMp4.h" />

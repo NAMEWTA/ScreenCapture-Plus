@@ -1,6 +1,7 @@
 #include "services/config/SettingsStore.h"
 
 #include "platform/FileCommitter.h"
+#include "platform/FileIdentity.h"
 #include "services/config/JsonText.h"
 #include "services/files/QtPaths.h"
 
@@ -11,6 +12,7 @@
 #include <QJsonDocument>
 #include <QLockFile>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <filesystem>
 #include <utility>
 
@@ -113,15 +115,34 @@ SettingsResult backup(const QString& destination, const QByteArray& bytes, const
     const auto staging = Platform::createExclusiveTemporaryFile(nativePath(directory), error);
     if (staging.empty())
         return {SettingsError::Backup, QString::fromStdString(error.message()), {}, {}};
-    const auto stagingPath = qtPath(staging);
-    QFile output(stagingPath);
-    if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() || !output.flush()) {
-        const auto detail = output.errorString();
-        output.close();
-        QFile::remove(stagingPath);
-        return {SettingsError::Backup, detail, {}, {}};
-    }
+    const auto claimed = Platform::readFileSnapshot(staging, error);
+    if (!claimed || claimed->bytes != 0)
+        return {SettingsError::Backup, QStringLiteral("Cannot identify the empty backup staging file"), {}, {}};
+    bool retainStaging = false;
+    const auto cleanup = qScopeGuard([&] {
+        if (retainStaging) return;
+        try {
+            std::error_code ignored;
+            const auto current = Platform::readFileSnapshot(staging, ignored);
+            if (current && current->identity == claimed->identity)
+                std::filesystem::remove(staging, ignored);
+        } catch (...) { /* Retain a private temporary if its identity is uncertain. */ }
+    });
+    auto handle = Platform::openOwnedEmptyFileForWrite(staging, claimed->identity, error);
+    if (!handle)
+        return {SettingsError::Backup, QString::fromStdString(error.message()), {}, {}};
+    QFile output;
+    if (!output.open(handle.get(), QIODevice::ReadWrite, QFileDevice::DontCloseHandle) ||
+        output.write(bytes) != bytes.size() || !output.flush())
+        return {SettingsError::Backup, output.errorString(), {}, {}};
     output.close();
+    if (output.error() != QFileDevice::NoError)
+        return {SettingsError::Backup, output.errorString(), {}, {}};
+    if (!handle.close(error))
+        return {SettingsError::Backup, QString::fromStdString(error.message()), {}, {}};
+    const auto finished = Platform::readFileSnapshot(staging, error);
+    if (!finished || finished->identity != claimed->identity || finished->bytes != static_cast<std::uint64_t>(bytes.size()))
+        return {SettingsError::Backup, QStringLiteral("Backup staging file changed before publication"), {}, {}};
     const auto digest = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().first(16);
     const auto stem = QFileInfo(destination).fileName() + QLatin1Char('.') + label +
         QLatin1Char('-') + QString::fromLatin1(digest);
@@ -129,18 +150,19 @@ SettingsResult backup(const QString& destination, const QByteArray& bytes, const
         const auto suffix = sequence ? QStringLiteral("-%1").arg(sequence) : QString();
         const auto target = QDir(directory).filePath(stem + suffix + QStringLiteral(".bak"));
         const auto committed = Platform::commitFileNoReplace(staging, nativePath(target));
-        if (committed.durable()) return {SettingsError::None, {}, qtPath(committed.destination), {}};
         if (committed.committed()) {
+            // The committer owns post-publication staging cleanup. Never delete
+            // or retry a published backup, including persistence uncertainty.
+            retainStaging = true;
+            if (committed.durable()) return {SettingsError::None, {}, qtPath(committed.destination), {}};
             // Preserve both names after a persistence uncertainty. The config
             // remains unchanged and the caller receives the actual backup path.
             return {SettingsError::Backup, QString::fromStdString(committed.error.message()),
                 qtPath(committed.destination), {}};
         }
         if (committed.error == std::errc::file_exists) continue;
-        QFile::remove(stagingPath);
         return {SettingsError::Backup, QString::fromStdString(committed.error.message()), {}, {}};
     }
-    QFile::remove(stagingPath);
     return {SettingsError::Backup, QStringLiteral("Configuration backup name limit reached"), {}, {}};
 }
 } // namespace
@@ -270,7 +292,18 @@ SettingsResult SettingsStore::persist(QJsonObject candidate, bool forceBackup, c
     }
     QSaveFile output(path_);
     output.setDirectWriteFallback(false);
-    if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() || !output.commit()) {
+    if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size()) {
+        outcome.error = SettingsError::Write;
+        outcome.detail = output.errorString();
+        return outcome;
+    }
+    const auto latest = checkSnapshot();
+    if (!latest.ok()) {
+        outcome.error = latest.error;
+        outcome.detail = latest.detail;
+        return outcome;
+    }
+    if (!output.commit()) {
         outcome.error = SettingsError::Write;
         outcome.detail = output.errorString();
         return outcome;
