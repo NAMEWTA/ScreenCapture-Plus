@@ -20,7 +20,11 @@ huhucapture 在 `main` 维护。修改围绕一个可观察的问题，说明改
 
 ## 实施边界
 
-优先复用已有能力和平台组件，保持原生单 EXE。纯规则在 `src/core`，平台资源在 `src/platform/windows`，编码、图像与持久化在服务层，窗口负责交互协调。新增文件登记到工程与 filters；依赖修改同步锁文件与合法许可。
+跨平台实施以 [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 的工作包和依赖为准，[迁移状态](docs/qt-migration.md) 说明当前代码边界。目标是同一套 C++20 / Qt 6 界面、编辑器和服务，只有系统能力进入 Windows / Linux 适配。不要新增第二套平台业务或复制编辑器规则。
+
+优先复用当前成熟实现，其次固定 Issue 引用的上游源码，再选择成熟库。纯规则在 `src/core` 和无平台头的编辑模型，系统资源在 `src/platform`，编码、图像与持久化在服务层，窗口负责交互协调。新增目标登记到 CMake；仍由现有 Windows 产品调用的文件也登记到其工程与 filters。依赖修改同步锁文件、源码归属、可重放补丁与许可。
+
+现有 Windows 单 EXE 是迁移回归基线，P12 未验收前保留其构建；P13 才清除旧生产架构。Qt 的动态库部署与 Windows / Linux 完整安装包须走新的验收门槛，不能把旧单 EXE 的运行要求套用到新架构。
 
 明确句柄、缓冲、图形和线程的拥有关系，停止工作线程后再释放资源。复制、保存、编码和归档不能用模糊的成功状态掩盖失败。媒体清理只影响应用管理的范围；编辑器、媒体文件和 Windows 剪贴板各有自己的生命周期。
 
@@ -34,7 +38,9 @@ huhucapture 在 `main` 维护。修改围绕一个可观察的问题，说明改
 
 ## 验证与提交
 
-Windows 标准入口为：
+共享核心和 Qt / Portal 的 CMake 入口见 [构建与发布](docs/building.md)；LocalSend 的真实 TLS 测试见 [core 适配说明](docs/localsend-core.md)。固定工具链和配置必须与 CI 一致，不以本机另一个 Qt 版本代替私有 ABI 验证。
+
+仍在维护的 Windows 回归入口为：
 
 ```powershell
 pwsh ./scripts/build.ps1 -Configuration Release

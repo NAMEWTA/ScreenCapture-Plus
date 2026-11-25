@@ -1,4 +1,3 @@
-#include "pch.h"
 #include "platform/windows/GdiCapture.h"
 #include "core/PixelBuffer.h"
 #include <limits>

@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/dlbeer/quirc",
+  "license": "ISC",
+  "copyright": "Daniel Beer, 2010–2012",
+  "inherited_snapshot": {
+    "repository": "https://github.com/NAMEWTA/huhucapture",
+    "commit": "0efaf45aae1062436da8238814bba17c325fe4d3",
+    "upstream_release": "Not recorded in the inherited sources; quirc_version() returning 1.0 is not a source-version pin."
+  },
+  "reviewed_upstream_commit": "f2e4271ae43a15d9263704e07bc86cba5697d74d",
+  "reviewed_upstream_files": [
+    {
+      "path": "lib/quirc.c",
+      "git_blob": "493def2ab8f270927c467e611ee4a83e7dcced2e"
+    },
+    {
+      "path": "lib/identify.c",
+      "git_blob": "c149c21beefc3b1a24d5ffe3fd972ae9d71f398f"
+    }
+  ],
+  "build_definitions": {
+    "QUIRC_MAX_REGIONS": 65534
+  },
+  "files": [
+    {
+      "path": "LICENSE",
+      "inherited_git_blob": "35fedfd8e584234a9af00536ebcd2a025096cba2",
+      "sha256": "f5ede52d78c11eaf3a9194945ec2e97d59189dd214ed1c11c9b9a82f75dcc3bd"
+    },
+    {
+      "path": "quirc.h",
+      "inherited_git_blob": "d8d250d4c01e7ef11cae48141aac990a3dec90f6",
+      "sha256": "49660ea710add2d6f304a1323f53190f5a2bf34db4dd160d633db0c3f22bfba5"
+    },
+    {
+      "path": "quirc_internal.h",
+      "inherited_git_blob": "62915369a0d0a90eb9618d4ac0506bf605db86ab",
+      "sha256": "e383ed1a0ca70c07b0530d76bfeb6bd5525efda182589f48c978921a9e54676b"
+    },
+    {
+      "path": "quirc.c",
+      "inherited_git_blob": "3cf75b97f0193d8575079cf90fc211209579d840",
+      "sha256": "3d2694638f40e7d1b12ac4eb5792424b6af315dfa02c2e37be7dc597d0328110"
+    },
+    {
+      "path": "identify.c",
+      "inherited_git_blob": "b98877b330cbe65e4e0a7b738d5936b5f082d1d9",
+      "sha256": "0b6a14aed6cc6a4d18683698583a026b750c369d2f22d3db9777d7105c628650"
+    },
+    {
+      "path": "decode.c",
+      "inherited_git_blob": "a27a59ae9145a09dd41c5d49218fa6360f7f8d19",
+      "sha256": "d4468c55ecd0d2f905a6813513708005e6d609ef0a3d32a17673313c7552a7c1"
+    },
+    {
+      "path": "version_db.c",
+      "inherited_git_blob": "fea8146dc68b4c4752bb29b7e4331097c50036b1",
+      "sha256": "6764aa2f245085080e1e5cefd9dcd59b9727718a0d4606956e0502a57f5dff30"
+    }
+  ],
+  "patches": [
+    {
+      "path": "third_party/quirc/patches/0001-first-resize-empty-copy.patch",
+      "sha256": "59c9add31f47618c1dfdd275cedf55e943a089dfe8b4c933f60381cabeddf961",
+      "upstream_commits": [
+        "a9f7f20eecac8102f1bc1d22f8dd7e3cc9a92e27",
+        "b1d371fc48561a0b1a1255364b307bb8a080b15a"
+      ],
+      "authors": [
+        "fuzzing-researcher",
+        "AlexandrKhromov2005"
+      ]
+    },
+    {
+      "path": "third_party/quirc/patches/0002-otsu-weighted-sum.patch",
+      "sha256": "c3fb692e7f082e07d75ef57cde727b10be5863c2a3b688b109af800a63934c84",
+      "upstream_commits": [
+        "8df5642aa88fd2a51719983b7dca4aebe3793613"
+      ],
+      "authors": [
+        "94xhn"
+      ]
+    },
+    {
+      "path": "third_party/quirc/patches/0003-screen-coordinate-arithmetic.patch",
+      "sha256": "7276eeb2024c822fe85f97776e2220403a138e8fdfe3379943e8e4bae9af328f",
+      "upstream_commits": [],
+      "authors": [
+        "huhucapture contributors"
+      ],
+      "origin": "Local maintenance of the inherited line intersection: promote before arithmetic, preserve truncation, reject non-finite or out-of-int results."
+    }
+  ],
+  "scope": "Inherited decoder retained; two documented upstream backports and one local screen-coordinate arithmetic fix. Not an upgrade to the complete reviewed upstream tree."
+}

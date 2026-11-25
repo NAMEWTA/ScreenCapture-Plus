@@ -1,6 +1,75 @@
 # 构建与发布
 
-本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。版本号来自 [Version.props](../build/windows/Version.props)，发布意图来自 [publish.json](../releases/publish.json)。
+## Qt 迁移验证入口
+
+当前正式 Windows 构建仍使用本页后续的 PowerShell / MSBuild 入口。根目录 CMake 默认构建 [Issue #5 的迁移验证](qt-migration.md)；显式开启 `HUHUCAPTURE_BUILD_APP=ON` 可构建统一 Qt 应用。完整应用预设及服务边界见 [Qt 应用](qt-application.md)，实际安装树和开发包命令见 [打包说明](qt-packaging.md)。这些入口仍受 P12 发布验收约束。CMake 要求 3.25 以上及 C++20 编译器，纯核心配置不需要 Qt：
+
+```sh
+cmake --preset core
+cmake --build --preset core --parallel 2
+ctest --preset core
+```
+
+Qt 验证严格使用 6.12.1 的 Core / Gui / Widgets / Network / Svg。SDK 恢复步骤、固定 aqtinstall 提交和实际平台架构见 [.github/workflows/qt-validation.yml](../.github/workflows/qt-validation.yml)；不能以另一个发行版 Qt 代替。Linux SDK 包含 QtWayland 和匹配的私有头，实际中文字体也是导出验证的前置条件。安装并将该 SDK 的 `bin` 与前缀加入环境后：
+
+CI 通过 aqt 官方支持的 `AQT_CONFIG` 读取 [build/aqt.ini](../build/aqt.ini)，
+串行恢复共享安装目录的 SDK 归档，避免 Windows 外部 7-Zip 并行创建同一目录的竞态。
+该设置来自固定 aqt 源码的 `Settings.concurrency` / `run_installer`，
+不修改下载内容、不关闭 SHA256 校验，也不忽略解压错误。
+
+```sh
+cmake --preset qt-validation
+cmake --build --preset qt-validation --parallel 2
+ctest --preset qt-validation
+```
+
+Windows 使用与 Qt 匹配的 MSVC v143、x64、动态 CRT；在对应开发环境执行：
+
+```powershell
+cmake -S . -B artifacts/cmake/qt-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON
+cmake --build artifacts/cmake/qt-validation --config Debug --parallel 2
+ctest --test-dir artifacts/cmake/qt-validation -C Debug --output-on-failure --no-tests=error
+cmake --build artifacts/cmake/qt-validation --config Release --parallel 2
+ctest --test-dir artifacts/cmake/qt-validation -C Release --output-on-failure --no-tests=error
+```
+
+Linux Portal 验证还需要 GLib / GIO 2.80 以上、Meson、Ninja、pkg-config、D-Bus 与 Qt 6.12.1 私有开发头。`scripts/build-portal.py` 在空的 `.deps/portal-validation` 中恢复锁定 libportal，检查受控补丁 SHA256，再构建 Qt 后端；不修改系统安装或清空已有源码。已有工作区时应指定另一个空 `--workspace` 并使用它实际产生的前缀。
+
+```sh
+python3 scripts/build-portal.py
+export PKG_CONFIG_PATH="$PWD/.deps/portal-validation/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+cmake --preset qt-validation -DHUHUCAPTURE_PORTAL_VALIDATION=ON
+cmake --build --preset qt-validation --parallel 2
+ctest --preset qt-validation
+```
+
+真实桌面授权 probe 与自动故障测试的区别见 [Linux Portal](linux-portal.md)。LocalSend 的 Cargo workspace 使用 Rust 1.97.1 和提交的实际锁文件，构建命令见 [core 适配](localsend-core.md)。这些验证入口没有发布权限，也不会创建正式 Release。Qt SDK 资产哈希、聚合 Rust 库、软件编码和最终部署工具仍须按 P00 完成验证，P11 / P12 / P13 通过后才能切换生产发布。
+
+受限开发环境可使用独立的 [开发依赖工作流](../.github/workflows/development-dependencies.yml)
+生成 Linux amd64 SDK。它保留固定 Qt Widgets / Wayland client、Portal、PipeWire、
+软件媒体依赖、CMake、Ninja、pkg-config、所需系统开发文件及许可证，并生成逐文件
+SHA256 与相对符号链接清单。Qt 官方归档中的未使用 QtSql、Wayland compositor 和
+QML imports 连同其导入元数据被明确排除，排除清单记录在 `metadata.json`；所有
+保留 ELF 的依赖仍须完整。Qt Wayland client、平台插件和匹配的私有头不会因此删除。
+
+恢复使用 `scripts/bundle-development-dependencies.py restore`，必须指定下载产物的
+实际 `--sha256` 与一个空 `--destination`，随后加载恢复目录中的 `sdk/environment.sh`。
+脚本逐项验证内容、权限、链接和原始前缀替换；CI 还将原依赖前缀改名，再用恢复后的
+SDK 实际构建 Portal / PipeWire / 软件编码目标。该产物是开发依赖，不是用户安装包，
+构建或恢复成功不能计作产品安装验收。宿主 C++ ABI / glibc 要求保留在元数据中，
+不复制或替换宿主加载器。
+
+Rust 聚合库由独立验证工作流保留实际 `.a` / `.lib` 和 `build-info.json`。CMake 会核对
+静态库、Cargo.lock 以及全部已记录桥接和上游源文件的 SHA256，拒绝用同一 Cargo.lock
+下的旧桥接库代替当前源码。Windows 还核对实际依赖导入库及匹配的动态 Release CRT。
+
+## 现有 Windows 生产构建
+
+本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。唯一手写版本来源是 [build/version.json](../build/version.json)，发布意图来自 [publish.json](../releases/publish.json)。
+
+CMake 使用原生 JSON 解析从同一个文件设置 `PROJECT_VERSION`，生成 `app/Version.h`、Qt Windows RC、About 版本和包身份；运行时不会读取版本 JSON 或启动 Python。根目录 `VERSION` 和保留 Windows 工程的 `build/windows/Version.props` 是兼容生成文件，不再独立维护。修改 JSON 后运行 `python scripts/version_source.py --write`，普通检查使用 `python scripts/version_source.py --check`；CMake、PowerShell 构建/打包脚本和直接 Visual Studio/MSBuild 构建都会拒绝未同步的生成值。MSBuild 在编译前核对 JSON 与模板的实际 SHA256、源版本和资源分量，正常构建不依赖 Python。
+
+资源的第四段固定为零。`build.ps1 -Version`、打包及发布声明只核对版本，不覆盖资源值；不同标签或陈旧 EXE 会明确失败。版本格式为无前导零的 `MAJOR.MINOR.PATCH`，每段不超过 65535，以匹配 Windows 资源格式。修改 JSON 或兼容生成文件会触发 CMake 重新配置。迁移分支保持当前正式版本号，只有发布门槛满足后才执行规定的 Patch 递增。
 
 ## 环境与依赖决策
 
@@ -68,7 +137,7 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 
 发行所指向的提交必须同时包含相互匹配的：
 
-1. `build/windows/Version.props` 默认版本；
+1. `build/version.json` 中的产品版本，以及由它重新生成的 `VERSION` 和 `build/windows/Version.props`；
 2. `releases/publish.json` 的稳定 tag 与说明路径；
 3. `releases/<tag>.md`、更新记录和当前下载说明。
 
@@ -82,7 +151,7 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 }
 ```
 
-稳定标签使用 `vMAJOR.MINOR.PATCH`，Windows 第四段固定为 0，各数字分量受 Windows 版本资源范围约束。可在手工预发布流程使用后缀，但内置更新器只处理稳定三段版本。构建参数覆盖版本时，构建与打包必须使用同一个标签。
+稳定标签使用 `vMAJOR.MINOR.PATCH`，Windows 第四段固定为 0，各数字分量受 Windows 版本资源范围约束。可在手工预发布流程使用后缀，但内置更新器只处理稳定三段版本。构建和打包传入的标签只能匹配源版本，不能覆盖它。
 
 main 构建成功后，[声明发布脚本](../scripts/publish-release.ps1) 使用本次已验证的 artifact，核对仓库、源 SHA、main 当前头、版本、架构、五个资产和哈希。只有一致才创建新 tag 和 Release。它不会通过重新构建另一份内容来完成这次发布，也不会自行推导下一个版本号。
 

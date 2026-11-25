@@ -1,0 +1,34 @@
+{
+  "repository": "https://github.com/ImageOptim/gifski",
+  "version": "1.34.0",
+  "commit": "1060eab4500a20f27e2fa3ab7e85473d0e921cbd",
+  "license": "AGPL-3.0-or-later",
+  "authors": [
+    "Kornel Lesiński"
+  ],
+  "sourceIntegration": "Unmodified upstream git dependency in src/platform/rust/Cargo.toml; default features disabled, gifsicle enabled. One aggregate Rust staticlib.",
+  "files": [
+    {
+      "path": "gifski.h",
+      "blob": "1ceb3c41cba4018763f0e8ef58230f9f29703ace"
+    },
+    {
+      "path": "LICENSE",
+      "blob": "24eda8a7b7de8d7028274f10ef3976f4f9916760"
+    },
+    {
+      "path": "upstream-cargo.lock",
+      "upstreamPath": "Cargo.lock",
+      "blob": "665f14360396830a93a35842eca49bd67be64f97"
+    }
+  ],
+  "reviewedSourceFiles": [
+    "Cargo.toml",
+    "src/lib.rs",
+    "src/c_api.rs",
+    "src/c_api/c_api_error.rs",
+    "gifski.h",
+    "LICENSE"
+  ],
+  "notice": "The repository MIT license does not replace gifski AGPL terms or corresponding-source obligations for a combined distribution."
+}

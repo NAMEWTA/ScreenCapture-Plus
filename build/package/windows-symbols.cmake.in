@@ -1,0 +1,10 @@
+# Produced during the explicit Symbols install of the same native CMake target.
+# Pair exact linker outputs; a differently named or rebuilt executable cannot
+# silently reuse this PDB bundle in a later packaging run.
+file(SHA256 "$<TARGET_FILE:huhucapture>" _huhu_executable_hash)
+file(SHA256 "$<TARGET_PDB_FILE:huhucapture>" _huhu_pdb_hash)
+file(SIZE "$<TARGET_PDB_FILE:huhucapture>" _huhu_pdb_size)
+set(_huhu_symbols "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/symbols")
+file(MAKE_DIRECTORY "${_huhu_symbols}")
+file(WRITE "${_huhu_symbols}/build-ids.json"
+    "{\n  \"schemaVersion\": 1,\n  \"sourceCommit\": \"@HUHU_PACKAGE_COMMIT@\",\n  \"version\": \"@HUHUCAPTURE_VERSION@\",\n  \"configuration\": \"$<CONFIG>\",\n  \"executableSha256\": \"${_huhu_executable_hash}\",\n  \"pdb\": {\"name\": \"huhucapture.pdb\", \"size\": ${_huhu_pdb_size}, \"sha256\": \"${_huhu_pdb_hash}\"}\n}\n")

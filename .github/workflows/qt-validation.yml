@@ -1,0 +1,164 @@
+name: Qt migration validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qt-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shared-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Configure shared contracts without Qt
+        run: cmake --preset core
+      - name: Build shared contracts
+        run: cmake --build --preset core --parallel 2
+      - name: Verify shared contracts
+        run: ctest --preset core
+
+  qt-contracts:
+    env:
+      AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            host: linux
+            arch: linux_gcc_64
+            archives: qtbase qtsvg qtwayland icu
+          - os: windows-2022
+            host: windows
+            arch: win64_msvc2022_64
+            archives: qtbase qtsvg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Linux font and Portal build prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus nasm libwayland-dev libwayland-bin sway pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr libglib2.0-bin libpipewire-0.3-dev libinih-dev libgbm-dev libdrm-dev libsystemd-dev fuse3 wtype xvfb xauth libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb1-dev libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0
+      - name: Build the locked Portal backend for the owned CPU desktop
+        if: runner.os == 'Linux'
+        run: python3 scripts/build-validation-desktop.py
+      - name: Restore the exact Qt validation toolchain
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: '6.12.1'
+          host: ${{ matrix.host }}
+          target: desktop
+          arch: ${{ matrix.arch }}
+          archives: ${{ matrix.archives }}
+          # QtSvg is part of the desktop base archives, not an add-on module.
+          # aqt 3.3.0 predates Qt 6.11's split Windows compiler repositories.
+          # Pin the upstream fix instead of patching an installed tool or Qt.
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4'
+          py7zrversion: '==1.1.3'
+          # Use the runner's native 7-Zip for Qt's Windows archive links.
+          extra: ${{ runner.os == 'Windows' && '--external 7z' || '' }}
+          cache: false
+      - name: Build the pinned libportal with its matching Qt backend
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/build-portal.py
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.deps/portal-validation/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+      - name: Build the fixed PipeWire client and its required runtime modules
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/build-pipewire.py
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.deps/pipewire-validation/install/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.deps/pipewire-validation/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "PIPEWIRE_MODULE_DIR=$GITHUB_WORKSPACE/.deps/pipewire-validation/install/lib/pipewire-0.3" >> "$GITHUB_ENV"
+          echo "SPA_PLUGIN_DIR=$GITHUB_WORKSPACE/.deps/pipewire-validation/install/lib/spa-0.2" >> "$GITHUB_ENV"
+          echo "PIPEWIRE_CONFIG_DIR=$GITHUB_WORKSPACE/.deps/pipewire-validation/install/share/pipewire" >> "$GITHUB_ENV"
+      - name: Build the pinned software H.264 and native AAC dependency set
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/build-software-media.py
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.deps/media-validation/install/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.deps/media-validation/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+      - name: Configure Linux Qt validation
+        if: runner.os == 'Linux'
+        run: cmake --preset qt-validation -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON -DHUHUCAPTURE_DESKTOP_VALIDATION=ON
+      - name: Configure Windows Qt validation with the matching v143 CRT
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake -S . -B artifacts/cmake/qt-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_DESKTOP_VALIDATION=ON
+      - name: Build and validate Debug
+        shell: bash
+        run: |
+          cmake --build artifacts/cmake/qt-validation --config Debug --target qt_editor_components --parallel 2
+          cmake --build artifacts/cmake/qt-validation --config Debug --parallel 2
+          ctest --test-dir artifacts/cmake/qt-validation -C Debug --output-on-failure --no-tests=error
+      - name: Exercise real Wayland parent ownership and GUI responsiveness (Debug)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-wayland-parent.py artifacts/cmake/qt-validation/portal_parent_probe --artifacts artifacts/cmake/qt-validation/wayland-parent/Debug
+      - name: Verify real Wayland clipboard ownership and independent reception (Debug)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-wayland-clipboard.py artifacts/cmake/qt-validation/desktop_clipboard_tests --artifacts artifacts/cmake/qt-validation/wayland-clipboard/Debug
+      - name: Capture real PipeWire frames, resize and daemon loss (Debug)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-pipewire-capture.py artifacts/cmake/qt-validation/pipewire_capture_probe --pipewire-prefix .deps/pipewire-validation/install --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr --backend-build-info .deps/validation-desktop/build-info.json --artifacts artifacts/cmake/qt-validation/pipewire/Debug
+      - name: Configure Linux Release
+        if: runner.os == 'Linux'
+        run: cmake --preset qt-validation -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON -DHUHUCAPTURE_DESKTOP_VALIDATION=ON
+      - name: Build and validate Release
+        shell: bash
+        run: |
+          cmake --build artifacts/cmake/qt-validation --config Release --parallel 2
+          ctest --test-dir artifacts/cmake/qt-validation -C Release --output-on-failure --no-tests=error
+      - name: Exercise real Wayland parent ownership and GUI responsiveness (Release)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-wayland-parent.py artifacts/cmake/qt-validation/portal_parent_probe --artifacts artifacts/cmake/qt-validation/wayland-parent/Release
+      - name: Verify real Wayland clipboard ownership and independent reception (Release)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-wayland-clipboard.py artifacts/cmake/qt-validation/desktop_clipboard_tests --artifacts artifacts/cmake/qt-validation/wayland-clipboard/Release
+      - name: Capture real PipeWire frames, resize and daemon loss (Release)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-pipewire-capture.py artifacts/cmake/qt-validation/pipewire_capture_probe --pipewire-prefix .deps/pipewire-validation/install --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr --backend-build-info .deps/validation-desktop/build-info.json --artifacts artifacts/cmake/qt-validation/pipewire/Release
+      - name: Retain real configure and test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qt-validation-${{ matrix.host }}
+          path: |
+            artifacts/cmake/qt-validation/CMakeCache.txt
+            artifacts/cmake/qt-validation/CMakeFiles/CMakeConfigureLog.yaml
+            artifacts/cmake/qt-validation/Testing/Temporary/
+            artifacts/cmake/qt-validation/annotation-render/
+            artifacts/cmake/qt-validation/editor-render/
+            artifacts/cmake/qt-validation/desktop-render/
+            artifacts/cmake/qt-validation/wayland-parent/
+            artifacts/cmake/qt-validation/wayland-clipboard/
+            artifacts/cmake/qt-validation/pipewire/
+            .deps/pipewire-validation/build-info.json
+            .deps/pipewire-validation/build/meson-logs/
+            .deps/validation-desktop/build-info.json
+            .deps/validation-desktop/portal-wlr-build/meson-logs/
+            .deps/validation-desktop/wayland-protocols-build/meson-logs/
+            .deps/validation-desktop/install/share/licenses/
+            .deps/portal-validation/build-info.json
+            .deps/portal-validation/build/meson-logs/
+            .deps/media-validation/build-info.json
+            .deps/media-validation/x264-build/config.log
+            .deps/media-validation/ffmpeg-build/ffbuild/config.log
+            artifacts/cmake/qt-validation/software-codec/
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: true

@@ -5,6 +5,8 @@
 #include "app/Brand.h"
 #include "core/MediaFileName.h"
 #include "core/PixelBuffer.h"
+#include "platform/FileCommitter.h"
+#include "platform/windows/DesktopFiles.h"
 
 #include <shobjidl.h>
 #include <wincodec.h>
@@ -45,15 +47,18 @@ fs::path prepareDirectory()
     if (root.empty()) return {};
     std::error_code error;
     fs::create_directories(root, error);
-    return error ? fs::path{} : root;
+    if (error) return {};
+    // Known Folder redirection may intentionally name a directory link. Resolve
+    // this trusted application root before the commit adapter rejects unknown
+    // reparse parents. Do not canonicalize a sender-provided media pathname.
+    const auto resolved = fs::canonical(root, error);
+    return error ? fs::path{} : resolved;
 }
 
 fs::path temporaryPath(const fs::path& root)
 {
-    GUID id{};
-    wchar_t text[40]{};
-    if (FAILED(CoCreateGuid(&id)) || !StringFromGUID2(id, text, 40)) return {};
-    return root / (L".capture-" + std::wstring(text) + L".tmp");
+    std::error_code error;
+    return Platform::createExclusiveTemporaryFile(root, error);
 }
 
 struct TemporaryFile {
@@ -68,11 +73,16 @@ fs::path commitFile(const fs::path& temporary, const std::wstring& extension)
         const auto name = Core::makeMediaFileName(stamp, extension, sequence);
         if (name.empty()) return {};
         const auto destination = temporary.parent_path() / name;
-        // MOVEFILE_REPLACE_EXISTING is deliberately absent. The final rename,
-        // not a preceding exists() check, arbitrates concurrent save attempts.
-        if (MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) return destination;
-        const auto error = GetLastError();
-        if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) return {};
+        const auto result = Platform::commitFileNoReplace(temporary, destination);
+        if (result.durable()) return result.destination;
+        if (result.committed()) {
+            // A final file must survive even when persistence is uncertain.
+            // Keep the legacy empty-result failure contract, while reporting
+            // the actual surviving path instead of silently retrying it.
+            reportError(nullptr, result.destination.wstring());
+            return {};
+        }
+        if (result.error != std::errc::file_exists) return {};
     }
     return {};
 }
@@ -292,7 +302,15 @@ fs::path archiveFile(const fs::path& source)
     std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
     if (extension != L".png" && extension != L".gif" && extension != L".mp4") return {};
     TemporaryFile temporary{temporaryPath(root)};
-    if (temporary.path.empty() || !CopyFileW(source.c_str(), temporary.path.c_str(), TRUE)) return {};
+    // This operation already exclusively claimed the empty staging file.
+    // Only that owned file may be replaced; the final commit never replaces.
+    if (temporary.path.empty() || !CopyFileW(source.c_str(), temporary.path.c_str(), FALSE)) return {};
+    // CopyFile propagates read-only attributes. The completed original remains
+    // unchanged, but our own staging file needs write access for a checked flush.
+    const auto attributes = GetFileAttributesW(temporary.path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        ((attributes & FILE_ATTRIBUTE_READONLY) &&
+            !SetFileAttributesW(temporary.path.c_str(), attributes & ~FILE_ATTRIBUTE_READONLY))) return {};
     return commitFile(temporary.path, extension.substr(1));
 }
 
@@ -340,13 +358,8 @@ bool reveal(HWND owner, const fs::path& path)
     if (path == directory()) fs::create_directories(path, error);
     if (error) return false;
     if (fs::is_directory(path, error) && !error)
-        return reinterpret_cast<INT_PTR>(ShellExecuteW(owner, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
-    if (!regularFile(path)) return false;
-    auto id = ILCreateFromPathW(path.c_str());
-    if (!id) return false;
-    const auto result = SHOpenFolderAndSelectItems(id, 0, nullptr, 0);
-    ILFree(id);
-    return SUCCEEDED(result);
+        return Platform::Windows::openDesktopDirectory(path, owner).completed();
+    return Platform::Windows::revealDesktopFile(path).completed();
 }
 
 bool clear(HWND owner)
@@ -354,22 +367,11 @@ bool clear(HWND owner)
     std::error_code error;
     const auto entries = list(&error);
     if (error) return false;
-    if (entries.empty()) return true;
-    ComPtr<IFileOperation> operation;
-    if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_INPROC_SERVER,
-            IID_PPV_ARGS(operation.GetAddressOf()))) ||
-        FAILED(operation->SetOwnerWindow(owner)) ||
-        FAILED(operation->SetOperationFlags(FOFX_RECYCLEONDELETE | FOFX_ADDUNDORECORD |
-            FOFX_EARLYFAILURE | FOF_NOERRORUI | FOF_NOCONFIRMATION | FOF_WANTNUKEWARNING | FOF_NO_CONNECTED_ELEMENTS | FOF_NORECURSION))) return false;
-    for (const auto& entry : entries) {
-        if (!regularFile(entry.path)) continue;
-        ComPtr<IShellItem> item;
-        if (FAILED(SHCreateItemFromParsingName(entry.path.c_str(), nullptr, IID_PPV_ARGS(item.GetAddressOf()))) ||
-            FAILED(operation->DeleteItem(item.Get(), nullptr))) return false;
-    }
-    if (FAILED(operation->PerformOperations())) return false;
-    BOOL aborted = FALSE;
-    return SUCCEEDED(operation->GetAnyOperationsAborted(&aborted)) && !aborted;
+    std::vector<fs::path> files;
+    files.reserve(entries.size());
+    for (const auto& entry : entries) if (regularFile(entry.path)) files.push_back(entry.path);
+    return Platform::Windows::recycleDesktopFiles(files, owner,
+        Platform::Windows::RecyclePolicy::AllowSystemPermanentConfirmation, regularFile).completed();
 }
 
 HBITMAP loadThumbnail(const fs::path& path, unsigned maximumEdge)

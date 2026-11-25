@@ -1,5 +1,10 @@
 #pragma once
 #include <include/Ling.h>
+#include "editor/Geometry.h"
+#include <cstdint>
+#include <optional>
+#include <span>
+namespace HuhuCapture::Editor { class AnnotationModel; }
 class WinPin;
 class ShapeBase
 {
@@ -18,10 +23,16 @@ public:
 	// 单击本身就是正常用法的元素（number 落徽章、text 进编辑）覆盖它返回 true
 	virtual bool isValidWithoutDrag() { return false; };
 	bool isInRect(const D2D1_RECT_F rect, const float x, const float y);
+    virtual const HuhuCapture::Editor::AnnotationModel* annotationModel() const noexcept { return nullptr; }
+    virtual std::optional<std::uint64_t> ordinaryNumber() const noexcept { return std::nullopt; }
 public:
 	WinPin* win;
 	int hoverDraggerIndex{ -1 };
 protected:
+    // Convert standard geometry in bounded batches: no aliasing cast, no
+    // duplicated persistent point buffer and no per-vertex COM call overhead.
+    static void addPathLines(ID2D1GeometrySink* sink,
+        std::span<const HuhuCapture::Editor::EditorPoint> points);
 protected:
 	float draggerSize;
 	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brushDragger;

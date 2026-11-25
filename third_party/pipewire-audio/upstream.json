@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/PipeWire/pipewire.git",
+  "version": "1.6.11",
+  "commit": "4287f31510771fc999f8a58a024c81ca10b8d55f",
+  "reference": {
+    "path": "src/examples/audio-capture.c",
+    "blob": "2429a2d3491b6621cddd48492161b184ae378ca4",
+    "sha256": "a6fbdf1e0b42d1e842944a193e559a57b02793da80c52eb5d623b4c05f921b94",
+    "license": "MIT",
+    "copyright": "Copyright © 2022 Wim Taymans"
+  },
+  "use": "Stream creation, SPA audio negotiation and dequeue/process/queue lifecycle adapted in src/platform/linux/pipewire/PipeWireAudio.cpp. The production adapter adds two explicit requested sources, bounded owned PCM queues, graph-clock mapping, cancellation and strict error propagation; no external capture process or generated audio substitutes for native input.",
+  "license": {
+    "file": "COPYING",
+    "upstream": "COPYING",
+    "blob": "aa100ce9c02238111b56e394ad5a13311e23a521",
+    "sha256": "8909c319a7e27dbb33a15b9035f89ab3b7b2f6a12f8bcddc755206a8db1ada44"
+  }
+}

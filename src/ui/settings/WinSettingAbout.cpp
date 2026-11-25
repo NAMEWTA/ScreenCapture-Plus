@@ -63,7 +63,7 @@ WinSettingAbout::WinSettingAbout(Ling::WinBase* parent) : Ling::Node(parent)
     folderButton->setText(Lang::get(L"update.openFolder"));
     folderButton->onClick.add([this](Ling::Button*) {
         const auto state = Update::status();
-        if (state.stage != Update::Stage::Downloaded || state.file.empty()) return;
+        if (state.file.empty()) return;
         const auto directory = state.file.parent_path();
         if (reinterpret_cast<INT_PTR>(ShellExecuteW(win->hwnd, L"open", directory.c_str(),
             nullptr, nullptr, SW_SHOWNORMAL)) <= 32) {
@@ -92,6 +92,9 @@ WinSettingAbout::WinSettingAbout(Ling::WinBase* parent) : Ling::Node(parent)
     updateStatus = Theme::label(this, L"", Theme::captionSize, Theme::captionLineHeight, Theme::secondary);
     updateStatus->setId(L"settings-update-status");
     updateStatus->setMarginTop(8.f);
+    updateInstructions = Theme::label(this, L"", Theme::captionSize, Theme::captionLineHeight * 3.f, Theme::secondary);
+    updateInstructions->setId(L"settings-update-instructions");
+    updateInstructions->setMarginTop(4.f);
     downloadPath = Theme::label(this, L"", Theme::captionSize, Theme::captionLineHeight, Theme::secondary);
     downloadPath->setId(L"settings-update-path");
     downloadPath->setMarginTop(4.f);
@@ -122,9 +125,11 @@ void WinSettingAbout::refreshUpdate()
     tip->hide();
     folderButton->hide();
     downloadPath->hide();
+    updateInstructions->hide();
 
     switch (state.stage) {
     case Stage::Idle:
+    case Stage::Cancelled:
         updateStatus->setText(Lang::get(L"update.idle"));
         break;
     case Stage::Checking:
@@ -141,15 +146,20 @@ void WinSettingAbout::refreshUpdate()
         break;
     }
     case Stage::Downloaded: {
+        const auto* key = state.packageKind == Update::PackageKind::WindowsInstaller ? L"update.installWindows" :
+            state.packageKind == Update::PackageKind::WindowsPortableZip ? L"update.extractWindows" : L"update.downloaded";
         updateStatus->setText(std::format(L"v{} · {}", state.version, Lang::get(L"update.downloaded")));
-        // Labels do not wrap. Keep the complete resolved path available in the
-        // folder button's tooltip while fitting the caption at the minimum size.
-        const auto path = state.file.wstring();
-        wchar_t compactPath[64]{};
-        const bool compacted = PathCompactPathExW(compactPath, path.c_str(), 32, 0) != FALSE;
-        downloadPath->setText(compacted ? compactPath : state.file.filename().wstring());
-        downloadPath->show();
-        folderButton->show();
+        if (state.packageKind != Update::PackageKind::LegacyExecutable) {
+            auto instructions = Lang::get(key);
+            // Ling's basic Label keeps explicit newlines but does not wrap. The
+            // existing six-language messages contain two short sentences; give
+            // each its own line instead of clipping the installation action.
+            auto boundary = instructions.find(L". ");
+            if (boundary != instructions.npos) instructions.replace(boundary + 1, 1, L"\n");
+            else if ((boundary = instructions.find(L'。')) != instructions.npos) instructions.insert(boundary + 1, L"\n");
+            updateInstructions->setText(instructions);
+            updateInstructions->show();
+        }
         break;
     }
     case Stage::Failed: {
@@ -158,11 +168,22 @@ void WinSettingAbout::refreshUpdate()
         case Update::Error::Metadata: key = L"update.metadataError"; break;
         case Update::Error::Folder: key = L"update.folderError"; break;
         case Update::Error::Integrity: key = L"update.integrityError"; break;
-        case Update::Error::Save: key = L"update.saveError"; break;
+        case Update::Error::Save:
+        case Update::Error::DurabilityUnknown: key = L"update.saveError"; break;
         default: break;
         }
         updateStatus->setText(Lang::get(key));
         break;
     }
+    }
+    if (!state.file.empty()) {
+        // A retained file must remain discoverable even when durable completion
+        // is uncertain or safe cleanup failed. No path is executed here.
+        const auto path = state.file.wstring();
+        wchar_t compactPath[64]{};
+        const bool compacted = PathCompactPathExW(compactPath, path.c_str(), 32, 0) != FALSE;
+        downloadPath->setText(compacted ? compactPath : state.file.filename().wstring());
+        downloadPath->show();
+        folderButton->show();
     }
 }

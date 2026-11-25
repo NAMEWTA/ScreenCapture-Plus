@@ -1,0 +1,59 @@
+{
+  "repository": "https://github.com/image-rs/image-gif",
+  "tag": "v0.13.3",
+  "commit": "acf2f6f7e6195962a9f455dab50a278b7dabc884",
+  "crate": "gif",
+  "version": "0.13.3",
+  "license": "MIT OR Apache-2.0",
+  "attribution": "The image-rs Developers; MIT copyright (c) 2015 nwin.",
+  "integration": "Direct registry dependency of huhucapture-native, reusing the already pinned gifski graph; no copied parser or upstream source changes.",
+  "reviewed_source": [
+    {
+      "path": "Cargo.toml",
+      "git_blob_sha": "c463b8a6caf89f698d52345a6b56939839cff19b"
+    },
+    {
+      "path": "src/reader/mod.rs",
+      "git_blob_sha": "edd8d28ef318229095d1476c255f7662786c3718"
+    },
+    {
+      "path": "src/reader/decoder.rs",
+      "git_blob_sha": "b420d892f299135386574dfc1c081400a58b7247"
+    },
+    {
+      "path": "src/reader/converter.rs",
+      "git_blob_sha": "dbc80dfca3044a2302d9615ce1c5d0ab3b605fa0"
+    },
+    {
+      "path": "src/encoder.rs",
+      "git_blob_sha": "1933478475d70c90e380227fb0a4352e7a80260c"
+    }
+  ],
+  "licenses": [
+    {
+      "path": "LICENSE-APACHE",
+      "git_blob_sha": "f8e5e5ea03400291957779488f5e542e6964c39d"
+    },
+    {
+      "path": "LICENSE-MIT",
+      "git_blob_sha": "44669a4a237f9c07edf49abd5f3b5ba0e6ea902b"
+    }
+  ],
+  "lzw": {
+    "crate": "weezl",
+    "version": "0.1.10",
+    "repository": "https://github.com/image-rs/weezl",
+    "commit": "fd444602c54a17ed3a557b455906efd8c90a5c98",
+    "reviewed_source": {
+      "path": "src/decode.rs",
+      "git_blob_sha": "f7f764b4eaaf7152739d2f4cfce061613e659cd5"
+    },
+    "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+    "registry_checksum": "a751b3277700db47d3e574514de2eced5e54dc8a5436a3bf7a0b248b2cee16f3"
+  },
+  "validation": "Indexed full LZW output with exact per-frame pixel counts, mandatory end codes, frame bounds, palette index checks, trailer and physical EOF; bounded source/frame/aggregate/metadata budgets.",
+  "tests": "../../src/platform/rust/tests/gif_validation.rs",
+  "maintenance_document": "../../docs/rust-bridge.md",
+  "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+  "registry_checksum": "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
+}

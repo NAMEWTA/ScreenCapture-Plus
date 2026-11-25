@@ -3,6 +3,7 @@
 #include "capture/WinCap.h"
 #include "editor/WinPin.h"
 #include "capture/CutMask.h"
+#include "capture/PixelSample.h"
 #include "app/App.h"
 #include "services/ImageExport.h"
 #include "services/MediaHistory.h"
@@ -343,16 +344,7 @@ void WinCap::copyCurrentStage()
 
 std::tuple<int, int, int, int> WinCap::getCMYK(const BYTE& r, const BYTE& g, const BYTE& b)
 {
-    double R = r / 255.0, G = g / 255.0, B = b / 255.0;
-    double K = 1.0 - (std::max)(R, (std::max)(G, B));
-    double C = (K == 1.0) ? 0.0 : (1.0 - R - K) / (1.0 - K);
-    double M = (K == 1.0) ? 0.0 : (1.0 - G - K) / (1.0 - K);
-    double Y = (K == 1.0) ? 0.0 : (1.0 - B - K) / (1.0 - K);
-    return std::make_tuple(static_cast<int>(std::round(C * 100)),
-        static_cast<int>(std::round(M * 100)),
-        static_cast<int>(std::round(Y * 100)),
-        static_cast<int>(std::round(K * 100))
-    );
+    return HuhuCapture::Capture::cmyk(r, g, b);
 }
 ComPtr<ID2D1Bitmap1> WinCap::getCutImg()
 {
@@ -508,20 +500,16 @@ void WinCap::makeToolCap()
 
 bool WinCap::enterByArg()
 {
-    auto& args = Ling::App::get()->args;
-    auto it = args.find(L"--enter");
-    if (it == args.end()) return false;
-    auto& val = it->second;
+    using HuhuCapture::Core::CaptureEntry;
+    const auto entry = App::get()->startup().entry;
+    if (entry == CaptureEntry::Capture) return false;
     // 下面这几条路本来都是从 ToolCap 的按钮进的，start* 会检查选区是不是已经定下来了
     stage = CapStage::Adjust;
     refresh();      //收掉放大镜：这几条路都是马上要换阶段或者弹窗，屏幕上不能留着它
-    if (val == L"long") startLong();
-    else if (val == L"video") startVideo();
-    else if (val == L"qr" || val == L"qrcode") startQrcode();
-    else if (val == L"pin") startPin();   //等于替用户按住了 Ctrl 框选
-    // 值不认识（用户拼错了）：当没给这个参数，照常出工具条。上面那两句白做了，
-    // 但调用方接着也是这两句，重复一遍没有副作用
-    else return false;
+    if (entry == CaptureEntry::Scroll) startLong();
+    else if (entry == CaptureEntry::Recording) startVideo();
+    else if (entry == CaptureEntry::Qr) startQrcode();
+    else if (entry == CaptureEntry::Pin) startPin(); // 等于替用户按住了 Ctrl 框选
     return true;
 }
 

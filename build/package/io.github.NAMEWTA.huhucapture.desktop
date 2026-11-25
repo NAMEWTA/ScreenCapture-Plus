@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=huhucapture
+Comment=Capture, annotate, record and share your screen
+Exec=huhucapture
+Icon=io.github.NAMEWTA.huhucapture
+Terminal=false
+Categories=Graphics;Utility;
+StartupNotify=true
+StartupWMClass=io.github.NAMEWTA.huhucapture

@@ -1,0 +1,956 @@
+--- a/libportal/screenshot.c
++++ b/libportal/screenshot.c
+@@ -32,11 +32,24 @@
+   GTask *task;
+   char *request_path;
+   gulong cancelled_id;
++  gint refs;
++  gboolean completed;
+ } ScreenshotCall;
+ 
++static ScreenshotCall *
++screenshot_call_ref (ScreenshotCall *call)
++{
++  g_atomic_int_inc (&call->refs);
++  return call;
++}
++
++/* Callbacks and cancellation are dispatched on the caller's owning context.
++ * A D-Bus method reply may arrive after Response or cancellation. */
+ static void
+ screenshot_call_free (ScreenshotCall *call)
+ {
++  if (!g_atomic_int_dec_and_test (&call->refs))
++    return;
+   if (call->parent)
+     {
+       call->parent->parent_unexport (call->parent);
+@@ -55,6 +68,18 @@
+   g_object_unref (call->task);
+ 
+   g_free (call);
++}
++
++static void
++screenshot_call_complete (ScreenshotCall *call)
++{
++  call->completed = TRUE;
++  g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
++  if (call->signal_id)
++    {
++      g_dbus_connection_signal_unsubscribe (call->portal->bus, call->signal_id);
++      call->signal_id = 0;
++    }
+ }
+ 
+ static void
+@@ -70,7 +95,9 @@
+   guint32 response;
+   g_autoptr(GVariant) ret = NULL;
+ 
+-  g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
++  if (call->completed)
++    return;
++  screenshot_call_complete (call);
+ 
+   g_variant_get (parameters, "(u@a{sv})", &response, &ret);
+ 
+@@ -87,7 +114,7 @@
+         }
+       else
+         {
+-          const char *uri;
++          const char *uri = NULL;
+           g_variant_lookup (ret, "uri", "&s", &uri);
+           if (uri)
+             g_task_return_pointer (call->task, g_strdup (uri), g_free);
+@@ -121,19 +148,15 @@
+ {
+   ScreenshotCall *call = data;
+ 
+-  g_dbus_connection_call (call->portal->bus,
+-                          PORTAL_BUS_NAME,
+-                          call->request_path,
+-                          REQUEST_INTERFACE,
+-                          "Close",
+-                          NULL,
+-                          NULL,
+-                          G_DBUS_CALL_FLAGS_NONE,
+-                          -1,
+-                          NULL, NULL, NULL);
+-
+-  g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_CANCELLED, "Screenshot portal call canceled by caller");
+-
++  if (call->completed)
++    return;
++  screenshot_call_complete (call);
++  if (call->request_path)
++    g_dbus_connection_call (call->portal->bus, PORTAL_BUS_NAME,
++                            call->request_path, REQUEST_INTERFACE, "Close",
++                            NULL, NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
++  g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_CANCELLED,
++                           "Screenshot portal call canceled by caller");
+   screenshot_call_free (call);
+ }
+ 
+@@ -143,16 +166,17 @@
+                gpointer data)
+ {
+   ScreenshotCall *call = data;
+-  GError *error = NULL;
++  g_autoptr(GError) error = NULL;
+   g_autoptr(GVariant) ret = NULL;
+ 
+   ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (object), result, &error);
+-  if (error)
+-    {
+-      g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
+-      g_task_return_error (call->task, error);
++  if (error && !call->completed)
++    {
++      screenshot_call_complete (call);
++      g_task_return_error (call->task, g_steal_pointer (&error));
+       screenshot_call_free (call);
+     }
++  screenshot_call_free (call); /* D-Bus callback reference */
+ }
+ 
+ static void
+@@ -162,9 +186,20 @@
+   g_autofree char *token = NULL;
+   GCancellable *cancellable;
+ 
++  if (g_cancellable_is_cancelled (g_task_get_cancellable (call->task)))
++    {
++      cancelled_cb (g_task_get_cancellable (call->task), call);
++      return;
++    }
+   if (call->parent_handle == NULL)
+     {
+-      call->parent->parent_export (call->parent, parent_exported, call);
++      if (!call->parent->parent_export (call->parent, parent_exported, call))
++        {
++          screenshot_call_complete (call);
++          g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
++                                   "Could not export the screenshot parent window");
++          screenshot_call_free (call);
++        }
+       return;
+     }
+ 
+@@ -201,7 +236,7 @@
+                           -1,
+                           NULL,
+                           call_returned,
+-                          call);
++                          screenshot_call_ref (call));
+ }
+ 
+ /**
+@@ -232,6 +267,7 @@
+   g_return_if_fail ((flags & ~(XDP_SCREENSHOT_FLAG_INTERACTIVE)) == 0);
+ 
+   call = g_new0 (ScreenshotCall, 1);
++  g_atomic_int_set (&call->refs, 1);
+   call->color = FALSE;
+   call->portal = g_object_ref (portal);
+   if (parent)
+@@ -240,6 +276,7 @@
+     call->parent_handle = g_strdup ("");
+   call->interactive = (flags & XDP_SCREENSHOT_FLAG_INTERACTIVE) != 0;
+   call->task = g_task_new (portal, cancellable, callback, data);
++  g_task_set_check_cancellable (call->task, FALSE);
+   g_task_set_source_tag (call->task, xdp_portal_take_screenshot);
+ 
+   take_screenshot (call);
+@@ -294,6 +331,7 @@
+   g_return_if_fail (XDP_IS_PORTAL (portal));
+ 
+   call = g_new0 (ScreenshotCall, 1);
++  g_atomic_int_set (&call->refs, 1);
+   call->color = TRUE;
+   call->portal = g_object_ref (portal);
+   if (parent)
+@@ -301,6 +339,7 @@
+   else
+     call->parent_handle = g_strdup ("");
+   call->task = g_task_new (portal, cancellable, callback, data);
++  g_task_set_check_cancellable (call->task, FALSE);
+   g_task_set_source_tag (call->task, xdp_portal_pick_color);
+ 
+   take_screenshot (call);
+--- a/libportal/remote.c
++++ b/libportal/remote.c
+@@ -20,6 +20,7 @@
+ #include "config.h"
+ 
+ #include <gio/gunixfdlist.h>
++#include <unistd.h>
+ 
+ #include "remote.h"
+ #include "portal-private.h"
+@@ -39,11 +40,22 @@
+   GTask *task;
+   char *request_path;
+   gulong cancelled_id;
++  gint refs;
++  gboolean completed;
+ } CreateCall;
+ 
++static CreateCall *
++create_call_ref (CreateCall *call)
++{
++  g_atomic_int_inc (&call->refs);
++  return call;
++}
++
+ static void
+ create_call_free (CreateCall *call)
+ {
++  if (!g_atomic_int_dec_and_test (&call->refs))
++    return;
+   if (call->signal_id)
+     g_dbus_connection_signal_unsubscribe (call->portal->bus, call->signal_id);
+ 
+@@ -58,6 +70,39 @@
+   g_free (call->id);
+ 
+   g_free (call);
++}
++
++static void
++create_call_complete (CreateCall *call)
++{
++  call->completed = TRUE;
++  g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
++  if (call->signal_id)
++    {
++      g_dbus_connection_signal_unsubscribe (call->portal->bus, call->signal_id);
++      call->signal_id = 0;
++    }
++}
++
++static void
++create_call_error (CreateCall *call, GError *error)
++{
++  if (call->completed)
++    {
++      g_error_free (error);
++      return;
++    }
++  create_call_complete (call);
++  if (call->request_path)
++    g_dbus_connection_call (call->portal->bus, PORTAL_BUS_NAME,
++                            call->request_path, REQUEST_INTERFACE, "Close",
++                            NULL, NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
++  if (call->id)
++    g_dbus_connection_call (call->portal->bus, PORTAL_BUS_NAME,
++                            call->id, SESSION_INTERFACE, "Close",
++                            NULL, NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
++  g_task_return_error (call->task, error);
++  create_call_free (call);
+ }
+ 
+ static void
+@@ -73,23 +118,21 @@
+   guint32 response;
+   g_autoptr(GVariant) ret = NULL;
+ 
+-  g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
+-
++  if (call->completed)
++    return;
+   g_variant_get (parameters, "(u@a{sv})", &response, &ret);
+-
+   if (response == 0)
+     {
+       XdpSession *session;
+-
++      create_call_complete (call);
+       session = _xdp_session_new (call->portal, call->id, call->type);
+       g_task_return_pointer (call->task, session, g_object_unref);
+-    }
+-  else if (response == 1)
+-    g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_CANCELLED, "Screencast SelectSources() canceled");
+-  else if (response == 2)
+-    g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_FAILED, "Screencast SelectSources() failed");
+-
+-  create_call_free (call);
++      create_call_free (call);
++    }
++  else
++    create_call_error (call, g_error_new_literal (G_IO_ERROR,
++                         response == 1 ? G_IO_ERROR_CANCELLED : G_IO_ERROR_FAILED,
++                         "Screencast SelectSources() did not complete"));
+ }
+ 
+ static void
+@@ -98,16 +141,13 @@
+                gpointer data)
+ {
+   CreateCall *call = data;
+-  GError *error = NULL;
++  g_autoptr(GError) error = NULL;
+   g_autoptr(GVariant) ret = NULL;
+ 
+   ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (object), result, &error);
+   if (error)
+-    {
+-      g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
+-      g_task_return_error (call->task, error);
+-      create_call_free (call);
+-    }
++    create_call_error (call, g_steal_pointer (&error));
++  create_call_free (call); /* D-Bus callback reference */
+ }
+ 
+ static void
+@@ -119,6 +159,8 @@
+ 
+   token = g_strdup_printf ("portal%d", g_random_int_range (0, G_MAXINT));
+   handle = g_strconcat (REQUEST_PATH_PREFIX, call->portal->sender, "/", token, NULL);
++  g_free (call->request_path);
++  call->request_path = g_strdup (handle);
+   call->signal_id = g_dbus_connection_signal_subscribe (call->portal->bus,
+                                                         PORTAL_BUS_NAME,
+                                                         REQUEST_INTERFACE,
+@@ -152,7 +194,7 @@
+                           -1,
+                           g_task_get_cancellable (call->task),
+                           call_returned,
+-                          call);
++                          create_call_ref (call));
+ }
+ 
+ static void
+@@ -168,32 +210,26 @@
+   guint32 response;
+   g_autoptr(GVariant) ret = NULL;
+ 
++  if (call->completed)
++    return;
+   g_variant_get (parameters, "(u@a{sv})", &response, &ret);
+-
+-  if (response != 0)
+-    g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
+-
+   if (response == 0)
+     {
+       g_dbus_connection_signal_unsubscribe (call->portal->bus, call->signal_id);
+       call->signal_id = 0;
+-
+       if (call->outputs != XDP_OUTPUT_NONE)
+         select_sources (call);
+       else
+         {
+-          g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
++          create_call_complete (call);
+           g_task_return_pointer (call->task, _xdp_session_new (call->portal, call->id, call->type), g_object_unref);
+           create_call_free (call);
+         }
+     }
+-  else if (response == 1)
+-    g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_CANCELLED, "Remote desktop SelectDevices() canceled");
+-  else if (response == 2)
+-    g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_FAILED, "Remote desktop SelectDevices() failed");
+-
+-  if (response != 0)
+-    create_call_free (call);
++  else
++    create_call_error (call, g_error_new_literal (G_IO_ERROR,
++                         response == 1 ? G_IO_ERROR_CANCELLED : G_IO_ERROR_FAILED,
++                         "Remote desktop SelectDevices() did not complete"));
+ }
+ 
+ static void
+@@ -205,6 +241,8 @@
+ 
+   token = g_strdup_printf ("portal%d", g_random_int_range (0, G_MAXINT));
+   handle = g_strconcat (REQUEST_PATH_PREFIX, call->portal->sender, "/", token, NULL);
++  g_free (call->request_path);
++  call->request_path = g_strdup (handle);
+   call->signal_id = g_dbus_connection_signal_subscribe (call->portal->bus,
+                                                         PORTAL_BUS_NAME,
+                                                         REQUEST_INTERFACE,
+@@ -236,7 +274,7 @@
+                           -1,
+                           g_task_get_cancellable (call->task),
+                           call_returned,
+-                          call);
++                          create_call_ref (call));
+ }
+ 
+ static void
+@@ -252,28 +290,22 @@
+   guint32 response;
+   g_autoptr(GVariant) ret = NULL;
+ 
++  if (call->completed)
++    return;
+   g_variant_get (parameters, "(u@a{sv})", &response, &ret);
+-
+-  if (response != 0)
+-    g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
+-
+   if (response == 0)
+     {
+       g_dbus_connection_signal_unsubscribe (call->portal->bus, call->signal_id);
+       call->signal_id = 0;
+-
+       if (call->type == XDP_SESSION_REMOTE_DESKTOP)
+         select_devices (call);
+       else
+         select_sources (call);
+     }
+-  else if (response == 1)
+-    g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_CANCELLED, "CreateSession canceled");
+-  else if (response == 2)
+-    g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_FAILED, "CreateSession failed");
+-
+-  if (response != 0)
+-    create_call_free (call);
++  else
++    create_call_error (call, g_error_new_literal (G_IO_ERROR,
++                         response == 1 ? G_IO_ERROR_CANCELLED : G_IO_ERROR_FAILED,
++                         "CreateSession did not complete"));
+ }
+ 
+ static void
+@@ -281,17 +313,8 @@
+                      gpointer data)
+ {
+   CreateCall *call = data;
+-
+-  g_dbus_connection_call (call->portal->bus,
+-                          PORTAL_BUS_NAME,
+-                          call->request_path,
+-                          REQUEST_INTERFACE,
+-                          "Close",
+-                          NULL,
+-                          NULL,
+-                          G_DBUS_CALL_FLAGS_NONE,
+-                          -1,
+-                          NULL, NULL, NULL);
++  create_call_error (call, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED,
++                                               "Session creation canceled by caller"));
+ }
+ 
+ static void
+@@ -301,6 +324,12 @@
+   g_autofree char *token = NULL;
+   g_autofree char *session_token = NULL;
+   GCancellable *cancellable;
++
++  if (g_cancellable_is_cancelled (g_task_get_cancellable (call->task)))
++    {
++      create_cancelled_cb (g_task_get_cancellable (call->task), call);
++      return;
++    }
+ 
+   token = g_strdup_printf ("portal%d", g_random_int_range (0, G_MAXINT));
+   call->request_path = g_strconcat (REQUEST_PATH_PREFIX, call->portal->sender, "/", token, NULL);
+@@ -338,7 +367,7 @@
+                           -1,
+                           cancellable,
+                           call_returned,
+-                          call);
++                          create_call_ref (call));
+ }
+ 
+ static void
+@@ -347,22 +376,35 @@
+                                            gpointer data)
+ {
+   CreateCall *call = data;
+-  GError *error = NULL;
++  g_autoptr(GError) error = NULL;
+   g_autoptr(GVariant) version_variant = NULL;
+   g_autoptr(GVariant) ret = NULL;
+ 
+   ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (object), result, &error);
++  if (call->completed)
++    goto out;
+   if (error)
+     {
+-      g_task_return_error (call->task, error);
+-      create_call_free (call);
+-      return;
+-    }
+-
++      create_call_error (call, g_steal_pointer (&error));
++      goto out;
++    }
++  if (!g_variant_is_of_type (ret, G_VARIANT_TYPE ("(v)")))
++    {
++      create_call_error (call, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                                   "Invalid portal version response"));
++      goto out;
++    }
+   g_variant_get_child (ret, 0, "v", &version_variant);
++  if (!g_variant_is_of_type (version_variant, G_VARIANT_TYPE_UINT32))
++    {
++      create_call_error (call, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                                   "Invalid portal version type"));
++      goto out;
++    }
+   call->portal->screencast_interface_version = g_variant_get_uint32 (version_variant);
+-
+   create_session (call);
++out:
++  create_call_free (call);
+ }
+ 
+ static void
+@@ -379,34 +421,47 @@
+                           -1,
+                           g_task_get_cancellable (call->task),
+                           get_screencast_interface_version_returned,
+-                          call);
++                          create_call_ref (call));
+ }
+ 
+ static void
+ get_remote_desktop_interface_version_returned (GObject *object,
+-                                               GAsyncResult *result,
+-                                               gpointer data)
++                                           GAsyncResult *result,
++                                           gpointer data)
+ {
+   CreateCall *call = data;
+-  GError *error = NULL;
++  g_autoptr(GError) error = NULL;
+   g_autoptr(GVariant) version_variant = NULL;
+   g_autoptr(GVariant) ret = NULL;
+ 
+   ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (object), result, &error);
++  if (call->completed)
++    goto out;
+   if (error)
+     {
+-      g_task_return_error (call->task, error);
+-      create_call_free (call);
+-      return;
+-    }
+-
++      create_call_error (call, g_steal_pointer (&error));
++      goto out;
++    }
++  if (!g_variant_is_of_type (ret, G_VARIANT_TYPE ("(v)")))
++    {
++      create_call_error (call, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                                   "Invalid portal version response"));
++      goto out;
++    }
+   g_variant_get_child (ret, 0, "v", &version_variant);
++  if (!g_variant_is_of_type (version_variant, G_VARIANT_TYPE_UINT32))
++    {
++      create_call_error (call, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                                   "Invalid portal version type"));
++      goto out;
++    }
+   call->portal->remote_desktop_interface_version = g_variant_get_uint32 (version_variant);
+-
+   if (call->portal->screencast_interface_version == 0)
+     get_screencast_interface_version (call);
+   else
+     create_session (call);
++out:
++  create_call_free (call);
+ }
+ 
+ static void
+@@ -423,7 +478,7 @@
+                           -1,
+                           g_task_get_cancellable (call->task),
+                           get_remote_desktop_interface_version_returned,
+-                          call);
++                          create_call_ref (call));
+ }
+ 
+ /**
+@@ -460,6 +515,7 @@
+   g_return_if_fail ((flags & ~(XDP_SCREENCAST_FLAG_MULTIPLE)) == 0);
+ 
+   call = g_new0 (CreateCall, 1);
++  g_atomic_int_set (&call->refs, 1);
+   call->portal = g_object_ref (portal);
+   call->type = XDP_SESSION_SCREENCAST;
+   call->devices = XDP_DEVICE_NONE;
+@@ -469,6 +525,7 @@
+   call->restore_token = g_strdup (restore_token);
+   call->multiple = (flags & XDP_SCREENCAST_FLAG_MULTIPLE) != 0;
+   call->task = g_task_new (portal, cancellable, callback, data);
++  g_task_set_check_cancellable (call->task, FALSE);
+ 
+   if (portal->screencast_interface_version == 0)
+     get_screencast_interface_version (call);
+@@ -571,6 +628,7 @@
+   g_return_if_fail ((flags & ~(XDP_REMOTE_DESKTOP_FLAG_MULTIPLE)) == 0);
+ 
+   call = g_new0 (CreateCall, 1);
++  g_atomic_int_set (&call->refs, 1);
+   call->portal = g_object_ref (portal);
+   call->type = XDP_SESSION_REMOTE_DESKTOP;
+   call->devices = devices;
+@@ -580,6 +638,7 @@
+   call->restore_token = g_strdup (restore_token);
+   call->multiple = (flags & XDP_REMOTE_DESKTOP_FLAG_MULTIPLE) != 0;
+   call->task = g_task_new (portal, cancellable, callback, data);
++  g_task_set_check_cancellable (call->task, FALSE);
+ 
+   if (portal->remote_desktop_interface_version == 0)
+     get_remote_desktop_interface_version (call);
+@@ -618,11 +677,24 @@
+   GTask *task;
+   char *request_path;
+   gulong cancelled_id;
++  gulong closed_id;
++  gint refs;
++  gboolean completed;
+ } StartCall;
+ 
++static StartCall *
++start_call_ref (StartCall *call)
++{
++  g_atomic_int_inc (&call->refs);
++  return call;
++}
++
+ static void
+ start_call_free (StartCall *call)
+ {
++  if (!g_atomic_int_dec_and_test (&call->refs))
++    return;
++  g_clear_signal_handler (&call->closed_id, call->session);
+   if (call->parent)
+     {
+       call->parent->parent_unexport (call->parent);
+@@ -642,6 +714,57 @@
+   g_object_unref (call->task);
+ 
+   g_free (call);
++}
++
++static void
++start_call_complete (StartCall *call)
++{
++  call->completed = TRUE;
++  g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
++  g_clear_signal_handler (&call->closed_id, call->session);
++  if (call->signal_id)
++    {
++      g_dbus_connection_signal_unsubscribe (call->portal->bus, call->signal_id);
++      call->signal_id = 0;
++    }
++}
++
++static void
++start_call_error (StartCall *call, GError *error)
++{
++  if (call->completed)
++    {
++      g_error_free (error);
++      return;
++    }
++  start_call_complete (call);
++  if (call->request_path)
++    g_dbus_connection_call (call->portal->bus, PORTAL_BUS_NAME,
++                            call->request_path, REQUEST_INTERFACE, "Close",
++                            NULL, NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
++  if (call->session->state != XDP_SESSION_CLOSED)
++    xdp_session_close (call->session);
++  g_task_return_error (call->task, error);
++  start_call_free (call);
++}
++
++static void
++start_session_closed (XdpSession *session, gpointer data)
++{
++  start_call_error (data, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CLOSED,
++                                              "Session closed before Start completed"));
++}
++
++static void
++start_call_returned (GObject *object, GAsyncResult *result, gpointer data)
++{
++  StartCall *call = data;
++  g_autoptr(GError) error = NULL;
++  g_autoptr(GVariant) ret = NULL;
++  ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (object), result, &error);
++  if (error)
++    start_call_error (call, g_steal_pointer (&error));
++  start_call_free (call);
+ }
+ 
+ static void
+@@ -657,7 +780,9 @@
+   guint32 response;
+   g_autoptr(GVariant) ret = NULL;
+ 
+-  g_clear_signal_handler (&call->cancelled_id, g_task_get_cancellable (call->task));
++  if (call->completed)
++    return;
++  start_call_complete (call);
+ 
+   g_variant_get (parameters, "(u@a{sv})", &response, &ret);
+ 
+@@ -667,7 +792,7 @@
+   if (response == 0)
+     {
+       guint32 devices;
+-      GVariant *streams;
++      g_autoptr(GVariant) streams = NULL;
+ 
+       if (!g_variant_lookup (ret, "persist_mode", "u", &call->session->persist_mode))
+         call->session->persist_mode = XDP_PERSIST_MODE_NONE;
+@@ -686,7 +811,7 @@
+     g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_CANCELLED,
+                              call->session->type == XDP_SESSION_REMOTE_DESKTOP ?
+                              "Remote desktop canceled" : "Screencast canceled");
+-  else if (response == 2)
++  else
+     g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_FAILED,
+                              call->session->type == XDP_SESSION_REMOTE_DESKTOP ?
+                              "Remote desktop failed" : "Screencast failed");
+@@ -710,18 +835,8 @@
+ start_cancelled_cb (GCancellable *cancellable,
+                     gpointer data)
+ {
+-  StartCall *call = data;
+-
+-  g_dbus_connection_call (call->portal->bus,
+-                          PORTAL_BUS_NAME,
+-                          call->request_path,
+-                          REQUEST_INTERFACE,
+-                          "Close",
+-                          NULL,
+-                          NULL,
+-                          G_DBUS_CALL_FLAGS_NONE,
+-                          -1,
+-                          NULL, NULL, NULL);
++  start_call_error (data, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED,
++                                              "Session Start canceled by caller"));
+ }
+ 
+ static void
+@@ -731,9 +846,21 @@
+   g_autofree char *token = NULL;
+   GCancellable *cancellable;
+ 
++  if (g_cancellable_is_cancelled (g_task_get_cancellable (call->task)))
++    {
++      start_cancelled_cb (g_task_get_cancellable (call->task), call);
++      return;
++    }
++  if (call->session->state == XDP_SESSION_CLOSED)
++    {
++      start_session_closed (call->session, call);
++      return;
++    }
+   if (call->parent_handle == NULL)
+     {
+-      call->parent->parent_export (call->parent, parent_exported, call);
++      if (!call->parent->parent_export (call->parent, parent_exported, call))
++        start_call_error (call, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
++                                                    "Could not export the screencast parent window"));
+       return;
+     }
+ 
+@@ -770,9 +897,9 @@
+                           NULL,
+                           G_DBUS_CALL_FLAGS_NONE,
+                           -1,
+-                          cancellable,
+                           NULL,
+-                          NULL);
++                          start_call_returned,
++                          start_call_ref (call));
+ }
+ 
+ /**
+@@ -800,6 +927,7 @@
+   g_return_if_fail (XDP_IS_SESSION (session));
+ 
+   call = g_new0 (StartCall, 1);
++  g_atomic_int_set (&call->refs, 1);
+   call->portal = g_object_ref (session->portal);
+   call->session = g_object_ref (session);
+   if (parent)
+@@ -807,6 +935,8 @@
+   else
+     call->parent_handle = g_strdup ("");
+   call->task = g_task_new (session, cancellable, callback, data);
++  g_task_set_check_cancellable (call->task, FALSE);
++  call->closed_id = g_signal_connect (session, "closed", G_CALLBACK (start_session_closed), call);
+ 
+   start_session (call);
+ }
+@@ -879,6 +1009,98 @@
+   g_variant_get (ret, "(h)", &fd_out);
+ 
+   return g_unix_fd_list_get (fd_list, fd_out, NULL);
++}
++
++/* huhucapture extension: the upstream sync API loses GError and blocks the
++ * caller. Keep the same protocol call with GIO's async/cancellable FD support. */
++static void
++pipewire_fd_free (gpointer data)
++{
++  int *fd = data;
++  if (*fd >= 0)
++    close (*fd);
++  g_free (fd);
++}
++
++static void
++pipewire_remote_returned (GObject *object, GAsyncResult *result, gpointer data)
++{
++  g_autoptr(GTask) task = data;
++  g_autoptr(GError) error = NULL;
++  g_autoptr(GUnixFDList) fd_list = NULL;
++  g_autoptr(GVariant) ret = NULL;
++  int index;
++  int fd;
++
++  ret = g_dbus_connection_call_with_unix_fd_list_finish (G_DBUS_CONNECTION (object),
++                                                        &fd_list, result, &error);
++  if (!ret)
++    {
++      g_task_return_error (task, g_steal_pointer (&error));
++      return;
++    }
++  g_variant_get (ret, "(h)", &index);
++  if (!fd_list)
++    {
++      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                               "OpenPipeWireRemote returned no file descriptors");
++      return;
++    }
++  fd = g_unix_fd_list_get (fd_list, index, &error);
++  if (fd < 0)
++    g_task_return_error (task, g_steal_pointer (&error));
++  else
++    {
++      int *owned_fd = g_new (int, 1);
++      *owned_fd = fd;
++      g_task_return_pointer (task, owned_fd, pipewire_fd_free);
++    }
++}
++
++void
++xdp_session_open_pipewire_remote_async (XdpSession *session,
++                                        GCancellable *cancellable,
++                                        GAsyncReadyCallback callback,
++                                        gpointer data)
++{
++  GVariantBuilder options;
++  GTask *task;
++  g_return_if_fail (XDP_IS_SESSION (session));
++  task = g_task_new (session, cancellable, callback, data);
++  g_task_set_source_tag (task, xdp_session_open_pipewire_remote_async);
++  if (session->state != XDP_SESSION_ACTIVE)
++    {
++      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_CLOSED,
++                               "Screencast session is not active");
++      g_object_unref (task);
++      return;
++    }
++  g_variant_builder_init (&options, G_VARIANT_TYPE_VARDICT);
++  g_dbus_connection_call_with_unix_fd_list (session->portal->bus,
++                                            PORTAL_BUS_NAME, PORTAL_OBJECT_PATH,
++                                            "org.freedesktop.portal.ScreenCast",
++                                            "OpenPipeWireRemote",
++                                            g_variant_new ("(oa{sv})", session->id, &options),
++                                            G_VARIANT_TYPE ("(h)"), G_DBUS_CALL_FLAGS_NONE,
++                                            -1, NULL, cancellable,
++                                            pipewire_remote_returned, task);
++}
++
++int
++xdp_session_open_pipewire_remote_finish (XdpSession *session,
++                                         GAsyncResult *result,
++                                         GError **error)
++{
++  int *owned_fd;
++  int fd;
++  g_return_val_if_fail (g_task_is_valid (result, session), -1);
++  g_return_val_if_fail (g_task_get_source_tag (G_TASK (result)) == xdp_session_open_pipewire_remote_async, -1);
++  owned_fd = g_task_propagate_pointer (G_TASK (result), error);
++  if (!owned_fd)
++    return -1;
++  fd = *owned_fd;
++  g_free (owned_fd);
++  return fd;
+ }
+ 
+ static inline gboolean
+@@ -1397,8 +1619,6 @@
+ _xdp_session_set_session_state (XdpSession *session,
+                                 XdpSessionState state)
+ {
+-  session->state = state;
+-
+   if (state == XDP_SESSION_INITIAL && session->state != XDP_SESSION_INITIAL)
+     {
+       g_warning ("Can't move a session back to initial state");
+@@ -1410,6 +1630,7 @@
+       return;
+     }
+ 
++  session->state = state;
+   if (state == XDP_SESSION_CLOSED)
+     _xdp_session_close (session);
+ }
+--- a/libportal/remote.h
++++ b/libportal/remote.h
+@@ -184,6 +184,19 @@
+ XDP_PUBLIC
+ int         xdp_session_open_pipewire_remote (XdpSession           *session);
+ 
++/* Downstream async counterpart; returned descriptor is owned by the caller. */
++XDP_PUBLIC
++void        xdp_session_open_pipewire_remote_async (XdpSession *session,
++                                                   GCancellable *cancellable,
++                                                   GAsyncReadyCallback callback,
++                                                   gpointer data);
++
++XDP_PUBLIC
++int         xdp_session_open_pipewire_remote_finish (XdpSession *session,
++                                                    GAsyncResult *result,
++                                                    GError **error);
++
++
+ XDP_PUBLIC
+ XdpDeviceType   xdp_session_get_devices       (XdpSession *session);
+ 
+--- a/libportal/session.c
++++ b/libportal/session.c
+@@ -187,8 +187,13 @@
+   if (session->is_closed)
+     return;
+ 
++  /* Keep the object alive while observers release their own references, then
++   * break the portal registry/session strong-reference cycle on close. */
++  g_object_ref (session);
+   session->is_closed = TRUE;
+   g_signal_emit_by_name (session, "closed");
++  xdp_portal_remove_session (session->portal, session);
++  g_object_unref (session);
+ }
+ 
+ /**
+@@ -218,6 +223,7 @@
+ xdp_session_close (XdpSession *session)
+ {
+   g_return_if_fail (XDP_IS_SESSION (session));
++  g_object_ref (session);
+ 
+   g_dbus_connection_call (session->portal->bus,
+                           PORTAL_BUS_NAME,
+@@ -229,4 +235,5 @@
+ 
+   _xdp_session_set_session_state (session, XDP_SESSION_CLOSED);
+   _xdp_session_close (session);
+-}
++  g_object_unref (session);
++}

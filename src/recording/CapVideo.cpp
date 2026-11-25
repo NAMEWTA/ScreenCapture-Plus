@@ -7,10 +7,14 @@
 #include "app/App.h"
 #include "services/Setting.h"
 #include "services/Lang.h"
-#include "recording/VideoMp4.h"
+#include "platform/windows/NativeMp4Recording.h"
+#include "platform/FileIdentity.h"
 #include "recording/VideoGif.h"
-#include "platform/windows/ComApartment.h"
-#include <atlbase.h>
+#include <atomic>
+#include <filesystem>
+#include <new>
+#include <optional>
+#include <system_error>
 
 namespace {
     std::wstring recordingPath(const wchar_t* extension)
@@ -24,17 +28,6 @@ namespace {
         return (root / (std::wstring(L"capture-") + name + L"." + extension)).wstring();
     }
 
-    class MediaFoundationSession final {
-    public:
-        MediaFoundationSession() : result_(MFStartup(MF_VERSION)) {}
-        ~MediaFoundationSession() { if (SUCCEEDED(result_)) MFShutdown(); }
-        MediaFoundationSession(const MediaFoundationSession&) = delete;
-        MediaFoundationSession& operator=(const MediaFoundationSession&) = delete;
-        HRESULT result() const noexcept { return result_; }
-    private:
-        HRESULT result_;
-    };
-
     // MP4 录制失败以前是静默 return，用户那边就是"录完什么都没有"，连缓存文件都不生成。
     // 失败原因基本都在对方机器上（混合显卡笔记本把进程放在独显上跑，桌面复制就不成立），
     // 实测让用户在系统图形设置里给本程序选"节能"（把进程放回核显）能解决，
@@ -45,54 +38,15 @@ namespace {
         MessageBoxW(nullptr, text.data(), title.data(), MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
     }
 
-    // 可能管着录制区域那块屏的 (适配器, 输出) 组合
-    struct DupTarget
-    {
-        CComPtr<IDXGIAdapter1> ad;
-        UINT output{ 0 };
-        RECT mon{}; //这块屏在虚拟桌面里的位置
-    };
 
-    // 按 DXGI 枚举顺序收集所有报告了 rect 所在那块屏的 (适配器, 输出)。
-    // 原来 dp.ad / dp.nOutput 全是 0，意思是"默认适配器的第 0 个输出"：双显卡笔记本上
-    // 默认适配器可能是独显而内屏挂在核显上，独显的 EnumOutputs(0) 直接失败；
-    // 多显示器时也永远只录得到枚举出来的第一块屏。
-    // 收成一个列表而不是直接挑一个，是因为混合显卡笔记本上独显和核显会同时报告同一块屏，
-    // 而 DuplicateOutput 只在真正拥有这块屏的那个适配器上成立，另一个返回
-    // DXGI_ERROR_UNSUPPORTED(0x887A0004) —— 光看 desc 分不出来，只能一个个试
-    void collectDupTargets(const RECT& rect, std::vector<DupTarget>& targets)
-    {
-        HMONITOR hMon = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
-        if (!hMon) return;
-        CComPtr<IDXGIFactory1> factory;
-        if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory)) || !factory) return;
-        for (UINT i = 0;; ++i) {
-            CComPtr<IDXGIAdapter1> ad;
-            if (FAILED(factory->EnumAdapters1(i, &ad)) || !ad) break;
-            for (UINT j = 0;; ++j) {
-                CComPtr<IDXGIOutput> output;
-                if (FAILED(ad->EnumOutputs(j, &output)) || !output) break;
-                DXGI_OUTPUT_DESC desc{};
-                if (FAILED(output->GetDesc(&desc)) || desc.Monitor != hMon) continue;
-                targets.push_back({ ad, j, desc.DesktopCoordinates });
-            }
-        }
-    }
-
-    // 把桌面坐标的录制区域换算成某块屏的局部坐标 —— DesktopCapture 的裁剪是相对复制出来
-    // 那张纹理算的，纹理原点是这块屏的左上角，不是虚拟桌面的原点。
-    // 宽高的对齐要求见 startMp4 里的注释，平移之后得重新对一遍
-    RECT toLocalRect(const RECT& rect, const RECT& mon)
-    {
-        long l = std::max(rect.left, mon.left) - mon.left;
-        long t = std::max(rect.top, mon.top) - mon.top;
-        long r = std::min(rect.right, mon.right) - mon.left;
-        long b = std::min(rect.bottom, mon.bottom) - mon.top;
-        l = (l + 3) & ~3l;
-        t = (t + 1) & ~1l;
-        return { l, t, l + std::max(4l, (r - l) & ~3l), t + std::max(2l, (b - t) & ~1l) };
-    }
 }
+
+struct CapVideo::Mp4Recording {
+    std::wstring path;
+    HuhuCapture::Recording::BackendResult result;
+    std::optional<HuhuCapture::Platform::FileIdentity> identity;
+    std::atomic<bool> errorReported{};
+};
 
 CapVideo::CapVideo(WinCap* win) : win(win)
 {
@@ -102,6 +56,7 @@ CapVideo::CapVideo(WinCap* win) : win(win)
 
 CapVideo::~CapVideo()
 {
+    lifetime.reset();
     stopWorker();
 }
 
@@ -134,89 +89,59 @@ bool CapVideo::isRecording() const
 void CapVideo::startMp4(bool useSpeaker, bool useMic)
 {
     if (isRecording()) return;
-    auto& cutMask = win->cutMask;
-    const auto videoTempPath = recordingPath(L"mp4");
-    if (videoTempPath.empty()) { showRecordError(Lang::get(L"video.recordFailed"), Lang::get(L"about.sysTip")); return; }
-    mp4Param = std::make_unique<VideoMp4::DESKTOPCAPTUREPARAMS>();
-    // 编码格式不在这里定，交给下面采集线程里那个"HEVC 不行就退 H.264"的循环
-    // 录制区域先夹回桌面范围，再做对齐 —— 只会往里缩，不会越出桌面。
-    // HEVC 编码器要求宽高是偶数，链路中间的 RGB32->NV12 转换还会按对齐后的 stride
-    // 去读我们交出去的缓冲区，宽度不是 4 的倍数（stride 凑不满 16 字节）时，
-    // 有的驱动编码器会读到缓冲区外面，首帧就崩在驱动里。
-    // 所以宽度对齐到 4、高度对齐到 2，代价是最多少录右侧 3 像素、底部 1 像素。
-    long rcLeft = std::max((long)win->x, (long)(win->x + cutMask->maskRect.left));
-    long rcTop = std::max((long)win->y, (long)(win->y + cutMask->maskRect.top));
-    long rcRight = std::min((long)(win->x + win->w), (long)(win->x + cutMask->maskRect.right));
-    long rcBottom = std::min((long)(win->y + win->h), (long)(win->y + cutMask->maskRect.bottom));
-    // 左上角往里取整，宽高往下取整，两头都不会超出上面夹好的范围
-    rcLeft = (rcLeft + 3) & ~3l;
-    rcTop = (rcTop + 1) & ~1l;
-    // 框选不可能真的小到 4x2，这里只是别让宽高变成 0：rx 全 0 会被当成"录整屏"
-    const long rcW = std::max(4l, (rcRight - rcLeft) & ~3l);
-    const long rcH = std::max(2l, (rcBottom - rcTop) & ~1l);
-    mp4Param->rx = { rcLeft, rcTop, rcLeft + rcW, rcTop + rcH };
-    mp4Param->f = videoTempPath;
-    mp4Param->EndMS = 0;
-    mp4Param->fps = 30;
-    mp4Param->vbrm = 2;
-    mp4Param->vbrq = 50;
-    mp4Param->Qu = 50;
-    mp4Param->MustEnd = false;
-    VideoMp4::setAudio(mp4Param.get(), useSpeaker, useMic);
-    // 文案在这里先取出来按值带进线程：langObj 是 WinRT 对象，不往采集线程里带
-    auto errText = Lang::get(L"video.recordFailed");
-    auto errTitle = Lang::get(L"about.sysTip");
-    captureThread = std::jthread([this, errText, errTitle](std::stop_token) {
+    const auto path = recordingPath(L"mp4");
+    if (path.empty()) { showRecordError(Lang::get(L"video.recordFailed"), Lang::get(L"about.sysTip")); return; }
+    const auto& cut = win->cutMask->maskRect;
+    const auto left = std::max(static_cast<long>(win->x), static_cast<long>(win->x + cut.left));
+    const auto top = std::max(static_cast<long>(win->y), static_cast<long>(win->y + cut.top));
+    const auto right = std::min(static_cast<long>(win->x + win->w), static_cast<long>(win->x + cut.right));
+    const auto bottom = std::min(static_cast<long>(win->y + win->h), static_cast<long>(win->y + cut.bottom));
+    HuhuCapture::Recording::BackendRequest request;
+    request.region = {static_cast<std::int32_t>(left), static_cast<std::int32_t>(top),
+        static_cast<std::int32_t>(right - left), static_cast<std::int32_t>(bottom - top)};
+    request.systemAudio = useSpeaker; request.microphone = useMic;
+    mp4Param = std::make_shared<Mp4Recording>(); mp4Param->path = path;
+    const auto operation = mp4Param;
+    const auto errText = Lang::get(L"video.recordFailed");
+    const auto errTitle = Lang::get(L"about.sysTip");
+    const auto dispatcher = Ling::App::get()->dq;
+    const std::weak_ptr<int> ownerAlive = lifetime;
+    captureThread = std::jthread([operation, request, dispatcher, ownerAlive, errText, errTitle](std::stop_token stop) {
+        using HuhuCapture::Core::RecordingStage;
         try {
-            HuhuCapture::Platform::ComApartment apartment(COINIT_APARTMENTTHREADED);
-            if (FAILED(apartment.result())) {
-                showRecordError(errText, errTitle);
-                return;
-            }
-            MediaFoundationSession media;
-            if (FAILED(media.result())) {
-                showRecordError(errText, errTitle);
-                return;
-            }
-            // 逐个候选试到桌面复制能成立为止。Prepare 挂得很早（缓存文件都还没建），
-            // 所以换个候选整个重来最省事，也不用为了预探测多建一次复制对象。
-            // targets 得活到 DesktopCapture 返回：dp.ad 是裸指针，生命周期归我们管
-            std::vector<DupTarget> targets;
-            collectDupTargets(mp4Param->rx, targets);
-            const RECT deskRx = mp4Param->rx; //每个候选都从桌面坐标重新换算
-            int code = 0;
-            // 编码格式也得按可用性退让。HEVC 文件小得多，但它的编码器不是每台机器都有 ——
-            // 有的只带解码，有的靠显卡的硬件 MFT 而显卡没有。缺了的时候 AddStream 照样成功
-            //（那一步只是记下输出类型），要到 SetInputMediaType 解析编码器时才失败(-10)。
-            // 退回 H.264：它从 Win7 起就带软件编码器，没有装不上的道理，代价是同画质下文件更大
-            for (auto codec : { MFVideoFormat_HEVC, MFVideoFormat_H264 }) {
-                mp4Param->VIDEO_ENCODING_FORMAT = codec;
-                if (targets.empty()) {
-                    mp4Param->rx = deskRx;
-                    code = VideoMp4::DesktopCapture(*(mp4Param.get())); //一个都没匹配上，走库原来的默认行为
+            if (stop.stop_requested()) { operation->result.stopRequested = true; return; }
+            // Claim the legacy host's GUID path exclusively. The shared backend
+            // then receives the same identity-checked writer as the Qt session.
+            const auto file = CreateFileW(operation->path.c_str(), GENERIC_WRITE, 0, nullptr,
+                CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (file == INVALID_HANDLE_VALUE) {
+                operation->result.media.fail(RecordingStage::Prepare, HRESULT_FROM_WIN32(GetLastError()));
+            } else if (!CloseHandle(file)) {
+                operation->result.media.fail(RecordingStage::Finalize, HRESULT_FROM_WIN32(GetLastError()));
+            } else {
+                std::error_code error;
+                const auto claimed = HuhuCapture::Platform::readFileSnapshot(operation->path, error);
+                if (!claimed) operation->result.media.fail(RecordingStage::Prepare, error.value());
+                else {
+                    operation->identity = claimed->identity;
+                    auto writer = HuhuCapture::Platform::openOwnedEmptyFileForWrite(operation->path, claimed->identity, error);
+                    if (!writer) operation->result.media.fail(RecordingStage::Prepare, error.value());
+                    else operation->result = HuhuCapture::Platform::Windows::runNativeMp4(request, std::move(writer), {}, stop);
                 }
-                for (auto& t : targets) {
-                    if (mp4Param->MustEnd) break; //已经点了停止，别再起新的
-                    mp4Param->ad = t.ad;
-                    mp4Param->nOutput = t.output;
-                    mp4Param->rx = toLocalRect(deskRx, t.mon);
-                    code = VideoMp4::DesktopCapture(*(mp4Param.get()));
-                    if (code != -2) break; //成功了，或者失败在跟适配器无关的地方
-                }
-                if (mp4Param->MustEnd) break;
-                // 只有这两个码是"这台机器认不了这个编码器"，换编码器才有意义
-                if (code != -5 && code != -10) break;
             }
-            if (code != 0) showRecordError(errText, errTitle);
-        }
-        catch (...) {
-            // Never unwind out of a worker: release its COM/MF/encoder resources
-            // first, then report through the existing recording error message.
-            showRecordError(errText, errTitle);
+        } catch (const std::bad_alloc&) { operation->result.media.fail(RecordingStage::Encode, E_OUTOFMEMORY); }
+        catch (...) { operation->result.media.fail(RecordingStage::Encode, E_FAIL); }
+        // Reuse the existing WinClipboard dispatcher/lifetime pattern. A worker
+        // must not block the GUI's stop/join in a worker-owned modal MessageBox.
+        if (operation->result.media.firstError) {
+            try {
+                dispatcher.TryEnqueue([operation, ownerAlive, errText, errTitle] {
+                    if (!ownerAlive.expired() && !operation->errorReported.exchange(true))
+                        showRecordError(errText + L"\n\n" + operation->path, errTitle);
+                });
+            } catch (...) { /* stop() also reports any unreported worker error. */ }
         }
     });
-
-
 }
 
 void CapVideo::startGif()
@@ -231,13 +156,18 @@ void CapVideo::startGif()
     gifParam->w = (int)(cutMask->maskRect.right - cutMask->maskRect.left);
     gifParam->h = (int)(cutMask->maskRect.bottom - cutMask->maskRect.top);
     gifParam->path = videoTempPath;
-    captureThread = std::jthread([this](std::stop_token) {
+    const auto errText = Lang::get(L"video.recordFailed");
+    const auto errTitle = Lang::get(L"about.sysTip");
+    captureThread = std::jthread([this, errText, errTitle](std::stop_token) {
         try {
             VideoGif::createGif(gifParam.get());
+            if (gifParam->result.firstError)
+                showRecordError(errText + L"\n\n" + gifParam->path, errTitle);
         }
         catch (...) {
             // The GIF encoder and DIB own their resources even on allocation failure.
-            OutputDebugStringW(L"huhucapture: GIF capture failed.\n");
+            gifParam->result.fail(HuhuCapture::Core::RecordingStage::Encode, E_FAIL);
+            showRecordError(errText + L"\n\n" + gifParam->path, errTitle);
         }
     });
 }
@@ -254,31 +184,41 @@ std::wstring CapVideo::stop()
     win->hide();
     std::wstring filePath;
     if (mp4Param) {
-        mp4Param->MustEnd = true;
-        filePath = mp4Param->f;
+        captureThread.request_stop();
+        filePath = mp4Param->path;
     }
     if (gifParam) {
         gifParam->isFinish = true;
         filePath = gifParam->path;
     }
     stopWorker();
-    // 刚开录就点了停止，一帧都没采到 —— 这时 Finalize 出来的是个 0 字节的空壳。
-    // 别拿它去走存盘流程（那会白弹一次保存框，存出来还是个打不开的文件），
-    // 直接删掉、回空路径，让整个流程无声收场
-    if ((mp4Param && mp4Param->framesWritten == 0) ||
-        (gifParam && gifParam->framesWritten == 0)) {
-        DeleteFile(filePath.data());
+    const auto& result = mp4Param ? mp4Param->result.media : gifParam->result;
+    if (!result.canArchive()) {
+        // A clean immediate stop has no media to keep. On any capture, encode
+        // or finalize failure retain this unique session path for recovery,
+        // but never hand it to archiveFile as a completed recording.
+        if (result.completion(true) == HuhuCapture::Core::RecordingCompletion::Cancelled) {
+            if (mp4Param && mp4Param->identity) {
+                std::error_code error;
+                const auto current = HuhuCapture::Platform::readFileSnapshot(filePath, error);
+                if (current && current->identity == *mp4Param->identity) DeleteFileW(filePath.c_str());
+            } else if (!mp4Param) DeleteFileW(filePath.c_str());
+        }
         filePath.clear();
     }
+    const auto failedMp4 = mp4Param && result.firstError && !mp4Param->errorReported.exchange(true)
+        ? mp4Param->path : std::wstring{};
     // 参数置空即"已停止"，stopIfRecording / dispose 再进来时不会重复 join
     mp4Param.reset();
     gifParam.reset();
+    if (!failedMp4.empty()) showRecordError(Lang::get(L"video.recordFailed") + L"\n\n" + failedMp4,
+        Lang::get(L"about.sysTip"));
     return filePath;
 }
 
 void CapVideo::stopWorker()
 {
-    if (mp4Param) mp4Param->MustEnd = true;
+    if (mp4Param) captureThread.request_stop();
     if (gifParam) gifParam->isFinish = true;
     if (captureThread.joinable()) captureThread.join();
 }

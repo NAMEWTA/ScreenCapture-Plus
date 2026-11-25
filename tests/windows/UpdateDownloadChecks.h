@@ -4,6 +4,7 @@
 #include "core/ReleaseVersion.h"
 #include "services/Update.h"
 #include <set>
+#include <fstream>
 #include <shlobj.h>
 
 namespace HuhuCapture::Tests {
@@ -61,18 +62,25 @@ inline void runUpdateDownloadChecks(const fs::path& evidence, const std::functio
     historyRequire(!existing.contains(result.file), "Updater reused or overwrote a pre-existing Downloads file");
     created.path = result.file;
     historyRequire(fs::is_regular_file(result.file) && fs::file_size(result.file) == result.total && result.total > 0,
-        "Downloaded executable is missing or incomplete");
-    historyRequire(result.file.extension() == L".exe", "Updater exposed a partial download as the result");
+        "Downloaded package is missing or incomplete");
     const auto version = Core::parseReleaseVersion(result.version);
-    historyRequire(version && Ling::Util::getVerNum(result.file.wstring()) == *version,
-        "Downloaded executable version differs from the selected release");
+    historyRequire(version.has_value(), "Selected stable version is invalid");
+    if (result.packageKind == Update::PackageKind::WindowsPortableZip) {
+        std::ifstream file(result.file, std::ios::binary);
+        std::array<char, 4> header{}; file.read(header.data(), header.size());
+        historyRequire(result.file.extension() == L".zip" && header == std::array<char, 4>{'P', 'K', 3, 4},
+            "Completed portable package is not a ZIP");
+    } else {
+        historyRequire(result.file.extension() == L".exe" && Ling::Util::getVerNum(result.file.wstring()) == *version,
+            "Downloaded application/installer PE version differs from the selected release");
+    }
     historyRequire(historyButton(settings->body.get(), L"settings-update-folder") &&
         settingsNode(settings->body.get(), L"settings-update-status") &&
         settingsNode(settings->body.get(), L"settings-update-path"), "Completed download controls are missing after reopening About");
     captureHistoryWindow(settings, evidence / L"20-update-downloaded.png", pump);
     std::cout << "PASS live About download: remote " << Ling::Util::convertToStr(result.version)
         << ", Windows Downloads known folder, " << result.total
-        << " bytes, matching EXE version, retained file and close/reopen status.\n";
+        << " bytes, validated package form, retained file and close/reopen status.\n";
     std::cout << "Downloaded filename: " << Ling::Util::convertToStr(result.file.filename().wstring()) << '\n';
     settings->close();
     pump(100);

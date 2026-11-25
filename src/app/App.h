@@ -1,5 +1,6 @@
 #pragma once
 #include <include/Ling.h>
+#include "core/Startup.h"
 
 class App
 {
@@ -12,6 +13,7 @@ class App
 		// 表现为读取访问权限冲突
 		static void dispose();
 		static App* get();
+        const HuhuCapture::Core::StartupRequest& startup() const noexcept { return startup_; }
 		void takeScreenShot(int x, int y, int w, int h,ID2D1Bitmap1** img);
 		std::tuple<int, int, int, int> getScreenArea();
 		// 把窗口从屏幕捕获里摘出去：它在屏幕上照常显示、照常能点，但录屏和抓屏都拿不到它。
@@ -23,5 +25,6 @@ class App
 		static void excludeFromCapture(HWND hwnd);
 	private:
 		App();
+        HuhuCapture::Core::StartupRequest startup_;
 };
 

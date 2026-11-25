@@ -1,0 +1,40 @@
+{
+  "repository": "https://github.com/FFmpeg/FFmpeg.git",
+  "version": "9.0.2",
+  "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+  "license": "LGPL-2.1-or-later",
+  "licenseFile": "../../ffmpeg-mov/COPYING.LGPLv2.1",
+  "patches": [
+    {
+      "path": "0001-strict-mov-validation.patch",
+      "sha256": "8d459a15f6659b16ebd6d81dab8f177623fc5096eb6307704f82ffce8b803a6f",
+      "source": "libavformat/mov.c",
+      "sourceBlob": "e7e29d7f92de8d8324fa78a24312864ec4dcebc1",
+      "scope": "Only AV_EF_EXPLODE callers: reject child-box clamping and parser overreads; reject STCO/STSC/STSZ/STTS/CTTS counts whose physical payload cannot fit; propagate STSZ short-read failure; reject STSZ/TRUN sample-index expansion above a nonzero max_index_size before allocation.",
+      "compatibility": "Default playback repair and all codec/encoder implementations stay unchanged. Strict clients must explicitly configure max_index_size; the upstream default was not designed as a complete required-index budget.",
+      "limits": "This is not an OS memory limit or a proof that every MOV metadata type and decoder allocation is bounded. Complete real-file tests and additional resource review remain necessary.",
+      "localVerification": "Forward and reverse git apply --check succeeded against copies whose original Git blob exactly matches the fixed source. Native compile/runtime not yet run when this record was created.",
+      "beforeEvidence": {
+        "commit": "38e3906a219d7efedd51d39f1c318c168a66bdc3",
+        "run": 45569261154,
+        "linuxJob": 139051576055,
+        "finding": "Unpatched strict-input FFmpeg accepted the real stsz-extra-entry.mp4 as 251 decoded frames; every other case matched. Shared MF full validation independently accepted four damaged audio/video cases on Windows job 139053165531."
+      }
+    }
+  ],
+  "upstreamReview": {
+    "reviewDate": "2026-11-25",
+    "masterMovBlob": "785b7697dfd3925974039befe870d8cb8a7b48fc",
+    "finding": "The reviewed master retains child-size FFMIN recovery and successful return after the STSZ truncated warning; no equivalent strict change was found in the examined source or targeted commit searches.",
+    "relevantCommits": [
+      {
+        "commit": "a9901840079b156c88c6d9ad4a61bc6e7e9c6235",
+        "use": "Actual diff intentionally changes a failed STSZ read into a warning and success. Strict inspection preserves the read error instead."
+      },
+      {
+        "commit": "f1e47f87131dd7c3718496b83911e17586e26e80",
+        "use": "Read the actual missing-atoms and fragment composition-time cleanup patch. It does not implement the parent-bound and strict-table behavior needed here; no wholesale backport was appropriate."
+      }
+    ]
+  }
+}

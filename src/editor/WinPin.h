@@ -109,8 +109,6 @@ private:
 	Ling::TextBox* textBox{ nullptr };
 	ShapeText* editingText{ nullptr };
 	AnnotationPanel* annotationPanel{ nullptr }; // owned by body, detached before history destruction
-	HuhuCapture::Core::AnnotationSequence annotationSequence;
-	std::uint64_t selectedAnnotation{ 0 };
 	bool annotationPanelVisible{ false };
 	bool fitAnnotationsAfterPointer{ false };
 	float annotationPanelWidth{ 340.f }; // logical pixels; may narrow on a small monitor

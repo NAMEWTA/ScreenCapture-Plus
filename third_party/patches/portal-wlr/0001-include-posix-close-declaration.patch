@@ -1,0 +1,23 @@
+From: huhucapture maintainers
+Subject: [PATCH] screencast: include the declaration of close
+
+The fixed 0.8.1 source calls close() in xdpw_wlr_screencopy_finish()
+without including unistd.h. Ubuntu 24.04's host development headers do
+not supply that declaration transitively. Include its POSIX header;
+retain -Werror and all capture/transport behavior.
+
+Source: emersion/xdg-desktop-portal-wlr
+Commit: e1d5d16f0e064a0b788c5d70c11461b15ee7a4af
+License: MIT (the original LICENSE remains with the source/build)
+
+diff --git a/src/screencast/wlr_screencast.c b/src/screencast/wlr_screencast.c
+--- a/src/screencast/wlr_screencast.c
++++ b/src/screencast/wlr_screencast.c
+@@ -15,6 +15,7 @@
+ #include <sys/mman.h>
+ #include <sys/param.h>
+ #include <sys/stat.h>
++#include <unistd.h>
+ #include <assert.h>
+ #include <wayland-client-protocol.h>
+ #include <xf86drm.h>

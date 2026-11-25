@@ -1,0 +1,62 @@
+Subject: [PATCH] core: unwind partially initialized connection state
+
+Base: PipeWire 1.6.11, 4287f31510771fc999f8a58a024c81ca10b8d55f
+Apply after 0001-owned-remote-fd-on-setup-error.patch.
+
+core_new creates a memory pool and object map before resolving the protocol.
+A missing protocol, failed native client or failed proxy leaves those objects
+allocated. A proxy failure also leaves its protocol client on the protocol's
+client list, referring to the freed core. Check memory-pool creation and unwind
+only the resources already initialized at each failure label.
+
+The embedded core proxy has no core/proxy listeners until all fallible creation
+has succeeded. pw_proxy_init removes its failed map entry; pw_proxy_new frees
+its failed client proxy. Therefore this partial-construction path clears the
+map directly instead of calling the connected-core teardown on a half object.
+
+Reviewed core.c, proxy.c, mem.c, map.h and module-protocol-native.c at the fixed
+revision. The core_new implementation is unchanged in upstream 685cb07a92acac24677fded669308f036207bb9a;
+no matching upstream fix was found. Upstream MIT notices continue to apply.
+This is a huhucapture adaptation, not an assertion of upstream acceptance.
+
+diff --git a/src/pipewire/core.c b/src/pipewire/core.c
+--- a/src/pipewire/core.c
++++ b/src/pipewire/core.c
+@@ -339,6 +339,8 @@
+ 	p->context = context;
+ 	p->properties = properties;
+ 	p->pool = pw_mempool_new(NULL);
++	if (p->pool == NULL)
++		goto error_pool;
+ 	if (user_data_size > 0)
+ 		p->user_data = SPA_PTROFF(p, sizeof(struct pw_core), void);
+ 	p->proxy.user_data = p->user_data;
+@@ -385,17 +387,24 @@
+ 	res = -errno;
+ 	pw_log_error("%p: can't create properties: %m", p);
+ 	goto exit_free;
++error_pool:
++	res = -errno;
++	pw_log_error("%p: can't create memory pool: %m", p);
++	goto exit_free;
+ error_protocol:
+ 	pw_log_error("%p: can't find protocol '%s': %s", p, protocol_name, spa_strerror(res));
+-	goto exit_free;
++	goto exit_pool;
+ error_connection:
+ 	res = -errno;
+ 	pw_log_error("%p: can't create new native protocol connection: %m", p);
+-	goto exit_free;
++	goto exit_pool;
+ error_proxy:
+ 	pw_log_error("%p: can't initialize proxy: %s", p, spa_strerror(res));
+-	goto exit_free;
+-
++	pw_protocol_client_destroy(p->conn);
++
++exit_pool:
++	pw_map_clear(&p->objects);
++	pw_mempool_destroy(p->pool);
+ exit_free:
+ 	free(p);
+ exit_cleanup:

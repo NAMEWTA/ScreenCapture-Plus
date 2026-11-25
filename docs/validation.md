@@ -1,5 +1,22 @@
 # huhucapture 验证与桌面验收
 
+## 跨平台迁移验证
+
+迁移合同和未完成的工作包集中在 [Qt 迁移状态](qt-migration.md)。每次集成同时维护纯 C++ 核心、Qt Debug / Release、原 Windows 产品，以及已经接入的 Rust / Linux 平台检查；不能用一个测试任务替代全部门槛。
+
+| 自动检查 | 实际执行内容 | 不能据此宣称 |
+| --- | --- | --- |
+| 纯 C++ 模型 | 真实创建 / 拖动 / 编号 / 历史状态、布局和边界 | Qt 工具栏、输入焦点、IME 或真实鼠标已正确 |
+| Qt 合图 | 完整文本测量与真实 PNG、像素保留、字体缺失失败、资源上限 | 编辑器用户流程、跨屏窗口和所有字体组合已验收 |
+| 配置 / 文件提交 | 真实文件读写、原字节备份、冲突、别名、无覆盖和平台错误 | 所有系统的断电持久化、外部恶意进程隔离 |
+| Windows 音频格式 | 保护页附近的真实格式缓冲读取与拒绝非法格式 | 麦克风、系统声、长时混音同步或设备切换已验收 |
+| LocalSend core | 真实 TLS、证书、HTTP、有限文件流、取消和完成握手 | Qt 接收 UI、完整媒体解码、两台机器或官方客户端互操作已完成 |
+| Portal 故障 | 真实私有 D-Bus、缺失服务 / session bus、取消和晚到回调释放 | 桌面授权、屏幕像素、PipeWire 帧或 GlobalShortcuts 已工作 |
+
+字体测试必须检查实际字体面和字号，非零 glyph index 本身不足以排除占位字体引擎。Windows 正常导出测试使用原生 Qt Windows 平台；另外用无字体的真实 offscreen 后端验证失败保留旧输出。Linux 安装实际 CJK 字体。文件系统不允许创建符号链接时，用例明确打印未执行，不能将该分支写成已验证。
+
+CI 保留真实测试日志、PNG 和依赖构建证据。合并和 Issue 进度引用准确提交、工作流以及未执行项；失败后修复并重跑相同门槛，不删断言、换成 Mock 或把“未运行”记为通过。真实设备、安装升级和固定机器性能项按 Issue #5 第 15 节单独填写，P12 未完成前禁止正式 Qt 双平台发布。
+
 ## 如何读取验证结果
 
 本文定义验证范围、执行方式与证据位置。某项检查列在本文中，不代表某次构建已经执行或通过。huhucapture v0.0.5 的构建结果以对应提交的 [Windows Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 为准，发行文件以 [Release](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) 的 `build-info.json` 和 SHA256 为准。
@@ -47,6 +64,28 @@ g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/annotation_region
 ```
 
 这类结果只能证明核心逻辑，不包含 Windows 编译、字体、窗口和设备行为。
+
+## 共享 Qt 组件与 Wayland 边界
+
+`qt_editor_components` 使用正式 `EditorWindow` / `EditorCanvas`，复用同一
+`EditorDocument`、九工具模型、工具默认值与马赛克算法。测试直接发送 Qt 输入事件，
+检查文字和批注归属、焦点转移、撤销 / 重做、44 逻辑像素点击区域、异步输出令牌、
+失败或取消时保留编辑，以及实际 PNG 中的完整备注和原图像素。生成证据位于
+`artifacts/cmake/qt-validation/editor-render`。生成图像是明确的测试输入，
+这些断言不替代采集入口、系统剪贴板、物理键鼠、中文 IME 或混合 DPI 验收。
+
+`scripts/test-wayland-parent.py` 为每个场景启动私有 headless / pixman Sway，
+使用真实 xdg-foreign v2 协议验证父窗导出、取消、窗口销毁、协议失效及超时。
+暂停的只会是本脚本拥有的合成器子进程，独立 watchdog 负责恢复与回收。
+测试检查暂停期间的 Qt 事件循环心跳，恢复后用异步 Wayland roundtrip 屏障排空
+晚到事件；日志位于 `artifacts/cmake/qt-validation/wayland-parent`。
+它证明指定协议与生命周期场景，不代表 GNOME / Plasma 授权、实际屏幕采集或
+PipeWire 帧传输已通过。是否执行和通过，以对应提交的运行报告为准。
+
+Rust 聚合验证使用真实 gifski 编码、Qt GIF 解码、loopback TLS 传输与
+`FileCommitter` 持久化，再检查协议终态及停止后的事件排空。完整边界和匹配
+CRT 要求见 [Rust 桥接](rust-bridge.md)。本机 loopback 不能充当两台设备的
+发现、防火墙、证书确认、局域网吞吐和互传用户流程验收。
 
 ## Windows 原生导出
 

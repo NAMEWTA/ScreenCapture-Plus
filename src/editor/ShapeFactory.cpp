@@ -15,7 +15,11 @@ std::unique_ptr<ShapeBase> ShapeFactory::create(std::wstring_view toolId, WinPin
     if (toolId == L"rect") return std::make_unique<ShapeRect>(window);
     if (toolId == L"ellipse") return std::make_unique<ShapeEllipse>(window);
     if (toolId == L"arrow") return std::make_unique<ShapeArrow>(window);
-    if (toolId == L"number") return std::make_unique<ShapeNumber>(window);
+    if (toolId == L"number") {
+        auto number = std::make_unique<ShapeNumber>(window);
+        if (number->number() == 0) return nullptr;
+        return number;
+    }
     if (toolId == L"annotation") {
         auto annotation = std::make_unique<ShapeAnnotation>(window);
         if (annotation->number() == 0) return nullptr;

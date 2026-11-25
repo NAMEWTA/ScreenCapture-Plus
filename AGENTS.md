@@ -1,5 +1,33 @@
 # huhucapture repository guide
 
+## Active Qt migration
+
+[Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) is the sole P00–P14
+implementation plan. Issue #4 supplements Linux and LocalSend details. Read
+[the current migration boundaries](docs/qt-migration.md) before editing the new
+CMake, Qt, Linux, or Rust paths. The target product uses one C++20 / Qt 6 Widgets
+UI, editor, and service implementation; only actual OS capabilities belong in
+platform adapters. The shipping Windows build described below remains the
+regression baseline until P12 passes; P13 then removes Ling and the old build.
+Do not describe component validation as a complete Qt/Linux product or weaken
+release gates to remove the old architecture early.
+
+Reuse existing production behavior first, pinned cited upstream second, then
+mature libraries. Keep pure editor models free of Qt/Win32 and use them in the
+existing adapters while migrating. Register shared targets and tests in CMake;
+register files used by the old Windows product in its project and filters too.
+Pinned external changes need exact provenance, licenses and replayable patches.
+Do not edit restored dependencies as an undocumented build fix. LocalSend and
+gifski must ultimately share one aggregated Rust static library and the Qt CRT.
+
+Qt/native/Portal tests and old Windows regression checks have distinct scopes.
+Portal fault tests use a real bus, while desktop authorization and PipeWire
+frames require separate real desktop evidence. Preserve unknown configuration
+fields and original migration bytes; a stale writer or failed backup must not
+overwrite user data. See the migration guide for atomicity and durability limits.
+
+## Shipping Windows baseline
+
 huhucapture is a native Windows x64 C++20 application using Ling, Win32,
 Direct2D/DirectWrite, and Windows media APIs. It ships as `huhucapture.exe`.
 The canonical repository is `NAMEWTA/huhucapture`; the maintained branch is
@@ -81,8 +109,12 @@ and documentation rules live in [conventions](docs/conventions.md).
 
 - Use lowercase `huhucapture` for product, executable, solution, configuration,
   and release filenames; use `HuhuCapture` for the C++ namespace. Runtime brand
-  values belong in `src/app/Brand.h`; version values belong in
-  `build/windows/Version.props`. Keep updater and package metadata consistent.
+  values belong in `src/app/Brand.h`; `build/version.json` is the sole
+  hand-maintained version source. Run `python scripts/version_source.py --write`
+  after changing it; root `VERSION` and `build/windows/Version.props` are
+  generated compatibility files. CMake, MSBuild and packaging reject stale
+  generated values; tag arguments verify the source and must not relabel it.
+  Keep updater and package metadata consistent.
 - Follow [docs/brand.md](docs/brand.md) for SVG, PNG, and ICO assets. Brand family
   association does not imply an unimplemented integration with another product.
 - Keep `Lang/*.json` UTF-16 with BOM. Update embedded and external translations
@@ -131,6 +163,6 @@ Record actual commands, results, and untested boundaries according to
 [docs/validation.md](docs/validation.md). Do not claim checks that did not run.
 
 Normal stable releases are declared by `releases/publish.json`, matched by
-`Version.props` and `releases/<tag>.md`. The main workflow publishes only after
+`build/version.json` and `releases/<tag>.md`. The main workflow publishes only after
 all required checks pass; an already published declaration is left unchanged.
 See [docs/building.md](docs/building.md) for asset validation and recovery steps.

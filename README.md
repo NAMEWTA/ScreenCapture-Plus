@@ -15,6 +15,8 @@
 
 [下载 v0.0.5](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
 
+> **Qt / Linux 重构正在实施：** [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 是唯一主计划。当前正式下载仍为下文的 Windows v0.0.5；根目录 CMake 已接入统一 Qt 应用、真实平台服务及开发包验证入口；完整产品验收和正式双平台安装包发布仍未完成。应用装配与构建见 [Qt 应用](docs/qt-application.md)。实现边界、数据保护、P00–P14 状态与未验证项目见 [迁移状态](docs/qt-migration.md)。
+
 ## 截图与说明，一起保存
 
 ![huhucapture 的范围批注合成示例](docs/banner.png)
@@ -159,6 +161,8 @@ pwsh ./scripts/package.ps1
 ```
 
 程序输出到 `artifacts/bin/x64/Release/huhucapture.exe`。首次恢复依赖后可打开 `huhucapture.slnx` 调试。CI 共用这些脚本，只有完整验证通过后才会发布声明的版本。脚本覆盖范围、桌面手工验收和实际证据应分别记录，不能相互替代。
+
+产品版本只在 [build/version.json](build/version.json) 中维护。变更后运行 `python scripts/version_source.py --write` 更新兼容生成文件；普通构建、直接 MSBuild 和打包都会拒绝过期版本，运行程序不需要 Python。版本与发布声明规则见[构建与发布](docs/building.md)。
 
 | 文档 | 内容 |
 | --- | --- |

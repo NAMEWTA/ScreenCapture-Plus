@@ -2,6 +2,17 @@
 
 本文件记录公开版本的产品能力与交付内容。发行文件见 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases)，构建和验证方法见 [building.md](docs/building.md) 与 [validation.md](docs/validation.md)。
 
+## 未发布 — Qt 跨平台迁移中
+
+- 按 Issue #5 引入共享 C++20 / CMake 验证入口与固定 Qt 6.12.1 双平台组件 CI；当前不提供正式 Qt 产品或 Linux 安装包。
+- 从现有编辑工具抽出共用模型，旧 Windows 工具直接使用；新增 Qt 完整批注导出与真实像素、字体、长文本回归。
+- 增加配置兼容读取、未知字段保留、迁移原字节备份、并发写入冲突与重复导入保护。
+- 将无覆盖媒体提交抽为公共合同及系统适配，现有 Windows 归档已接入；录制完成和失败分离，保留首个错误及可恢复文件。
+- 修复 Windows 录音初始化、线程错误传递及音频格式缓冲边界，增加保护页验证。
+- 引入固定 LocalSend core 和受控补丁、真实 TLS 测试，以及基于 libportal 的 Linux 异步控制面。完整 UI、PipeWire 帧、编码、聚合 Rust 接口、安装与用户旅程仍按主计划实施。
+
+实际状态及发布门槛见 [迁移说明](docs/qt-migration.md)。此节不表示 P00–P14 或双平台验收已经完成，也不分配正式版本号。
+
 ## v0.0.5 — 2026-11-24
 
 ### 更新下载与跨屏拖动

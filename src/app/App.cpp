@@ -87,12 +87,14 @@ App::App()
     Ling::init();
     auto app = Ling::App::get();
     app->initArgs();
+    startup_ = HuhuCapture::Core::startupRequestFromValues<wchar_t>(
+        app->args[L"--auto-quit"], app->args[L"--auto-start"], app->args[L"--enter"]);
     Ling::D2D::addFonts({ L"icon.ttf" });
     // 录制中直接退出会让编码线程和 D3D 设备一起卡住，退出前先把录制停掉
     app->onBeforeQuit.add([]() { WinCap::stopIfRecording(); });
     Setting::init();
     Lang::init();
-    if (app->args[L"--auto-quit"] == L"true") {
+    if (startup_.oneShot) {
         WinCap::init();
     }
     else {
@@ -102,7 +104,7 @@ App::App()
         Setting::get()->initShortcutKeys([] { WinCap::init(); });
 		// 开机自启不启动截图；--enter=tray 也一样，用于直接进入托盘待命 ——
 		// 都是"只挂个托盘图标待命"，这条路上一个窗口都不建，图形设备也就根本不会创建
-		if (app->args[L"--auto-start"] == L"true" || app->args[L"--enter"] == L"tray") {
+		if (startup_.background) {
 			Update::checkLater();
 			return;
 		}

@@ -45,6 +45,14 @@ jobs:
       - name: Verify native annotation rendering and PNG export
         run: ./scripts/test-windows.ps1
 
+      - name: Install the pinned native-test interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+
+      - name: Verify the legacy bridge with real local HTTP transfers
+        run: ./scripts/test-windows-update.ps1
+
       - name: Check single-executable tray startup
         run: ./scripts/smoke.ps1
 

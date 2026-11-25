@@ -1,0 +1,337 @@
+[
+  {
+    "path": "Cargo.lock",
+    "sha": "bc5f600b379e95f421c2cbbfce5b418931bd2617",
+    "size": 129903
+  },
+  {
+    "path": "Cargo.toml",
+    "sha": "aa78542254fab0b705f489b0997048a5d3d8fdf3",
+    "size": 534
+  },
+  {
+    "path": "LICENSE",
+    "sha": "129b09014da391f203d75f06b86f27eaf13c5154",
+    "size": 11346
+  },
+  {
+    "path": "packages/core/Cargo.toml",
+    "sha": "21229bba416aadebf9da614cad0d941f48803366",
+    "size": 3050
+  },
+  {
+    "path": "packages/core/assets/web/download.html",
+    "sha": "4d662dcc1d4981b002a1db47f796abbbdb825268",
+    "size": 7772
+  },
+  {
+    "path": "packages/core/assets/web/error-403.html",
+    "sha": "69922bffcf0d78ab6f5c2c25225bf514dc8432ef",
+    "size": 206
+  },
+  {
+    "path": "packages/core/assets/web/upload.html",
+    "sha": "f5e19caae99c4fac76a274f6c46a46c922fbd02a",
+    "size": 11339
+  },
+  {
+    "path": "packages/core/examples/stress_send.rs",
+    "sha": "15d04fb5f6fd07a96abb4915558614d849cc2462",
+    "size": 3937
+  },
+  {
+    "path": "packages/core/src/crypto/cert.rs",
+    "sha": "e55181297ad21f1c6a1c10e6269c1228ee4799a9",
+    "size": 12496
+  },
+  {
+    "path": "packages/core/src/crypto/hash.rs",
+    "sha": "6b24fedeb67b51cb9996de54c312a0e5899f04a1",
+    "size": 3514
+  },
+  {
+    "path": "packages/core/src/crypto/mod.rs",
+    "sha": "d6e7ef6b5f8c694a508864586f003b9a27d21613",
+    "size": 58
+  },
+  {
+    "path": "packages/core/src/crypto/nonce.rs",
+    "sha": "c1e95b9bad5792f6a9303fd83bc4cd1eebbe3fe1",
+    "size": 231
+  },
+  {
+    "path": "packages/core/src/crypto/token.rs",
+    "sha": "e4dc6dd7d43eab638870bf863db466b0730034f5",
+    "size": 8195
+  },
+  {
+    "path": "packages/core/src/discovery/mod.rs",
+    "sha": "2dba8d638ff0eb3f00ac393021a3cde89c175026",
+    "size": 29198
+  },
+  {
+    "path": "packages/core/src/discovery/store.rs",
+    "sha": "7593463c27460db4a9208d0b3645f893eadf5e69",
+    "size": 44652
+  },
+  {
+    "path": "packages/core/src/http/client/mod.rs",
+    "sha": "aa9e9484dfce47a0373b94915bf9a4d9b48edac9",
+    "size": 25057
+  },
+  {
+    "path": "packages/core/src/http/client/scoped_host.rs",
+    "sha": "f1dc1bde752c558674744a5373ba3689cdf9b38e",
+    "size": 3603
+  },
+  {
+    "path": "packages/core/src/http/client/server_cert_verifier.rs",
+    "sha": "5d405c76b53aea65af230f5ca6b83239aa634d01",
+    "size": 7854
+  },
+  {
+    "path": "packages/core/src/http/client/url.rs",
+    "sha": "61e0fc89d8dcae7a048b4b320ff55270a4272c03",
+    "size": 4151
+  },
+  {
+    "path": "packages/core/src/http/client/v2.rs",
+    "sha": "a92b23faf248bf7a69ad642a7073146841a272a3",
+    "size": 15434
+  },
+  {
+    "path": "packages/core/src/http/client/v3.rs",
+    "sha": "6c55e13e8f3b290186cbc0eae5483286eb656a05",
+    "size": 9630
+  },
+  {
+    "path": "packages/core/src/http/dto.rs",
+    "sha": "1738054112b946e7e9028252744fe6cabed47434",
+    "size": 3972
+  },
+  {
+    "path": "packages/core/src/http/dto_v2.rs",
+    "sha": "9f9598217c2ab353effa874ea14288bcc00b4079",
+    "size": 8032
+  },
+  {
+    "path": "packages/core/src/http/mod.rs",
+    "sha": "2af0c5a8ffe6c8c5de56cbdd8bc27f17bdb6c915",
+    "size": 242
+  },
+  {
+    "path": "packages/core/src/http/server/common/client_cert_verifier.rs",
+    "sha": "73cf3dda6f333915a8e01053492c5c0ebcfaefb0",
+    "size": 3000
+  },
+  {
+    "path": "packages/core/src/http/server/common/collect_to_json.rs",
+    "sha": "9a99f9c7048a6786d9847f9e1035f47fe59a0da9",
+    "size": 636
+  },
+  {
+    "path": "packages/core/src/http/server/common/error.rs",
+    "sha": "e42644161d3b4710f0c1f73abcbb94ceba7dc0f4",
+    "size": 1393
+  },
+  {
+    "path": "packages/core/src/http/server/common/mod.rs",
+    "sha": "2a0d99469602f63e85fbabe7a4500df325e6c766",
+    "size": 147
+  },
+  {
+    "path": "packages/core/src/http/server/common/pin.rs",
+    "sha": "2353cf7763b76b6bc60931c2f1b03621ebc49a06",
+    "size": 1392
+  },
+  {
+    "path": "packages/core/src/http/server/common/query.rs",
+    "sha": "f60d5098c7d0a5a2c22699e2aff50aa102a150a5",
+    "size": 1356
+  },
+  {
+    "path": "packages/core/src/http/server/common/response.rs",
+    "sha": "300268226e71eeb6b97ec61cb136ed56a7799647",
+    "size": 1229
+  },
+  {
+    "path": "packages/core/src/http/server/common/save.rs",
+    "sha": "b12645d244c70efa5adf23baad5727efe466a4f5",
+    "size": 13541
+  },
+  {
+    "path": "packages/core/src/http/server/common/session.rs",
+    "sha": "c909a311dc1c61dcc03a8f5086358552af15f726",
+    "size": 2053
+  },
+  {
+    "path": "packages/core/src/http/server/connection_limit.rs",
+    "sha": "893fb4c908e0bf09f085d0ad5f924c7b02d1fc2d",
+    "size": 4892
+  },
+  {
+    "path": "packages/core/src/http/server/internal.rs",
+    "sha": "4e34de78b4e551738b7633c5a15db77cc91c0139",
+    "size": 2422
+  },
+  {
+    "path": "packages/core/src/http/server/mod.rs",
+    "sha": "e96f858a865e01a1ecad007e10c4bed0b70d87af",
+    "size": 27563
+  },
+  {
+    "path": "packages/core/src/http/server/peer_ip.rs",
+    "sha": "18822624be2782ecb27f93e1bbf3870bc9b1f7fc",
+    "size": 2113
+  },
+  {
+    "path": "packages/core/src/http/server/v2.rs",
+    "sha": "48b11d96ac7fa678fdf7630547e4eda06cafc4db",
+    "size": 24598
+  },
+  {
+    "path": "packages/core/src/http/server/v3.rs",
+    "sha": "71fc561d77c4110a5233877bf04f3df5c0afb5a2",
+    "size": 2481
+  },
+  {
+    "path": "packages/core/src/http/server/web.rs",
+    "sha": "ffdc3c92cf969a1520c5eb4123dca69067e1a1cb",
+    "size": 19027
+  },
+  {
+    "path": "packages/core/src/http/state.rs",
+    "sha": "3c5335db40d35ab2972857151d84772aa5e40b25",
+    "size": 792
+  },
+  {
+    "path": "packages/core/src/lib.rs",
+    "sha": "a80bdbaf5b773999c281e53f37e82f93cb6afef1",
+    "size": 288
+  },
+  {
+    "path": "packages/core/src/model/discovery.rs",
+    "sha": "050aa14faf3febd90809e8a74538d18ce9d54d12",
+    "size": 6598
+  },
+  {
+    "path": "packages/core/src/model/mod.rs",
+    "sha": "0fffa94f34585afc4804d8b896e2c1f6ff34a6c2",
+    "size": 37
+  },
+  {
+    "path": "packages/core/src/model/transfer.rs",
+    "sha": "d54c704db96b67781a8de365953ca0ca0c6c4dca",
+    "size": 12778
+  },
+  {
+    "path": "packages/core/src/multicast/mod.rs",
+    "sha": "df06a32aeaad0d15325491bd0222f8c7f66f60a0",
+    "size": 14481
+  },
+  {
+    "path": "packages/core/src/multicast/socket.rs",
+    "sha": "8eaac75b517f13a57ad879bfc4303701360677b5",
+    "size": 5734
+  },
+  {
+    "path": "packages/core/src/util/base64.rs",
+    "sha": "e3505860eccd3d57525e9f2d8b28d38a24827382",
+    "size": 363
+  },
+  {
+    "path": "packages/core/src/util/error.rs",
+    "sha": "8b34a2ddcf476778925d6188eb056b1802889e7e",
+    "size": 1584
+  },
+  {
+    "path": "packages/core/src/util/filename.rs",
+    "sha": "b4873c0a7c7101d779c81de73c836da065b6a6cc",
+    "size": 15396
+  },
+  {
+    "path": "packages/core/src/util/interface.rs",
+    "sha": "3093d607c144583d8131fbfd89c4b9adc0c7cd42",
+    "size": 8643
+  },
+  {
+    "path": "packages/core/src/util/mod.rs",
+    "sha": "c0d982c8646a9c65aa3b0650fdde891ad4adab6c",
+    "size": 118
+  },
+  {
+    "path": "packages/core/src/util/time.rs",
+    "sha": "6c229e431067e022270b46e2216b83857ea2068e",
+    "size": 222
+  },
+  {
+    "path": "packages/core/src/webrtc/mod.rs",
+    "sha": "dcc8d73dc5c74b1726a486a811a6bd0030b07267",
+    "size": 62
+  },
+  {
+    "path": "packages/core/src/webrtc/signaling.rs",
+    "sha": "302de5bb262355de019e74201c7e2e7b71f71745",
+    "size": 15463
+  },
+  {
+    "path": "packages/core/src/webrtc/webrtc.rs",
+    "sha": "e12a99512e4e0b55b74c24896ac99fdb87a2cb1a",
+    "size": 50585
+  },
+  {
+    "path": "packages/core/tests/accept_resilience.rs",
+    "sha": "94b2001dd8a2a8dc8ea60887752fe5eadd94af6a",
+    "size": 5116
+  },
+  {
+    "path": "packages/core/tests/connections.rs",
+    "sha": "cf772bb33f54a1c7133cc8db99506c5306f70495",
+    "size": 3531
+  },
+  {
+    "path": "packages/core/tests/discovery.rs",
+    "sha": "519a96c2d2b7cb02d3bc1185085c870047e37a08",
+    "size": 26669
+  },
+  {
+    "path": "packages/core/tests/event_backpressure.rs",
+    "sha": "d374c7f033646b9900aa98a5908d4319bff0cee8",
+    "size": 5841
+  },
+  {
+    "path": "packages/core/tests/hash.rs",
+    "sha": "8b493f32a0e4344c247e06880d759afd58afdd2f",
+    "size": 3751
+  },
+  {
+    "path": "packages/core/tests/internal_server.rs",
+    "sha": "32f69ebd7581b4c57c7c593ea406e9fb51bc28a5",
+    "size": 3741
+  },
+  {
+    "path": "packages/core/tests/multicast.rs",
+    "sha": "f5a7ba94b167b528f784e0c82a729826ea618af9",
+    "size": 7986
+  },
+  {
+    "path": "packages/core/tests/v2_server.rs",
+    "sha": "26bf0f74d00dfaf3e63bc1af0e102f6eb984fe1f",
+    "size": 47434
+  },
+  {
+    "path": "packages/core/tests/v2_tls_pinning.rs",
+    "sha": "744e427ea28167658391249d002da96682654d11",
+    "size": 19431
+  },
+  {
+    "path": "packages/core/tests/v2_web_download.rs",
+    "sha": "4a98d8212e6f9a20a256f0e9707b73d9d06c11a1",
+    "size": 18907
+  },
+  {
+    "path": "rust-toolchain.toml",
+    "sha": "ba59a010164ea0620696e3bc8181dfbc9398be30",
+    "size": 55
+  }
+]

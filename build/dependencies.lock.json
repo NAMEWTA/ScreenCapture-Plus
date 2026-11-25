@@ -10,5 +10,384 @@
     "repository": "https://github.com/ImageOptim/gifski.git",
     "version": "1.34.0",
     "commit": "1060eab4500a20f27e2fa3ab7e85473d0e921cbd"
+  },
+  "qtMigration": {
+    "status": "validation-in-progress",
+    "baseline": {
+      "version": "0.0.5",
+      "commit": "0efaf45aae1062436da8238814bba17c325fe4d3"
+    },
+    "qt": {
+      "version": "6.12.1",
+      "qtbaseRepository": "https://github.com/qt/qtbase.git",
+      "qtbaseCommit": "5af1a37e31a869cd6eb8a73d82e2c71a450e6634",
+      "windowsArch": "win64_msvc2022_64",
+      "linuxArch": "linux_gcc_64",
+      "windowsToolset": "v143",
+      "windowsCrt": "MD/MDd",
+      "qtbaseLicense": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    "aqtinstall": {
+      "repository": "https://github.com/miurahr/aqtinstall.git",
+      "commit": "4c759852b1108cc801d8e24979136b895b5155d4"
+    },
+    "rustToolchain": "1.97.1",
+    "localsend": {
+      "repository": "https://github.com/localsend/localsend.git",
+      "commit": "44f48f18a5503c43873570ff489d27ff1983e198",
+      "upstreamManifest": "third_party/localsend/upstream.json"
+    },
+    "libportal": {
+      "repository": "https://github.com/flatpak/libportal.git",
+      "version": "0.11.0",
+      "commit": "fc4d62cfe131e8494c82f597f92b2234d584c367",
+      "license": "LGPL-3.0-only",
+      "patches": [
+        {
+          "path": "third_party/patches/libportal/0001-capture-request-lifetime-and-async-fd.patch",
+          "sha256": "5fa507079a165e5a65d3f178173c18953465e0a66cd5c6660b0df809dc291cc7"
+        },
+        {
+          "path": "third_party/patches/libportal/0002-globalshortcuts-lifetime-and-qt-parent.patch",
+          "sha256": "c7236263f0c21dd925cc55356fc89a66fa4a2271c7f8fdae39871f6b5cf068f9"
+        },
+        {
+          "path": "third_party/patches/libportal/0003-preexported-parent-handle.patch",
+          "sha256": "db06a93fedd42dc950532560b39d059addb2dbe1b705057414d31d415b6f7021"
+        }
+      ]
+    },
+    "softwareMedia": {
+      "status": "P00 API and distribution-input validation; not desktop recording acceptance",
+      "x264": {
+        "repository": "https://github.com/mirror/x264.git",
+        "upstreamRepository": "https://code.videolan.org/videolan/x264.git",
+        "commit": "3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3",
+        "apiBuild": 164,
+        "license": "GPL-2.0-or-later",
+        "selectionSource": "VLC contrib/src/x264/rules.mak blob e0194f468c74f59f99d14775308942184481df12",
+        "configure": [
+          "--enable-shared",
+          "--enable-pic",
+          "--disable-cli",
+          "--disable-opencl",
+          "--disable-avs",
+          "--disable-lavf",
+          "--disable-ffms",
+          "--bit-depth=8",
+          "--chroma-format=420"
+        ]
+      },
+      "ffmpeg": {
+        "repository": "https://github.com/FFmpeg/FFmpeg.git",
+        "version": "9.0.2",
+        "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+        "configuredLicense": "GPL-3.0-or-later",
+        "configure": [
+          "--enable-shared",
+          "--disable-static",
+          "--disable-programs",
+          "--disable-doc",
+          "--disable-autodetect",
+          "--disable-network",
+          "--disable-everything",
+          "--disable-avdevice",
+          "--disable-avfilter",
+          "--enable-gpl",
+          "--enable-version3",
+          "--enable-libx264",
+          "--enable-encoder=libx264,aac",
+          "--enable-decoder=h264,hevc,aac,mp3float",
+          "--enable-parser=h264,hevc,aac,mpegaudio",
+          "--enable-muxer=mp4",
+          "--enable-demuxer=mov",
+          "--enable-protocol=file",
+          "--enable-swscale",
+          "--enable-swresample",
+          "--enable-debug=3",
+          "--disable-stripping"
+        ],
+        "patches": [
+          {
+            "path": "third_party/patches/ffmpeg/0001-strict-mov-validation.patch",
+            "sha256": "8d459a15f6659b16ebd6d81dab8f177623fc5096eb6307704f82ffce8b803a6f"
+          }
+        ]
+      }
+    },
+    "nativeRust": {
+      "package": "huhucapture-native",
+      "workspaceManifest": "third_party/localsend/Cargo.toml",
+      "bridgeManifest": "src/platform/rust/Cargo.toml",
+      "staticLibrary": "huhucapture_native",
+      "preserveCodecPackages": [
+        "imagequant",
+        "gif",
+        "gif-dispose",
+        "resize",
+        "rgb",
+        "imgref",
+        "loop9",
+        "ordered-channel",
+        "rayon",
+        "rayon-core",
+        "weezl"
+      ],
+      "windowsCrt": "MD",
+      "validationConfigurations": [
+        "Release",
+        "RelWithDebInfo"
+      ],
+      "cargoLockStatus": "aggregate-resolution-verified-windows-linux",
+      "buildPythonVersion": "3.13.17",
+      "setupPythonActionCommit": "ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "cargoLockSha256": "02579ba6cce8b2a4e55a464834b895f40dfb8b677e5211b5883fdd0b8369172c"
+    },
+    "waylandParent": {
+      "repository": "https://github.com/KDE/kwindowsystem.git",
+      "version": "6.32.0",
+      "commit": "870fed584663656db8b5e3d4ec1a7048b5eff25f",
+      "license": "LGPL-2.0-or-later",
+      "sourceManifest": "third_party/kwayland-parent/upstream.md",
+      "protocolBlob": "cc3271dca4d6211bf6d04c34c0ca973c52f9b552",
+      "qtPrivateAbi": "6.12.1"
+    },
+    "pipewire": {
+      "repository": "https://github.com/PipeWire/pipewire.git",
+      "version": "1.6.11",
+      "commit": "4287f31510771fc999f8a58a024c81ca10b8d55f",
+      "clientLicense": "MIT",
+      "patches": [
+        {
+          "path": "third_party/patches/pipewire/0001-owned-remote-fd-on-setup-error.patch",
+          "sha256": "5886887cfdbec4f2ee148358aa52f1b626dab60d29b2d01b4a0876c2eaf7a5c6"
+        },
+        {
+          "path": "third_party/patches/pipewire/0002-core-new-error-cleanup.patch",
+          "sha256": "4086eda6e2288c0059753783f709452013e7f50683cb50ee0749cc0068c7c694"
+        },
+        {
+          "path": "third_party/patches/pipewire/0003-unlink-other-failed-loop-sources.patch",
+          "sha256": "2eb40e839bb252e7a434b93e61d873bfff8bdd8b686b6d51b5d9aa4dde0a1ba1"
+        }
+      ],
+      "mesonOptions": [
+        "--buildtype=release",
+        "-Dauto_features=disabled",
+        "-Ddocs=disabled",
+        "-Dman=disabled",
+        "-Dexamples=disabled",
+        "-Dtests=disabled",
+        "-Dinstalled_tests=disabled",
+        "-Dsession-managers=[]",
+        "-Dpipewire-alsa=disabled",
+        "-Dpipewire-jack=disabled",
+        "-Dpipewire-v4l2=disabled",
+        "-Dspa-plugins=enabled",
+        "-Dsupport=enabled",
+        "-Dvideoconvert=enabled",
+        "-Daudioconvert=enabled",
+        "-Daudiomixer=disabled",
+        "-Dcontrol=disabled",
+        "-Daudiotestsrc=disabled",
+        "-Dvideotestsrc=disabled",
+        "-Ddbus=disabled",
+        "-Dflatpak=disabled",
+        "-Dlegacy-rtkit=false",
+        "-Dv4l2=disabled",
+        "-Dgstreamer=disabled",
+        "-Dffmpeg=disabled",
+        "-Dpw-cat=disabled",
+        "-Dpw-cat-ffmpeg=disabled",
+        "-Dsystemd-user-service=disabled",
+        "-Dsystemd-system-service=disabled",
+        "-Dlibsystemd=disabled",
+        "-Dlogind=disabled"
+      ]
+    },
+    "headlessPortalValidation": {
+      "purpose": "CI-owned software-rendered desktop only; not an application runtime dependency",
+      "backend": {
+        "repository": "https://github.com/emersion/xdg-desktop-portal-wlr.git",
+        "version": "0.8.1",
+        "commit": "e1d5d16f0e064a0b788c5d70c11461b15ee7a4af",
+        "license": "MIT",
+        "mesonOptions": [
+          "--buildtype=release",
+          "-Dsd-bus-provider=libsystemd",
+          "-Dsystemd=disabled",
+          "-Dman-pages=disabled"
+        ],
+        "patches": [
+          {
+            "path": "third_party/patches/portal-wlr/0001-include-posix-close-declaration.patch",
+            "sha256": "b0bfc62f8204e0df4630fe4938a2c7894d57939f9d7a50975822b34a86693764"
+          },
+          {
+            "path": "third_party/patches/portal-wlr/0002-allow-wlr-shm-without-dmabuf.patch",
+            "sha256": "3dc38990f49b16f82493631fcf4a2113804be4e9f0406b4e5487167f1f93fe0b"
+          }
+        ]
+      },
+      "waylandProtocols": {
+        "repository": "https://github.com/wayland-mirror/wayland-protocols.git",
+        "upstreamRepository": "https://gitlab.freedesktop.org/wayland/wayland-protocols.git",
+        "version": "1.40",
+        "commit": "c7b582cb71ec145026a547dcd8abb9dfeba40541",
+        "license": "MIT",
+        "scope": "Protocol XML build input, with per-protocol copyright notices retained"
+      }
+    },
+    "videoInspectionWindows": {
+      "source": "qtMigration.softwareMedia.ffmpeg",
+      "purpose": "Shared strict local-MP4 inspection and unsupported-codec cover fallback; Windows capture and encoding retain MF",
+      "configurations": {
+        "Debug": "MDd",
+        "Release": "MD"
+      },
+      "configure": [
+        "--toolchain=msvc",
+        "--target-os=win64",
+        "--arch=x86_64",
+        "--enable-shared",
+        "--disable-static",
+        "--disable-programs",
+        "--disable-doc",
+        "--disable-autodetect",
+        "--disable-network",
+        "--disable-everything",
+        "--disable-avdevice",
+        "--disable-avfilter",
+        "--enable-swscale",
+        "--disable-swresample",
+        "--enable-avcodec",
+        "--enable-avformat",
+        "--enable-avutil",
+        "--enable-decoder=h264,hevc,aac,mp3float",
+        "--enable-parser=h264,hevc,aac,mpegaudio",
+        "--enable-demuxer=mov",
+        "--enable-debug",
+        "--disable-stripping"
+      ],
+      "nasm": {
+        "version": "3.01",
+        "urls": [
+          "https://www.nasm.us/pub/nasm/releasebuilds/3.01/win64/nasm-3.01-win64.zip",
+          "https://www.nasm.dev/pub/nasm/releasebuilds/3.01/win64/nasm-3.01-win64.zip"
+        ],
+        "sha512": "771c238ddb17c98d5736ccaba4ade1d1601d896f09e588489cb43a4f6381bc0ae14d1869f5316fe94f847f54867e65cf12665529b1e7ad88e5e7d3e162719a4f",
+        "source": "microsoft/vcpkg scripts/cmake/vcpkg_find_acquire_program(NASM).cmake blob eda7b5d97fe3c51b47f1058a6ec06df3ec60e028"
+      },
+      "make": {
+        "version": "4.4.1-3",
+        "urls": [
+          "https://mirror.msys2.org/msys/x86_64/make-4.4.1-3-x86_64.pkg.tar.zst",
+          "https://repo.msys2.org/msys/x86_64/make-4.4.1-3-x86_64.pkg.tar.zst"
+        ],
+        "sha512": "52c08ceb977109570a97fe32a934a4bd27d471de4d7c53259cbdf9902706261bb771ebad9978d122f3498d1634d170da7ef378fd33592a4fec489a8710198677",
+        "source": "microsoft/vcpkg scripts/cmake/vcpkg_acquire_msys.cmake blob 81b027d78e3c5c19c8573ab8b1f80a8706a606eb"
+      },
+      "configuredLicense": "LGPL-2.1-or-later"
+    },
+    "hevcFixtureTools": {
+      "purpose": "CI-only real HEVC Main/Main10 fixture encoders and elementary-stream remuxer; never linked or packaged with the product",
+      "x265": {
+        "version": "4.1",
+        "urls": [
+          "https://downloads.videolan.org/pub/videolan/x265/x265_4.1.tar.gz",
+          "https://downloads.videolan.org/pub/contrib/x265/x265_4.1.tar.gz"
+        ],
+        "sha512": "5af5b958ff507f96a52813a6b72847c9fbc555bf95af287ae7f011055338266fb647dfea3b7789730c7f5c746f7e6cb7d9395ba10cbe43eb5034d3ed99730c3f",
+        "license": "GPL-2.0-or-later",
+        "archiveHashSource": "videolan/vlc contrib/src/x265/SHA512SUMS blob ecd0a04f6a72de0c607390d73e5e850468bf2cea",
+        "reviewMirror": "https://github.com/ShiftMediaProject/x265",
+        "reviewCommit": "5c2b6b749e5bb386fe7ff1a395dfdb72999bb7d0",
+        "reviewedFiles": [
+          {
+            "path": "source/CMakeLists.txt",
+            "blob": "5c6dda9e8cfa9f2aff43b516f74237b04d0952c5"
+          },
+          {
+            "path": "source/x265.cpp",
+            "blob": "d1a362070f4fde07357d9a3de2e6f16572bd0733"
+          },
+          {
+            "path": "source/input/yuv.cpp",
+            "blob": "65d696c4874dafd7c09c5d4b24a063633de05c98"
+          },
+          {
+            "path": "source/output/raw.cpp",
+            "blob": "7894e22fc6b987bf58d5956baa827ffc5d824206"
+          },
+          {
+            "path": "source/x265cli.cpp",
+            "blob": "6ca6fb495205f7e72a75c2093f2ae097d5c90a59"
+          },
+          {
+            "path": "source/abrEncApp.cpp",
+            "blob": "f4cf7b108dcfab3cb4dfd82ed2f7b50d48c56af1"
+          },
+          {
+            "path": "source/x265.h",
+            "blob": "7241beda203f9e8526fce6ad79058224f9e55002"
+          },
+          {
+            "path": "COPYING",
+            "blob": "d5457c93678be27ffeeef24195cfea5d201549e2"
+          }
+        ],
+        "cmake": [
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DENABLE_SHARED=OFF",
+          "-DENABLE_CLI=ON",
+          "-DENABLE_LIBNUMA=OFF",
+          "-DENABLE_HDR10_PLUS=OFF",
+          "-DENABLE_SVT_HEVC=OFF",
+          "-DENABLE_MULTIVIEW=OFF",
+          "-DENABLE_ALPHA=OFF"
+        ],
+        "hostCmake": "Ubuntu official /usr/bin/cmake 3.x; actual dpkg version and executable SHA256 recorded"
+      },
+      "ffmpeg": {
+        "source": "qtMigration.softwareMedia.ffmpeg",
+        "configure": [
+          "--enable-static",
+          "--disable-shared",
+          "--disable-doc",
+          "--disable-autodetect",
+          "--disable-network",
+          "--disable-everything",
+          "--disable-avdevice",
+          "--enable-ffmpeg",
+          "--disable-ffplay",
+          "--disable-ffprobe",
+          "--enable-avfilter",
+          "--enable-avcodec",
+          "--enable-avformat",
+          "--enable-avutil",
+          "--enable-decoder=hevc,aac",
+          "--enable-parser=hevc,aac",
+          "--enable-demuxer=hevc,mov",
+          "--enable-muxer=mp4",
+          "--enable-protocol=file",
+          "--enable-bsf=extract_extradata,setts"
+        ],
+        "purpose": "Stream copy only: upstream HEVC demux/parser -> MP4 mux, plus copied existing AAC; no encoder or external x265 library",
+        "reviewedSourceFiles": [
+          {
+            "path": "libavformat/rawdec.c",
+            "blob": "d0c829dc42911d4b5ff3c0064395eae4b7a58bb6"
+          },
+          {
+            "path": "libavcodec/bsf/setts.c",
+            "blob": "4106eb950e755a9ef570ca04e9c1e49a9155ac87"
+          },
+          {
+            "path": "configure",
+            "blob": "374bd5c1512943439480825f32e448e7871eb61c"
+          }
+        ]
+      }
+    }
   }
 }

@@ -1,0 +1,190 @@
+From: huhucapture maintainers
+Subject: [PATCH] avformat/mov: reject repaired bounds in explicit strict validation
+
+Base: FFmpeg 9.0.2, 946fcce07b6dcd0331c8cc609192aeff5e1924f8
+File: libavformat/mov.c blob e7e29d7f92de8d8324fa78a24312864ec4dcebc1
+License: LGPL-2.1-or-later; original notices remain in mov.c.
+
+Only callers requesting AV_EF_EXPLODE get these rejection semantics. Keep
+ordinary playback recovery unchanged. Strict local-file inspection must not
+silently clamp a child box, overread a sibling as another sample-table entry,
+or turn a truncated STSZ into successful EOF. Validate count-derived table
+payload sizes before allocating, and honor the caller's nonzero sample-index
+budget before STSZ/TRUN expansion. The full codec decoders are unchanged.
+
+This is not a complete memory sandbox for every MOV metadata type or codec.
+Actual generated good/bad-file tests must pass before use as an archive gate.
+
+diff --git a/libavformat/mov.c b/libavformat/mov.c
+--- a/libavformat/mov.c
++++ b/libavformat/mov.c
+@@ -2730,6 +2730,12 @@
+     // Clamp allocation size for `chunk_offsets` -- don't throw an error for an
+     // invalid count since the EOF path doesn't throw either.
+     entries = avio_rb32(pb);
++    if ((c->fc->error_recognition & AV_EF_EXPLODE) &&
++        (atom.size < 8 || entries > (uint64_t)(atom.size - 8) /
++            (atom.type == MKTAG('s', 't', 'c', 'o') ? 4 : 8))) {
++        av_log(c->fc, AV_LOG_ERROR, "STCO entry count exceeds its atom\n");
++        return AVERROR_INVALIDDATA;
++    }
+     entries =
+         FFMIN(entries,
+               FFMAX(0, (atom.size - 8) /
+@@ -3399,6 +3405,11 @@
+     avio_rb24(pb); /* flags */
+ 
+     entries = avio_rb32(pb);
++    if ((c->fc->error_recognition & AV_EF_EXPLODE) &&
++        (atom.size < 8 || (uint64_t)entries * 12 > atom.size - 8)) {
++        av_log(c->fc, AV_LOG_ERROR, "STSC entry count exceeds its atom\n");
++        return AVERROR_INVALIDDATA;
++    }
+     if ((uint64_t)entries * 12 + 4 > atom.size)
+         return AVERROR_INVALIDDATA;
+ 
+@@ -3613,6 +3624,20 @@
+ 
+     av_log(c->fc, AV_LOG_TRACE, "sample_size = %u sample_count = %u\n", sc->sample_size, entries);
+ 
++    if (c->fc->error_recognition & AV_EF_EXPLODE) {
++        if (atom.size < 12 ||
++            (!sample_size && ((uint64_t)entries * field_size + 7) / 8 >
++                             (uint64_t)(atom.size - 12))) {
++            av_log(c->fc, AV_LOG_ERROR, "STSZ entries exceed their atom\n");
++            return AVERROR_INVALIDDATA;
++        }
++        if (c->fc->max_index_size &&
++            entries > c->fc->max_index_size / sizeof(AVIndexEntry)) {
++            av_log(c->fc, AV_LOG_ERROR, "STSZ exceeds the strict sample-index budget\n");
++            return AVERROR(ENOMEM);
++        }
++    }
++
+     sc->sample_count = entries;
+     if (sample_size)
+         return 0;
+@@ -3647,7 +3672,7 @@
+         av_freep(&sc->sample_sizes);
+         av_free(buf);
+         av_log(c->fc, AV_LOG_WARNING, "STSZ atom truncated\n");
+-        return 0;
++        return c->fc->error_recognition & AV_EF_EXPLODE ? ret : 0;
+     }
+ 
+     init_get_bits(&gb, buf, 8*num_bytes);
+@@ -3695,6 +3720,12 @@
+ 
+     av_log(c->fc, AV_LOG_TRACE, "track[%u].stts.entries = %u\n",
+             c->fc->nb_streams-1, entries);
++
++    if ((c->fc->error_recognition & AV_EF_EXPLODE) &&
++        (atom.size < 8 || (uint64_t)entries * 8 > atom.size - 8)) {
++        av_log(c->fc, AV_LOG_ERROR, "STTS entry count exceeds its atom\n");
++        return AVERROR_INVALIDDATA;
++    }
+ 
+     if (sc->stts_data)
+         av_log(c->fc, AV_LOG_WARNING, "Duplicated STTS atom\n");
+@@ -3859,6 +3890,12 @@
+     entries = avio_rb32(pb);
+ 
+     av_log(c->fc, AV_LOG_TRACE, "track[%u].ctts.entries = %u\n", c->fc->nb_streams - 1, entries);
++
++    if ((c->fc->error_recognition & AV_EF_EXPLODE) &&
++        (atom.size < 8 || (uint64_t)entries * 8 > atom.size - 8)) {
++        av_log(c->fc, AV_LOG_ERROR, "CTTS entry count exceeds its atom\n");
++        return AVERROR_INVALIDDATA;
++    }
+ 
+     if (!entries)
+         return 0;
+@@ -6092,6 +6129,15 @@
+     offset   = frag->base_data_offset + data_offset;
+     distance = 0;
+     av_log(c->fc, AV_LOG_TRACE, "first sample flags 0x%x\n", first_sample_flags);
++
++    // Strict local-file validation must reject an over-budget complete index,
++    // not allocate an unbounded sample table or silently discard entries.
++    if ((c->fc->error_recognition & AV_EF_EXPLODE) && c->fc->max_index_size &&
++        (uint64_t)sti->nb_index_entries + entries >
++            c->fc->max_index_size / sizeof(AVIndexEntry)) {
++        av_log(c->fc, AV_LOG_ERROR, "TRUN exceeds the strict sample-index budget\n");
++        return AVERROR(ENOMEM);
++    }
+ 
+     // realloc space for new index entries
+     if ((uint64_t)sti->nb_index_entries + entries >= UINT_MAX / sizeof(AVIndexEntry)) {
+@@ -9882,6 +9928,7 @@
+     int64_t total_size = 0;
+     MOVAtom a;
+     int i;
++    const int strict = c->fc->error_recognition & AV_EF_EXPLODE;
+ 
+     if (c->atom_depth > 10) {
+         av_log(c->fc, AV_LOG_ERROR, "Atoms too deeply nested\n");
+@@ -9895,8 +9942,11 @@
+         int (*parse)(MOVContext*, AVIOContext*, MOVAtom) = NULL;
+         a.size = avio_rb32(pb);
+         a.type = avio_rl32(pb);
+-        if (avio_feof(pb))
++        if (avio_feof(pb)) {
++            if (strict)
++                goto invalid_atom;
+             break;
++        }
+         if (((a.type == MKTAG('f','r','e','e') && c->moov_retry) ||
+               a.type == MKTAG('h','o','o','v')) &&
+             a.size >= 8 &&
+@@ -9924,6 +9974,8 @@
+             }
+         }
+         total_size += 8;
++        if (strict && a.size == 1 && atom.size - total_size < 8)
++            goto invalid_atom;
+         if (a.size == 1 && total_size + 8 <= atom.size) { /* 64 bit extended size */
+             a.size = avio_rb64(pb) - 8;
+             total_size += 8;
+@@ -9933,11 +9985,19 @@
+         if (a.size == 0) {
+             a.size = atom.size - total_size + 8;
+         }
+-        if (a.size < 0)
++        if (a.size < 0) {
++            if (strict)
++                goto invalid_atom;
+             break;
++        }
+         a.size -= 8;
+-        if (a.size < 0)
++        if (a.size < 0) {
++            if (strict)
++                goto invalid_atom;
+             break;
++        }
++        if (strict && a.size > atom.size - total_size)
++            goto invalid_atom;
+         a.size = FFMIN(a.size, atom.size - total_size);
+ 
+         for (i = 0; mov_default_parse_table[i].type; i++)
+@@ -9970,6 +10030,8 @@
+                 c->atom_depth --;
+                 return err;
+             }
++            if (strict && avio_tell(pb) - start_pos > a.size)
++                goto invalid_atom;
+             if (c->found_moov && c->found_mdat && a.size <= INT64_MAX - start_pos &&
+                 ((!(pb->seekable & AVIO_SEEKABLE_NORMAL) || c->fc->flags & AVFMT_FLAG_IGNIDX || c->frag_index.complete) ||
+                  start_pos + a.size == avio_size(pb))) {
+@@ -9997,6 +10059,11 @@
+ 
+     c->atom_depth --;
+     return 0;
++
++invalid_atom:
++    av_log(c->fc, AV_LOG_ERROR, "MOV atom exceeds its declared parent or is truncated\n");
++    c->atom_depth --;
++    return AVERROR_INVALIDDATA;
+ }
+ 
+ static int mov_probe(const AVProbeData *p)

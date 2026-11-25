@@ -11,7 +11,7 @@ History::~History() = default;
 ShapeBase* History::createShape(std::wstring_view toolId, int x, int y)
 {
     auto shape = ShapeFactory::create(toolId, win);
-    auto* result = stack.append(std::move(shape),
+    auto* result = document_.append(std::move(shape),
         [this](ShapeBase* discarded) { releaseBorrows(discarded); });
     if (result) result->mouseDown(static_cast<float>(x), static_cast<float>(y));
     if (result) win->onAnnotationsChanged();
@@ -20,8 +20,7 @@ ShapeBase* History::createShape(std::wstring_view toolId, int x, int y)
 
 void History::undo()
 {
-    if (auto* shape = stack.undo()) {
-        releaseBorrows(shape);
+    if (document_.undo([this](ShapeBase* shape) { releaseBorrows(shape); })) {
         win->onAnnotationsChanged();
         win->refresh();
     }
@@ -29,7 +28,7 @@ void History::undo()
 
 void History::redo()
 {
-    if (stack.redo()) {
+    if (document_.redo()) {
         win->onAnnotationsChanged();
         win->refresh();
     }
@@ -42,7 +41,7 @@ void History::removeHoverShape()
 
 void History::removeShape(ShapeBase* target)
 {
-    if (stack.erase(target, [this](ShapeBase* removed) { releaseBorrows(removed); })) {
+    if (document_.erase(target, [this](ShapeBase* removed) { releaseBorrows(removed); })) {
         win->onAnnotationsChanged();
         win->refresh();
     }
@@ -52,7 +51,7 @@ void History::removeShapeLater(ShapeBase* target)
 {
     // Both this history and the exact item must still exist when the UI queue
     // runs. A new shape at the same address must not be removed by an old task.
-    const auto ticket = stack.ticket(target);
+    const auto ticket = document_.ticket(target);
     Ling::App::get()->dq.TryEnqueue([this, ticket]() {
         if (auto* shape = ticket.get()) removeShape(shape);
     });

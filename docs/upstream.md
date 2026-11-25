@@ -16,6 +16,16 @@ huhucapture 由 [NAMEWTA](https://github.com/NAMEWTA) 独立维护，使用自�
 
 ## 归属与分发
 
+Qt 迁移继续直接复用本仓库的 `HistoryStack`、批注几何 / 排版、`ScrollStitch`、Windows GDI / DXGI / Media Foundation / WASAPI、quirc 和 gifski。模型抽取保留来源与行为，原 Windows 适配仍直接调用共享模型；不把换用 Qt 表述为重写或原创这些能力。
+
+新增的 LocalSend core 固定到 `44f48f18a5503c43873570ff489d27ff1983e198`，只引入 Rust core，不引入 Flutter / Dart 运行时。原始文件 blob、Apache-2.0 许可和受控改动补丁随源码保存，详见 [LocalSend core](localsend-core.md)。Linux Portal 复用 libportal 0.11.0 与对应 Qt 后端，补丁只针对已检查的生命周期和异步接缝；精确提交、上游文件和 LGPL / GPL 许可见 [Linux Portal](linux-portal.md)。
+
+Wayland 异步父窗口导出适配 KWindowSystem 6.32.0 固定提交 `870fed584663656db8b5e3d4ec1a7048b5eff25f` 中的两类导出对象，保留 Kai Uwe Broulik 的 LGPL-2.0-or-later 归属；未引入整套 KDE Frameworks。原始源码 blob、Qt 私有 ABI 边界及协议 XML 来源见 [来源清单](../third_party/kwayland-parent/upstream.md)。
+
+Linux 软件媒体验证直接构建固定 FFmpeg 9.0.2 和 x264 API 164，并复用上游 mux / decode 示例的 API 流程。Fabrice Bellard、Stefano Sabatini 的 MIT 示例归属与依赖本身的 GPL 条款分别保留，详见 [软件编解码](software-codecs.md)。
+
+Qt 按各模块的实际许可部署；现有 gifski 的 AGPL、libportal / KWindowSystem 的 LGPL 和软件编码组合的 GPL 条款都必须独立保留。新的 Qt 组合二进制与对应源码 / 构建说明尚未完成发行审查，不能根据仓库根 MIT 声明直接声称所有依赖都采用 MIT。
+
 上游致谢是源码与分发说明的一部分，不随本项目名称、分支或贡献统计的展示方式改变。
 
 - ScreenCapture 继承快照的 [应用资源](https://github.com/xland/ScreenCapture/blob/5e4713e2fbe333873abff911424a212923489ccd/Src/Res/Resource.rc) 声明 `Copyright (C) LiuXiaoLun 2023-2026`，本项目在第三方声明中保留该归属。

@@ -88,19 +88,59 @@
     <ClCompile Include="..\..\src\pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp" />
+    <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\DesktopClipboard.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\DesktopFiles.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileIdentity.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileHandleStream.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\NativeMp4Recording.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="..\..\src\recording\CapVideo.cpp" />
-    <ClCompile Include="..\..\src\recording\VideoGif.cpp" />
-    <ClCompile Include="..\..\src\recording\VideoMp4.cpp" />
+    <ClCompile Include="..\..\src\recording\VideoGif.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\recording\VideoMp4.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\services\AnnotationRenderer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\..\src\services\ImageExport.cpp" />
+    <ClCompile Include="..\..\src\core\QrRecognition.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>QUIRC_MAX_REGIONS=65534;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\QrText.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ObjectFileName>$(IntDir)platform_qr_text.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\QrText.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ObjectFileName>$(IntDir)windows_qr_text.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\..\src\services\ImageRecognition.cpp" />
     <ClCompile Include="..\..\src\services\Lang.cpp" />
     <ClCompile Include="..\..\src\services\MediaHistory.cpp" />
     <ClCompile Include="..\..\src\services\Setting.cpp" />
     <ClCompile Include="..\..\src\services\Update.cpp" />
+    <ClCompile Include="..\..\src\services\update\WindowsUpdateDownload.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\ui\AnnotationPanel.cpp" />
     <ClCompile Include="..\..\src\ui\Tip.cpp" />
     <ClCompile Include="..\..\src\ui\Tray.cpp" />
@@ -152,6 +192,7 @@
     <ClInclude Include="..\..\src\app\App.h" />
     <ClInclude Include="..\..\src\app\Brand.h" />
     <ClInclude Include="..\..\src\capture\CapLong.h" />
+    <ClInclude Include="..\..\src\capture\SelectionModel.h" />
     <ClInclude Include="..\..\src\capture\CutMask.h" />
     <ClInclude Include="..\..\src\capture\WinCap.h" />
     <ClInclude Include="..\..\src\core\Annotation.h" />
@@ -160,9 +201,25 @@
     <ClInclude Include="..\..\src\core\ImagePreview.h" />
     <ClInclude Include="..\..\src\core\PixelBuffer.h" />
     <ClInclude Include="..\..\src\core\MediaFileName.h" />
+    <ClInclude Include="..\..\src\core\MediaClock.h" />
+    <ClInclude Include="..\..\src\core\MosaicPixels.h" />
+    <ClInclude Include="..\..\src\core\ShortcutKeys.h" />
+    <ClInclude Include="..\..\src\core\Startup.h" />
+    <ClInclude Include="..\..\src\editor\ToolSettings.h" />
+    <ClInclude Include="..\..\src\core\RecordingResult.h" />
+    <ClInclude Include="..\..\src\core\RecordingTime.h" />
     <ClInclude Include="..\..\src\core\ReleaseVersion.h" />
+    <ClInclude Include="..\..\src\core\ReleasePackage.h" />
     <ClInclude Include="..\..\src\core\ScrollStitch.h" />
     <ClInclude Include="..\..\src\editor\History.h" />
+    <ClInclude Include="..\..\src\editor\AnnotationModel.h" />
+    <ClInclude Include="..\..\src\editor\Geometry.h" />
+    <ClInclude Include="..\..\src\editor\BoxModel.h" />
+    <ClInclude Include="..\..\src\editor\StrokeModel.h" />
+    <ClInclude Include="..\..\src\editor\ArrowModel.h" />
+    <ClInclude Include="..\..\src\editor\NumberModel.h" />
+    <ClInclude Include="..\..\src\editor\TextModel.h" />
+    <ClInclude Include="..\..\src\editor\EditorDocument.h" />
     <ClInclude Include="..\..\src\editor\ShapeFactory.h" />
     <ClInclude Include="..\..\src\editor\WinPin.h" />
     <ClInclude Include="..\..\src\editor\shapes\ShapeAnnotation.h" />
@@ -177,23 +234,37 @@
     <ClInclude Include="..\..\src\editor\shapes\ShapeText.h" />
     <ClInclude Include="..\..\src\pch.h" />
     <ClInclude Include="..\..\src\platform\windows\ComApartment.h" />
+    <ClInclude Include="..\..\src\platform\windows\AudioFormat.h" />
+    <ClInclude Include="..\..\src\platform\FileCommitter.h" />
+    <ClInclude Include="..\..\src\platform\FileIdentity.h" />
+    <ClInclude Include="..\..\src\platform\windows\FileHandleStream.h" />
+    <ClInclude Include="..\..\src\platform\windows\NativeMp4Recording.h" />
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h" />
+    <ClInclude Include="..\..\src\platform\windows\DesktopClipboard.h" />
+    <ClInclude Include="..\..\src\platform\windows\DesktopFiles.h" />
     <ClInclude Include="..\..\src\recording\CapVideo.h" />
+    <ClInclude Include="..\..\src\recording\RecordingBackend.h" />
+    <ClInclude Include="..\..\src\core\FrameSource.h" />
+    <ClInclude Include="..\..\src\core\MediaFrame.h" />
     <ClInclude Include="..\..\src\recording\VideoGif.h" />
     <ClInclude Include="..\..\src\recording\VideoMp4.h" />
     <ClInclude Include="..\..\src\services\AnnotationRenderer.h" />
     <ClInclude Include="..\..\src\services\ImageExport.h" />
+    <ClInclude Include="..\..\src\core\QrRecognition.h" />
+    <ClInclude Include="..\..\src\platform\QrText.h" />
     <ClInclude Include="..\..\src\services\ImageRecognition.h" />
     <ClInclude Include="..\..\src\services\Lang.h" />
     <ClInclude Include="..\..\src\services\MediaHistory.h" />
     <ClInclude Include="..\..\src\services\Setting.h" />
     <ClInclude Include="..\..\src\services\Update.h" />
+    <ClInclude Include="..\..\src\services\update\WindowsUpdateDownload.h" />
     <ClInclude Include="..\..\src\ui\AnnotationPanel.h" />
     <ClInclude Include="..\..\src\ui\AnnotationPanelLayout.h" />
     <ClInclude Include="..\..\src\ui\Tip.h" />
     <ClInclude Include="..\..\src\ui\Tray.h" />
     <ClInclude Include="..\..\src\ui\WinClipboard.h" />
     <ClInclude Include="..\..\src\ui\settings\SettingsTheme.h" />
+    <ClInclude Include="..\..\src\ui\SettingsMetrics.h" />
     <ClInclude Include="..\..\src\ui\settings\SettingsSelectPopup.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSetting.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSettingAbout.h" />
