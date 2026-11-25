@@ -22,7 +22,8 @@ namespace {
 constexpr auto actionCount = static_cast<std::size_t>(Action::Count);
 constexpr auto actionIndex(Action action) { return static_cast<std::size_t>(action); }
 bool isText(Action action) { return action >= Action::Hex && action <= Action::Position; }
-bool needsImage(Action action) { return !isText(action) && action != Action::History; }
+bool needsSelection(Action action) { return !isText(action) && action != Action::History; }
+bool needsImage(Action action) { return needsSelection(action) && action != Action::Record; }
 SelectionPoint point(QPoint value) { return {static_cast<float>(value.x()), static_cast<float>(value.y())}; }
 QRect rectangle(const SelectionBounds& value)
 {
@@ -203,14 +204,14 @@ void CaptureSession::nudgeCursor(QPoint delta)
 quint64 CaptureSession::request(Action action)
 {
     if (state_->stage != Stage::Selecting && state_->stage != Stage::Adjusting) return 0;
-    if (!capability(action).canRequest() || (needsImage(action) &&
+    if (!capability(action).canRequest() || (needsSelection(action) &&
         (state_->stage != Stage::Adjusting || !state_->selection.hasSelection()))) return 0;
     ActionRequest request;
     request.token = ++state_->sequence;
     if (!request.token) request.token = ++state_->sequence;
     request.action = action; request.coordinates = state_->snapshot.coordinates;
     request.sourceId = state_->snapshot.sourceId; request.generation = state_->snapshot.generation;
-    if (needsImage(action)) {
+    if (needsSelection(action)) {
         request.sourceRect = rectangle(state_->selection.bounds());
         if (state_->snapshot.desktopOrigin)
             request.desktopRect = request.sourceRect.translated(*state_->snapshot.desktopOrigin);

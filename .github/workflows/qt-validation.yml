@@ -145,6 +145,7 @@ jobs:
             artifacts/cmake/qt-validation/editor-render/
             artifacts/cmake/qt-validation/desktop-render/
             artifacts/cmake/qt-validation/capture-render/
+            artifacts/cmake/qt-validation/native-capture/
             artifacts/cmake/qt-validation/recording-render/
             artifacts/cmake/qt-validation/settings-controller/
             artifacts/cmake/qt-validation/settings-controller-unavailable/

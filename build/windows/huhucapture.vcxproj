@@ -70,6 +70,9 @@
     <ClCompile Include="..\..\src\app\App.cpp" />
     <ClCompile Include="..\..\src\app\main.cpp" />
     <ClCompile Include="..\..\src\capture\CapLong.cpp" />
+    <ClCompile Include="..\..\src\capture\ScrollCaptureModel.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\capture\CutMask.cpp" />
     <ClCompile Include="..\..\src\capture\WinCap.cpp" />
     <ClCompile Include="..\..\src\editor\History.cpp" />
@@ -89,6 +92,9 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\..\src\platform\windows\GdiCapture.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\CaptureGeometry.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\..\src\platform\windows\DesktopClipboard.cpp">
@@ -200,6 +206,7 @@
     <ClInclude Include="..\..\src\app\App.h" />
     <ClInclude Include="..\..\src\app\Brand.h" />
     <ClInclude Include="..\..\src\capture\CapLong.h" />
+    <ClInclude Include="..\..\src\capture\ScrollCaptureModel.h" />
     <ClInclude Include="..\..\src\capture\SelectionModel.h" />
     <ClInclude Include="..\..\src\capture\PixelSample.h" />
     <ClInclude Include="..\..\src\capture\CutMask.h" />
@@ -252,6 +259,7 @@
     <ClInclude Include="..\..\src\core\GifLimits.h" />
     <ClInclude Include="..\..\src\core\MediaFrame.h" />
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h" />
+    <ClInclude Include="..\..\src\platform\windows\CaptureGeometry.h" />
     <ClInclude Include="..\..\src\platform\windows\CaptureExclusion.h" />
     <ClInclude Include="..\..\src\platform\windows\DesktopClipboard.h" />
     <ClInclude Include="..\..\src\platform\windows\DesktopFiles.h" />

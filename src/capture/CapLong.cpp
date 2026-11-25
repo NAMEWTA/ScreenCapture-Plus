@@ -9,7 +9,6 @@
 #include "services/ImageExport.h"
 #include "services/MediaHistory.h"
 #include "services/Lang.h"
-#include "core/ScrollStitch.h"
 #include "core/ImagePreview.h"
 #include <limits>
 #include <new>
@@ -18,20 +17,7 @@ using namespace Microsoft::WRL;
 namespace {
     constexpr UINT scrollMsgId = 18;
     constexpr UINT scrollEndMsgId = 19;
-    constexpr int comparisonH = 100;  // 匹配比较用的条带高度
-    // 连续这么多次滚不动才认为到底了。以前是 2 次，反馈里有明明还能滚就提示触底的：
-    // 滚轮发出去之后目标窗口不一定跟着动 —— 惯性滚动还没停、页面在加载、
-    // 或者鼠标底下那一层刚好不接收滚轮，多试几次就过去了。
-    // 每次重试之间隔 500ms，多等几轮的代价只是到底时晚几秒出提示
-    constexpr int maxDismissTime = 8;
-    // 滚轮发出去之后等多久再抓屏：太短会抓到滚动动画还没走完（甚至还没开始）的
-    // 中间帧，滚动量被误判成 0，导致最后一截内容没接上、成图偏短。
-    // 浏览器 / Electron 这类目标是动画式滚动，要给它留足时间
-    constexpr int scrollSettleMs = 250;
-    // 抓到"帧在变但匹配不出滚动量"的帧时，多半是滚动动画还没停。此时先不急着发
-    // 下一次滚轮，隔一会儿重新抓一帧等它停稳；最多连续等这么多次，避免一直卡住
-    constexpr int settleRecheckMs = 250;
-    constexpr int maxSettleRecheck = 2;
+    using Rules = HuhuCapture::Capture::ScrollCaptureRules;
 
 }
 
@@ -140,7 +126,7 @@ void CapLong::onTimerCB(UINT timerId)
         input.mi.dwFlags = MOUSEEVENTF_WHEEL;
         input.mi.mouseData = -WHEEL_DELTA;
         SendInput(1, &input, sizeof(INPUT));
-        win->setTimer(scrollSettleMs, scrollEndMsgId); //滚动开始
+        win->setTimer(Rules::scrollSettleMs, scrollEndMsgId); //滚动开始
     }
     else if (scrollEndMsgId == timerId) {
         win->killTimer(scrollEndMsgId); //滚动完成
@@ -151,34 +137,24 @@ void CapLong::onTimerCB(UINT timerId)
 void CapLong::firstStep()
 {
     auto& maskRect = win->cutMask->maskRect;
-    imgW = int(maskRect.right - maskRect.left);
-    imgH = int(maskRect.bottom - maskRect.top);
-    resultH = imgH;
+    const int width = int(maskRect.right - maskRect.left);
+    const int height = int(maskRect.bottom - maskRect.top);
     capStartPos.x = (int)maskRect.left;
     capStartPos.y = (int)maskRect.top;
     ClientToScreen(win->hwnd, &capStartPos);
-    if (!capture.capture(capStartPos.x, capStartPos.y, imgW, imgH)) {
-        stopCap();
-        return;
-    }
-    const auto pixels = capture.pixels();
-    try {
-        imgData.assign(pixels.begin(), pixels.end());
-        img1 = imgData;
-        HuhuCapture::Core::toGrayscale(img1, imgW, imgH, previousGray);
-    }
-    catch (const std::bad_alloc&) {
+    if (!capture.capture(capStartPos.x, capStartPos.y, width, height) ||
+        model.begin(capture.pixels(), width, height) != HuhuCapture::Capture::ScrollStartError::None) {
         stopCap();
         return;
     }
     makeImgPreview();
     win->refresh();
-    win->setTimer(88, scrollMsgId); //准备滚动
+    win->setTimer(Rules::firstScrollDelayMs, scrollMsgId);
 }
 
 void CapLong::makeImgPreview()
 {
-    if (imgW <= 0 || resultH <= 0 || imgData.empty()) return;
+    if (!model.hasImage()) return;
     auto ctx = Ling::D2D::get()->deviceContext;
     const auto maximum = static_cast<int>(ctx->GetMaximumBitmapSize());
     POINT bottom{ tool ? tool->x : win->x, tool ? tool->y : win->y };
@@ -188,8 +164,8 @@ void CapLong::makeImgPreview()
     // top may be hundreds of thousands of rows for a very narrow selection.
     // Rasterize only the visible tail with the identical source coordinates.
     try {
-        const auto size = HuhuCapture::Core::makeImagePreview(imgData, imgW, resultH,
-            tool ? static_cast<float>(tool->w) : static_cast<float>(imgW),
+        const auto size = HuhuCapture::Core::makeImagePreview(model.pixels(), model.width(), model.height(),
+            tool ? static_cast<float>(tool->w) : static_cast<float>(model.width()),
             static_cast<int>(bottom.y), maximum, previewPixels);
         if (!size) {
             imgPreview.Reset();
@@ -212,92 +188,20 @@ void CapLong::makeImgPreview()
 
 void CapLong::capStep()
 {
-    if (!capture.capture(capStartPos.x, capStartPos.y, imgW, imgH)) {
-        if (++dismissTime > maxDismissTime) { stopCap(); return; }
-        win->setTimer(500, scrollMsgId);
-        return;
+    const auto update = capture.capture(capStartPos.x, capStartPos.y, model.width(), model.frameHeight())
+        ? model.accept(capture.pixels()) : model.captureFailed();
+    if (update.appended) {
+        makeImgPreview();
+        win->refresh();
     }
-    const auto data = capture.pixels();
-    // 检测滚动区域：首次时找出前后两帧的像素差异边界
-    if (firstCheck) {
-        changeStartY = -1;
-        for (int y = 0; y < imgH; y++) {
-            for (int x = 0; x < imgW; x++) {
-                const auto idx = (static_cast<std::size_t>(y) * imgW + x) * 4;
-                if (img1[idx] != data[idx] || img1[idx + 1] != data[idx + 1] || img1[idx + 2] != data[idx + 2]) {
-                    if (changeStartY == -1) changeStartY = y;
-                    break;
-                }
-            }
-            if (changeStartY != -1) break;
-        }
-        if (changeStartY == -1) {
-            // 没有检测到变化，可能滚动未生效
-            dismissTime++;
-            if (dismissTime > maxDismissTime) { stopCap(); return; }
-            win->setTimer(500, scrollMsgId);
-            return;
-        }
-        firstCheck = false;
-    }
-    // 从 changeStartY 开始，裁剪用于匹配的条带
-    int stripH = std::min(comparisonH, imgH - changeStartY);
-    if (stripH <= 0) { win->setTimer(500, scrollMsgId); return; }
-    int img1StripH = imgH - changeStartY;
-    try {
-        HuhuCapture::Core::toGrayscale(data, imgW, imgH, currentGray);
-    }
-    catch (const std::bad_alloc&) {
+    if (update.next == HuhuCapture::Capture::ScrollNextStep::Stopped) {
         stopCap();
         return;
     }
-    const auto grayOffset = static_cast<std::size_t>(changeStartY) * imgW;
-    const auto gray1 = std::span<const BYTE>(previousGray).subspan(grayOffset);
-    const auto gray2 = std::span<const BYTE>(currentGray).subspan(grayOffset);
-    int y = HuhuCapture::Core::findMostSimilarY(gray1, img1StripH, gray2, stripH, imgW);
-    if (y == 0) {
-        // 顶部条带没对上：可能滚动区域顶部是纯色/空白（比如页面底部的留白），
-        // 换用新帧底部的条带再反推一次滚动量
-        const auto bottomOffset = static_cast<std::size_t>(imgH - stripH) * imgW;
-        const auto gray1Bottom = std::span<const BYTE>(previousGray).subspan(bottomOffset);
-        const auto gray2Bottom = std::span<const BYTE>(currentGray).subspan(bottomOffset);
-        y = HuhuCapture::Core::findScrollByBottomStrip(gray1Bottom, gray2Bottom, imgW, stripH);
-    }
-    if (y == 0) { // 未检测到滚动
-        if (!std::equal(data.begin(), data.end(), img1.begin(), img1.end())) {
-            // 帧在变但匹配不出滚动量：多半是滚动动画还没停、或页面还在加载。
-            // 这时不急着判"滚不动"，隔一会儿重抓一帧等它停稳，最多等几次再放弃
-            if (settleRecheckCount < maxSettleRecheck) {
-                settleRecheckCount++;
-                win->setTimer(settleRecheckMs, scrollEndMsgId);
-                return;
-            }
-        }
-        settleRecheckCount = 0;
-        dismissTime++;
-        if (dismissTime > maxDismissTime) { stopCap(); return; }
-        win->setTimer(500, scrollMsgId);
-        return;
-    }
-    dismissTime = 0;
-    settleRecheckCount = 0;
-    try {
-        if (!HuhuCapture::Core::appendScrollFrame(imgData, imgW, resultH, data, imgH, changeStartY, y)) {
-            stopCap();
-            return;
-        }
-    }
-    catch (const std::bad_alloc&) {
-        // Keep the last complete image available for saving when memory is low.
-        stopCap();
-        return;
-    }
-    img1.assign(data.begin(), data.end());
-    previousGray.swap(currentGray);
-    if (resultH > 36000) { stopCap(); return; }
-    makeImgPreview();
-    win->refresh();
-    win->setTimer(500, scrollMsgId); //准备下次滚动
+    if (update.next == HuhuCapture::Capture::ScrollNextStep::Settle)
+        win->setTimer(Rules::settleRecheckMs, scrollEndMsgId);
+    else
+        win->setTimer(Rules::retryDelayMs, scrollMsgId);
 }
 
 void CapLong::makeTool()
@@ -351,9 +255,7 @@ void CapLong::paintImgPreview(ID2D1DeviceContext* ctx)
 void CapLong::stopCap()
 {
     capture.reset();
-    std::vector<BYTE>().swap(img1);
-    std::vector<BYTE>().swap(previousGray);
-    std::vector<BYTE>().swap(currentGray);
+    model.stop();
     isFinish = true;
     makeStopText();
     win->restoreWin();
@@ -365,7 +267,7 @@ void CapLong::stopCap()
 
 void CapLong::makeStopText()
 {
-    if (resultH > 36000) {
+    if (model.stopReason() == HuhuCapture::Capture::ScrollStopReason::HeightLimit) {
         layoutTextEnd = Ling::D2D::get()->makeTextLayout(Lang::get(L"long.tooLong"), 13 * win->dpi);
     }
     else {
@@ -390,21 +292,21 @@ void CapLong::makeStopText()
 
 bool CapLong::copyToClipboard()
 {
-    if (imgData.empty()) return false;
-    return HuhuCapture::MediaHistory::copyImage(win->hwnd, imgW, resultH, imgData.data());
+    if (!model.hasImage()) return false;
+    return HuhuCapture::MediaHistory::copyImage(win->hwnd, model.width(), model.height(), model.pixels().data());
 }
 
 bool CapLong::saveToFile()
 {
-    if (imgData.empty()) return false;
+    if (!model.hasImage()) return false;
     auto path = ImageExport::getSaveFilePath(win->hwnd);
     if (path.empty()) return false;
-    return HuhuCapture::MediaHistory::saveImage(win->hwnd, path, imgW, resultH, imgData.data());
+    return HuhuCapture::MediaHistory::saveImage(win->hwnd, path, model.width(), model.height(), model.pixels().data());
 }
 
 void CapLong::pin()
 {
-    if (imgData.empty()) return;
+    if (!model.hasImage()) return;
     // 居中放置在主显示器
     auto monitor = MonitorFromPoint({ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi{ sizeof(MONITORINFO) };
@@ -412,7 +314,7 @@ void CapLong::pin()
     auto& workArea = mi.rcWork;
     int screenW = workArea.right - workArea.left;
     int screenH = workArea.bottom - workArea.top;
-    int posX = workArea.left + (screenW - imgW) / 2;
-    int posY = workArea.top + (screenH - std::min(resultH, screenH)) / 2;
-    WinPin::initFromData(posX, posY, imgW, resultH, imgData);
+    int posX = workArea.left + (screenW - model.width()) / 2;
+    int posY = workArea.top + (screenH - std::min(model.height(), screenH)) / 2;
+    WinPin::initFromData(posX, posY, model.width(), model.height(), model.pixels());
 }

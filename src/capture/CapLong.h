@@ -1,6 +1,7 @@
 #pragma once
 #include <include/Ling.h>
 #include "platform/windows/GdiCapture.h"
+#include "capture/ScrollCaptureModel.h"
 
 class WinCap;
 class ToolLong;
@@ -24,7 +25,7 @@ public:
 	bool saveToFile();
 	void pin();
 	// Ctrl+S / Ctrl+C 用：还没点"开始"的时候一张图都没有，此时快捷键不该生效
-	bool hasImage() const { return !imgData.empty(); }
+	bool hasImage() const { return model.hasImage(); }
 	// ToolLong 的摆放规则：摆在选区右侧（右边放不下就改到左侧），底边与选区底边齐。
 	// 建窗口时走一遍，工具条的 DPI 变了之后由它回头再走一遍
 	void layoutTool();
@@ -39,11 +40,6 @@ private:
 private:
 	WinCap* win;
 	bool isShowStartBtn{ false }, isScrolling{ false }, isFinish{ false };
-	bool firstCheck{ true };
-	int dismissTime{ 0 };
-	// 抓到"帧在变但匹配不出滚动量"的帧时连续等待的次数，防止一直卡住
-	int settleRecheckCount{ 0 };
-	int changeStartY{ -1 };
 	D2D1_RECT_F stopTextRect{};
 	// 两处文字的绘制起点。IDWriteTextLayout 默认左上对齐，DrawTextLayout 给的又是
 	// layout 框的左上角，所以得先测出文本实际宽高，才能算出居中要的那个起点
@@ -58,11 +54,8 @@ private:
 	HWND targetHwnd{ nullptr };
 	std::unique_ptr<ToolLong> tool;
 	Microsoft::WRL::ComPtr<ID2D1Bitmap1> imgPreview;
-	std::vector<BYTE> imgData;
-	std::vector<BYTE> img1;
+	HuhuCapture::Capture::ScrollCaptureModel model;
 	HuhuCapture::Platform::GdiCapture capture;
-	std::vector<BYTE> previousGray, currentGray, previewPixels;
-	int imgW{ 0 }, imgH{ 0 };
-	int resultH{ 0 };
+	std::vector<BYTE> previewPixels;
 	POINT capStartPos{};
 };

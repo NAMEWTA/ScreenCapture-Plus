@@ -72,7 +72,9 @@ struct ActionRequest {
     CoordinateSpace coordinates{CoordinateSpace::AuthorizedSourcePixels};
     QRect sourceRect;
     std::optional<QRect> desktopRect;
-    QImage image; // owned selection, copied on a worker, never a borrowed view
+    // Owned worker-prepared selection for image consumers, never a borrowed
+    // view. Recording consumes the verified rectangles and has no image copy.
+    QImage image;
     QString text;
 };
 

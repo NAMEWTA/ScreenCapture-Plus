@@ -169,6 +169,52 @@ void directEditorEntry()
     std::cout << "PASS direct shared-editor handoff distinct from explicit pinning\n";
 }
 
+void recordingSelectionWithoutImage()
+{
+    CaptureSession session;
+    // This is a selection/handoff contract test, not a physical capture test.
+    // Use the real QScreen geometry for a valid Qt binding; no native backend
+    // or recording success is asserted by this owned image fixture.
+    auto* screen = QGuiApplication::primaryScreen();
+    require(screen && screen->geometry().width() > 20 && screen->geometry().height() > 18,
+        "the component environment provides a real Qt screen binding");
+    Snapshot snapshot;
+    snapshot.sourceId = 29; snapshot.generation = 7;
+    snapshot.coordinates = CoordinateSpace::DesktopPixels;
+    snapshot.desktopOrigin = screen->geometry().topLeft();
+    snapshot.image = QImage(screen->geometry().size(), QImage::Format_ARGB32);
+    snapshot.image.fill(qRgb(29, 61, 113));
+    ScreenBinding binding;
+    binding.screenId = 1; binding.screen = screen;
+    binding.nativeId = QStringLiteral("component-screen-binding");
+    binding.sourcePixels = snapshot.image.rect();
+    binding.logicalGeometry = screen->geometry();
+    binding.logicalWorkArea = screen->availableGeometry();
+    binding.pixelsPerDipX = binding.pixelsPerDipY = 1;
+    snapshot.screens.push_back(binding);
+    require(!session.load(snapshot), "load an explicit desktop selection contract");
+    available(session, Action::Record);
+    require(session.request(Action::Record) == 0,
+        "recording still requires a complete selected region before admission");
+    select(session);
+    std::vector<ActionRequest> requests;
+    QObject::connect(&session, &CaptureSession::actionRequested, &session,
+        [&](const ActionRequest& value) { requests.push_back(value); });
+    const auto sourceBytes = session.snapshot().image.cacheKey();
+    const auto token = session.request(Action::Record);
+    require(token && requests.size() == 1 && requests.front().token == token &&
+        requests.front().sourceId == 29 && requests.front().generation == 7 &&
+        requests.front().coordinates == CoordinateSpace::DesktopPixels &&
+        requests.front().sourceRect == QRect(5, 4, 15, 14) &&
+        requests.front().desktopRect == QRect(5, 4, 15, 14).translated(*snapshot.desktopOrigin) &&
+        requests.front().image.isNull() && session.snapshot().image.cacheKey() == sourceBytes,
+        "recording receives the exact source and desktop region without allocating a cropped image");
+    session.complete(token, ActionResult::Failed, QStringLiteral("The real recorder was unavailable"));
+    require(session.stage() == Stage::Adjusting && session.selection().hasSelection(),
+        "a recorder rejection retains the existing image and selection for retry");
+    std::cout << "PASS recording selection identity and desktop coordinates without an unused image copy\n";
+}
+
 void reentrantHost()
 {
     auto* session = new CaptureSession;
@@ -192,6 +238,6 @@ void reentrantHost()
 int main(int argc, char** argv)
 {
     QGuiApplication app(argc, argv);
-    try { actualPixelOutput(); entryAndCancellation(); colorAndCoordinates(); authorizedImageClick(); directEditorEntry(); reentrantHost(); return 0; }
+    try { actualPixelOutput(); entryAndCancellation(); colorAndCoordinates(); authorizedImageClick(); directEditorEntry(); recordingSelectionWithoutImage(); reentrantHost(); return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

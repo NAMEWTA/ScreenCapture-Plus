@@ -58,9 +58,12 @@ if(MSVC)
 endif()
 
 find_package(Threads REQUIRED)
-add_library(huhucapture_media_frames STATIC src/core/MediaFrame.cpp)
+add_library(huhucapture_media_frames STATIC src/core/MediaFrame.cpp src/core/FrameQueue.cpp)
 target_link_libraries(huhucapture_media_frames PUBLIC huhucapture_core Threads::Threads)
 set_target_properties(huhucapture_media_frames PROPERTIES CXX_EXTENSIONS OFF)
+add_library(huhucapture_scroll_model STATIC src/capture/ScrollCaptureModel.cpp)
+target_link_libraries(huhucapture_scroll_model PUBLIC huhucapture_core)
+set_target_properties(huhucapture_scroll_model PROPERTIES CXX_EXTENSIONS OFF)
 
 # Reuse the production decoder and exactly its 16-bit region configuration in
 # both the existing native product and the shared Qt recognition service.
@@ -117,12 +120,16 @@ if(BUILD_TESTING)
     target_link_libraries(qr_recognition_tests PRIVATE huhucapture_qr_core)
     huhucapture_test(media_frame_tests tests/media_frame_tests.cpp)
     target_link_libraries(media_frame_tests PRIVATE huhucapture_media_frames)
+    huhucapture_test(frame_queue_tests tests/frame_queue_tests.cpp)
+    target_link_libraries(frame_queue_tests PRIVATE huhucapture_media_frames)
     huhucapture_test(pixel_buffer tests/PixelBufferTests.cpp)
     huhucapture_test(annotations tests/annotation_tests.cpp)
     huhucapture_test(annotation_regions tests/annotation_region_tests.cpp)
     huhucapture_test(annotation_panel tests/annotation_panel_layout_tests.cpp)
     huhucapture_test(history tests/history_tests.cpp)
     huhucapture_test(scroll_stitch tests/scroll_stitch_tests.cpp)
+    huhucapture_test(scroll_capture_model tests/scroll_capture_model_tests.cpp)
+    target_link_libraries(scroll_capture_model PRIVATE huhucapture_scroll_model)
     huhucapture_test(toolbar_layout tests/toolbar_layout_tests.cpp)
     huhucapture_test(capture_selection tests/capture_selection_tests.cpp)
     huhucapture_test(media_file_names tests/media_file_name_tests.cpp)
@@ -314,6 +321,11 @@ if(HUHUCAPTURE_QT_VALIDATION)
         target_link_libraries(qt_media_workspace PRIVATE huhucapture_media_workspace huhucapture_languages)
         set_tests_properties(qt_media_workspace PROPERTIES TIMEOUT 180
             ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
+        huhucapture_test(system_clipboard_shutdown_tests tests/qt/system_clipboard_shutdown_tests.cpp)
+        target_link_libraries(system_clipboard_shutdown_tests PRIVATE huhucapture_desktop_services
+            Qt6::Widgets Qt6::Concurrent Threads::Threads)
+        set_tests_properties(system_clipboard_shutdown_tests PROPERTIES TIMEOUT 60
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         huhucapture_test(desktop_files_tests tests/qt/desktop_files_tests.cpp)
         target_link_libraries(desktop_files_tests PRIVATE huhucapture_desktop_services)
         huhucapture_test(file_revealer_tests tests/qt/file_revealer_tests.cpp)
@@ -501,15 +513,21 @@ if(HUHUCAPTURE_QT_VALIDATION)
     endif()
     if(WIN32)
         huhucapture_test(windows_audio_format tests/platform/windows_audio_format_tests.cpp)
+        add_library(huhucapture_windows_capture STATIC
+            src/platform/windows/GdiCapture.cpp src/platform/windows/CaptureGeometry.cpp)
+        target_link_libraries(huhucapture_windows_capture PUBLIC huhucapture_core gdi32 user32 dwmapi)
+        target_compile_definitions(huhucapture_windows_capture PUBLIC
+            UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00)
+        target_compile_options(huhucapture_windows_capture PRIVATE /W4 /utf-8 /permissive-)
+        set_target_properties(huhucapture_windows_capture PROPERTIES CXX_EXTENSIONS OFF)
         # Compile the retained native backends without Ling, its PCH, or /MT.
         # This verifies the Qt/native link boundary, not hardware capture.
         add_library(huhucapture_native_media STATIC
-            src/platform/windows/GdiCapture.cpp
             src/platform/windows/FileHandleStream.cpp
             src/platform/windows/NativeMp4Recording.cpp
             src/recording/VideoMp4.cpp)
         target_link_libraries(huhucapture_native_media PUBLIC huhucapture_core huhucapture_file_committer
-            gdi32 user32 ole32 oleaut32 uuid shell32 shlwapi propsys
+            huhucapture_windows_capture ole32 oleaut32 uuid shell32 shlwapi propsys
             d3d11 dxgi windowscodecs mf mfplat mfreadwrite mfuuid
             wininet comctl32)
         target_compile_definitions(huhucapture_native_media PUBLIC
@@ -673,6 +691,61 @@ if(HUHUCAPTURE_QT_VALIDATION)
                 "${CMAKE_COMMAND}" -E env "QT_QPA_PLATFORM=xcb" $<TARGET_FILE:window_activation_tests>)
         endif()
         set_tests_properties(window_activation_native PROPERTIES TIMEOUT 45 RUN_SERIAL TRUE)
+        add_library(huhucapture_screen_capture STATIC src/services/capture/ScreenCaptureService.h
+            src/services/capture/ScreenCaptureService.cpp src/platform/ScreenCaptureBackend.h)
+        set_target_properties(huhucapture_screen_capture PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+        target_compile_definitions(huhucapture_screen_capture PRIVATE QT_NO_KEYWORDS)
+        target_link_libraries(huhucapture_screen_capture PUBLIC huhucapture_capture
+            huhucapture_media_archive Qt6::Core Qt6::Gui Qt6::Concurrent)
+        if(WIN32)
+            target_sources(huhucapture_screen_capture PRIVATE src/platform/windows/ScreenCaptureBackend.cpp)
+            target_link_libraries(huhucapture_screen_capture PRIVATE huhucapture_windows_capture)
+        else()
+            pkg_check_modules(XCB_CAPTURE REQUIRED IMPORTED_TARGET xcb xcb-randr xcb-shm xcb-xfixes xcb-xtest)
+            add_library(huhucapture_x11_capture STATIC src/platform/linux/X11Capture.cpp)
+            set_target_properties(huhucapture_x11_capture PROPERTIES CXX_EXTENSIONS OFF)
+            target_link_libraries(huhucapture_x11_capture PUBLIC huhucapture_core PRIVATE PkgConfig::XCB_CAPTURE)
+            target_sources(huhucapture_screen_capture PRIVATE src/platform/linux/ScreenCaptureBackend.cpp)
+            target_link_libraries(huhucapture_screen_capture PRIVATE huhucapture_x11_capture huhucapture_portal)
+        endif()
+        add_executable(screen_capture_tests tests/qt/screen_capture_tests.cpp)
+        target_link_libraries(screen_capture_tests PRIVATE huhucapture_screen_capture Qt6::Widgets)
+        set_target_properties(screen_capture_tests PROPERTIES CXX_EXTENSIONS OFF)
+        add_test(NAME screen_capture_unavailable COMMAND screen_capture_tests --no-backend)
+        set_tests_properties(screen_capture_unavailable PROPERTIES TIMEOUT 45 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        if(WIN32)
+            add_test(NAME screen_capture_native COMMAND screen_capture_tests
+                --artifacts "${PROJECT_BINARY_DIR}/native-capture/$<CONFIG>")
+            set_tests_properties(screen_capture_native PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows")
+        else()
+            add_test(NAME screen_capture_native COMMAND "${XVFB_RUN}" -a
+                "${CMAKE_COMMAND}" -E env "QT_QPA_PLATFORM=xcb" $<TARGET_FILE:screen_capture_tests>
+                --artifacts "${PROJECT_BINARY_DIR}/native-capture/$<CONFIG>")
+        endif()
+        set_tests_properties(screen_capture_native PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+        if(HUHUCAPTURE_DESKTOP_VALIDATION)
+            add_library(huhucapture_capture_workspace STATIC src/app/CaptureWorkspace.h src/app/CaptureWorkspace.cpp)
+            set_target_properties(huhucapture_capture_workspace PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+            target_link_libraries(huhucapture_capture_workspace PUBLIC huhucapture_screen_capture
+                huhucapture_capture_ui huhucapture_media_workspace huhucapture_qr_service)
+            add_library(huhucapture_recording_workspace STATIC src/app/RecordingWorkspace.h src/app/RecordingWorkspace.cpp)
+            set_target_properties(huhucapture_recording_workspace PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+            target_link_libraries(huhucapture_recording_workspace PUBLIC huhucapture_capture_workspace
+                huhucapture_recording_ui huhucapture_recording_session)
+            add_executable(capture_workspace_tests tests/qt/capture_workspace_tests.cpp)
+            target_link_libraries(capture_workspace_tests PRIVATE huhucapture_recording_workspace huhucapture_languages)
+            set_target_properties(capture_workspace_tests PROPERTIES CXX_EXTENSIONS OFF)
+            add_test(NAME capture_workspace_unavailable COMMAND capture_workspace_tests --unavailable)
+            set_tests_properties(capture_workspace_unavailable PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+            if(WIN32)
+                add_test(NAME capture_workspace_native COMMAND capture_workspace_tests)
+                set_tests_properties(capture_workspace_native PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows")
+            else()
+                add_test(NAME capture_workspace_native COMMAND "${XVFB_RUN}" -a
+                    "${CMAKE_COMMAND}" -E env "QT_QPA_PLATFORM=xcb" $<TARGET_FILE:capture_workspace_tests>)
+            endif()
+            set_tests_properties(capture_workspace_native PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+        endif()
         add_library(huhucapture_settings_controller STATIC
             src/app/SettingsController.h src/app/SettingsController.cpp
             src/services/desktop/GlobalShortcut.h src/services/desktop/GlobalShortcut.cpp

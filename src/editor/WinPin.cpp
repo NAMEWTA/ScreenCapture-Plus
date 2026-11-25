@@ -441,7 +441,7 @@ void WinPin::init(int x, int y, int w, int h)
 	winPins.push_back(std::move(winPin));
 }
 
-void WinPin::initFromData(int x, int y, int w, int h, std::vector<BYTE>& data)
+void WinPin::initFromData(int x, int y, int w, int h, const std::vector<BYTE>& data)
 {
 	auto ptr = new WinPin(x, y, w, h, &data);
 	std::unique_ptr<WinPin> winPin{ ptr };

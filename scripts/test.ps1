@@ -21,12 +21,26 @@ foreach ($test in $tests) {
     $object = Join-Path $testDirectory "$($test.BaseName).obj"
     $extraObjects = @()
     $extraCompilerArguments = @()
-    if ($test.BaseName -eq 'media_frame_tests') {
+    if ($test.BaseName -in @('media_frame_tests', 'frame_queue_tests')) {
         $frameObject = Join-Path $testDirectory 'MediaFrame.obj'
         & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /MT /O2 /c "/I$(Join-Path $RepoRoot 'src')" `
             (Join-Path $RepoRoot 'src/core/MediaFrame.cpp') "/Fo$frameObject"
         Assert-NativeSuccess 'Compiling shared media frame implementation'
         $extraObjects = @($frameObject)
+    }
+    if ($test.BaseName -eq 'frame_queue_tests') {
+        $queueObject = Join-Path $testDirectory 'FrameQueue.obj'
+        & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /MT /O2 /c "/I$(Join-Path $RepoRoot 'src')" `
+            (Join-Path $RepoRoot 'src/core/FrameQueue.cpp') "/Fo$queueObject"
+        Assert-NativeSuccess 'Compiling shared bounded frame queue'
+        $extraObjects += $queueObject
+    }
+    if ($test.BaseName -eq 'scroll_capture_model_tests') {
+        $scrollObject = Join-Path $testDirectory 'ScrollCaptureModel.obj'
+        & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /MT /O2 /c "/I$(Join-Path $RepoRoot 'src')" `
+            (Join-Path $RepoRoot 'src/capture/ScrollCaptureModel.cpp') "/Fo$scrollObject"
+        Assert-NativeSuccess 'Compiling shared scrolling capture model'
+        $extraObjects += $scrollObject
     }
     if ($test.BaseName -eq 'qr_recognition_tests') {
         # Retain the existing native product's real decoder configuration while

@@ -59,17 +59,29 @@ public:
     ~SystemClipboard() override;
     // One-shot content: even a failed attempt releases the file read lease.
     // Every nonzero token gets one queued completion while this service lives.
+    // After shutdown starts, new content is consumed and rejected with token 0.
     quint64 publish(std::shared_ptr<PreparedClipboard> content, QWindow* origin);
     void cancel(quint64 token);
+    // Cancellation ends the request, but a running identity check must really
+    // finish before busy becomes false or another validation can be admitted.
     bool busy() const noexcept;
+    // GUI-thread normal-exit barrier. Does not clear the desktop selection.
+    // Wait for shutdownFinished before destroying the application-owned service.
+    void shutdown();
 Q_SIGNALS:
     void finished(quint64 token, const HuhuCapture::Desktop::ClipboardResult& result);
+    void busyChanged(bool busy);
+    // Every admitted receipt has been delivered; real validation work, Portal
+    // queries and any reentrant native publication have finished.
+    void shutdownFinished();
 private:
     struct State;
     std::unique_ptr<State> state_;
     void validatePrepared(quint64 token);
     void publishPrepared(quint64 token);
     void finish(quint64 token, ClipboardResult result);
+    void updateBusy();
+    void maybeFinishShutdown();
 };
 
 } // namespace HuhuCapture::Desktop

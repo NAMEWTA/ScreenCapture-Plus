@@ -23,10 +23,10 @@ std::wstring suggestedName(const std::wstring& extension);
 
 // Commit through a unique temporary file and a no-replace rename. An empty
 // result means no complete history entry was committed. The source is retained.
-std::filesystem::path archiveImage(int width, int height, BYTE* pixels);
+std::filesystem::path archiveImage(int width, int height, const BYTE* pixels);
 std::filesystem::path archiveFile(const std::filesystem::path& source);
-bool copyImage(HWND owner, int width, int height, BYTE* pixels);
-bool saveImage(HWND owner, const std::wstring& destination, int width, int height, BYTE* pixels);
+bool copyImage(HWND owner, int width, int height, const BYTE* pixels);
+bool saveImage(HWND owner, const std::wstring& destination, int width, int height, const BYTE* pixels);
 void reportError(HWND owner, const std::wstring& detail = {});
 
 bool copy(HWND owner, const Entry& entry);

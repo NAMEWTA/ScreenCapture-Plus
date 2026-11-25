@@ -280,7 +280,7 @@ std::wstring suggestedName(const std::wstring& extension)
     return {};
 }
 
-fs::path archiveImage(int width, int height, BYTE* pixels)
+fs::path archiveImage(int width, int height, const BYTE* pixels)
 {
     const auto root = prepareDirectory();
     if (root.empty()) return {};
@@ -321,7 +321,7 @@ void reportError(HWND owner, const std::wstring& detail)
     MessageBoxW(owner, text.c_str(), HuhuCapture::Brand::name.data(), MB_OK | MB_ICONWARNING | MB_TOPMOST);
 }
 
-bool copyImage(HWND owner, int width, int height, BYTE* pixels)
+bool copyImage(HWND owner, int width, int height, const BYTE* pixels)
 {
     const auto path = archiveImage(width, height, pixels);
     if (path.empty()) { reportError(owner, directory().wstring()); return false; }
@@ -332,7 +332,7 @@ bool copyImage(HWND owner, int width, int height, BYTE* pixels)
     return true;
 }
 
-bool saveImage(HWND owner, const std::wstring& destination, int width, int height, BYTE* pixels)
+bool saveImage(HWND owner, const std::wstring& destination, int width, int height, const BYTE* pixels)
 {
     if (!ImageExport::saveToFile(destination, width, height, pixels)) { reportError(owner, destination); return false; }
     if (archiveFile(destination).empty()) { reportError(owner, destination); return false; }

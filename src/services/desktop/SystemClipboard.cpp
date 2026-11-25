@@ -8,6 +8,7 @@
 #include <QImageWriter>
 #include <QMimeData>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -17,6 +18,7 @@
 #include <atomic>
 #include <exception>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <utility>
@@ -212,8 +214,16 @@ ClipboardPreparation prepareFile(std::shared_ptr<const Media::MediaLease> lease,
 }
 
 struct SystemClipboard::State {
-    std::atomic<quint64> sequence{};
+    // Admission is the only cross-thread state. A call accepted before shutdown
+    // owns a receipt until all finished() listeners return, even when its GUI
+    // dispatch has not run yet. Calls after that boundary return zero.
+    std::mutex admission;
+    quint64 sequence{};
+    std::size_t receipts{};
+    bool accepting{true};
     quint64 active{};
+    unsigned publications{};
+    bool stopping{}, shutdownEmitted{}, busyReported{};
     std::shared_ptr<PreparedClipboard> content;
     QPointer<QWindow> origin;
     QPointer<QFutureWatcher<Failure>> validation;
@@ -238,12 +248,28 @@ SystemClipboard::~SystemClipboard()
 {
     if (state_->content) state_->content->state_->release();
 }
-bool SystemClipboard::busy() const noexcept { return state_->active != 0; }
+bool SystemClipboard::busy() const noexcept
+{
+    return state_->active || state_->validation || state_->publications
+#ifndef Q_OS_WIN
+        || state_->filePortal
+#endif
+        ;
+}
 
 quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWindow* origin)
 {
-    auto token = state_->sequence.fetch_add(1) + 1;
-    if (!token) token = state_->sequence.fetch_add(1) + 1;
+    quint64 token{};
+    {
+        const std::lock_guard lock(state_->admission);
+        if (state_->accepting && state_->sequence != (std::numeric_limits<quint64>::max)()) {
+            token = ++state_->sequence; ++state_->receipts;
+        }
+    }
+    if (!token) {
+        if (content && !content->state_->consumed.exchange(true)) content->state_->release();
+        return 0;
+    }
     if (QThread::currentThread() != thread()) {
         QTimer::singleShot(0, this, [this, token, content = std::move(content)] {
             if (content && !content->state_->consumed.exchange(true)) content->state_->release();
@@ -264,6 +290,7 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
     }
     try {
         state_->active = token; state_->content = std::move(content); state_->origin = origin;
+        updateBusy();
 #ifndef Q_OS_WIN
         if (!state_->content->state_->file.isEmpty() &&
             QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
@@ -281,7 +308,7 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
                 const QDBusPendingReply<QDBusVariant> reply = *watcher;
                 if (state_->filePortal == watcher) state_->filePortal.clear();
                 watcher->deleteLater();
-                if (state_->active != token) return;
+                if (state_->active != token) { updateBusy(); return; }
                 bool numeric = false;
                 const auto version = reply.isValid() ? reply.value().variant().toUInt(&numeric) : 0u;
                 if (!numeric || version < 1) {
@@ -303,36 +330,58 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
 void SystemClipboard::validatePrepared(quint64 token)
 {
     if (!token || state_->active != token) return;
+    QPointer<QFutureWatcher<Failure>> createdWatcher;
+    bool workerStarted{};
     try {
         if (auto lease = state_->content->state_->lease) {
             // This last identity check remains off the GUI thread. The application
             // read reservation bridges preparation and actual native publication.
-            auto* watcher = new QFutureWatcher<Failure>(this); state_->validation = watcher;
+            auto* watcher = new QFutureWatcher<Failure>(this); state_->validation = watcher; createdWatcher = watcher;
             connect(watcher, &QFutureWatcher<Failure>::finished, this, [this, token, watcher] {
-                const auto failure = watcher->result();
+                Failure failure;
+                try { failure = watcher->result(); }
+                catch (const std::bad_alloc&) { failure = allocation(); }
+                catch (...) { failure = {Error::Read, 0, QStringLiteral("The media identity check failed")}; }
                 if (state_->validation == watcher) state_->validation.clear();
                 watcher->deleteLater();
-                if (state_->active != token) return;
+                if (state_->active != token) { updateBusy(); return; }
                 if (failure) finish(token, {failure, {}}); else publishPrepared(token);
             });
-            watcher->setFuture(QtConcurrent::run([lease]() mutable {
+            auto future = QtConcurrent::run([lease]() mutable {
                 // Empty the stored task capture before QFuture reports its
                 // result; no completed future may retain a hidden media lease.
                 auto reservation = std::move(lease);
                 try { return reservation->unchanged() ? Failure{} : changed(); }
                 catch (const std::bad_alloc&) { return allocation(); }
                 catch (const std::exception& error) { return Failure{Error::Read, 0, QString::fromUtf8(error.what())}; }
-            }));
+                catch (...) { return Failure{Error::Read, 0, QStringLiteral("The media identity check failed")}; }
+            });
+            workerStarted = true;
+            watcher->setFuture(future);
         } else {
             QTimer::singleShot(0, this, [this, token] { if (state_->active == token) publishPrepared(token); });
         }
-    } catch (const std::bad_alloc&) { finish(token, {allocation(), {}}); }
+    } catch (const std::bad_alloc&) {
+        // QtConcurrent could fail before a future was attached. Such an empty
+        // watcher has no worker to drain and will never emit finished().
+        if (createdWatcher && !workerStarted) {
+            delete createdWatcher;
+            state_->validation.clear();
+        }
+        finish(token, {allocation(), {}});
+    }
 }
 
 void SystemClipboard::publishPrepared(quint64 token)
 {
     if (!token || state_->active != token) return;
     const QPointer<SystemClipboard> lifetime(this);
+    ++state_->publications;
+    const auto publication = qScopeGuard([lifetime] {
+        if (!lifetime) return;
+        --lifetime->state_->publications;
+        lifetime->updateBusy();
+    });
     const auto content = state_->content;
     // System clipboard notifications may synchronously destroy their caller.
     // Keep the original reservation through the actual native handoff anyway.
@@ -387,21 +436,51 @@ void SystemClipboard::finish(quint64 token, ClipboardResult result)
     if (state_->active == token) {
 #ifndef Q_OS_WIN
         state_->observer->cancel();
-        if (state_->filePortal) {
-            disconnect(state_->filePortal, nullptr, this, nullptr);
-            state_->filePortal->deleteLater(); state_->filePortal.clear();
-        }
 #endif
-        if (state_->validation) {
-            disconnect(state_->validation, nullptr, this, nullptr);
-            state_->validation->deleteLater(); state_->validation.clear();
-        }
+        // Keep actual future/Portal watchers alive until their completion.
+        // A cancelled request cannot turn unfinished I/O into an idle service
+        // or enqueue unbounded replacement workers.
         // Neither the QMimeData nor an externally retained preparation keeps a
         // media lease after completion. Linux's clipboard owner remains Qt.
         if (state_->content) state_->content->state_->release();
         state_->content.reset(); state_->origin.clear(); state_->active = 0;
     }
-    QTimer::singleShot(0, this, [this, token, result = std::move(result)] { Q_EMIT finished(token, result); });
+    updateBusy();
+    QTimer::singleShot(0, this, [this, token, result = std::move(result)] {
+        const QPointer<SystemClipboard> lifetime(this);
+        Q_EMIT finished(token, result);
+        if (!lifetime) return;
+        { const std::lock_guard lock(state_->admission); --state_->receipts; }
+        maybeFinishShutdown();
+    });
+}
+
+void SystemClipboard::updateBusy()
+{
+    const bool current = busy();
+    if (current != state_->busyReported) {
+        state_->busyReported = current;
+        QTimer::singleShot(0, this, [this, current] { Q_EMIT busyChanged(current); });
+    }
+    maybeFinishShutdown();
+}
+
+void SystemClipboard::shutdown()
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (state_->stopping) return;
+    { const std::lock_guard lock(state_->admission); state_->accepting = false; }
+    state_->stopping = true;
+    if (state_->active) finish(state_->active, {cancelled(), {}});
+    maybeFinishShutdown();
+}
+
+void SystemClipboard::maybeFinishShutdown()
+{
+    if (!state_->stopping || state_->shutdownEmitted || busy()) return;
+    { const std::lock_guard lock(state_->admission); if (state_->receipts) return; }
+    state_->shutdownEmitted = true;
+    QTimer::singleShot(0, this, [this] { Q_EMIT shutdownFinished(); });
 }
 
 } // namespace HuhuCapture::Desktop

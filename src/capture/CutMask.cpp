@@ -1,5 +1,5 @@
 #include "pch.h"
-#include <dwmapi.h>
+#include "platform/windows/CaptureGeometry.h"
 #include <include/Ling.h>
 #include "capture/CutMask.h"
 
@@ -26,35 +26,17 @@ bool CutMask::highlight(POINT pos)
 
 void CutMask::initWinRect()
 {
-	struct Enumeration {
-		CutMask* owner;
-		std::vector<HuhuCapture::Capture::SelectionBounds> rectangles;
-	} enumeration{ this, {} };
-	EnumWindows([](HWND hwnd, LPARAM lparam)
-		{
-			if (!hwnd) return TRUE;
-			if (!IsWindowVisible(hwnd)) return TRUE;
-			BOOL cloaked = FALSE;
-			DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
-			if (cloaked) return TRUE;
-			RECT rect{};
-			if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect)))) return TRUE;
-			if (rect.right - rect.left <= 6 || rect.bottom - rect.top <= 6) return TRUE;
-			auto& result = *(Enumeration*)lparam;
-			auto self = result.owner;
-			auto win = self->win;
-			if (rect.left < win->x) rect.left = win->x;
-			if (rect.top < win->y) rect.top = win->y;
-			if (rect.right > win->x + win->w) rect.right = (LONG)(win->x + win->w);
-			if (rect.bottom > win->y + win->h) rect.bottom = (LONG)(win->y + win->h);
-			auto x = (float)(rect.left - win->x);
-			auto y = (float)(rect.top - win->y);
-			auto r = (float)(rect.right - win->x);
-			auto b = (float)(rect.bottom - win->y);
-			result.rectangles.push_back({ x, y, r, b });
-			return TRUE;
-		}, (LPARAM)&enumeration);
-	selection.setWindowCandidates(std::move(enumeration.rectangles));
+	const RECT bounds{static_cast<LONG>(win->x), static_cast<LONG>(win->y),
+		static_cast<LONG>(win->x + win->w), static_cast<LONG>(win->y + win->h)};
+	std::vector<RECT> native;
+	DWORD error{};
+	if (!HuhuCapture::Platform::captureWindowRectangles(bounds, native, error)) return;
+	std::vector<HuhuCapture::Capture::SelectionBounds> rectangles;
+	rectangles.reserve(native.size());
+	for (const auto& rectangle : native)
+		rectangles.push_back({static_cast<float>(rectangle.left - bounds.left), static_cast<float>(rectangle.top - bounds.top),
+			static_cast<float>(rectangle.right - bounds.left), static_cast<float>(rectangle.bottom - bounds.top)});
+	selection.setWindowCandidates(std::move(rectangles));
 }
 
 void CutMask::selectionChanged()

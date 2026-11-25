@@ -12,7 +12,7 @@
 
 using Microsoft::WRL::ComPtr;
 
-bool ImageExport::saveToClipboard(const int w, const int h, BYTE* data, HWND owner)
+bool ImageExport::saveToClipboard(const int w, const int h, const BYTE* data, HWND owner)
 {
     const auto layout = HuhuCapture::Core::pixelLayout(w, h, 4);
     if (!data || !layout) return false;
@@ -22,7 +22,7 @@ bool ImageExport::saveToClipboard(const int w, const int h, BYTE* data, HWND own
     return HuhuCapture::Platform::Windows::publishClipboard(prepared.payload, owner).completed();
 }
 
-bool ImageExport::saveToFile(const std::wstring& path, const int w, const int h, BYTE* data)
+bool ImageExport::saveToFile(const std::wstring& path, const int w, const int h, const BYTE* data)
 {
 	const auto layout = HuhuCapture::Core::pixelLayout(w, h, 4);
 	if (path.empty() || !data || !layout || layout->bytes > (std::numeric_limits<UINT>::max)()) return false;
