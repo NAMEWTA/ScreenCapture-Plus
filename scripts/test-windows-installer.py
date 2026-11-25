@@ -203,7 +203,7 @@ def main():
                 report['failureCleanup'] = str(error)
         report['elapsedSeconds'] = time.monotonic() - started
         (root / 'installer-regression.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
-        print(json.dumps(report, indent=2, ensure_ascii=False), flush=True)
+        print(json.dumps(report, indent=2, ensure_ascii=True), flush=True)
 
 
 if __name__ == '__main__':
