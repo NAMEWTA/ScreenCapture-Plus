@@ -1,7 +1,7 @@
 #pragma once
 
 #include <string_view>
-#include "core/HistoryStack.h"
+#include "editor/EditorDocument.h"
 
 class ShapeBase;
 class WinPin;
@@ -20,11 +20,13 @@ public:
     void removeShapeLater(ShapeBase* target);
 
     // Only active shapes are rendered, hit-tested, numbered and composited.
-    auto shapes() const noexcept { return stack.activeItems(); }
+    auto shapes() const noexcept { return document_.activeItems(); }
+    auto& document() noexcept { return document_; }
+    const auto& document() const noexcept { return document_; }
 
 private:
     void releaseBorrows(ShapeBase* target);
 
     WinPin* win;
-    HuhuCapture::Core::HistoryStack<ShapeBase> stack;
+    HuhuCapture::Editor::EditorDocument<ShapeBase> document_;
 };

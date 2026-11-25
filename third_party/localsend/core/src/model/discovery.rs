@@ -1,4 +1,15 @@
+// huhucapture modification; see docs/localsend-core.md and upstream.json.
 use serde::{Deserialize, Serialize};
+
+/// Shared byte limits for untrusted discovery JSON, before it enters a store
+/// or an application event queue. HTTP fingerprints may be arbitrary legacy
+/// identifiers; the TLS-only receiver additionally requires a SHA-256 digest.
+pub(crate) fn metadata_within_limits(alias: &str, version: &str,
+    model: Option<&str>, fingerprint: &str) -> bool {
+    let bounded = |text: &str, limit| text.len() <= limit && !text.contains('\0');
+    !alias.is_empty() && bounded(alias, 256) && bounded(version, 32)
+        && model.is_none_or(|value| bounded(value, 256)) && bounded(fingerprint, 128)
+}
 
 /// The protocol version (major.minor) implemented by this crate for the v2 protocol.
 pub const PROTOCOL_VERSION_V2: &str = "2.2";

@@ -1,3 +1,4 @@
+// huhucapture modification; see docs/localsend-core.md and upstream.json.
 //! The in-memory store of discovered devices.
 
 use super::DiscoveryEvent;
@@ -12,6 +13,8 @@ use std::time::SystemTime;
 /// chatty peers re-announce for the whole run, so the oldest entries are
 /// dropped beyond this.
 const MAX_LOGS: usize = 100;
+const MAX_DEVICES: usize = 256;
+const MAX_CHANNELS: usize = 16;
 
 /// A device discovered on the network, as it was observed on one of its
 /// channels.
@@ -227,9 +230,14 @@ impl StatefulDevice {
     fn apply(
         &mut self,
         device: DiscoveredDevice,
-        observation: Observation,
+        mut observation: Observation,
         timestamp: SystemTime,
     ) -> DiscoveryEvent {
+        if let Observation::Failed(error) = &mut observation {
+            let mut end = error.len().min(1024);
+            while !error.is_char_boundary(end) { end -= 1; }
+            error.truncate(end);
+        }
         self.update_channel(&device.channel, &observation, timestamp);
 
         let channel = device.channel.clone();
@@ -287,6 +295,16 @@ impl StatefulDevice {
             .keys()
             .find(|known| known.same_endpoint(channel))
             .cloned();
+        if same_endpoint.is_none() && self.channels.len() >= MAX_CHANNELS {
+            let oldest = self.channels.iter().min_by_key(|(_, state)| {
+                let outbound = match state.outbound {
+                    Outbound::Reachable(time) | Outbound::Failed(time) => Some(time),
+                    Outbound::Untested => None,
+                };
+                state.inbound.max(outbound)
+            }).map(|(channel, _)| channel.clone());
+            if let Some(oldest) = oldest { self.channels.remove(&oldest); }
+        }
 
         match observation {
             Observation::Reached => {
@@ -484,6 +502,18 @@ impl DeviceStore {
         {
             Some(index) => index,
             None => {
+                if devices.len() >= MAX_DEVICES {
+                    // Discovery is a bounded volatile cache, not the trusted
+                    // device store. Prefer evicting an unconfirmed observation.
+                    let oldest = devices.iter().enumerate().min_by_key(|(_, device)|
+                        (device.confirmed, device.logs.last().map(|log| log.timestamp)))
+                        .map(|(index, _)| index).unwrap();
+                    if devices[oldest].confirmed && matches!(observation, Observation::Failed(_)) {
+                        return (None, StatefulDevice { device, confirmed: false, verified: false,
+                            channels: HashMap::new(), logs: Vec::new() });
+                    }
+                    devices.remove(oldest);
+                }
                 devices.push(StatefulDevice {
                     device: device.clone(),
                     confirmed: false,
@@ -749,6 +779,27 @@ mod tests {
             log_marker(logs.last().unwrap()),
             &(MAX_LOGS + 4).to_string()
         );
+    }
+
+    #[test]
+    fn native_cache_bounds_untrusted_devices_channels_and_errors() {
+        let store = DeviceStore::new();
+        for index in 0..MAX_DEVICES + 20 {
+            fail(&store, device(&format!("unconfirmed-{index}"), "192.168.0.1"));
+        }
+        assert!(store.unconfirmed_devices().len() <= MAX_DEVICES);
+        reach(&store, device("confirmed", "192.168.0.2"));
+        for index in 0..MAX_CHANNELS + 20 {
+            reach(&store, device("confirmed", &format!("192.168.1.{index}")));
+        }
+        let known = store.by_fingerprint("confirmed").unwrap();
+        assert!(known.channels.len() <= MAX_CHANNELS);
+        assert!(known.channels.contains_key(&channel(&format!("192.168.1.{}", MAX_CHANNELS + 19), 53317)));
+        store.report_outbound("confirmed", channel("192.168.0.2", 53317), Err("错".repeat(4096)), SystemTime::now());
+        let known = store.by_fingerprint("confirmed").unwrap();
+        let DeviceLogEvent::OutboundFailed { error, .. } = &known.logs.last().unwrap().event else { panic!("missing failure"); };
+        assert!(error.len() <= 1024);
+        assert!(std::str::from_utf8(error.as_bytes()).is_ok());
     }
 
     #[test]

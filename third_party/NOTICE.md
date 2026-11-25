@@ -36,3 +36,24 @@ building with `--locked` preserves that dependency graph. Its AGPL license is
 included separately and is not replaced by this repository's MIT license.
 Sources and build instructions for this release are available at
 https://github.com/NAMEWTA/huhucapture and at the pinned links above.
+
+## Qt migration components (not yet a released product)
+
+The additional CMake and platform validation targets do not replace the released
+Windows application yet. Their exact revisions are in
+[`build/dependencies.lock.json`](../build/dependencies.lock.json). Dependency
+licenses apply independently of the root application license.
+
+| Component | Source and revision | License and provenance |
+| --- | --- | --- |
+| Qt 6.12.1 | QtBase `5af1a37e31a869cd6eb8a73d82e2c71a450e6634`; matching Core / Gui / Widgets / Network / Svg / platform SDK | Qt's module-specific commercial or open-source terms; preserve the actual SDK license set when packaging. Validation is not a completed deployment license audit. |
+| LocalSend core | `localsend/localsend` `44f48f18a5503c43873570ff489d27ff1983e198`, core crate 0.1.0 | Apache-2.0; original [LICENSE](localsend/LICENSE), [file provenance](localsend/upstream-files.json) and [adaptations](localsend/patches/native-core.patch) retained. |
+| infer 0.22.0 | `bojand/infer` `cb05400c5f43e07200fbc1c5753e15946e9b1de8` | MIT, Bojan; [license](localsend/infer.LICENSE). The crate checksum is in the resolved Cargo.lock. |
+| libportal 0.11.0 | `flatpak/libportal` `fc4d62cfe131e8494c82f597f92b2234d584c367` | LGPL-3.0-only; [COPYING](patches/libportal/COPYING) and [GPL text](patches/libportal/COPYING.GPL3) retained with the [reviewed patch](patches/libportal/0001-capture-request-lifetime-and-async-fd.patch). |
+
+LocalSend's application UI and Flutter/Dart runtime are not included. Unselected
+upstream Rust APIs remain in the audited source to keep the fork reviewable; the
+strict native v2 entry point and its limits are documented in
+[`docs/localsend-core.md`](../docs/localsend-core.md). Rust dependencies retain
+their own Cargo.lock identities and licenses; their final aggregated binary
+distribution requirements remain a release gate.

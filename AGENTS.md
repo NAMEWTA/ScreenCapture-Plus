@@ -1,5 +1,33 @@
 # huhucapture repository guide
 
+## Active Qt migration
+
+[Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) is the sole P00–P14
+implementation plan. Issue #4 supplements Linux and LocalSend details. Read
+[the current migration boundaries](docs/qt-migration.md) before editing the new
+CMake, Qt, Linux, or Rust paths. The target product uses one C++20 / Qt 6 Widgets
+UI, editor, and service implementation; only actual OS capabilities belong in
+platform adapters. The shipping Windows build described below remains the
+regression baseline until P12 passes; P13 then removes Ling and the old build.
+Do not describe component validation as a complete Qt/Linux product or weaken
+release gates to remove the old architecture early.
+
+Reuse existing production behavior first, pinned cited upstream second, then
+mature libraries. Keep pure editor models free of Qt/Win32 and use them in the
+existing adapters while migrating. Register shared targets and tests in CMake;
+register files used by the old Windows product in its project and filters too.
+Pinned external changes need exact provenance, licenses and replayable patches.
+Do not edit restored dependencies as an undocumented build fix. LocalSend and
+gifski must ultimately share one aggregated Rust static library and the Qt CRT.
+
+Qt/native/Portal tests and old Windows regression checks have distinct scopes.
+Portal fault tests use a real bus, while desktop authorization and PipeWire
+frames require separate real desktop evidence. Preserve unknown configuration
+fields and original migration bytes; a stale writer or failed backup must not
+overwrite user data. See the migration guide for atomicity and durability limits.
+
+## Shipping Windows baseline
+
 huhucapture is a native Windows x64 C++20 application using Ling, Win32,
 Direct2D/DirectWrite, and Windows media APIs. It ships as `huhucapture.exe`.
 The canonical repository is `NAMEWTA/huhucapture`; the maintained branch is

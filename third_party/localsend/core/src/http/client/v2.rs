@@ -110,6 +110,10 @@ impl LsHttpClientV2 {
         };
 
         let body = res.json_limited::<RegisterResponseDtoV2>().await?;
+        if !crate::model::discovery::metadata_within_limits(&body.alias, &body.version,
+            body.device_model.as_deref(), &body.fingerprint) {
+            return Err(anyhow::anyhow!("Invalid device response metadata").into());
+        }
 
         Ok(ResultWithPublicKey {
             public_key,
@@ -363,6 +367,10 @@ impl LsHttpClientV2 {
         }
 
         let body = res.json_limited::<InfoResponseDtoV2>().await?;
+        if !crate::model::discovery::metadata_within_limits(&body.alias, &body.version,
+            body.device_model.as_deref(), &body.fingerprint) {
+            return Err(anyhow::anyhow!("Invalid device response metadata").into());
+        }
 
         Ok(body)
     }

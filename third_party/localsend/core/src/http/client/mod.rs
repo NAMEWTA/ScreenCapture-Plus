@@ -410,10 +410,13 @@ impl ResponseExt for Response {
         let status = self.status().as_u16();
         let bytes = self.bounded_bytes().await?;
         let body = String::from_utf8_lossy(&bytes).into_owned();
-        let message = match serde_json::from_str::<ErrorResponse>(&body) {
+        let mut message = match serde_json::from_str::<ErrorResponse>(&body) {
             Ok(error) => error.message,
             Err(_) => body,
         };
+        let mut end = message.len().min(1024);
+        while !message.is_char_boundary(end) { end -= 1; }
+        message.truncate(end);
         Err(ClientError::StatusCode(StatusCodeError {
             status,
             message: if message.is_empty() {

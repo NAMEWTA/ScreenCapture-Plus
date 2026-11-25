@@ -1,5 +1,47 @@
 # 构建与发布
 
+## Qt 迁移验证入口
+
+当前正式 Windows 构建仍使用本页后续的 PowerShell / MSBuild 入口。根目录 CMake 用于 [Issue #5 的迁移验证](qt-migration.md)，还不生成最终 Qt 应用或安装包。CMake 要求 3.25 以上及 C++20 编译器，纯核心配置不需要 Qt：
+
+```sh
+cmake --preset core
+cmake --build --preset core --parallel 2
+ctest --preset core
+```
+
+Qt 验证严格使用 6.12.1 的 Core / Gui / Widgets / Network / Svg。SDK 恢复步骤、固定 aqtinstall 提交和实际平台架构见 [.github/workflows/qt-validation.yml](../.github/workflows/qt-validation.yml)；不能以另一个发行版 Qt 代替。Linux SDK 包含 QtWayland 和匹配的私有头，实际中文字体也是导出验证的前置条件。安装并将该 SDK 的 `bin` 与前缀加入环境后：
+
+```sh
+cmake --preset qt-validation
+cmake --build --preset qt-validation --parallel 2
+ctest --preset qt-validation
+```
+
+Windows 使用与 Qt 匹配的 MSVC v143、x64、动态 CRT；在对应开发环境执行：
+
+```powershell
+cmake -S . -B artifacts/cmake/qt-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON
+cmake --build artifacts/cmake/qt-validation --config Debug --parallel 2
+ctest --test-dir artifacts/cmake/qt-validation -C Debug --output-on-failure --no-tests=error
+cmake --build artifacts/cmake/qt-validation --config Release --parallel 2
+ctest --test-dir artifacts/cmake/qt-validation -C Release --output-on-failure --no-tests=error
+```
+
+Linux Portal 验证还需要 GLib / GIO 2.80 以上、Meson、Ninja、pkg-config、D-Bus 与 Qt 6.12.1 私有开发头。`scripts/build-portal.py` 在空的 `.deps/portal-validation` 中恢复锁定 libportal，检查受控补丁 SHA256，再构建 Qt 后端；不修改系统安装或清空已有源码。已有工作区时应指定另一个空 `--workspace` 并使用它实际产生的前缀。
+
+```sh
+python3 scripts/build-portal.py
+export PKG_CONFIG_PATH="$PWD/.deps/portal-validation/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+cmake --preset qt-validation -DHUHUCAPTURE_PORTAL_VALIDATION=ON
+cmake --build --preset qt-validation --parallel 2
+ctest --preset qt-validation
+```
+
+真实桌面授权 probe 与自动故障测试的区别见 [Linux Portal](linux-portal.md)。LocalSend 的 Cargo workspace 使用 Rust 1.97.1 和提交的实际锁文件，构建命令见 [core 适配](localsend-core.md)。这些验证入口没有发布权限，也不会创建正式 Release。Qt SDK 资产哈希、聚合 Rust 库、软件编码和最终部署工具仍须按 P00 完成验证，P11 / P12 / P13 通过后才能切换生产发布。
+
+## 现有 Windows 生产构建
+
 本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。版本号来自 [Version.props](../build/windows/Version.props)，发布意图来自 [publish.json](../releases/publish.json)。
 
 ## 环境与依赖决策

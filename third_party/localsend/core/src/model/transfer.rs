@@ -305,6 +305,12 @@ mod tests {
     fn formats_nanosecond_timestamp() {
         let time = SystemTime::UNIX_EPOCH + Duration::from_nanos(123_456_789);
         let formatted = format_timestamp(time).unwrap();
+        // Rust's Windows SystemTime uses FILETIME: checked_dur2intervals
+        // truncates to 100 ns before the formatter receives the value.
+        // Require all representable ticks, never invent extra precision.
+        #[cfg(windows)]
+        assert_eq!(formatted, "1970-01-01T00:00:00.1234567Z");
+        #[cfg(not(windows))]
         assert_eq!(formatted, "1970-01-01T00:00:00.123456789Z");
         assert_eq!(parse_timestamp(&formatted), Some(time));
     }

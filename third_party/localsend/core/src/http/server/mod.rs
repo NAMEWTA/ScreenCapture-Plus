@@ -31,7 +31,7 @@ use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as SyncMutex};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -64,7 +64,10 @@ pub(crate) struct V2State {
     pub(crate) event_tx: mpsc::Sender<ServerEventV2>,
 
     /// The single upload session slot. Only one session can be active at a time.
-    pub(crate) session: Mutex<Option<SessionStateV2>>,
+    // No I/O or await while this lock is held. A synchronous lock lets a
+    // dropped request release its session and reserved terminal event without
+    // creating detached cleanup tasks after shutdown.
+    pub(crate) session: SyncMutex<Option<SessionStateV2>>,
 
     /// Maps client IPs to the number of failed PIN attempts.
     pub(crate) pin_attempts: Mutex<LruCache<IpAddr, u32>>,
@@ -112,7 +115,7 @@ impl AppState {
                 pin: config.pin,
                 verify_checksums: config.verify_checksums,
                 event_tx: config.event_tx,
-                session: Mutex::new(None),
+                session: SyncMutex::new(None),
                 pin_attempts: Mutex::new(LruCache::new(NonZeroUsize::new(200).unwrap())),
                 uploads: Semaphore::new(2),
             })
@@ -218,7 +221,7 @@ impl ServerHandle {
         let Some(v2) = &self.v2 else {
             return false;
         };
-        let mut slot = v2.session.lock().await;
+        let mut slot = v2.session.lock().unwrap();
         match slot.as_ref() {
             Some(SessionStateV2::Active(session)) if session.session_id == session_id => {
                 session.cancel.cancel();
@@ -338,8 +341,16 @@ pub async fn start_bound_v2(
         !address.is_unspecified() && !address.is_multicast() && !address.is_broadcast()),
         "a concrete unicast IPv4 address is required");
     anyhow::ensure!(v2_config.verify_checksums, "checksum verification is mandatory");
+    anyhow::ensure!(v2_config.pin.as_ref().is_none_or(|pin| pin.len() <= 128 && !pin.contains('\0')),
+        "PIN exceeds the metadata limit");
     anyhow::ensure!(v2_config.event_tx.max_capacity() <= limits.max_event_queue,
         "event channel exceeds its capacity budget");
+    anyhow::ensure!(v2_config.event_tx.max_capacity() >= 3,
+        "event channel needs request, terminal and listener-failure slots");
+    // This slot cannot be consumed by discovery/progress noise. A listener
+    // failure remains deliverable even if the consumer temporarily stalls.
+    let listener_failure = v2_config.event_tx.clone().try_reserve_owned()
+        .map_err(|_| anyhow::anyhow!("event consumer is unavailable"))?;
     addresses.sort();
     addresses.dedup();
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -382,18 +393,27 @@ pub async fn start_bound_v2(
                         Some(Err(error)) => format!("{error:#}"),
                         _ => "listener stopped unexpectedly".to_string(),
                     };
-                    if let Some(v2) = &state.v2 {
-                        let _ = v2.event_tx.try_send(ServerEventV2::ListenerFailed { error });
-                    }
+                    listener_failure.send(ServerEventV2::ListenerFailed { error });
                 }
             }
             // No selected listener may continue serving after another failed.
             cancel.cancel();
             if let Some(v2) = &state.v2 {
-                let mut slot = v2.session.lock().await;
+                let mut slot = v2.session.lock().unwrap();
                 match slot.take() {
-                    Some(SessionStateV2::Active(session)) => session.cancel.cancel(),
-                    Some(SessionStateV2::Pending(session)) => session.cancel.cancel(),
+                    Some(SessionStateV2::Active(session)) => {
+                        session.cancel.cancel();
+                        if let Some(terminal) = session.terminal {
+                            terminal.send(ServerEventV2::SessionEnd { session_id: session.session_id,
+                                reason: v2::SessionEndReasonV2::Cancelled });
+                        }
+                    }
+                    Some(SessionStateV2::Pending(session)) => {
+                        session.cancel.cancel();
+                        if let Some(terminal) = session.terminal {
+                            terminal.send(ServerEventV2::PrepareUploadAborted { session_id: session.session_id });
+                        }
+                    }
                     None => {},
                 }
             }

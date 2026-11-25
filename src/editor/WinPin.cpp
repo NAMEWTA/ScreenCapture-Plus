@@ -173,48 +173,37 @@ bool WinPin::isImagePosition(POINT point) const
 
 std::uint64_t WinPin::allocateAnnotationId()
 {
-	return annotationSequence.allocate().value_or(0);
+    return history->document().allocateAnnotationId().value_or(0);
 }
 
 ShapeAnnotation* WinPin::findAnnotation(std::uint64_t number) const
 {
-	if (!number) return nullptr;
-	for (const auto& shape : history->shapes()) {
-		auto* note = dynamic_cast<ShapeAnnotation*>(shape.get());
-		if (note && note->number() == number) return note;
-	}
-	return nullptr;
+    return dynamic_cast<ShapeAnnotation*>(history->document().findAnnotation(number));
 }
 
 std::vector<HuhuCapture::Core::AnnotationNote> WinPin::annotationNotes() const
 {
-	std::vector<HuhuCapture::Core::AnnotationNote> result;
-	for (const auto& shape : history->shapes()) {
-		if (auto* note = dynamic_cast<ShapeAnnotation*>(shape.get())) result.push_back({note->number(), note->note()});
-	}
-	std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return a.number < b.number; });
-	return result;
+    return history->document().annotationNotes();
 }
 
 void WinPin::onAnnotationsChanged()
 {
-	auto notes = annotationNotes();
-	if (!findAnnotation(selectedAnnotation)) selectedAnnotation = notes.empty() ? 0 : notes.back().number;
-	if (annotationPanel) annotationPanel->sync(std::move(notes), selectedAnnotation);
-	refresh();
+    if (annotationPanel)
+        annotationPanel->sync(annotationNotes(), history->document().selectedAnnotation());
+    refresh();
 }
 
 void WinPin::selectAnnotation(std::uint64_t number, bool focusEditor)
 {
-	if (!findAnnotation(number)) return;
-	if (editingText) editingText->finishEdit();
-	selectedAnnotation = number;
-	showAnnotationPanel(!annotationPanelVisible);
-	if (annotationPanel) {
-		annotationPanel->sync(annotationNotes(), selectedAnnotation);
-		annotationPanel->select(number, focusEditor);
-	}
-	refresh();
+    if (!findAnnotation(number)) return;
+    if (editingText) editingText->finishEdit();
+    history->document().selectAnnotation(number);
+    showAnnotationPanel(!annotationPanelVisible);
+    if (annotationPanel) {
+        annotationPanel->sync(annotationNotes(), history->document().selectedAnnotation());
+        annotationPanel->select(number, focusEditor);
+    }
+    refresh();
 }
 
 void WinPin::updateAnnotationNote(std::uint64_t number, const std::wstring& text)
@@ -503,7 +492,7 @@ void WinPin::layout()
 		shape->paint(ctx);
 	}
 	if (annotationPanelVisible) {
-		if (auto* selected = findAnnotation(selectedAnnotation); selected && selected != shapeHover)
+		if (auto* selected = findAnnotation(history->document().selectedAnnotation()); selected && selected != shapeHover)
 			selected->paintDragger(ctx);
 	}
 	if (!isMouseDown && shapeHover) {
@@ -856,7 +845,7 @@ void WinPin::onKey(UINT key)
 	}
 	else if (key == VK_DELETE) {
 		if (shapeHover) history->removeHoverShape();
-		else if (annotationPanelVisible) removeAnnotation(selectedAnnotation);
+		else if (annotationPanelVisible) removeAnnotation(history->document().selectedAnnotation());
 	}
 	else if (key == VK_ESCAPE) {
 		close();

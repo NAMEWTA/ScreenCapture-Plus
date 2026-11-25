@@ -1,5 +1,6 @@
 // huhucapture modification; see docs/localsend-core.md and upstream.json.
 use crate::model::transfer::FileContent;
+use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
@@ -48,7 +49,8 @@ pub async fn sha256_file_content(
                 match chunk {
                     Some(chunk) => {
                         hasher.update(&chunk);
-                        hashed += chunk.len() as u64;
+                        hashed = hashed.checked_add(chunk.len() as u64)
+                            .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
                         progress(hashed);
                     }
                     None => break,
@@ -63,13 +65,14 @@ pub async fn sha256_file_content(
         FileContent::File(file) => {
             read_and_hash_from_file(&mut hasher, tokio::fs::File::from_std(file), cancel_token, progress).await?;
         }
-        FileContent::ResultStream(mut receiver) => {
+        FileContent::ResultStream(receiver) => {
+            let mut stream = FileContent::ResultStream(receiver).into_stream();
             let mut hashed = 0_u64;
             loop {
                 let chunk = tokio::select! {
                     biased;
                     _ = cancel_token.cancelled() => return Err(HashError::Cancelled),
-                    chunk = receiver.recv() => chunk,
+                    chunk = stream.next() => chunk,
                 };
                 let Some(chunk) = chunk else { break; };
                 let chunk = chunk?;
@@ -116,7 +119,8 @@ async fn read_and_hash_from_file(
             break;
         }
         hasher.update(&buffer[..read]);
-        hashed += read as u64;
+        hashed = hashed.checked_add(read as u64)
+            .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
         progress(hashed);
     }
     Ok(())

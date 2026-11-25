@@ -1,3 +1,4 @@
+// huhucapture modification; see docs/localsend-core.md and upstream.json.
 //! UDP multicast discovery for the LocalSend protocol (v2.2).
 //!
 //! Devices announce themselves by sending a [`MulticastMessageV2`] to the
@@ -16,6 +17,7 @@ use serde::Serialize;
 use socket::MulticastSocket;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
@@ -50,7 +52,7 @@ const ANNOUNCE_DELAYS: [Duration; 3] = [
 
 /// The largest datagram that is read at once. Announcements are far smaller;
 /// anything bigger is truncated and then fails to parse.
-const RECEIVE_BUFFER_SIZE: usize = 65536;
+const RECEIVE_BUFFER_SIZE: usize = 4097;
 
 /// How many consecutive receive errors are tolerated before a socket is given
 /// up on. Receiving may fail transiently (on Windows an ICMP error of a
@@ -169,6 +171,7 @@ struct MulticastState {
     /// The sockets used for sending. Emptied once discovery is stopped, which
     /// releases the port and turns further sends into no-ops.
     sockets: RwLock<Vec<SendSocket>>,
+    failed: AtomicBool,
 }
 
 /// A [`MulticastMessageV2`] plus the legacy `announce` flag of protocol v2.
@@ -216,6 +219,8 @@ pub struct MulticastHandle {
 }
 
 impl MulticastHandle {
+    pub fn has_failed(&self) -> bool { self.state.failed.load(Ordering::Acquire) }
+
     /// Announces this device to the network, which makes every other LocalSend
     /// device on it register with this device over HTTP.
     ///
@@ -269,6 +274,7 @@ pub async fn start(
 
     let state = Arc::new(MulticastState {
         device: config.device,
+        failed: AtomicBool::new(false),
         sockets: RwLock::new(
             sockets
                 .iter()
@@ -300,6 +306,7 @@ pub async fn start(
                 // All receive loops gave up on their socket.
                 _ = async { while receivers.join_next().await.is_some() {} } => {
                     tracing::error!("All multicast sockets failed, stopping multicast discovery");
+                    state.failed.store(true, Ordering::Release);
                     // Tell the application, so it can restart discovery.
                     // `try_send` because this task must reach its end even
                     // when nobody consumes events anymore, so that
@@ -348,6 +355,12 @@ async fn receive_loop(
                 received
             }
             Err(err) => {
+                // Windows reports a truncated UDP datagram as WSAEMSGSIZE;
+                // oversized untrusted metadata must not kill the listener.
+                #[cfg(windows)]
+                if err.raw_os_error() == Some(10040) { continue; }
+                #[cfg(unix)]
+                if err.raw_os_error() == Some(libc::EMSGSIZE) { continue; }
                 consecutive_errors += 1;
                 tracing::warn!(
                     "Could not receive multicast message on interface {}: {err:#}",
@@ -363,6 +376,7 @@ async fn receive_loop(
                 continue;
             }
         };
+        if size > 4096 { continue; }
 
         let message = match serde_json::from_slice::<MulticastMessageV2>(&buffer[..size]) {
             Ok(message) => message,
@@ -371,6 +385,11 @@ async fn receive_loop(
                 continue;
             }
         };
+        if message.port == 0 || !crate::model::discovery::metadata_within_limits(
+            &message.alias, &message.version, message.device_model.as_deref(), &message.fingerprint)
+        {
+            continue;
+        }
 
         // Loopback is enabled, so our own messages come back as well.
         if message.fingerprint == state.device.fingerprint {

@@ -2,6 +2,7 @@
 
 #include <QColorSpace>
 #include <QDir>
+#include <QFontDatabase>
 #include <QFontInfo>
 #include <QGlyphRun>
 #include <QGuiApplication>
@@ -92,9 +93,13 @@ void verifyRequiredCjkFonts(const Renderer::PreparedText& text)
         std::cout << "FONT QFontInfo: " << requested.family().toStdString() << " / "
             << requested.styleName().toStdString() << ", point=" << requested.pointSizeF()
             << ", pixel=" << requested.pixelSize() << ", exact=" << requested.exactMatch() << '\n';
+        require(!requested.family().trimmed().isEmpty() && requested.pixelSize() > 0 && requested.pointSizeF() > 0,
+            "QFontInfo resolved a box engine instead of a real system font");
         for (const auto& run : paragraph.layout->glyphRuns()) {
             const auto font = run.rawFont();
-            require(font.isValid(), "CJK text has no usable raw font");
+            require(font.isValid() && !font.familyName().trimmed().isEmpty() &&
+                std::isfinite(font.pixelSize()) && font.pixelSize() > 0,
+                "CJK text has no real font face (a valid QRawFont alone can be Qt's box engine)");
             const auto description = font.familyName() + QStringLiteral(" / ") + font.styleName() +
                 QStringLiteral(" / ") + QString::number(font.pixelSize()) + QStringLiteral(" px");
             if (!fallbackFonts.contains(description)) {
@@ -379,6 +384,29 @@ void verifyPreviewState(const Renderer::Options& options)
     std::cout << "PASS shared preview/export plan, preview transform/clip/paint-state restoration, untouched image area\n";
 }
 
+void verifyUnavailableFontFailure()
+{
+    // Run in a fresh Windows process with -platform offscreen and an explicitly
+    // empty QT_QPA_FONTDIR. That plugin uses QFreeTypeFontDatabase, not the native
+    // Windows font database. This exercises the real box engine, not a mock font.
+    require(QGuiApplication::platformName() == QStringLiteral("offscreen") && QFontDatabase::families().isEmpty(),
+        "Missing-font test requires a genuinely empty offscreen font database");
+    Renderer::Options options;
+    Renderer::Plan plan;
+    checked(Renderer::makePlan(QSize(2, 2), {}, options, plan), "Plan image-only export without fonts");
+    const std::vector<AnnotationNote> notes{{1, L"完整中文 / readable text must not become boxes"}};
+    require(Renderer::makePlan(QSize(2, 2), notes, options, plan) == Renderer::Status::FontUnavailable,
+        "Qt's real box font engine was accepted as readable text");
+    require(plan.isValid() && plan.notes().empty() && plan.layout().width == 2 && plan.layout().height == 2,
+        "Missing-font failure replaced the previous valid plan");
+    QImage source(2, 2, QImage::Format_ARGB32);
+    source.fill(qRgba(17, 29, 43, 128));
+    QImage result;
+    checked(Renderer::render(source, plan, result), "Render previous image-only plan after missing-font failure");
+    verifySourcePreserved(source, result);
+    std::cout << "PASS real missing-font/box-engine rejection and atomic retention of the previous export\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -388,6 +416,10 @@ int main(int argc, char** argv)
         QTemporaryDir temporary;
         require(temporary.isValid(), "Could not create fixture directory");
         const auto arguments = application.arguments();
+        if (arguments.size() == 2 && arguments[1] == QStringLiteral("--expect-font-unavailable")) {
+            verifyUnavailableFontFailure();
+            return 0;
+        }
         require(arguments.size() <= 2, "Usage: annotation_render_tests [render-output-directory]");
         const QDir directory(arguments.size() == 2 ? arguments[1] : temporary.path());
         require(QDir().mkpath(directory.absolutePath()), "Could not create render-output directory");

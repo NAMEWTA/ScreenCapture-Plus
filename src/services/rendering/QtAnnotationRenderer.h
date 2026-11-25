@@ -20,7 +20,7 @@ class QPainter;
 // supplies Unicode shaping, font fallback, wrapping and rasterization only.
 namespace HuhuCapture::QtAnnotationRenderer {
 
-enum class Status { Ok, InvalidInput, LayoutOverflow, OutOfMemory, RenderFailure };
+enum class Status { Ok, InvalidInput, LayoutOverflow, OutOfMemory, RenderFailure, FontUnavailable };
 
 struct Options : Core::AnnotationLayoutOptions {
     QString title;

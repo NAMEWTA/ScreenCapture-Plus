@@ -26,6 +26,10 @@ pub(crate) struct PendingSessionV2 {
     pub(crate) sender_ip: PeerIp,
 
     pub(crate) cancel: CancellationToken,
+
+    /// A slot reserved when the strict server accepted the session. Completing
+    /// or cancelling a session never waits on a saturated application queue.
+    pub(crate) terminal: Option<tokio::sync::mpsc::OwnedPermit<crate::http::server::v2::ServerEventV2>>,
 }
 
 pub(crate) struct UploadSessionV2 {
@@ -39,6 +43,7 @@ pub(crate) struct UploadSessionV2 {
 
     /// Interrupts body reads and commit waits when either side cancels.
     pub(crate) cancel: CancellationToken,
+    pub(crate) terminal: Option<tokio::sync::mpsc::OwnedPermit<crate::http::server::v2::ServerEventV2>>,
 }
 
 impl UploadSessionV2 {

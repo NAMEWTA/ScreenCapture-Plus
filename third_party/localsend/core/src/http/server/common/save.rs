@@ -8,7 +8,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
 use crate::http::limits::TransferLimits;
-use super::verified_upload::{CommittedMedia, UploadFailure, UploadVerification, receive_verified};
+use super::verified_upload::{VerifiedUploadTarget, receive_verified};
 use tokio_util::sync::CancellationToken;
 
 /// Channel capacity for file upload chunks (provides backpressure).
@@ -24,11 +24,7 @@ pub enum FileUploadTarget {
     /// Bounded sink with a separate, hash-validated permission to commit.
     /// The application returns success only after full media validation and
     /// durable no-replace archival. Use `verified_upload_channel` to construct.
-    VerifiedStream {
-        binary_tx: mpsc::Sender<Bytes>,
-        verification_tx: oneshot::Sender<Result<UploadVerification, UploadFailure>>,
-        commit_rx: oneshot::Receiver<Result<CommittedMedia, UploadFailure>>,
-    },
+    VerifiedStream(VerifiedUploadTarget),
     /// The application consumes the binary chunks itself.
     ///
     /// The server forwards chunks into `binary_tx` and closes it at end of file.
@@ -131,9 +127,9 @@ pub(crate) async fn save_req_to_target(
     use sha2::{Digest, Sha256};
 
     let target = match target {
-        FileUploadTarget::VerifiedStream { binary_tx, verification_tx, commit_rx } => {
+        FileUploadTarget::VerifiedStream(target) => {
             let defaults = TransferLimits::default();
-            return receive_verified(req, binary_tx, verification_tx, commit_rx, file_size,
+            return receive_verified(req, target.binary_tx, target.verification_tx, target.commit_rx, file_size,
                 expected_sha256, mime, strict.unwrap_or(&defaults), cancel).await;
         }
         other if strict.is_some() => {
@@ -150,7 +146,7 @@ pub(crate) async fn save_req_to_target(
     // result channel is answered by this function once the complete outcome
     // (including the checksum verification) is known.
     let (binary_tx, result_rx, app_result_tx) = match target {
-        FileUploadTarget::VerifiedStream { .. } => unreachable!("handled above"),
+        FileUploadTarget::VerifiedStream(_) => unreachable!("handled above"),
         FileUploadTarget::Stream {
             binary_tx,
             result_rx,

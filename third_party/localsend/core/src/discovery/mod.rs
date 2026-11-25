@@ -1,3 +1,4 @@
+// huhucapture modification; see docs/localsend-core.md and upstream.json.
 mod store;
 
 pub use store::{
@@ -19,7 +20,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use store::{Announcement, DeviceStore, Observation};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 /// The default timeout of the register requests sent by discovery, matching
 /// the Flutter app's default discovery timeout. Discovery only talks to LAN
@@ -32,6 +35,7 @@ const MULTICAST_CHANNEL_SIZE: usize = 64;
 /// How many hosts a subnet scan probes at once, matching the Flutter app's
 /// legacy HTTP discovery.
 const SCAN_CONCURRENCY: usize = 50;
+const BACKGROUND_CONCURRENCY: usize = 16;
 
 /// This device's TLS identity, sent as client certificate with every register
 /// request (client certificates are mandatory in HTTPS mode).
@@ -147,9 +151,29 @@ struct DiscoveryState {
     /// Number of confirmations in this run, on which
     /// [`DiscoveryHandle::discover_staged`] decides whether to escalate.
     confirmations: AtomicU64,
+    secure_only: bool,
+    cancel: CancellationToken,
+    tasks: TaskTracker,
+    task_gate: std::sync::Mutex<()>,
+    background_slots: Arc<Semaphore>,
+    requests: Semaphore,
 }
 
 impl DiscoveryState {
+    fn spawn_background(self: &Arc<Self>, task: impl std::future::Future<Output = ()> + Send + 'static) -> bool {
+        let _gate = self.task_gate.lock().unwrap();
+        if self.cancel.is_cancelled() || self.tasks.is_closed() { return false; }
+        self.tasks.spawn(task);
+        true
+    }
+
+    fn permits_channel(&self, host: &str, port: u16, protocol: ProtocolType) -> bool {
+        !host.is_empty() && host.len() <= 255 && !host.contains('\0') && port != 0
+            && (!self.secure_only || (protocol == ProtocolType::Https
+                && host.parse::<Ipv4Addr>().is_ok_and(|ip| !ip.is_unspecified()
+                    && !ip.is_multicast() && !ip.is_broadcast())))
+    }
+
     fn register_dto(&self) -> RegisterDtoV2 {
         RegisterDtoV2 {
             alias: self.device.alias.clone(),
@@ -185,9 +209,19 @@ impl DiscoveryState {
         port: u16,
         protocol: ProtocolType,
     ) -> Result<Option<StatefulDevice>, ClientError> {
-        let response = client
-            .register(protocol, host, port, self.register_dto())
-            .await?;
+        if !self.permits_channel(host, port, protocol) {
+            return Err(anyhow::anyhow!("Discovery channel is not permitted").into());
+        }
+        let _permit = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return Err(ClientError::Cancelled),
+            permit = self.requests.acquire() => permit.map_err(|_| ClientError::Cancelled)?,
+        };
+        let response = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return Err(ClientError::Cancelled),
+            response = client.register(protocol, host, port, self.register_dto()) => response?,
+        };
 
         // In HTTPS mode the certificate is the peer's identity; the
         // fingerprint claimed in the body only counts without encryption.
@@ -231,6 +265,8 @@ impl DiscoveryState {
     }
 
     fn emit(&self, event: DiscoveryEvent) {
+        let _gate = self.task_gate.lock().unwrap();
+        if self.cancel.is_cancelled() { return; }
         if let Some(event_tx) = &self.event_tx {
             // Never wait for the application here. A subnet scan confirms up to
             // 255 devices in a burst, far more than the channel holds, and
@@ -256,6 +292,7 @@ pub struct DiscoveryHandle {
     /// keeps working without it, see [`DiscoveryHandle::multicast_error`].
     multicast: Result<MulticastHandle, anyhow::Error>,
     state: Arc<DiscoveryState>,
+    supervisor: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl DiscoveryHandle {
@@ -314,6 +351,7 @@ impl DiscoveryHandle {
         &self,
         channels: Vec<HttpChannel>,
     ) -> Result<Vec<StatefulDevice>, ClientError> {
+        if channels.len() > 256 { return Err(anyhow::anyhow!("Too many known discovery channels").into()); }
         let client = self.state.unpinned_client()?;
 
         let state = &self.state;
@@ -354,6 +392,7 @@ impl DiscoveryHandle {
         protocol: ProtocolType,
         grace: Duration,
     ) -> Result<(), ClientError> {
+        if interface_ips.len() > 16 { return Err(anyhow::anyhow!("Too many discovery interfaces").into()); }
         let confirmations = self.state.confirmations.load(Ordering::Relaxed);
         let escalate = async {
             self.discover_known_http_channels(known_channels).await?;
@@ -386,8 +425,10 @@ impl DiscoveryHandle {
         port: u16,
         protocol: ProtocolType,
     ) -> Result<Vec<StatefulDevice>, ClientError> {
-        if !self.state.scanning.lock().unwrap().insert(interface_ip) {
-            return Ok(Vec::new());
+        if self.state.cancel.is_cancelled() { return Err(ClientError::Cancelled); }
+        {
+            let mut scanning = self.state.scanning.lock().unwrap();
+            if scanning.len() >= 16 || !scanning.insert(interface_ip) { return Ok(Vec::new()); }
         }
         let _guard = ScanGuard {
             state: &self.state,
@@ -446,6 +487,12 @@ impl DiscoveryHandle {
     /// A channel that was dialed before is not dialed again, so two devices
     /// running this do not keep answering each other.
     pub async fn observe_inbound(&self, device: DiscoveredDevice) -> bool {
+        if self.state.cancel.is_cancelled()
+            || !crate::model::discovery::metadata_within_limits(&device.alias, &device.version,
+                device.device_model.as_deref(), &device.fingerprint)
+            || device.http().is_none_or(|channel| !self.state.permits_channel(&channel.host, channel.port, channel.protocol))
+            || (self.state.secure_only && !crate::http::limits::is_digest(&device.fingerprint))
+        { return false; }
         let (is_new, merged) = self
             .state
             .observed(device.clone(), Observation::ReachedUs, None);
@@ -480,6 +527,7 @@ impl DiscoveryHandle {
         channel: DeviceChannel,
         result: Result<(), String>,
     ) -> bool {
+        if self.state.cancel.is_cancelled() { return false; }
         let event =
             self.state
                 .store
@@ -521,9 +569,16 @@ impl DiscoveryHandle {
     /// Must be called after requesting a stop via the stop channel.
     /// Returns immediately when multicast is unavailable.
     pub async fn wait_stopped(&self) {
+        if let Some(task) = self.supervisor.lock().await.take() { let _ = task.await; }
         if let Ok(multicast) = &self.multicast {
             multicast.wait_stopped().await;
         }
+    }
+
+    /// The runtime socket failure remains observable even when an informational
+    /// event was coalesced while the application queue was full.
+    pub fn multicast_failed(&self) -> bool {
+        self.multicast.as_ref().map_or(true, |handle| handle.has_failed())
     }
 }
 
@@ -551,7 +606,32 @@ impl Drop for ScanGuard<'_> {
 /// the port is already bound by another process or because there is no network
 /// at all, discovery runs without multicast.
 pub async fn start(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>) -> DiscoveryHandle {
+    start_inner(config, stop_rx, false).await
+}
+
+/// Native IPv4 discovery. No peer announcement can cause a plaintext dial.
+/// Filters must name concrete selected local interface addresses, not a wildcard.
+pub async fn start_secure(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>) -> anyhow::Result<DiscoveryHandle> {
+    anyhow::ensure!(config.device.protocol == ProtocolType::Https && config.group_v6.is_none(),
+        "native discovery requires HTTPS and explicit IPv4 scope");
+    anyhow::ensure!(config.interface_filter.whitelist.as_ref().is_some_and(|addresses|
+        !addresses.is_empty() && addresses.len() <= 16 && addresses.iter().all(|address|
+            address.parse::<Ipv4Addr>().is_ok_and(|ip| !ip.is_unspecified() && !ip.is_multicast() && !ip.is_broadcast()))),
+        "select concrete local IPv4 interfaces before starting discovery");
+    anyhow::ensure!(config.timeout > Duration::ZERO && config.timeout <= Duration::from_secs(10),
+        "discovery timeout is outside its budget");
+    anyhow::ensure!(config.event_tx.as_ref().is_none_or(|events| events.max_capacity() <= 64),
+        "discovery event queue exceeds its budget");
+    anyhow::ensure!(crate::model::discovery::metadata_within_limits(&config.device.alias,
+        &config.device.version, config.device.device_model.as_deref(), &config.device.fingerprint)
+        && crate::http::limits::is_digest(&config.device.fingerprint) && config.device.port != 0,
+        "invalid local device metadata");
+    Ok(start_inner(config, stop_rx, true).await)
+}
+
+async fn start_inner(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>, secure_only: bool) -> DiscoveryHandle {
     let (multicast_tx, mut multicast_rx) = mpsc::channel(MULTICAST_CHANNEL_SIZE);
+    let (multicast_stop, multicast_stop_rx) = oneshot::channel();
 
     // On failure `multicast_tx` is dropped, which ends the answering task.
     let multicast = multicast::start(
@@ -563,7 +643,7 @@ pub async fn start(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>) -> D
             device: config.device.clone(),
             event_tx: multicast_tx,
         },
-        stop_rx,
+        multicast_stop_rx,
     )
     .await;
 
@@ -577,39 +657,67 @@ pub async fn start(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>) -> D
         scanning: std::sync::Mutex::new(HashSet::new()),
         dialing_back: std::sync::Mutex::new(HashSet::new()),
         confirmations: AtomicU64::new(0),
+        secure_only,
+        cancel: CancellationToken::new(),
+        tasks: TaskTracker::new(),
+        task_gate: std::sync::Mutex::new(()),
+        background_slots: Arc::new(Semaphore::new(BACKGROUND_CONCURRENCY)),
+        requests: Semaphore::new(SCAN_CONCURRENCY),
     });
 
     // Ends once discovery is stopped: the multicast side then drops its
     // sender and the channel closes.
-    tokio::spawn({
+    state.spawn_background({
         let state = state.clone();
         async move {
-            while let Some(event) = multicast_rx.recv().await {
+            loop {
+                let event = tokio::select! {
+                    biased;
+                    _ = state.cancel.cancelled() => break,
+                    event = multicast_rx.recv() => match event { Some(event) => event, None => break },
+                };
                 match event {
                     MulticastEvent::Discovered {
                         ip,
                         scope_id,
                         message,
                     } => {
-                        if !state.answering.load(Ordering::Relaxed) {
+                        if !state.answering.load(Ordering::Relaxed)
+                            || !state.permits_channel(&ip.to_string(), message.port, message.protocol)
+                            || (state.secure_only && !crate::http::limits::is_digest(&message.fingerprint)) {
                             continue;
                         }
 
                         // The register request may take a while (up to the timeout),
                         // so announcements are answered concurrently.
-                        tokio::spawn(answer_announcement(state.clone(), ip, scope_id, message));
+                        let Ok(permit) = state.background_slots.clone().try_acquire_owned() else { continue; };
+                        state.spawn_background({
+                            let state = state.clone();
+                            async move { let _permit = permit; answer_announcement(state, ip, scope_id, message).await; }
+                        });
                     }
                     MulticastEvent::SocketsFailed => {
-                        if let Some(event_tx) = &state.event_tx {
-                            let _ = event_tx.try_send(DiscoveryEvent::MulticastFailed);
-                        }
+                        state.emit(DiscoveryEvent::MulticastFailed);
                     }
                 }
             }
         }
     });
 
-    DiscoveryHandle { multicast, state }
+    let supervisor = tokio::spawn({
+        let state = state.clone();
+        async move {
+            let _ = stop_rx.await;
+            {
+                let _gate = state.task_gate.lock().unwrap();
+                state.cancel.cancel();
+                state.tasks.close();
+            }
+            let _ = multicast_stop.send(());
+            state.tasks.wait().await;
+        }
+    });
+    DiscoveryHandle { multicast, state, supervisor: tokio::sync::Mutex::new(Some(supervisor)) }
 }
 
 /// Answers an announcement with a register request, as the protocol requires.
@@ -652,15 +760,22 @@ async fn answer_announcement(
 /// several requests in a row, e.g. one for every message of an announcement
 /// burst.
 fn dial_back(state: Arc<DiscoveryState>, device: DiscoveredDevice) {
+    let Ok(permit) = state.background_slots.clone().try_acquire_owned() else { return; };
     let key = (device.fingerprint.clone(), device.channel.clone());
     if !state.dialing_back.lock().unwrap().insert(key.clone()) {
         return;
     }
 
-    tokio::spawn(async move {
-        dial(&state, device, None).await;
-        state.dialing_back.lock().unwrap().remove(&key);
+    let admitted = state.spawn_background({
+        let state = state.clone();
+        let key = key.clone();
+        async move {
+            let _permit = permit;
+            dial(&state, device, None).await;
+            state.dialing_back.lock().unwrap().remove(&key);
+        }
     });
+    if !admitted { state.dialing_back.lock().unwrap().remove(&key); }
 }
 
 /// Sends a register request to a device whose identity is already claimed —
@@ -680,6 +795,12 @@ async fn dial(
     }) = device.http().cloned()
     else {
         return;
+    };
+    if !state.permits_channel(&host, port, protocol) { return; }
+    let _permit = tokio::select! {
+        biased;
+        _ = state.cancel.cancelled() => return,
+        permit = state.requests.acquire() => match permit { Ok(permit) => permit, Err(_) => return },
     };
 
     // Pin the claimed fingerprint, so nothing is sent to a device that does
@@ -704,9 +825,11 @@ async fn dial(
         }
     };
 
-    let result = client
-        .register(protocol, &host, port, state.register_dto())
-        .await;
+    let result = tokio::select! {
+        biased;
+        _ = state.cancel.cancelled() => return,
+        result = client.register(protocol, &host, port, state.register_dto()) => result,
+    };
 
     match result {
         Ok(response) => {

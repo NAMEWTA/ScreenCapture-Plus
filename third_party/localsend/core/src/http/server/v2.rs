@@ -246,6 +246,9 @@ pub(crate) async fn prepare_upload(
 ) -> Result<Response<BoxedBody>, AppError> {
     let v2 = require_v2(&state)?;
     let query = parse_query(req.uri().query());
+    if state.strict.is_some() && query.get("pin").is_some_and(|pin| pin.len() > 128 || pin.contains('\0')) {
+        return Err(AppError::BadRequest("Invalid PIN field".into()));
+    }
 
     check_pin(
         v2.pin.as_deref(),
@@ -289,10 +292,17 @@ pub(crate) async fn prepare_upload(
 
     let session_id = Uuid::new_v4().to_string();
     let cancelled = CancellationToken::new();
+    // Reserve the eventual abort/completion event before exposing this session
+    // to the application. A full queue rejects admission instead of causing a
+    // detached completion task or losing a terminal result.
+    let terminal = if state.strict.is_some() {
+        Some(v2.event_tx.clone().try_reserve_owned()
+            .map_err(|_| AppError::Status(StatusCode::TOO_MANY_REQUESTS))?)
+    } else { None };
 
     // Claim the single session slot.
     {
-        let mut slot = v2.session.lock().await;
+        let mut slot = v2.session.lock().unwrap();
         if slot.is_some() {
             return Err(AppError::Message(
                 StatusCode::CONFLICT,
@@ -303,6 +313,7 @@ pub(crate) async fn prepare_upload(
             session_id: session_id.clone(),
             sender_ip: client_info.ip,
             cancel: cancelled.clone(),
+            terminal,
         }));
     }
 
@@ -393,17 +404,21 @@ pub(crate) async fn prepare_upload(
         .collect();
 
     {
-        let mut slot = v2.session.lock().await;
+        let mut slot = v2.session.lock().unwrap();
         if cancelled.is_cancelled() || !matches!(slot.as_ref(),
             Some(SessionStateV2::Pending(pending)) if pending.session_id == session_id)
         {
             return Err(AppError::Status(StatusCode::FORBIDDEN));
         }
+        let Some(SessionStateV2::Pending(pending)) = slot.take() else {
+            return Err(AppError::Status(StatusCode::FORBIDDEN));
+        };
         *slot = Some(SessionStateV2::Active(UploadSessionV2 {
             session_id: session_id.clone(),
             sender_ip: client_info.ip,
             files,
             cancel: cancelled,
+            terminal: pending.terminal,
         }));
     }
     pending_guard.disarm();
@@ -427,6 +442,10 @@ pub(crate) async fn upload(
 ) -> Result<Response<BoxedBody>, AppError> {
     let v2 = require_v2(&state)?;
     let query = parse_query(req.uri().query());
+    if state.strict.is_some() && ["sessionId", "fileId", "token"].iter().any(|key|
+        query.get(*key).is_some_and(|value| value.is_empty() || value.len() > 128 || value.contains('\0'))) {
+        return Err(AppError::BadRequest("Invalid upload identifier".into()));
+    }
 
     // Keep the permit until verification and durable commit are complete.
     let _permit = if state.strict.is_some() {
@@ -446,7 +465,7 @@ pub(crate) async fn upload(
 
     // Validate the request and mark the file as in progress.
     let (file_dto, cancelled) = {
-        let mut slot = v2.session.lock().await;
+        let mut slot = v2.session.lock().unwrap();
         let Some(SessionStateV2::Active(session)) = slot.as_mut() else {
             return Err(invalid_token_error());
         };
@@ -559,12 +578,16 @@ pub(crate) async fn cancel(
     let v2 = require_v2(&state)?;
     let query = parse_query(req.uri().query());
     let session_id = query.get("sessionId");
+    if state.strict.is_some() && session_id.is_some_and(|value| value.is_empty()
+        || value.len() > 128 || value.contains('\0')) {
+        return Err(AppError::BadRequest("Invalid session identifier".into()));
+    }
 
     // A pending prepare-upload request: the sender does not know the session
     // ID yet (it is part of the response), so a cancel from the pending
     // sender's address is accepted without one.
     let pending_cancelled = {
-        let slot = v2.session.lock().await;
+        let slot = v2.session.lock().unwrap();
         match slot.as_ref() {
             Some(SessionStateV2::Pending(pending))
                 if pending.sender_ip == client_info.ip
@@ -589,38 +612,36 @@ pub(crate) async fn cancel(
 
     if let Some(session_id) = session_id {
         let cancelled = {
-            let mut slot = v2.session.lock().await;
+            let mut slot = v2.session.lock().unwrap();
             match slot.as_ref() {
                 Some(SessionStateV2::Active(session))
                     if session.session_id == *session_id && session.sender_ip == client_info.ip =>
                 {
+                    let Some(SessionStateV2::Active(session)) = slot.take() else { unreachable!(); };
                     session.cancel.cancel();
-                    *slot = None;
-                    true
+                    Some(session.terminal)
                 }
-                _ => false,
+                _ => None,
             }
         };
 
-        if cancelled {
+        if let Some(terminal) = cancelled {
             tracing::info!("Upload session cancelled by sender: {session_id}");
-            let _ = v2
-                .event_tx
-                .send(ServerEventV2::SessionEnd {
+            deliver_terminal(&v2, terminal, ServerEventV2::SessionEnd {
                     session_id: session_id.clone(),
                     reason: SessionEndReasonV2::Cancelled,
-                })
-                .await;
+                }).await;
         } else {
             // Not one of our upload sessions: the remote device may be
             // cancelling a transfer this application is sending to it.
-            let _ = v2
-                .event_tx
-                .send(ServerEventV2::CancelReceived {
+            let event = ServerEventV2::CancelReceived {
                     ip: client_info.ip,
                     session_id: session_id.clone(),
-                })
-                .await;
+                };
+            if state.strict.is_some() {
+                v2.event_tx.try_send(event)
+                    .map_err(|_| AppError::Status(StatusCode::TOO_MANY_REQUESTS))?;
+            } else { let _ = v2.event_tx.send(event).await; }
         }
     }
 
@@ -669,7 +690,7 @@ impl PendingSessionGuard {
     /// Frees the pending slot immediately.
     async fn clear(&mut self) {
         self.armed = false;
-        clear_pending_session(&self.v2, &self.session_id).await;
+        take_pending_session(&self.v2, &self.session_id);
     }
 }
 
@@ -678,25 +699,19 @@ impl Drop for PendingSessionGuard {
         if !self.armed {
             return;
         }
-        let v2 = self.v2.clone();
-        let session_id = std::mem::take(&mut self.session_id);
-        tokio::spawn(async move {
-            clear_pending_session(&v2, &session_id).await;
-            // The application may still be waiting for a decision; tell it
-            // that answering is pointless now.
-            let _ = v2
-                .event_tx
-                .send(ServerEventV2::PrepareUploadAborted { session_id })
-                .await;
-        });
+        if let Some(pending) = take_pending_session(&self.v2, &self.session_id) {
+            dispatch_terminal(self.v2.clone(), pending.terminal,
+                ServerEventV2::PrepareUploadAborted { session_id: pending.session_id });
+        }
     }
 }
 
-async fn clear_pending_session(v2: &V2State, session_id: &str) {
-    let mut slot = v2.session.lock().await;
+fn take_pending_session(v2: &V2State, session_id: &str) -> Option<PendingSessionV2> {
+    let mut slot = v2.session.lock().unwrap();
     if matches!(slot.as_ref(), Some(SessionStateV2::Pending(pending)) if pending.session_id == session_id) {
-        *slot = None;
+        if let Some(SessionStateV2::Pending(pending)) = slot.take() { return Some(pending); }
     }
+    None
 }
 
 /// Sets the final status of a file after an upload attempt.
@@ -735,12 +750,10 @@ impl Drop for UploadGuard {
             return;
         }
         self.cancel.cancel();
-        let v2 = self.v2.clone();
-        let session_id = std::mem::take(&mut self.session_id);
-        let file_id = std::mem::take(&mut self.file_id);
-        tokio::spawn(async move {
-            finalize_file(&v2, &session_id, &file_id, SaveResult::Failed).await;
-        });
+        if let Some((terminal, event)) = finalize_file_state(&self.v2, &self.session_id,
+            &self.file_id, SaveResult::Failed) {
+            dispatch_terminal(self.v2.clone(), terminal, event);
+        }
     }
 }
 
@@ -755,13 +768,22 @@ const MAX_UPLOAD_ATTEMPTS: u8 = 3;
 /// [MAX_UPLOAD_ATTEMPTS] is not exhausted) so the sender can retry the upload
 /// with the same token; the session stays active in that case.
 async fn finalize_file(v2: &V2State, session_id: &str, file_id: &str, result: SaveResult) {
-    let session_ended = {
-        let mut slot = v2.session.lock().await;
+    if let Some((terminal, event)) = finalize_file_state(v2, session_id, file_id, result) {
+        deliver_terminal(v2, terminal, event).await;
+    }
+}
+
+type TerminalPermit = Option<mpsc::OwnedPermit<ServerEventV2>>;
+
+fn finalize_file_state(v2: &V2State, session_id: &str, file_id: &str, result: SaveResult)
+    -> Option<(TerminalPermit, ServerEventV2)> {
+    let ended = {
+        let mut slot = v2.session.lock().unwrap();
         let Some(SessionStateV2::Active(session)) = slot.as_mut() else {
-            return;
+            return None;
         };
         if session.session_id != session_id {
-            return;
+            return None;
         }
         if let Some(file) = session.files.get_mut(file_id) {
             if file.status == FileStatusV2::InProgress {
@@ -775,23 +797,30 @@ async fn finalize_file(v2: &V2State, session_id: &str, file_id: &str, result: Sa
                 };
             }
         }
-        match session.is_complete() {
-            true => {
-                *slot = None;
-                true
-            }
-            false => false,
-        }
+        if session.is_complete() { slot.take() } else { None }
     };
-
-    if session_ended {
+    if let Some(SessionStateV2::Active(session)) = ended {
         tracing::info!("Upload session finished: {session_id}");
-        let _ = v2
-            .event_tx
-            .send(ServerEventV2::SessionEnd {
-                session_id: session_id.to_string(),
+        return Some((session.terminal, ServerEventV2::SessionEnd {
+                session_id: session.session_id,
                 reason: SessionEndReasonV2::Finished,
-            })
-            .await;
+            }));
+    }
+    None
+}
+
+async fn deliver_terminal(v2: &V2State, terminal: TerminalPermit, event: ServerEventV2) {
+    match terminal {
+        Some(permit) => { permit.send(event); }
+        // Preserve legacy API backpressure for the unmodified upstream tests.
+        None => { let _ = v2.event_tx.send(event).await; }
+    }
+}
+
+fn dispatch_terminal(v2: Arc<V2State>, terminal: TerminalPermit, event: ServerEventV2) {
+    match terminal {
+        Some(permit) => { permit.send(event); }
+        // Strict sessions always own a permit and never enter this legacy path.
+        None => { tokio::spawn(async move { let _ = v2.event_tx.send(event).await; }); }
     }
 }

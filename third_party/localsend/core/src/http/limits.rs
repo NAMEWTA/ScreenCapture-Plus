@@ -55,22 +55,23 @@ impl TransferLimits {
         anyhow::ensure!(self.max_files > 0 && self.max_files <= 64, "invalid file count limit");
         anyhow::ensure!(self.max_name_bytes > 0 && self.max_name_bytes <= 1024,
             "invalid filename limit");
-        anyhow::ensure!(self.max_file_bytes > 0 && self.max_total_bytes >= self.max_file_bytes,
+        anyhow::ensure!(self.max_file_bytes > 0 && self.max_file_bytes <= 32 * 1024 * 1024 * 1024
+            && self.max_total_bytes >= self.max_file_bytes && self.max_total_bytes <= 64 * self.max_file_bytes,
             "invalid file size budget");
         anyhow::ensure!(self.concurrent_uploads > 0 && self.concurrent_uploads <= 2,
             "at most two uploads may be active");
-        anyhow::ensure!(self.max_event_queue > 0 && self.max_event_queue <= 64,
+        anyhow::ensure!(self.max_event_queue >= 3 && self.max_event_queue <= 64,
             "invalid event queue budget");
         anyhow::ensure!(!self.decision_timeout.is_zero() && !self.idle_timeout.is_zero()
-            && !self.commit_timeout.is_zero(), "timeouts must be finite and positive");
+            && !self.commit_timeout.is_zero() && self.decision_timeout <= Duration::from_secs(300)
+            && self.idle_timeout <= Duration::from_secs(120) && self.commit_timeout <= Duration::from_secs(300),
+            "timeouts are outside the bounded network policy");
         Ok(())
     }
 
     pub(crate) fn register(&self, info: &RegisterDtoV2) -> Result<(), AppError> {
-        let bounded = |value: &str, limit| !value.contains('\0') && value.len() <= limit;
-        if info.alias.is_empty() || !bounded(&info.alias, 256)
-            || !bounded(&info.version, 32)
-            || info.device_model.as_ref().is_some_and(|value| !bounded(value, 256))
+        if !crate::model::discovery::metadata_within_limits(&info.alias, &info.version,
+                info.device_model.as_deref(), &info.fingerprint)
             || !is_digest(&info.fingerprint) || info.port == 0
             || info.protocol != ProtocolType::Https
         {

@@ -11,7 +11,7 @@ use localsend::http::client::{ClientError, LsHttpClientV2};
 use localsend::http::dto_v2::{PrepareUploadRequestDtoV2, PrepareUploadResponseDtoV2, RegisterDtoV2};
 use localsend::http::limits::TransferLimits;
 use localsend::http::server::common::verified_upload::{
-    verified_upload_channel, CommittedMedia, UploadFailure, UploadVerification,
+    verified_upload_channel, CommittedMedia, CompletionError, UploadFailure, UploadVerification,
     VerifiedUploadReceiver,
 };
 use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
@@ -169,7 +169,7 @@ async fn archive_fixture(mut receiver: VerifiedUploadReceiver, root: PathBuf,
     action: SinkAction, observations: mpsc::Sender<Observation>) {
     observations.send(Observation::Started).await.unwrap();
     if matches!(action, SinkAction::EarlyCompletion) {
-        receiver.completion.send(Ok(CommittedMedia::Png)).unwrap();
+        assert_eq!(receiver.completion.send(Ok(CommittedMedia::Png)), Err(CompletionError::BeforeVerification));
         while receiver.chunks.recv().await.is_some() {}
         if let Ok(Err(error)) = receiver.verification.await {
             observations.send(Observation::Rejected(error)).await.unwrap();
@@ -431,5 +431,101 @@ async fn invalid_file_metadata_is_rejected_before_application_events() {
         assert_eq!(raw.post(&route).json(&payload).send().await.unwrap().status().as_u16(), expected_status);
     }
     assert!(receiver.observations.try_recv().is_err());
+    receiver.shutdown().await;
+}
+
+#[tokio::test]
+async fn terminal_events_have_reserved_capacity_under_real_registration_traffic() {
+    let identity = generate_self_signed().unwrap();
+    let sender = generate_self_signed().unwrap();
+    let (events, mut event_rx) = mpsc::channel(4);
+    let (stop, stop_rx) = oneshot::channel();
+    let handle = start_bound_v2(vec![Ipv4Addr::LOCALHOST], 0,
+        TlsConfig { cert: identity.certificate_pem.clone(), private_key: identity.private_key_pem.clone() },
+        ClientInfo { alias: "receiver".into(), version: "2.2".into(), device_model: None,
+            device_type: None, token: identity.fingerprint.clone() },
+        ServerConfigV2 { pin: None, verify_checksums: true, event_tx: events },
+        TransferLimits::default(), stop_rx).await.unwrap();
+    let client = || LsHttpClientV2::try_new(&sender.private_key_pem, &sender.certificate_pem,
+        Some(identity.fingerprint.clone()), Some(WAIT)).unwrap();
+    let info = RegisterDtoV2 { alias: "sender".into(), version: "2.2".into(), device_model: None,
+        device_type: None, fingerprint: sender.fingerprint.clone(), port: 53317,
+        protocol: ProtocolType::Https, download: false };
+    let prepare = tokio::spawn({
+        let client = client();
+        let port = handle.port();
+        let payload = PrepareUploadRequestDtoV2 { info: info.clone(), files: HashMap::from([("file".into(), media())]) };
+        async move { client.prepare_upload(ProtocolType::Https, "127.0.0.1", port,
+            None, payload, None, CancellationToken::new()).await.unwrap().response.unwrap() }
+    });
+    let event = tokio::time::timeout(WAIT, event_rx.recv()).await.unwrap().unwrap();
+    let ServerEventV2::PrepareUpload { files, decision_tx, .. } = event else { panic!("missing request"); };
+    decision_tx.send(PrepareUploadDecisionV2::Accept(files.into_keys().collect())).unwrap();
+    let session = prepare.await.unwrap();
+    let upload = tokio::spawn({
+        let client = client();
+        let port = handle.port();
+        async move { client.upload(ProtocolType::Https, "127.0.0.1", port, None,
+            &session.session_id, "file", &session.files["file"], PNG.to_vec().into(), CancellationToken::new()).await }
+    });
+    let event = tokio::time::timeout(WAIT, event_rx.recv()).await.unwrap().unwrap();
+    let ServerEventV2::FileUpload { target_tx, .. } = event else { panic!("missing upload"); };
+    let (target, receiver) = verified_upload_channel();
+    target_tx.send(target).unwrap();
+    let root = std::env::temp_dir().join(format!("huhucapture-events-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let gate = Arc::new(Semaphore::new(0));
+    let (observations, mut observed) = mpsc::channel(2);
+    let archive = tokio::spawn(archive_fixture(receiver, root.clone(), SinkAction::Hold(gate.clone()), observations));
+    assert!(matches!(observed.recv().await, Some(Observation::Started)));
+    assert!(matches!(observed.recv().await, Some(Observation::Verified(_))));
+    for _ in 0..16 {
+        client().register(ProtocolType::Https, "127.0.0.1", handle.port(), info.clone()).await.unwrap();
+    }
+    gate.add_permits(1);
+    tokio::time::timeout(WAIT, upload).await.unwrap().unwrap().unwrap();
+    archive.await.unwrap();
+    let mut terminal = 0;
+    while let Ok(event) = event_rx.try_recv() {
+        if matches!(event, ServerEventV2::SessionEnd { .. }) { terminal += 1; }
+    }
+    assert_eq!(terminal, 1, "terminal result is retained even though informational events saturated the queue");
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, handle.wait_stopped()).await.unwrap();
+    assert!(event_rx.try_recv().is_err(), "joined shutdown cannot enqueue a late terminal callback");
+    std::fs::remove_file(root.join("committed.png")).unwrap();
+    std::fs::remove_dir(root).unwrap();
+}
+
+#[cfg(feature = "discovery")]
+#[tokio::test]
+async fn secure_discovery_uses_tls_and_joins_its_background_tasks() {
+    use localsend::discovery::{self, DeviceIdentity, DiscoveryConfig};
+    use localsend::multicast::MulticastDevice;
+    use localsend::util::interface::InterfaceFilter;
+    let mut receiver = Receiver::start(SinkAction::Commit, TransferLimits::default()).await;
+    let (events, mut event_rx) = mpsc::channel(4);
+    let (stop, stop_rx) = oneshot::channel();
+    let handle = discovery::start_secure(DiscoveryConfig {
+        group: Ipv4Addr::new(224, 0, 0, 167), group_v6: None, port: 0,
+        interface_filter: InterfaceFilter { whitelist: Some(vec!["127.0.0.1".into()]), blacklist: None },
+        device: MulticastDevice { alias: "discovery test".into(), version: "2.2".into(), device_model: None,
+            device_type: None, fingerprint: receiver.sender.fingerprint.clone(), port: 53317,
+            protocol: ProtocolType::Https, download: false },
+        identity: DeviceIdentity { cert_pem: receiver.sender.certificate_pem.clone(),
+            private_key_pem: receiver.sender.private_key_pem.clone() },
+        timeout: Duration::from_secs(2), event_tx: Some(events),
+    }, stop_rx).await.unwrap();
+    // Loopback has no multicast membership; explicit-address fallback must
+    // still use real mutual TLS and authenticate the observed fingerprint.
+    let known = handle.discover("127.0.0.1", receiver.handle.port(), ProtocolType::Https).await.unwrap().unwrap();
+    assert_eq!(known.device.fingerprint, receiver.identity.fingerprint);
+    assert!(handle.discover("127.0.0.1", receiver.handle.port(), ProtocolType::Http).await.is_err());
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, handle.wait_stopped()).await.unwrap();
+    while event_rx.try_recv().is_ok() {}
+    assert!(matches!(handle.discover("127.0.0.1", receiver.handle.port(), ProtocolType::Https).await,
+        Err(ClientError::Cancelled)));
+    assert!(event_rx.try_recv().is_err());
     receiver.shutdown().await;
 }

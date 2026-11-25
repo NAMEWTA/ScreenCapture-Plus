@@ -15,6 +15,8 @@
 
 [下载 v0.0.5](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
 
+> **Qt / Linux 重构正在实施：** [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 是唯一主计划。当前正式下载仍为下文的 Windows v0.0.5；根目录 CMake 提供共享模型与 Qt / 平台验证程序，尚无功能完整的 Qt 产品或 Linux 安装包。实现边界、数据保护、P00–P14 状态与未验证项目见 [迁移状态](docs/qt-migration.md)。
+
 ## 截图与说明，一起保存
 
 ![huhucapture 的范围批注合成示例](docs/banner.png)

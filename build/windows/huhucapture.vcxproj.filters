@@ -410,6 +410,18 @@
     <ClInclude Include="..\..\src\editor\StrokeModel.h">
       <Filter>src\editor</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\editor\ArrowModel.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\NumberModel.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\TextModel.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\EditorDocument.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\services\MediaHistory.h">
       <Filter>src\services</Filter>
     </ClInclude>

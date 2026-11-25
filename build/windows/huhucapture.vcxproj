@@ -178,6 +178,10 @@
     <ClInclude Include="..\..\src\editor\Geometry.h" />
     <ClInclude Include="..\..\src\editor\BoxModel.h" />
     <ClInclude Include="..\..\src\editor\StrokeModel.h" />
+    <ClInclude Include="..\..\src\editor\ArrowModel.h" />
+    <ClInclude Include="..\..\src\editor\NumberModel.h" />
+    <ClInclude Include="..\..\src\editor\TextModel.h" />
+    <ClInclude Include="..\..\src\editor\EditorDocument.h" />
     <ClInclude Include="..\..\src\editor\ShapeFactory.h" />
     <ClInclude Include="..\..\src\editor\WinPin.h" />
     <ClInclude Include="..\..\src\editor\shapes\ShapeAnnotation.h" />

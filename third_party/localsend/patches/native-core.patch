@@ -33,25 +33,39 @@
  webrtc = ["crypto", "flate2", "dep:webrtc", "webrtc-signaling", "x509-parser"]
 --- a/core/src/crypto/hash.rs
 +++ b/core/src/crypto/hash.rs
-@@ -1,3 +1,4 @@
+@@ -1,4 +1,6 @@
 +// huhucapture modification; see docs/localsend-core.md and upstream.json.
  use crate::model::transfer::FileContent;
++use futures_util::StreamExt;
  use sha2::{Digest, Sha256};
  use tokio_util::sync::CancellationToken;
-@@ -59,6 +60,25 @@
+ 
+@@ -47,7 +49,8 @@
+                 match chunk {
+                     Some(chunk) => {
+                         hasher.update(&chunk);
+-                        hashed += chunk.len() as u64;
++                        hashed = hashed.checked_add(chunk.len() as u64)
++                            .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
+                         progress(hashed);
+                     }
+                     None => break,
+@@ -58,6 +61,26 @@
+             tracing::info!("Hashing file content from path: {}", path.display());
              let file = tokio::fs::File::open(&path).await?;
              read_and_hash_from_file(&mut hasher, file, cancel_token, progress).await?;
-         }
++        }
 +        FileContent::File(file) => {
 +            read_and_hash_from_file(&mut hasher, tokio::fs::File::from_std(file), cancel_token, progress).await?;
 +        }
-+        FileContent::ResultStream(mut receiver) => {
++        FileContent::ResultStream(receiver) => {
++            let mut stream = FileContent::ResultStream(receiver).into_stream();
 +            let mut hashed = 0_u64;
 +            loop {
 +                let chunk = tokio::select! {
 +                    biased;
 +                    _ = cancel_token.cancelled() => return Err(HashError::Cancelled),
-+                    chunk = receiver.recv() => chunk,
++                    chunk = stream.next() => chunk,
 +                };
 +                let Some(chunk) = chunk else { break; };
 +                let chunk = chunk?;
@@ -60,10 +74,450 @@
 +                    .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
 +                progress(hashed);
 +            }
-+        }
+         }
          #[cfg(target_os = "android")]
          FileContent::Fd(fd) => {
-             use std::os::fd::FromRawFd;
+@@ -96,7 +119,8 @@
+             break;
+         }
+         hasher.update(&buffer[..read]);
+-        hashed += read as u64;
++        hashed = hashed.checked_add(read as u64)
++            .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
+         progress(hashed);
+     }
+     Ok(())
+--- a/core/src/discovery/mod.rs
++++ b/core/src/discovery/mod.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ mod store;
+ 
+ pub use store::{
+@@ -19,7 +20,9 @@
+ use std::sync::Arc;
+ use std::time::{Duration, SystemTime};
+ use store::{Announcement, DeviceStore, Observation};
+-use tokio::sync::{mpsc, oneshot};
++use tokio::sync::{mpsc, oneshot, Semaphore};
++use tokio_util::sync::CancellationToken;
++use tokio_util::task::TaskTracker;
+ 
+ /// The default timeout of the register requests sent by discovery, matching
+ /// the Flutter app's default discovery timeout. Discovery only talks to LAN
+@@ -32,6 +35,7 @@
+ /// How many hosts a subnet scan probes at once, matching the Flutter app's
+ /// legacy HTTP discovery.
+ const SCAN_CONCURRENCY: usize = 50;
++const BACKGROUND_CONCURRENCY: usize = 16;
+ 
+ /// This device's TLS identity, sent as client certificate with every register
+ /// request (client certificates are mandatory in HTTPS mode).
+@@ -147,9 +151,29 @@
+     /// Number of confirmations in this run, on which
+     /// [`DiscoveryHandle::discover_staged`] decides whether to escalate.
+     confirmations: AtomicU64,
++    secure_only: bool,
++    cancel: CancellationToken,
++    tasks: TaskTracker,
++    task_gate: std::sync::Mutex<()>,
++    background_slots: Arc<Semaphore>,
++    requests: Semaphore,
+ }
+ 
+ impl DiscoveryState {
++    fn spawn_background(self: &Arc<Self>, task: impl std::future::Future<Output = ()> + Send + 'static) -> bool {
++        let _gate = self.task_gate.lock().unwrap();
++        if self.cancel.is_cancelled() || self.tasks.is_closed() { return false; }
++        self.tasks.spawn(task);
++        true
++    }
++
++    fn permits_channel(&self, host: &str, port: u16, protocol: ProtocolType) -> bool {
++        !host.is_empty() && host.len() <= 255 && !host.contains('\0') && port != 0
++            && (!self.secure_only || (protocol == ProtocolType::Https
++                && host.parse::<Ipv4Addr>().is_ok_and(|ip| !ip.is_unspecified()
++                    && !ip.is_multicast() && !ip.is_broadcast())))
++    }
++
+     fn register_dto(&self) -> RegisterDtoV2 {
+         RegisterDtoV2 {
+             alias: self.device.alias.clone(),
+@@ -185,9 +209,19 @@
+         port: u16,
+         protocol: ProtocolType,
+     ) -> Result<Option<StatefulDevice>, ClientError> {
+-        let response = client
+-            .register(protocol, host, port, self.register_dto())
+-            .await?;
++        if !self.permits_channel(host, port, protocol) {
++            return Err(anyhow::anyhow!("Discovery channel is not permitted").into());
++        }
++        let _permit = tokio::select! {
++            biased;
++            _ = self.cancel.cancelled() => return Err(ClientError::Cancelled),
++            permit = self.requests.acquire() => permit.map_err(|_| ClientError::Cancelled)?,
++        };
++        let response = tokio::select! {
++            biased;
++            _ = self.cancel.cancelled() => return Err(ClientError::Cancelled),
++            response = client.register(protocol, host, port, self.register_dto()) => response?,
++        };
+ 
+         // In HTTPS mode the certificate is the peer's identity; the
+         // fingerprint claimed in the body only counts without encryption.
+@@ -231,6 +265,8 @@
+     }
+ 
+     fn emit(&self, event: DiscoveryEvent) {
++        let _gate = self.task_gate.lock().unwrap();
++        if self.cancel.is_cancelled() { return; }
+         if let Some(event_tx) = &self.event_tx {
+             // Never wait for the application here. A subnet scan confirms up to
+             // 255 devices in a burst, far more than the channel holds, and
+@@ -256,6 +292,7 @@
+     /// keeps working without it, see [`DiscoveryHandle::multicast_error`].
+     multicast: Result<MulticastHandle, anyhow::Error>,
+     state: Arc<DiscoveryState>,
++    supervisor: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+ }
+ 
+ impl DiscoveryHandle {
+@@ -314,6 +351,7 @@
+         &self,
+         channels: Vec<HttpChannel>,
+     ) -> Result<Vec<StatefulDevice>, ClientError> {
++        if channels.len() > 256 { return Err(anyhow::anyhow!("Too many known discovery channels").into()); }
+         let client = self.state.unpinned_client()?;
+ 
+         let state = &self.state;
+@@ -354,6 +392,7 @@
+         protocol: ProtocolType,
+         grace: Duration,
+     ) -> Result<(), ClientError> {
++        if interface_ips.len() > 16 { return Err(anyhow::anyhow!("Too many discovery interfaces").into()); }
+         let confirmations = self.state.confirmations.load(Ordering::Relaxed);
+         let escalate = async {
+             self.discover_known_http_channels(known_channels).await?;
+@@ -386,8 +425,10 @@
+         port: u16,
+         protocol: ProtocolType,
+     ) -> Result<Vec<StatefulDevice>, ClientError> {
+-        if !self.state.scanning.lock().unwrap().insert(interface_ip) {
+-            return Ok(Vec::new());
++        if self.state.cancel.is_cancelled() { return Err(ClientError::Cancelled); }
++        {
++            let mut scanning = self.state.scanning.lock().unwrap();
++            if scanning.len() >= 16 || !scanning.insert(interface_ip) { return Ok(Vec::new()); }
+         }
+         let _guard = ScanGuard {
+             state: &self.state,
+@@ -446,6 +487,12 @@
+     /// A channel that was dialed before is not dialed again, so two devices
+     /// running this do not keep answering each other.
+     pub async fn observe_inbound(&self, device: DiscoveredDevice) -> bool {
++        if self.state.cancel.is_cancelled()
++            || !crate::model::discovery::metadata_within_limits(&device.alias, &device.version,
++                device.device_model.as_deref(), &device.fingerprint)
++            || device.http().is_none_or(|channel| !self.state.permits_channel(&channel.host, channel.port, channel.protocol))
++            || (self.state.secure_only && !crate::http::limits::is_digest(&device.fingerprint))
++        { return false; }
+         let (is_new, merged) = self
+             .state
+             .observed(device.clone(), Observation::ReachedUs, None);
+@@ -480,6 +527,7 @@
+         channel: DeviceChannel,
+         result: Result<(), String>,
+     ) -> bool {
++        if self.state.cancel.is_cancelled() { return false; }
+         let event =
+             self.state
+                 .store
+@@ -521,9 +569,16 @@
+     /// Must be called after requesting a stop via the stop channel.
+     /// Returns immediately when multicast is unavailable.
+     pub async fn wait_stopped(&self) {
++        if let Some(task) = self.supervisor.lock().await.take() { let _ = task.await; }
+         if let Ok(multicast) = &self.multicast {
+             multicast.wait_stopped().await;
+         }
++    }
++
++    /// The runtime socket failure remains observable even when an informational
++    /// event was coalesced while the application queue was full.
++    pub fn multicast_failed(&self) -> bool {
++        self.multicast.as_ref().map_or(true, |handle| handle.has_failed())
+     }
+ }
+ 
+@@ -551,7 +606,32 @@
+ /// the port is already bound by another process or because there is no network
+ /// at all, discovery runs without multicast.
+ pub async fn start(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>) -> DiscoveryHandle {
++    start_inner(config, stop_rx, false).await
++}
++
++/// Native IPv4 discovery. No peer announcement can cause a plaintext dial.
++/// Filters must name concrete selected local interface addresses, not a wildcard.
++pub async fn start_secure(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>) -> anyhow::Result<DiscoveryHandle> {
++    anyhow::ensure!(config.device.protocol == ProtocolType::Https && config.group_v6.is_none(),
++        "native discovery requires HTTPS and explicit IPv4 scope");
++    anyhow::ensure!(config.interface_filter.whitelist.as_ref().is_some_and(|addresses|
++        !addresses.is_empty() && addresses.len() <= 16 && addresses.iter().all(|address|
++            address.parse::<Ipv4Addr>().is_ok_and(|ip| !ip.is_unspecified() && !ip.is_multicast() && !ip.is_broadcast()))),
++        "select concrete local IPv4 interfaces before starting discovery");
++    anyhow::ensure!(config.timeout > Duration::ZERO && config.timeout <= Duration::from_secs(10),
++        "discovery timeout is outside its budget");
++    anyhow::ensure!(config.event_tx.as_ref().is_none_or(|events| events.max_capacity() <= 64),
++        "discovery event queue exceeds its budget");
++    anyhow::ensure!(crate::model::discovery::metadata_within_limits(&config.device.alias,
++        &config.device.version, config.device.device_model.as_deref(), &config.device.fingerprint)
++        && crate::http::limits::is_digest(&config.device.fingerprint) && config.device.port != 0,
++        "invalid local device metadata");
++    Ok(start_inner(config, stop_rx, true).await)
++}
++
++async fn start_inner(config: DiscoveryConfig, stop_rx: oneshot::Receiver<()>, secure_only: bool) -> DiscoveryHandle {
+     let (multicast_tx, mut multicast_rx) = mpsc::channel(MULTICAST_CHANNEL_SIZE);
++    let (multicast_stop, multicast_stop_rx) = oneshot::channel();
+ 
+     // On failure `multicast_tx` is dropped, which ends the answering task.
+     let multicast = multicast::start(
+@@ -563,7 +643,7 @@
+             device: config.device.clone(),
+             event_tx: multicast_tx,
+         },
+-        stop_rx,
++        multicast_stop_rx,
+     )
+     .await;
+ 
+@@ -577,39 +657,67 @@
+         scanning: std::sync::Mutex::new(HashSet::new()),
+         dialing_back: std::sync::Mutex::new(HashSet::new()),
+         confirmations: AtomicU64::new(0),
++        secure_only,
++        cancel: CancellationToken::new(),
++        tasks: TaskTracker::new(),
++        task_gate: std::sync::Mutex::new(()),
++        background_slots: Arc::new(Semaphore::new(BACKGROUND_CONCURRENCY)),
++        requests: Semaphore::new(SCAN_CONCURRENCY),
+     });
+ 
+     // Ends once discovery is stopped: the multicast side then drops its
+     // sender and the channel closes.
+-    tokio::spawn({
++    state.spawn_background({
+         let state = state.clone();
+         async move {
+-            while let Some(event) = multicast_rx.recv().await {
++            loop {
++                let event = tokio::select! {
++                    biased;
++                    _ = state.cancel.cancelled() => break,
++                    event = multicast_rx.recv() => match event { Some(event) => event, None => break },
++                };
+                 match event {
+                     MulticastEvent::Discovered {
+                         ip,
+                         scope_id,
+                         message,
+                     } => {
+-                        if !state.answering.load(Ordering::Relaxed) {
++                        if !state.answering.load(Ordering::Relaxed)
++                            || !state.permits_channel(&ip.to_string(), message.port, message.protocol)
++                            || (state.secure_only && !crate::http::limits::is_digest(&message.fingerprint)) {
+                             continue;
+                         }
+ 
+                         // The register request may take a while (up to the timeout),
+                         // so announcements are answered concurrently.
+-                        tokio::spawn(answer_announcement(state.clone(), ip, scope_id, message));
++                        let Ok(permit) = state.background_slots.clone().try_acquire_owned() else { continue; };
++                        state.spawn_background({
++                            let state = state.clone();
++                            async move { let _permit = permit; answer_announcement(state, ip, scope_id, message).await; }
++                        });
+                     }
+                     MulticastEvent::SocketsFailed => {
+-                        if let Some(event_tx) = &state.event_tx {
+-                            let _ = event_tx.try_send(DiscoveryEvent::MulticastFailed);
+-                        }
++                        state.emit(DiscoveryEvent::MulticastFailed);
+                     }
+                 }
+             }
+         }
+     });
+ 
+-    DiscoveryHandle { multicast, state }
++    let supervisor = tokio::spawn({
++        let state = state.clone();
++        async move {
++            let _ = stop_rx.await;
++            {
++                let _gate = state.task_gate.lock().unwrap();
++                state.cancel.cancel();
++                state.tasks.close();
++            }
++            let _ = multicast_stop.send(());
++            state.tasks.wait().await;
++        }
++    });
++    DiscoveryHandle { multicast, state, supervisor: tokio::sync::Mutex::new(Some(supervisor)) }
+ }
+ 
+ /// Answers an announcement with a register request, as the protocol requires.
+@@ -652,15 +760,22 @@
+ /// several requests in a row, e.g. one for every message of an announcement
+ /// burst.
+ fn dial_back(state: Arc<DiscoveryState>, device: DiscoveredDevice) {
++    let Ok(permit) = state.background_slots.clone().try_acquire_owned() else { return; };
+     let key = (device.fingerprint.clone(), device.channel.clone());
+     if !state.dialing_back.lock().unwrap().insert(key.clone()) {
+         return;
+     }
+ 
+-    tokio::spawn(async move {
+-        dial(&state, device, None).await;
+-        state.dialing_back.lock().unwrap().remove(&key);
++    let admitted = state.spawn_background({
++        let state = state.clone();
++        let key = key.clone();
++        async move {
++            let _permit = permit;
++            dial(&state, device, None).await;
++            state.dialing_back.lock().unwrap().remove(&key);
++        }
+     });
++    if !admitted { state.dialing_back.lock().unwrap().remove(&key); }
+ }
+ 
+ /// Sends a register request to a device whose identity is already claimed —
+@@ -680,6 +795,12 @@
+     }) = device.http().cloned()
+     else {
+         return;
++    };
++    if !state.permits_channel(&host, port, protocol) { return; }
++    let _permit = tokio::select! {
++        biased;
++        _ = state.cancel.cancelled() => return,
++        permit = state.requests.acquire() => match permit { Ok(permit) => permit, Err(_) => return },
+     };
+ 
+     // Pin the claimed fingerprint, so nothing is sent to a device that does
+@@ -704,9 +825,11 @@
+         }
+     };
+ 
+-    let result = client
+-        .register(protocol, &host, port, state.register_dto())
+-        .await;
++    let result = tokio::select! {
++        biased;
++        _ = state.cancel.cancelled() => return,
++        result = client.register(protocol, &host, port, state.register_dto()) => result,
++    };
+ 
+     match result {
+         Ok(response) => {
+--- a/core/src/discovery/store.rs
++++ b/core/src/discovery/store.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ //! The in-memory store of discovered devices.
+ 
+ use super::DiscoveryEvent;
+@@ -12,6 +13,8 @@
+ /// chatty peers re-announce for the whole run, so the oldest entries are
+ /// dropped beyond this.
+ const MAX_LOGS: usize = 100;
++const MAX_DEVICES: usize = 256;
++const MAX_CHANNELS: usize = 16;
+ 
+ /// A device discovered on the network, as it was observed on one of its
+ /// channels.
+@@ -227,9 +230,14 @@
+     fn apply(
+         &mut self,
+         device: DiscoveredDevice,
+-        observation: Observation,
++        mut observation: Observation,
+         timestamp: SystemTime,
+     ) -> DiscoveryEvent {
++        if let Observation::Failed(error) = &mut observation {
++            let mut end = error.len().min(1024);
++            while !error.is_char_boundary(end) { end -= 1; }
++            error.truncate(end);
++        }
+         self.update_channel(&device.channel, &observation, timestamp);
+ 
+         let channel = device.channel.clone();
+@@ -287,6 +295,16 @@
+             .keys()
+             .find(|known| known.same_endpoint(channel))
+             .cloned();
++        if same_endpoint.is_none() && self.channels.len() >= MAX_CHANNELS {
++            let oldest = self.channels.iter().min_by_key(|(_, state)| {
++                let outbound = match state.outbound {
++                    Outbound::Reachable(time) | Outbound::Failed(time) => Some(time),
++                    Outbound::Untested => None,
++                };
++                state.inbound.max(outbound)
++            }).map(|(channel, _)| channel.clone());
++            if let Some(oldest) = oldest { self.channels.remove(&oldest); }
++        }
+ 
+         match observation {
+             Observation::Reached => {
+@@ -484,6 +502,18 @@
+         {
+             Some(index) => index,
+             None => {
++                if devices.len() >= MAX_DEVICES {
++                    // Discovery is a bounded volatile cache, not the trusted
++                    // device store. Prefer evicting an unconfirmed observation.
++                    let oldest = devices.iter().enumerate().min_by_key(|(_, device)|
++                        (device.confirmed, device.logs.last().map(|log| log.timestamp)))
++                        .map(|(index, _)| index).unwrap();
++                    if devices[oldest].confirmed && matches!(observation, Observation::Failed(_)) {
++                        return (None, StatefulDevice { device, confirmed: false, verified: false,
++                            channels: HashMap::new(), logs: Vec::new() });
++                    }
++                    devices.remove(oldest);
++                }
+                 devices.push(StatefulDevice {
+                     device: device.clone(),
+                     confirmed: false,
+@@ -749,6 +779,27 @@
+             log_marker(logs.last().unwrap()),
+             &(MAX_LOGS + 4).to_string()
+         );
++    }
++
++    #[test]
++    fn native_cache_bounds_untrusted_devices_channels_and_errors() {
++        let store = DeviceStore::new();
++        for index in 0..MAX_DEVICES + 20 {
++            fail(&store, device(&format!("unconfirmed-{index}"), "192.168.0.1"));
++        }
++        assert!(store.unconfirmed_devices().len() <= MAX_DEVICES);
++        reach(&store, device("confirmed", "192.168.0.2"));
++        for index in 0..MAX_CHANNELS + 20 {
++            reach(&store, device("confirmed", &format!("192.168.1.{index}")));
++        }
++        let known = store.by_fingerprint("confirmed").unwrap();
++        assert!(known.channels.len() <= MAX_CHANNELS);
++        assert!(known.channels.contains_key(&channel(&format!("192.168.1.{}", MAX_CHANNELS + 19), 53317)));
++        store.report_outbound("confirmed", channel("192.168.0.2", 53317), Err("错".repeat(4096)), SystemTime::now());
++        let known = store.by_fingerprint("confirmed").unwrap();
++        let DeviceLogEvent::OutboundFailed { error, .. } = &known.logs.last().unwrap().event else { panic!("missing failure"); };
++        assert!(error.len() <= 1024);
++        assert!(std::str::from_utf8(error.as_bytes()).is_ok());
+     }
+ 
+     #[test]
 --- a/core/src/http/client/mod.rs
 +++ b/core/src/http/client/mod.rs
 @@ -1,3 +1,4 @@
@@ -81,7 +535,7 @@
          progress(sent);
          Ok::<Bytes, anyhow::Error>(chunk)
      });
-@@ -376,12 +378,38 @@
+@@ -376,16 +378,45 @@
  
  pub(super) trait ResponseExt {
      async fn into_error<T>(self) -> Result<T, ClientError>;
@@ -116,11 +570,19 @@
      async fn into_error<T>(self) -> Result<T, ClientError> {
          let status = self.status().as_u16();
 -        let body = self.text().await.unwrap_or_default();
+-        let message = match serde_json::from_str::<ErrorResponse>(&body) {
 +        let bytes = self.bounded_bytes().await?;
 +        let body = String::from_utf8_lossy(&bytes).into_owned();
-         let message = match serde_json::from_str::<ErrorResponse>(&body) {
++        let mut message = match serde_json::from_str::<ErrorResponse>(&body) {
              Ok(error) => error.message,
              Err(_) => body,
+         };
++        let mut end = message.len().min(1024);
++        while !message.is_char_boundary(end) { end -= 1; }
++        message.truncate(end);
+         Err(ClientError::StatusCode(StatusCodeError {
+             status,
+             message: if message.is_empty() {
 --- a/core/src/http/client/v2.rs
 +++ b/core/src/http/client/v2.rs
 @@ -1,3 +1,4 @@
@@ -128,16 +590,20 @@
  use super::{ClientError, ResponseExt, ResultWithPublicKey};
  use crate::http::client::url::{ApiVersion, TargetUrl};
  use crate::http::dto_v2::{
-@@ -108,7 +109,7 @@
+@@ -108,7 +109,11 @@
              _ => (None, None),
          };
  
 -        let body = res.json::<RegisterResponseDtoV2>().await?;
 +        let body = res.json_limited::<RegisterResponseDtoV2>().await?;
++        if !crate::model::discovery::metadata_within_limits(&body.alias, &body.version,
++            body.device_model.as_deref(), &body.fingerprint) {
++            return Err(anyhow::anyhow!("Invalid device response metadata").into());
++        }
  
          Ok(ResultWithPublicKey {
              public_key,
-@@ -199,7 +200,14 @@
+@@ -199,7 +204,14 @@
                  });
              }
  
@@ -153,7 +619,7 @@
  
              Ok(PrepareUploadResultV2 {
                  status_code: status.as_u16(),
-@@ -311,7 +319,10 @@
+@@ -311,7 +323,10 @@
          }
          .to_string();
  
@@ -165,16 +631,20 @@
  
          Ok(())
      }
-@@ -351,7 +362,7 @@
+@@ -351,7 +366,11 @@
              return res.into_error().await;
          }
  
 -        let body = res.json::<InfoResponseDtoV2>().await?;
 +        let body = res.json_limited::<InfoResponseDtoV2>().await?;
++        if !crate::model::discovery::metadata_within_limits(&body.alias, &body.version,
++            body.device_model.as_deref(), &body.fingerprint) {
++            return Err(anyhow::anyhow!("Invalid device response metadata").into());
++        }
  
          Ok(body)
      }
-@@ -409,7 +420,7 @@
+@@ -409,7 +428,7 @@
              return res.into_error().await;
          }
  
@@ -185,7 +655,7 @@
      }
 --- /dev/null
 +++ b/core/src/http/limits.rs
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,122 @@
 +//! Bounded network policy shared by request parsing and transfer tasks.
 +//! huhucapture modification; upstream source and changes are recorded alongside
 +//! this vendored crate. Limits do not depend on a GUI being open.
@@ -243,22 +713,23 @@
 +        anyhow::ensure!(self.max_files > 0 && self.max_files <= 64, "invalid file count limit");
 +        anyhow::ensure!(self.max_name_bytes > 0 && self.max_name_bytes <= 1024,
 +            "invalid filename limit");
-+        anyhow::ensure!(self.max_file_bytes > 0 && self.max_total_bytes >= self.max_file_bytes,
++        anyhow::ensure!(self.max_file_bytes > 0 && self.max_file_bytes <= 32 * 1024 * 1024 * 1024
++            && self.max_total_bytes >= self.max_file_bytes && self.max_total_bytes <= 64 * self.max_file_bytes,
 +            "invalid file size budget");
 +        anyhow::ensure!(self.concurrent_uploads > 0 && self.concurrent_uploads <= 2,
 +            "at most two uploads may be active");
-+        anyhow::ensure!(self.max_event_queue > 0 && self.max_event_queue <= 64,
++        anyhow::ensure!(self.max_event_queue >= 3 && self.max_event_queue <= 64,
 +            "invalid event queue budget");
 +        anyhow::ensure!(!self.decision_timeout.is_zero() && !self.idle_timeout.is_zero()
-+            && !self.commit_timeout.is_zero(), "timeouts must be finite and positive");
++            && !self.commit_timeout.is_zero() && self.decision_timeout <= Duration::from_secs(300)
++            && self.idle_timeout <= Duration::from_secs(120) && self.commit_timeout <= Duration::from_secs(300),
++            "timeouts are outside the bounded network policy");
 +        Ok(())
 +    }
 +
 +    pub(crate) fn register(&self, info: &RegisterDtoV2) -> Result<(), AppError> {
-+        let bounded = |value: &str, limit| !value.contains('\0') && value.len() <= limit;
-+        if info.alias.is_empty() || !bounded(&info.alias, 256)
-+            || !bounded(&info.version, 32)
-+            || info.device_model.as_ref().is_some_and(|value| !bounded(value, 256))
++        if !crate::model::discovery::metadata_within_limits(&info.alias, &info.version,
++                info.device_model.as_deref(), &info.fingerprint)
 +            || !is_digest(&info.fingerprint) || info.port == 0
 +            || info.protocol != ProtocolType::Https
 +        {
@@ -395,27 +866,23 @@
  use std::path::PathBuf;
  use tokio::sync::{mpsc, oneshot};
 +use crate::http::limits::TransferLimits;
-+use super::verified_upload::{CommittedMedia, UploadFailure, UploadVerification, receive_verified};
++use super::verified_upload::{VerifiedUploadTarget, receive_verified};
 +use tokio_util::sync::CancellationToken;
  
  /// Channel capacity for file upload chunks (provides backpressure).
  const UPLOAD_CHANNEL_CAPACITY: usize = 16;
-@@ -17,6 +21,14 @@
+@@ -17,6 +21,10 @@
  /// Where the content of an uploaded file should go, decided by the application.
  #[derive(Debug)]
  pub enum FileUploadTarget {
 +    /// Bounded sink with a separate, hash-validated permission to commit.
 +    /// The application returns success only after full media validation and
 +    /// durable no-replace archival. Use `verified_upload_channel` to construct.
-+    VerifiedStream {
-+        binary_tx: mpsc::Sender<Bytes>,
-+        verification_tx: oneshot::Sender<Result<UploadVerification, UploadFailure>>,
-+        commit_rx: oneshot::Receiver<Result<CommittedMedia, UploadFailure>>,
-+    },
++    VerifiedStream(VerifiedUploadTarget),
      /// The application consumes the binary chunks itself.
      ///
      /// The server forwards chunks into `binary_tx` and closes it at end of file.
-@@ -100,6 +112,9 @@
+@@ -100,6 +108,9 @@
  
      /// The received bytes do not match the expected SHA-256 checksum.
      HashMismatch,
@@ -425,7 +892,7 @@
  }
  
  /// Forwards the body of `req` to `target`.
-@@ -109,14 +124,33 @@
+@@ -109,14 +120,33 @@
      file_size: u64,
      expected_sha256: Option<&str>,
      timestamps: FileTimestamps,
@@ -436,9 +903,9 @@
      use sha2::{Digest, Sha256};
 +
 +    let target = match target {
-+        FileUploadTarget::VerifiedStream { binary_tx, verification_tx, commit_rx } => {
++        FileUploadTarget::VerifiedStream(target) => {
 +            let defaults = TransferLimits::default();
-+            return receive_verified(req, binary_tx, verification_tx, commit_rx, file_size,
++            return receive_verified(req, target.binary_tx, target.verification_tx, target.commit_rx, file_size,
 +                expected_sha256, mime, strict.unwrap_or(&defaults), cancel).await;
 +        }
 +        other if strict.is_some() => {
@@ -455,7 +922,7 @@
      // result channel is answered by this function once the complete outcome
      // (including the checksum verification) is known.
      let (binary_tx, result_rx, app_result_tx) = match target {
-+        FileUploadTarget::VerifiedStream { .. } => unreachable!("handled above"),
++        FileUploadTarget::VerifiedStream(_) => unreachable!("handled above"),
          FileUploadTarget::Stream {
              binary_tx,
              result_rx,
@@ -466,19 +933,31 @@
  use crate::http::server::PeerIp;
  use crate::model::transfer::FileDto;
  use std::collections::HashMap;
-@@ -35,6 +36,9 @@
+@@ -25,6 +26,10 @@
+     pub(crate) sender_ip: PeerIp,
+ 
+     pub(crate) cancel: CancellationToken,
++
++    /// A slot reserved when the strict server accepted the session. Completing
++    /// or cancelling a session never waits on a saturated application queue.
++    pub(crate) terminal: Option<tokio::sync::mpsc::OwnedPermit<crate::http::server::v2::ServerEventV2>>,
+ }
+ 
+ pub(crate) struct UploadSessionV2 {
+@@ -35,6 +40,10 @@
  
      /// The accepted files, mapped by file ID.
      pub(crate) files: HashMap<String, SessionFileV2>,
 +
 +    /// Interrupts body reads and commit waits when either side cancels.
 +    pub(crate) cancel: CancellationToken,
++    pub(crate) terminal: Option<tokio::sync::mpsc::OwnedPermit<crate::http::server::v2::ServerEventV2>>,
  }
  
  impl UploadSessionV2 {
 --- /dev/null
 +++ b/core/src/http/server/common/verified_upload.rs
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,245 @@
 +//! Receive/verify/commit handshake used by the native archive adapter.
 +//! EOF is not permission to publish. Only a successful `verification` followed
 +//! by complete-media validation and a durable, no-replace archive commit may
@@ -491,6 +970,10 @@
 +use hyper::body::Incoming;
 +use hyper::Request;
 +use sha2::{Digest, Sha256};
++use std::future::Future;
++use std::pin::Pin;
++use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
++use std::task::{Context, Poll};
 +use tokio::sync::{mpsc, oneshot};
 +use tokio_util::sync::CancellationToken;
 +
@@ -537,15 +1020,68 @@
 +/// close, commit without replacement, and send the actual completion result.
 +pub struct VerifiedUploadReceiver {
 +    pub chunks: mpsc::Receiver<Bytes>,
-+    pub verification: oneshot::Receiver<Result<UploadVerification, UploadFailure>>,
-+    pub completion: oneshot::Sender<Result<CommittedMedia, UploadFailure>>,
++    pub verification: VerificationReceiver,
++    pub completion: CommitSender,
++}
++
++/// Opaque server half. A caller cannot construct a raw completion channel and
++/// bypass the verification-consumption check enforced by `CommitSender`.
++#[derive(Debug)]
++pub struct VerifiedUploadTarget {
++    pub(crate) binary_tx: mpsc::Sender<Bytes>,
++    pub(crate) verification_tx: oneshot::Sender<Result<UploadVerification, UploadFailure>>,
++    pub(crate) commit_rx: oneshot::Receiver<Result<CommittedMedia, UploadFailure>>,
++}
++
++/// Reading a successful permission, rather than merely queuing it, enables the
++/// completion sender. Keeping these as separate channels prevents EOF/ready
++/// scheduling from accidentally acknowledging an unvalidated archive.
++pub struct VerificationReceiver {
++    receiver: oneshot::Receiver<Result<UploadVerification, UploadFailure>>,
++    consumed: Arc<AtomicBool>,
++}
++
++impl Future for VerificationReceiver {
++    type Output = Result<Result<UploadVerification, UploadFailure>, oneshot::error::RecvError>;
++
++    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
++        let result = Pin::new(&mut self.receiver).poll(context);
++        if matches!(&result, Poll::Ready(Ok(Ok(_)))) {
++            self.consumed.store(true, Ordering::Release);
++        }
++        result
++    }
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum CompletionError { BeforeVerification, ReceiverDropped }
++
++pub struct CommitSender {
++    sender: oneshot::Sender<Result<CommittedMedia, UploadFailure>>,
++    consumed: Arc<AtomicBool>,
++}
++
++impl CommitSender {
++    /// Only an actually consumed successful verification may be followed by a
++    /// successful commit receipt. Invalid early success produces a failure at
++    /// the HTTP boundary regardless of how the two tasks were scheduled.
++    pub fn send(self, result: Result<CommittedMedia, UploadFailure>) -> Result<(), CompletionError> {
++        if result.is_ok() && !self.consumed.load(Ordering::Acquire) {
++            let _ = self.sender.send(Err(UploadFailure::Io));
++            return Err(CompletionError::BeforeVerification);
++        }
++        self.sender.send(result).map_err(|_| CompletionError::ReceiverDropped)
++    }
 +}
 +
 +pub fn verified_upload_channel() -> (FileUploadTarget, VerifiedUploadReceiver) {
 +    let (binary_tx, chunks) = mpsc::channel(DATA_QUEUE_CHUNKS);
-+    let (verification_tx, verification) = oneshot::channel();
-+    let (completion, commit_rx) = oneshot::channel();
-+    (FileUploadTarget::VerifiedStream { binary_tx, verification_tx, commit_rx },
++    let (verification_tx, receiver) = oneshot::channel();
++    let (sender, commit_rx) = oneshot::channel();
++    let consumed = Arc::new(AtomicBool::new(false));
++    let verification = VerificationReceiver { receiver, consumed: consumed.clone() };
++    let completion = CommitSender { sender, consumed };
++    (FileUploadTarget::VerifiedStream(VerifiedUploadTarget { binary_tx, verification_tx, commit_rx }),
 +        VerifiedUploadReceiver { chunks, verification, completion })
 +}
 +
@@ -645,6 +1181,28 @@
 +        _ => SaveResult::Failed,
 +    }
 +}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[tokio::test]
++    async fn early_success_fails_before_and_after_permission_is_queued() {
++        for permission_already_queued in [false, true] {
++            let (target, receiver) = verified_upload_channel();
++            let FileUploadTarget::VerifiedStream(mut target) = target else { unreachable!(); };
++            if permission_already_queued {
++                target.verification_tx.send(Ok(UploadVerification {
++                    received_bytes: 1, actual_sha256: "0".repeat(64),
++                    sender_checksum_matched: true, cancellation: CancellationToken::new(),
++                })).unwrap();
++            }
++            assert_eq!(receiver.completion.send(Ok(CommittedMedia::Png)),
++                Err(CompletionError::BeforeVerification));
++            assert_eq!(target.commit_rx.try_recv().unwrap(), Err(UploadFailure::Io));
++        }
++    }
++}
 --- a/core/src/http/server/mod.rs
 +++ b/core/src/http/server/mod.rs
 @@ -1,3 +1,4 @@
@@ -669,16 +1227,27 @@
  use lru::LruCache;
  use rustls::pki_types::pem::PemObject;
  use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-@@ -31,7 +33,7 @@
+@@ -29,9 +31,9 @@
+ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+ use std::num::NonZeroUsize;
  use std::ops::Deref;
- use std::sync::Arc;
+-use std::sync::Arc;
++use std::sync::{Arc, Mutex as SyncMutex};
  use tokio::io::{AsyncRead, AsyncWrite};
 -use tokio::sync::{mpsc, oneshot, Mutex};
 +use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
  use tokio_util::sync::CancellationToken;
  use tokio_util::task::TaskTracker;
  use web::WebState;
-@@ -66,6 +68,9 @@
+@@ -62,10 +64,16 @@
+     pub(crate) event_tx: mpsc::Sender<ServerEventV2>,
+ 
+     /// The single upload session slot. Only one session can be active at a time.
+-    pub(crate) session: Mutex<Option<SessionStateV2>>,
++    // No I/O or await while this lock is held. A synchronous lock lets a
++    // dropped request release its session and reserved terminal event without
++    // creating detached cleanup tasks after shutdown.
++    pub(crate) session: SyncMutex<Option<SessionStateV2>>,
  
      /// Maps client IPs to the number of failed PIN attempts.
      pub(crate) pin_attempts: Mutex<LruCache<IpAddr, u32>>,
@@ -688,7 +1257,7 @@
  }
  
  #[derive(Clone)]
-@@ -90,6 +95,9 @@
+@@ -90,6 +98,9 @@
  
      /// Limits the connections being served, shared by the IPv4 and IPv6 listeners.
      connection_limiter: Arc<ConnectionLimiter>,
@@ -698,15 +1267,18 @@
  }
  
  impl AppState {
-@@ -106,6 +114,7 @@
+@@ -104,8 +115,9 @@
+                 pin: config.pin,
+                 verify_checksums: config.verify_checksums,
                  event_tx: config.event_tx,
-                 session: Mutex::new(None),
+-                session: Mutex::new(None),
++                session: SyncMutex::new(None),
                  pin_attempts: Mutex::new(LruCache::new(NonZeroUsize::new(200).unwrap())),
 +                uploads: Semaphore::new(2),
              })
          });
  
-@@ -123,6 +132,7 @@
+@@ -123,6 +135,7 @@
              ))),
              v2,
              connection_limiter: ConnectionLimiter::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP),
@@ -714,7 +1286,7 @@
          }
      }
  }
-@@ -137,6 +147,9 @@
+@@ -137,6 +150,9 @@
  
      /// Whether the IPv6 wildcard listener could be bound.
      ipv6_bound: bool,
@@ -724,7 +1296,7 @@
  
      /// The task running the accept loops. Completes after a stop has been
      /// requested, the listeners have been dropped and all connections have
-@@ -161,6 +174,9 @@
+@@ -161,6 +177,9 @@
      ///
      /// Empty when the interfaces cannot be enumerated.
      pub fn local_addresses(&self) -> Vec<SocketAddr> {
@@ -734,7 +1306,7 @@
          let Ok(interfaces) = if_addrs::get_if_addrs() else {
              return Vec::new();
          };
-@@ -192,8 +208,8 @@
+@@ -192,8 +211,8 @@
      /// Cancels the active v2 upload session if it matches `session_id`,
      /// e.g. because the user aborted the transfer on the receiving side.
      ///
@@ -745,15 +1317,19 @@
      /// No [ServerEventV2::SessionEnd] is emitted: the application initiated
      /// the cancellation itself.
      ///
-@@ -205,6 +221,7 @@
-         let mut slot = v2.session.lock().await;
+@@ -202,9 +221,10 @@
+         let Some(v2) = &self.v2 else {
+             return false;
+         };
+-        let mut slot = v2.session.lock().await;
++        let mut slot = v2.session.lock().unwrap();
          match slot.as_ref() {
              Some(SessionStateV2::Active(session)) if session.session_id == session_id => {
 +                session.cancel.cancel();
                  *slot = None;
                  true
              }
-@@ -294,8 +311,100 @@
+@@ -294,8 +314,117 @@
          v2: state.v2.clone(),
          port: bound_port,
          ipv6_bound,
@@ -784,8 +1360,16 @@
 +        !address.is_unspecified() && !address.is_multicast() && !address.is_broadcast()),
 +        "a concrete unicast IPv4 address is required");
 +    anyhow::ensure!(v2_config.verify_checksums, "checksum verification is mandatory");
++    anyhow::ensure!(v2_config.pin.as_ref().is_none_or(|pin| pin.len() <= 128 && !pin.contains('\0')),
++        "PIN exceeds the metadata limit");
 +    anyhow::ensure!(v2_config.event_tx.max_capacity() <= limits.max_event_queue,
 +        "event channel exceeds its capacity budget");
++    anyhow::ensure!(v2_config.event_tx.max_capacity() >= 3,
++        "event channel needs request, terminal and listener-failure slots");
++    // This slot cannot be consumed by discovery/progress noise. A listener
++    // failure remains deliverable even if the consumer temporarily stalls.
++    let listener_failure = v2_config.event_tx.clone().try_reserve_owned()
++        .map_err(|_| anyhow::anyhow!("event consumer is unavailable"))?;
 +    addresses.sort();
 +    addresses.dedup();
 +    let _ = rustls::crypto::ring::default_provider().install_default();
@@ -828,18 +1412,27 @@
 +                        Some(Err(error)) => format!("{error:#}"),
 +                        _ => "listener stopped unexpectedly".to_string(),
 +                    };
-+                    if let Some(v2) = &state.v2 {
-+                        let _ = v2.event_tx.try_send(ServerEventV2::ListenerFailed { error });
-+                    }
++                    listener_failure.send(ServerEventV2::ListenerFailed { error });
 +                }
 +            }
 +            // No selected listener may continue serving after another failed.
 +            cancel.cancel();
 +            if let Some(v2) = &state.v2 {
-+                let mut slot = v2.session.lock().await;
++                let mut slot = v2.session.lock().unwrap();
 +                match slot.take() {
-+                    Some(SessionStateV2::Active(session)) => session.cancel.cancel(),
-+                    Some(SessionStateV2::Pending(session)) => session.cancel.cancel(),
++                    Some(SessionStateV2::Active(session)) => {
++                        session.cancel.cancel();
++                        if let Some(terminal) = session.terminal {
++                            terminal.send(ServerEventV2::SessionEnd { session_id: session.session_id,
++                                reason: v2::SessionEndReasonV2::Cancelled });
++                        }
++                    }
++                    Some(SessionStateV2::Pending(session)) => {
++                        session.cancel.cancel();
++                        if let Some(terminal) = session.terminal {
++                            terminal.send(ServerEventV2::PrepareUploadAborted { session_id: session.session_id });
++                        }
++                    }
 +                    None => {},
 +                }
 +            }
@@ -854,7 +1447,7 @@
  }
  
  /// Binds an IPv6 listener with `IPV6_V6ONLY` enabled.
-@@ -492,12 +601,14 @@
+@@ -492,12 +621,14 @@
  ) {
      let res = match tls_acceptor {
          Some(tls_acceptor) => {
@@ -872,7 +1465,7 @@
              };
  
              let client_info = {
-@@ -543,6 +654,10 @@
+@@ -543,6 +674,10 @@
      I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
  {
      hyper::server::conn::http1::Builder::new()
@@ -883,7 +1476,7 @@
          .serve_connection(
              TokioIo::new(io),
              hyper::service::service_fn(move |mut req: Request<Incoming>| {
-@@ -641,6 +756,16 @@
+@@ -641,6 +776,16 @@
  
      let v2_enabled = state.v2.is_some();
  
@@ -928,7 +1521,17 @@
  
      // On TLS, only trust registrations whose claimed fingerprint is proven
      // by the client certificate of the mTLS handshake.
-@@ -253,7 +257,8 @@
+@@ -242,6 +246,9 @@
+ ) -> Result<Response<BoxedBody>, AppError> {
+     let v2 = require_v2(&state)?;
+     let query = parse_query(req.uri().query());
++    if state.strict.is_some() && query.get("pin").is_some_and(|pin| pin.len() > 128 || pin.contains('\0')) {
++        return Err(AppError::BadRequest("Invalid PIN field".into()));
++    }
+ 
+     check_pin(
+         v2.pin.as_deref(),
+@@ -253,7 +260,8 @@
  
      let mut payload = req
          .into_body()
@@ -938,7 +1541,7 @@
          .await?;
  
      if payload.files.is_empty() {
-@@ -265,6 +270,7 @@
+@@ -265,6 +273,7 @@
      for file in payload.files.values_mut() {
          file.file_name = filename::normalize(&file.file_name);
      }
@@ -946,7 +1549,34 @@
  
      // Like `register`: a sender with a client certificate must claim the
      // fingerprint of that certificate, so that `info` cannot pass itself off
-@@ -312,23 +318,39 @@
+@@ -283,10 +292,17 @@
+ 
+     let session_id = Uuid::new_v4().to_string();
+     let cancelled = CancellationToken::new();
++    // Reserve the eventual abort/completion event before exposing this session
++    // to the application. A full queue rejects admission instead of causing a
++    // detached completion task or losing a terminal result.
++    let terminal = if state.strict.is_some() {
++        Some(v2.event_tx.clone().try_reserve_owned()
++            .map_err(|_| AppError::Status(StatusCode::TOO_MANY_REQUESTS))?)
++    } else { None };
+ 
+     // Claim the single session slot.
+     {
+-        let mut slot = v2.session.lock().await;
++        let mut slot = v2.session.lock().unwrap();
+         if slot.is_some() {
+             return Err(AppError::Message(
+                 StatusCode::CONFLICT,
+@@ -297,6 +313,7 @@
+             session_id: session_id.clone(),
+             sender_ip: client_info.ip,
+             cancel: cancelled.clone(),
++            terminal,
+         }));
+     }
+ 
+@@ -312,23 +329,39 @@
          files: payload.files.clone(),
          decision_tx,
      };
@@ -993,27 +1623,37 @@
      };
  
      let accepted_ids = match decision {
-@@ -372,10 +394,16 @@
+@@ -371,11 +404,21 @@
+         .collect();
  
      {
-         let mut slot = v2.session.lock().await;
+-        let mut slot = v2.session.lock().await;
++        let mut slot = v2.session.lock().unwrap();
 +        if cancelled.is_cancelled() || !matches!(slot.as_ref(),
 +            Some(SessionStateV2::Pending(pending)) if pending.session_id == session_id)
 +        {
 +            return Err(AppError::Status(StatusCode::FORBIDDEN));
 +        }
++        let Some(SessionStateV2::Pending(pending)) = slot.take() else {
++            return Err(AppError::Status(StatusCode::FORBIDDEN));
++        };
          *slot = Some(SessionStateV2::Active(UploadSessionV2 {
              session_id: session_id.clone(),
              sender_ip: client_info.ip,
              files,
 +            cancel: cancelled,
++            terminal: pending.terminal,
          }));
      }
      pending_guard.disarm();
-@@ -399,6 +427,11 @@
+@@ -399,6 +442,15 @@
  ) -> Result<Response<BoxedBody>, AppError> {
      let v2 = require_v2(&state)?;
      let query = parse_query(req.uri().query());
++    if state.strict.is_some() && ["sessionId", "fileId", "token"].iter().any(|key|
++        query.get(*key).is_some_and(|value| value.is_empty() || value.len() > 128 || value.contains('\0'))) {
++        return Err(AppError::BadRequest("Invalid upload identifier".into()));
++    }
 +
 +    // Keep the permit until verification and durable commit are complete.
 +    let _permit = if state.strict.is_some() {
@@ -1022,16 +1662,18 @@
  
      let (Some(session_id), Some(file_id), Some(token)) = (
          query.get("sessionId"),
-@@ -412,7 +445,7 @@
+@@ -412,8 +464,8 @@
      };
  
      // Validate the request and mark the file as in progress.
 -    let file_dto = {
+-        let mut slot = v2.session.lock().await;
 +    let (file_dto, cancelled) = {
-         let mut slot = v2.session.lock().await;
++        let mut slot = v2.session.lock().unwrap();
          let Some(SessionStateV2::Active(session)) = slot.as_mut() else {
              return Err(invalid_token_error());
-@@ -428,13 +461,21 @@
+         };
+@@ -428,13 +480,21 @@
          }
          file.status = FileStatusV2::InProgress;
          file.attempts = file.attempts.saturating_add(1);
@@ -1055,7 +1697,7 @@
      let expected_sha256 = match v2.verify_checksums {
          true => file_dto.sha256.clone(),
          false => None,
-@@ -454,14 +495,33 @@
+@@ -454,14 +514,33 @@
          file: file_dto,
          target_tx,
      };
@@ -1093,7 +1735,7 @@
      };
  
      let result = common::save::save_req_to_target(
-@@ -470,6 +530,9 @@
+@@ -470,6 +549,9 @@
          file_size,
          expected_sha256.as_deref(),
          timestamps,
@@ -1103,7 +1745,7 @@
      )
      .await;
  
-@@ -478,6 +541,9 @@
+@@ -478,6 +560,9 @@
      match result {
          SaveResult::Success => Ok(Response::new(empty_body())),
          SaveResult::Failed => Err(AppError::Status(StatusCode::INTERNAL_SERVER_ERROR)),
@@ -1113,45 +1755,125 @@
          SaveResult::HashMismatch => Err(AppError::Message(
              StatusCode::UNPROCESSABLE_ENTITY,
              "Checksum mismatch".to_string(),
-@@ -528,6 +594,7 @@
+@@ -493,12 +578,16 @@
+     let v2 = require_v2(&state)?;
+     let query = parse_query(req.uri().query());
+     let session_id = query.get("sessionId");
++    if state.strict.is_some() && session_id.is_some_and(|value| value.is_empty()
++        || value.len() > 128 || value.contains('\0')) {
++        return Err(AppError::BadRequest("Invalid session identifier".into()));
++    }
+ 
+     // A pending prepare-upload request: the sender does not know the session
+     // ID yet (it is part of the response), so a cancel from the pending
+     // sender's address is accepted without one.
+     let pending_cancelled = {
+-        let slot = v2.session.lock().await;
++        let slot = v2.session.lock().unwrap();
+         match slot.as_ref() {
+             Some(SessionStateV2::Pending(pending))
+                 if pending.sender_ip == client_info.ip
+@@ -523,37 +612,36 @@
+ 
+     if let Some(session_id) = session_id {
+         let cancelled = {
+-            let mut slot = v2.session.lock().await;
++            let mut slot = v2.session.lock().unwrap();
+             match slot.as_ref() {
                  Some(SessionStateV2::Active(session))
                      if session.session_id == *session_id && session.sender_ip == client_info.ip =>
                  {
+-                    *slot = None;
+-                    true
++                    let Some(SessionStateV2::Active(session)) = slot.take() else { unreachable!(); };
 +                    session.cancel.cancel();
-                     *slot = None;
-                     true
++                    Some(session.terminal)
                  }
-@@ -602,7 +669,7 @@
+-                _ => false,
++                _ => None,
+             }
+         };
+ 
+-        if cancelled {
++        if let Some(terminal) = cancelled {
+             tracing::info!("Upload session cancelled by sender: {session_id}");
+-            let _ = v2
+-                .event_tx
+-                .send(ServerEventV2::SessionEnd {
++            deliver_terminal(&v2, terminal, ServerEventV2::SessionEnd {
+                     session_id: session_id.clone(),
+                     reason: SessionEndReasonV2::Cancelled,
+-                })
+-                .await;
++                }).await;
+         } else {
+             // Not one of our upload sessions: the remote device may be
+             // cancelling a transfer this application is sending to it.
+-            let _ = v2
+-                .event_tx
+-                .send(ServerEventV2::CancelReceived {
++            let event = ServerEventV2::CancelReceived {
+                     ip: client_info.ip,
+                     session_id: session_id.clone(),
+-                })
+-                .await;
++                };
++            if state.strict.is_some() {
++                v2.event_tx.try_send(event)
++                    .map_err(|_| AppError::Status(StatusCode::TOO_MANY_REQUESTS))?;
++            } else { let _ = v2.event_tx.send(event).await; }
+         }
+     }
+ 
+@@ -602,7 +690,7 @@
      /// Frees the pending slot immediately.
      async fn clear(&mut self) {
          self.armed = false;
 -        clear_pending_session(&self.v2).await;
-+        clear_pending_session(&self.v2, &self.session_id).await;
++        take_pending_session(&self.v2, &self.session_id);
      }
  }
  
-@@ -614,7 +681,7 @@
-         let v2 = self.v2.clone();
-         let session_id = std::mem::take(&mut self.session_id);
-         tokio::spawn(async move {
+@@ -611,25 +699,19 @@
+         if !self.armed {
+             return;
+         }
+-        let v2 = self.v2.clone();
+-        let session_id = std::mem::take(&mut self.session_id);
+-        tokio::spawn(async move {
 -            clear_pending_session(&v2).await;
-+            clear_pending_session(&v2, &session_id).await;
-             // The application may still be waiting for a decision; tell it
-             // that answering is pointless now.
-             let _ = v2
-@@ -625,9 +692,9 @@
-     }
+-            // The application may still be waiting for a decision; tell it
+-            // that answering is pointless now.
+-            let _ = v2
+-                .event_tx
+-                .send(ServerEventV2::PrepareUploadAborted { session_id })
+-                .await;
+-        });
+-    }
+-}
+-
+-async fn clear_pending_session(v2: &V2State) {
+-    let mut slot = v2.session.lock().await;
+-    if matches!(*slot, Some(SessionStateV2::Pending(_))) {
+-        *slot = None;
+-    }
++        if let Some(pending) = take_pending_session(&self.v2, &self.session_id) {
++            dispatch_terminal(self.v2.clone(), pending.terminal,
++                ServerEventV2::PrepareUploadAborted { session_id: pending.session_id });
++        }
++    }
++}
++
++fn take_pending_session(v2: &V2State, session_id: &str) -> Option<PendingSessionV2> {
++    let mut slot = v2.session.lock().unwrap();
++    if matches!(slot.as_ref(), Some(SessionStateV2::Pending(pending)) if pending.session_id == session_id) {
++        if let Some(SessionStateV2::Pending(pending)) = slot.take() { return Some(pending); }
++    }
++    None
  }
  
--async fn clear_pending_session(v2: &V2State) {
-+async fn clear_pending_session(v2: &V2State, session_id: &str) {
-     let mut slot = v2.session.lock().await;
--    if matches!(*slot, Some(SessionStateV2::Pending(_))) {
-+    if matches!(slot.as_ref(), Some(SessionStateV2::Pending(pending)) if pending.session_id == session_id) {
-         *slot = None;
-     }
- }
-@@ -641,20 +708,23 @@
+ /// Sets the final status of a file after an upload attempt.
+@@ -641,20 +723,23 @@
      session_id: String,
      file_id: String,
      armed: bool,
@@ -1176,15 +1898,52 @@
          finalize_file(&self.v2, &self.session_id, &self.file_id, result).await;
      }
  }
-@@ -664,6 +734,7 @@
+@@ -664,12 +749,11 @@
          if !self.armed {
              return;
          }
+-        let v2 = self.v2.clone();
+-        let session_id = std::mem::take(&mut self.session_id);
+-        let file_id = std::mem::take(&mut self.file_id);
+-        tokio::spawn(async move {
+-            finalize_file(&v2, &session_id, &file_id, SaveResult::Failed).await;
+-        });
 +        self.cancel.cancel();
-         let v2 = self.v2.clone();
-         let session_id = std::mem::take(&mut self.session_id);
-         let file_id = std::mem::take(&mut self.file_id);
-@@ -699,7 +770,8 @@
++        if let Some((terminal, event)) = finalize_file_state(&self.v2, &self.session_id,
++            &self.file_id, SaveResult::Failed) {
++            dispatch_terminal(self.v2.clone(), terminal, event);
++        }
+     }
+ }
+ 
+@@ -684,13 +768,22 @@
+ /// [MAX_UPLOAD_ATTEMPTS] is not exhausted) so the sender can retry the upload
+ /// with the same token; the session stays active in that case.
+ async fn finalize_file(v2: &V2State, session_id: &str, file_id: &str, result: SaveResult) {
+-    let session_ended = {
+-        let mut slot = v2.session.lock().await;
++    if let Some((terminal, event)) = finalize_file_state(v2, session_id, file_id, result) {
++        deliver_terminal(v2, terminal, event).await;
++    }
++}
++
++type TerminalPermit = Option<mpsc::OwnedPermit<ServerEventV2>>;
++
++fn finalize_file_state(v2: &V2State, session_id: &str, file_id: &str, result: SaveResult)
++    -> Option<(TerminalPermit, ServerEventV2)> {
++    let ended = {
++        let mut slot = v2.session.lock().unwrap();
+         let Some(SessionStateV2::Active(session)) = slot.as_mut() else {
+-            return;
++            return None;
+         };
+         if session.session_id != session_id {
+-            return;
++            return None;
+         }
+         if let Some(file) = session.files.get_mut(file_id) {
+             if file.status == FileStatusV2::InProgress {
+@@ -699,27 +792,35 @@
                      SaveResult::HashMismatch if file.attempts < MAX_UPLOAD_ATTEMPTS => {
                          FileStatusV2::Pending
                      }
@@ -1194,6 +1953,69 @@
                  };
              }
          }
+-        match session.is_complete() {
+-            true => {
+-                *slot = None;
+-                true
+-            }
+-            false => false,
+-        }
+-    };
+-
+-    if session_ended {
++        if session.is_complete() { slot.take() } else { None }
++    };
++    if let Some(SessionStateV2::Active(session)) = ended {
+         tracing::info!("Upload session finished: {session_id}");
+-        let _ = v2
+-            .event_tx
+-            .send(ServerEventV2::SessionEnd {
+-                session_id: session_id.to_string(),
++        return Some((session.terminal, ServerEventV2::SessionEnd {
++                session_id: session.session_id,
+                 reason: SessionEndReasonV2::Finished,
+-            })
+-            .await;
+-    }
+-}
++            }));
++    }
++    None
++}
++
++async fn deliver_terminal(v2: &V2State, terminal: TerminalPermit, event: ServerEventV2) {
++    match terminal {
++        Some(permit) => { permit.send(event); }
++        // Preserve legacy API backpressure for the unmodified upstream tests.
++        None => { let _ = v2.event_tx.send(event).await; }
++    }
++}
++
++fn dispatch_terminal(v2: Arc<V2State>, terminal: TerminalPermit, event: ServerEventV2) {
++    match terminal {
++        Some(permit) => { permit.send(event); }
++        // Strict sessions always own a permit and never enter this legacy path.
++        None => { tokio::spawn(async move { let _ = v2.event_tx.send(event).await; }); }
++    }
++}
+--- a/core/src/model/discovery.rs
++++ b/core/src/model/discovery.rs
+@@ -1,4 +1,15 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ use serde::{Deserialize, Serialize};
++
++/// Shared byte limits for untrusted discovery JSON, before it enters a store
++/// or an application event queue. HTTP fingerprints may be arbitrary legacy
++/// identifiers; the TLS-only receiver additionally requires a SHA-256 digest.
++pub(crate) fn metadata_within_limits(alias: &str, version: &str,
++    model: Option<&str>, fingerprint: &str) -> bool {
++    let bounded = |text: &str, limit| text.len() <= limit && !text.contains('\0');
++    !alias.is_empty() && bounded(alias, 256) && bounded(version, 32)
++        && model.is_none_or(|value| bounded(value, 256)) && bounded(fingerprint, 128)
++}
+ 
+ /// The protocol version (major.minor) implemented by this crate for the v2 protocol.
+ pub const PROTOCOL_VERSION_V2: &str = "2.2";
 --- a/core/src/model/transfer.rs
 +++ b/core/src/model/transfer.rs
 @@ -1,3 +1,4 @@
@@ -1277,9 +2099,112 @@
                  if tx.send(Ok(buffer.split().freeze())).await.is_err() {
                      break;
                  }
+@@ -258,6 +305,12 @@
+     fn formats_nanosecond_timestamp() {
+         let time = SystemTime::UNIX_EPOCH + Duration::from_nanos(123_456_789);
+         let formatted = format_timestamp(time).unwrap();
++        // Rust's Windows SystemTime uses FILETIME: checked_dur2intervals
++        // truncates to 100 ns before the formatter receives the value.
++        // Require all representable ticks, never invent extra precision.
++        #[cfg(windows)]
++        assert_eq!(formatted, "1970-01-01T00:00:00.1234567Z");
++        #[cfg(not(windows))]
+         assert_eq!(formatted, "1970-01-01T00:00:00.123456789Z");
+         assert_eq!(parse_timestamp(&formatted), Some(time));
+     }
+--- a/core/src/multicast/mod.rs
++++ b/core/src/multicast/mod.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ //! UDP multicast discovery for the LocalSend protocol (v2.2).
+ //!
+ //! Devices announce themselves by sending a [`MulticastMessageV2`] to the
+@@ -16,6 +17,7 @@
+ use socket::MulticastSocket;
+ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+ use std::sync::Arc;
++use std::sync::atomic::{AtomicBool, Ordering};
+ use std::time::Duration;
+ use tokio::net::UdpSocket;
+ use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+@@ -50,7 +52,7 @@
+ 
+ /// The largest datagram that is read at once. Announcements are far smaller;
+ /// anything bigger is truncated and then fails to parse.
+-const RECEIVE_BUFFER_SIZE: usize = 65536;
++const RECEIVE_BUFFER_SIZE: usize = 4097;
+ 
+ /// How many consecutive receive errors are tolerated before a socket is given
+ /// up on. Receiving may fail transiently (on Windows an ICMP error of a
+@@ -169,6 +171,7 @@
+     /// The sockets used for sending. Emptied once discovery is stopped, which
+     /// releases the port and turns further sends into no-ops.
+     sockets: RwLock<Vec<SendSocket>>,
++    failed: AtomicBool,
+ }
+ 
+ /// A [`MulticastMessageV2`] plus the legacy `announce` flag of protocol v2.
+@@ -216,6 +219,8 @@
+ }
+ 
+ impl MulticastHandle {
++    pub fn has_failed(&self) -> bool { self.state.failed.load(Ordering::Acquire) }
++
+     /// Announces this device to the network, which makes every other LocalSend
+     /// device on it register with this device over HTTP.
+     ///
+@@ -269,6 +274,7 @@
+ 
+     let state = Arc::new(MulticastState {
+         device: config.device,
++        failed: AtomicBool::new(false),
+         sockets: RwLock::new(
+             sockets
+                 .iter()
+@@ -300,6 +306,7 @@
+                 // All receive loops gave up on their socket.
+                 _ = async { while receivers.join_next().await.is_some() {} } => {
+                     tracing::error!("All multicast sockets failed, stopping multicast discovery");
++                    state.failed.store(true, Ordering::Release);
+                     // Tell the application, so it can restart discovery.
+                     // `try_send` because this task must reach its end even
+                     // when nobody consumes events anymore, so that
+@@ -348,6 +355,12 @@
+                 received
+             }
+             Err(err) => {
++                // Windows reports a truncated UDP datagram as WSAEMSGSIZE;
++                // oversized untrusted metadata must not kill the listener.
++                #[cfg(windows)]
++                if err.raw_os_error() == Some(10040) { continue; }
++                #[cfg(unix)]
++                if err.raw_os_error() == Some(libc::EMSGSIZE) { continue; }
+                 consecutive_errors += 1;
+                 tracing::warn!(
+                     "Could not receive multicast message on interface {}: {err:#}",
+@@ -363,6 +376,7 @@
+                 continue;
+             }
+         };
++        if size > 4096 { continue; }
+ 
+         let message = match serde_json::from_slice::<MulticastMessageV2>(&buffer[..size]) {
+             Ok(message) => message,
+@@ -371,6 +385,11 @@
+                 continue;
+             }
+         };
++        if message.port == 0 || !crate::model::discovery::metadata_within_limits(
++            &message.alias, &message.version, message.device_model.as_deref(), &message.fingerprint)
++        {
++            continue;
++        }
+ 
+         // Loopback is enabled, so our own messages come back as well.
+         if message.fingerprint == state.device.fingerprint {
 --- /dev/null
 +++ b/core/tests/native_v2.rs
-@@ -0,0 +1,435 @@
+@@ -0,0 +1,531 @@
 +#![cfg(feature = "http")]
 +
 +//! Actual loopback TLS and filesystem tests for the native receive boundary.
@@ -1293,7 +2218,7 @@
 +use localsend::http::dto_v2::{PrepareUploadRequestDtoV2, PrepareUploadResponseDtoV2, RegisterDtoV2};
 +use localsend::http::limits::TransferLimits;
 +use localsend::http::server::common::verified_upload::{
-+    verified_upload_channel, CommittedMedia, UploadFailure, UploadVerification,
++    verified_upload_channel, CommittedMedia, CompletionError, UploadFailure, UploadVerification,
 +    VerifiedUploadReceiver,
 +};
 +use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
@@ -1451,7 +2376,7 @@
 +    action: SinkAction, observations: mpsc::Sender<Observation>) {
 +    observations.send(Observation::Started).await.unwrap();
 +    if matches!(action, SinkAction::EarlyCompletion) {
-+        receiver.completion.send(Ok(CommittedMedia::Png)).unwrap();
++        assert_eq!(receiver.completion.send(Ok(CommittedMedia::Png)), Err(CompletionError::BeforeVerification));
 +        while receiver.chunks.recv().await.is_some() {}
 +        if let Ok(Err(error)) = receiver.verification.await {
 +            observations.send(Observation::Rejected(error)).await.unwrap();
@@ -1713,5 +2638,101 @@
 +        assert_eq!(raw.post(&route).json(&payload).send().await.unwrap().status().as_u16(), expected_status);
 +    }
 +    assert!(receiver.observations.try_recv().is_err());
++    receiver.shutdown().await;
++}
++
++#[tokio::test]
++async fn terminal_events_have_reserved_capacity_under_real_registration_traffic() {
++    let identity = generate_self_signed().unwrap();
++    let sender = generate_self_signed().unwrap();
++    let (events, mut event_rx) = mpsc::channel(4);
++    let (stop, stop_rx) = oneshot::channel();
++    let handle = start_bound_v2(vec![Ipv4Addr::LOCALHOST], 0,
++        TlsConfig { cert: identity.certificate_pem.clone(), private_key: identity.private_key_pem.clone() },
++        ClientInfo { alias: "receiver".into(), version: "2.2".into(), device_model: None,
++            device_type: None, token: identity.fingerprint.clone() },
++        ServerConfigV2 { pin: None, verify_checksums: true, event_tx: events },
++        TransferLimits::default(), stop_rx).await.unwrap();
++    let client = || LsHttpClientV2::try_new(&sender.private_key_pem, &sender.certificate_pem,
++        Some(identity.fingerprint.clone()), Some(WAIT)).unwrap();
++    let info = RegisterDtoV2 { alias: "sender".into(), version: "2.2".into(), device_model: None,
++        device_type: None, fingerprint: sender.fingerprint.clone(), port: 53317,
++        protocol: ProtocolType::Https, download: false };
++    let prepare = tokio::spawn({
++        let client = client();
++        let port = handle.port();
++        let payload = PrepareUploadRequestDtoV2 { info: info.clone(), files: HashMap::from([("file".into(), media())]) };
++        async move { client.prepare_upload(ProtocolType::Https, "127.0.0.1", port,
++            None, payload, None, CancellationToken::new()).await.unwrap().response.unwrap() }
++    });
++    let event = tokio::time::timeout(WAIT, event_rx.recv()).await.unwrap().unwrap();
++    let ServerEventV2::PrepareUpload { files, decision_tx, .. } = event else { panic!("missing request"); };
++    decision_tx.send(PrepareUploadDecisionV2::Accept(files.into_keys().collect())).unwrap();
++    let session = prepare.await.unwrap();
++    let upload = tokio::spawn({
++        let client = client();
++        let port = handle.port();
++        async move { client.upload(ProtocolType::Https, "127.0.0.1", port, None,
++            &session.session_id, "file", &session.files["file"], PNG.to_vec().into(), CancellationToken::new()).await }
++    });
++    let event = tokio::time::timeout(WAIT, event_rx.recv()).await.unwrap().unwrap();
++    let ServerEventV2::FileUpload { target_tx, .. } = event else { panic!("missing upload"); };
++    let (target, receiver) = verified_upload_channel();
++    target_tx.send(target).unwrap();
++    let root = std::env::temp_dir().join(format!("huhucapture-events-{}", uuid::Uuid::new_v4()));
++    std::fs::create_dir(&root).unwrap();
++    let gate = Arc::new(Semaphore::new(0));
++    let (observations, mut observed) = mpsc::channel(2);
++    let archive = tokio::spawn(archive_fixture(receiver, root.clone(), SinkAction::Hold(gate.clone()), observations));
++    assert!(matches!(observed.recv().await, Some(Observation::Started)));
++    assert!(matches!(observed.recv().await, Some(Observation::Verified(_))));
++    for _ in 0..16 {
++        client().register(ProtocolType::Https, "127.0.0.1", handle.port(), info.clone()).await.unwrap();
++    }
++    gate.add_permits(1);
++    tokio::time::timeout(WAIT, upload).await.unwrap().unwrap().unwrap();
++    archive.await.unwrap();
++    let mut terminal = 0;
++    while let Ok(event) = event_rx.try_recv() {
++        if matches!(event, ServerEventV2::SessionEnd { .. }) { terminal += 1; }
++    }
++    assert_eq!(terminal, 1, "terminal result is retained even though informational events saturated the queue");
++    stop.send(()).unwrap();
++    tokio::time::timeout(WAIT, handle.wait_stopped()).await.unwrap();
++    assert!(event_rx.try_recv().is_err(), "joined shutdown cannot enqueue a late terminal callback");
++    std::fs::remove_file(root.join("committed.png")).unwrap();
++    std::fs::remove_dir(root).unwrap();
++}
++
++#[cfg(feature = "discovery")]
++#[tokio::test]
++async fn secure_discovery_uses_tls_and_joins_its_background_tasks() {
++    use localsend::discovery::{self, DeviceIdentity, DiscoveryConfig};
++    use localsend::multicast::MulticastDevice;
++    use localsend::util::interface::InterfaceFilter;
++    let mut receiver = Receiver::start(SinkAction::Commit, TransferLimits::default()).await;
++    let (events, mut event_rx) = mpsc::channel(4);
++    let (stop, stop_rx) = oneshot::channel();
++    let handle = discovery::start_secure(DiscoveryConfig {
++        group: Ipv4Addr::new(224, 0, 0, 167), group_v6: None, port: 0,
++        interface_filter: InterfaceFilter { whitelist: Some(vec!["127.0.0.1".into()]), blacklist: None },
++        device: MulticastDevice { alias: "discovery test".into(), version: "2.2".into(), device_model: None,
++            device_type: None, fingerprint: receiver.sender.fingerprint.clone(), port: 53317,
++            protocol: ProtocolType::Https, download: false },
++        identity: DeviceIdentity { cert_pem: receiver.sender.certificate_pem.clone(),
++            private_key_pem: receiver.sender.private_key_pem.clone() },
++        timeout: Duration::from_secs(2), event_tx: Some(events),
++    }, stop_rx).await.unwrap();
++    // Loopback has no multicast membership; explicit-address fallback must
++    // still use real mutual TLS and authenticate the observed fingerprint.
++    let known = handle.discover("127.0.0.1", receiver.handle.port(), ProtocolType::Https).await.unwrap().unwrap();
++    assert_eq!(known.device.fingerprint, receiver.identity.fingerprint);
++    assert!(handle.discover("127.0.0.1", receiver.handle.port(), ProtocolType::Http).await.is_err());
++    stop.send(()).unwrap();
++    tokio::time::timeout(WAIT, handle.wait_stopped()).await.unwrap();
++    while event_rx.try_recv().is_ok() {}
++    assert!(matches!(handle.discover("127.0.0.1", receiver.handle.port(), ProtocolType::Https).await,
++        Err(ClientError::Cancelled)));
++    assert!(event_rx.try_recv().is_err());
 +    receiver.shutdown().await;
 +}

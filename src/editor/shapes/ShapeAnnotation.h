@@ -14,6 +14,7 @@ public:
     explicit ShapeAnnotation(WinPin* win);
 
     std::uint64_t number() const noexcept { return model_.number(); }
+    const HuhuCapture::Editor::AnnotationModel* annotationModel() const noexcept override { return &model_; }
     const std::wstring& note() const noexcept { return model_.note(); }
     void setNote(std::wstring note);
     D2D1_COLOR_F color() const noexcept;

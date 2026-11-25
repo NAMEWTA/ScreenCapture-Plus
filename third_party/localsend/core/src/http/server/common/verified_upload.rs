@@ -10,6 +10,10 @@ use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::Request;
 use sha2::{Digest, Sha256};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::task::{Context, Poll};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -56,15 +60,68 @@ pub enum UploadFailure {
 /// close, commit without replacement, and send the actual completion result.
 pub struct VerifiedUploadReceiver {
     pub chunks: mpsc::Receiver<Bytes>,
-    pub verification: oneshot::Receiver<Result<UploadVerification, UploadFailure>>,
-    pub completion: oneshot::Sender<Result<CommittedMedia, UploadFailure>>,
+    pub verification: VerificationReceiver,
+    pub completion: CommitSender,
+}
+
+/// Opaque server half. A caller cannot construct a raw completion channel and
+/// bypass the verification-consumption check enforced by `CommitSender`.
+#[derive(Debug)]
+pub struct VerifiedUploadTarget {
+    pub(crate) binary_tx: mpsc::Sender<Bytes>,
+    pub(crate) verification_tx: oneshot::Sender<Result<UploadVerification, UploadFailure>>,
+    pub(crate) commit_rx: oneshot::Receiver<Result<CommittedMedia, UploadFailure>>,
+}
+
+/// Reading a successful permission, rather than merely queuing it, enables the
+/// completion sender. Keeping these as separate channels prevents EOF/ready
+/// scheduling from accidentally acknowledging an unvalidated archive.
+pub struct VerificationReceiver {
+    receiver: oneshot::Receiver<Result<UploadVerification, UploadFailure>>,
+    consumed: Arc<AtomicBool>,
+}
+
+impl Future for VerificationReceiver {
+    type Output = Result<Result<UploadVerification, UploadFailure>, oneshot::error::RecvError>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let result = Pin::new(&mut self.receiver).poll(context);
+        if matches!(&result, Poll::Ready(Ok(Ok(_)))) {
+            self.consumed.store(true, Ordering::Release);
+        }
+        result
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionError { BeforeVerification, ReceiverDropped }
+
+pub struct CommitSender {
+    sender: oneshot::Sender<Result<CommittedMedia, UploadFailure>>,
+    consumed: Arc<AtomicBool>,
+}
+
+impl CommitSender {
+    /// Only an actually consumed successful verification may be followed by a
+    /// successful commit receipt. Invalid early success produces a failure at
+    /// the HTTP boundary regardless of how the two tasks were scheduled.
+    pub fn send(self, result: Result<CommittedMedia, UploadFailure>) -> Result<(), CompletionError> {
+        if result.is_ok() && !self.consumed.load(Ordering::Acquire) {
+            let _ = self.sender.send(Err(UploadFailure::Io));
+            return Err(CompletionError::BeforeVerification);
+        }
+        self.sender.send(result).map_err(|_| CompletionError::ReceiverDropped)
+    }
 }
 
 pub fn verified_upload_channel() -> (FileUploadTarget, VerifiedUploadReceiver) {
     let (binary_tx, chunks) = mpsc::channel(DATA_QUEUE_CHUNKS);
-    let (verification_tx, verification) = oneshot::channel();
-    let (completion, commit_rx) = oneshot::channel();
-    (FileUploadTarget::VerifiedStream { binary_tx, verification_tx, commit_rx },
+    let (verification_tx, receiver) = oneshot::channel();
+    let (sender, commit_rx) = oneshot::channel();
+    let consumed = Arc::new(AtomicBool::new(false));
+    let verification = VerificationReceiver { receiver, consumed: consumed.clone() };
+    let completion = CommitSender { sender, consumed };
+    (FileUploadTarget::VerifiedStream(VerifiedUploadTarget { binary_tx, verification_tx, commit_rx }),
         VerifiedUploadReceiver { chunks, verification, completion })
 }
 
@@ -162,5 +219,27 @@ fn save_result(failure: UploadFailure) -> SaveResult {
         UploadFailure::InvalidMedia => SaveResult::InvalidMedia,
         UploadFailure::Cancelled => SaveResult::Cancelled,
         _ => SaveResult::Failed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn early_success_fails_before_and_after_permission_is_queued() {
+        for permission_already_queued in [false, true] {
+            let (target, receiver) = verified_upload_channel();
+            let FileUploadTarget::VerifiedStream(mut target) = target else { unreachable!(); };
+            if permission_already_queued {
+                target.verification_tx.send(Ok(UploadVerification {
+                    received_bytes: 1, actual_sha256: "0".repeat(64),
+                    sender_checksum_matched: true, cancellation: CancellationToken::new(),
+                })).unwrap();
+            }
+            assert_eq!(receiver.completion.send(Ok(CommittedMedia::Png)),
+                Err(CompletionError::BeforeVerification));
+            assert_eq!(target.commit_rx.try_recv().unwrap(), Err(UploadFailure::Io));
+        }
     }
 }

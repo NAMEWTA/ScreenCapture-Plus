@@ -1,5 +1,9 @@
 # 架构与扩展
 
+## Qt 迁移期间的适用范围
+
+本页的原生窗口说明记录仍在运行的 Windows 回归基线。新的共享模型、Qt 服务、Linux 适配与 CMake 已按 [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 实施，准确集成范围见 [迁移状态](qt-migration.md)。目标架构只维护一套 Qt UI / 业务 / 编辑器，保留现有成熟 Windows 采集和媒体后端；P12 通过之后才能在 P13 移除旧 UI 和生产工程。
+
 ## 为什么保持原生模块化单体
 
 huhucapture 是 C++20、Ling、Win32、Direct2D / DirectWrite 与 Windows 媒体能力组成的单 EXE 桌面工具。截图、批注、长截图、GIF / MP4、QR 和媒体历史共享生命周期与渲染环境。模块边界用于控制职责、依赖与资源所有权，避免为一个桌面操作引入进程通信和额外运行时。

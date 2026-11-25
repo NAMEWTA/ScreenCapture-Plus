@@ -47,11 +47,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Install the CJK font prerequisite for real text rendering
+      - name: Install Linux font and Portal build prerequisites
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk meson ninja-build pkg-config libglib2.0-dev libglib2.0-dev-bin dbus
       - name: Restore the exact Qt validation toolchain
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
@@ -68,9 +68,14 @@ jobs:
           # Use the runner's native 7-Zip for Qt's Windows archive links.
           extra: ${{ runner.os == 'Windows' && '--external 7z' || '' }}
           cache: false
+      - name: Build the pinned libportal with its matching Qt backend
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/build-portal.py
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.deps/portal-validation/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
       - name: Configure Linux Qt validation
         if: runner.os == 'Linux'
-        run: cmake --preset qt-validation
+        run: cmake --preset qt-validation -DHUHUCAPTURE_PORTAL_VALIDATION=ON
       - name: Configure Windows Qt validation with the matching v143 CRT
         if: runner.os == 'Windows'
         shell: pwsh
@@ -82,7 +87,7 @@ jobs:
           ctest --test-dir artifacts/cmake/qt-validation -C Debug --output-on-failure --no-tests=error
       - name: Configure Linux Release
         if: runner.os == 'Linux'
-        run: cmake --preset qt-validation -DCMAKE_BUILD_TYPE=Release
+        run: cmake --preset qt-validation -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_PORTAL_VALIDATION=ON
       - name: Build and validate Release
         shell: bash
         run: |
@@ -98,5 +103,8 @@ jobs:
             artifacts/cmake/qt-validation/CMakeFiles/CMakeConfigureLog.yaml
             artifacts/cmake/qt-validation/Testing/Temporary/
             artifacts/cmake/qt-validation/annotation-render/
+            .deps/portal-validation/build-info.json
+            .deps/portal-validation/build/meson-logs/
           if-no-files-found: warn
           retention-days: 14
+          include-hidden-files: true

@@ -8,6 +8,7 @@
 #include <QGuiApplication>
 #include <QPainter>
 #include <QPointer>
+#include <QRawFont>
 #include <QThread>
 
 #include <algorithm>
@@ -130,6 +131,15 @@ Status shapeText(const QString& original, const QFont& font, const QImage& devic
         // boundingRect() to recompute actual glyph ink using the raw font. This
         // includes combining marks and fallback-font overhang, not just advances.
         for (auto run : paragraph->glyphRuns()) {
+            const auto font = run.rawFont();
+            // QFontEngineBox is Qt's last-resort square-drawing engine. It reports
+            // glyph index 1 for every character and even QRawFont::isValid() can
+            // succeed. A real face must also identify itself and have a positive
+            // pixel size; otherwise exporting would silently replace all text
+            // with boxes (notably Windows offscreen without a font directory).
+            if (!font.isValid() || font.familyName().trimmed().isEmpty() ||
+                !std::isfinite(font.pixelSize()) || font.pixelSize() <= 0)
+                return Status::FontUnavailable;
             run.setBoundingRect(QRectF());
             const auto ink = run.boundingRect().translated(position);
             if (!validBounds(ink)) return Status::RenderFailure;
