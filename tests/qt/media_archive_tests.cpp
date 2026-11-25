@@ -215,6 +215,20 @@ void completeValidationAndOwnership(const QTemporaryDir& root)
         retained = temporary.file.retainForRecovery();
     }
     require(!retained.isEmpty() && QFileInfo::exists(retained), "recording recovery path survives explicit ownership release");
+    {
+        auto temporary = archive.createStaging();
+        require(!temporary.failure, "Create actual recording output for explicit discard");
+        const auto discarded = temporary.file.path();
+        write(discarded, png);
+        require(!temporary.file.discard() && !temporary.file && !QFileInfo::exists(discarded),
+            "Explicit discard reports actual removal and releases only its owned token");
+        require(!temporary.file.discard(), "Repeated discard of a cleared token has no additional effect");
+    }
+    {
+        auto temporary = archive.createStaging();
+        require(!temporary.failure && QFile::remove(temporary.file.path()), "The actual temporary name is already absent");
+        require(!temporary.file.discard() && !temporary.file, "Discard settles an already absent temporary name without deleting another file");
+    }
     QString replaced;
     {
         auto temporary = archive.createStaging();
@@ -227,6 +241,8 @@ void completeValidationAndOwnership(const QTemporaryDir& root)
             "a substituted staging file is refused before any writer can truncate its contents");
         require(archive.commitStaged(temporary.file, media::Kind::Png).failure.code == media::Error::ChangedOnDisk,
             "staging identity is checked before decode");
+        require(temporary.file.discard().code == media::Error::ChangedOnDisk && temporary.file.path() == replaced &&
+            read(replaced) == "another file", "Explicit discard refuses a replacement and retains the recovery token");
     }
     require(read(replaced) == "another file", "staging destructor never deletes a substituted inode");
     {

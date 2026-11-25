@@ -105,7 +105,8 @@ def main() -> int:
     packages = subprocess.run([host_binary("dpkg-query"), "-W", "sway", "wtype", "libwayland-client0"],
                               env=host_base, capture_output=True, text=True, check=True).stdout
     (artifacts / "environment.json").write_text(json.dumps({"compositor": version,
-        "packages": packages, "input": "wtype virtual keyboard", "physicalDesktopAcceptance": False}, indent=2) + "\n")
+        "packages": packages, "input": "wtype virtual keyboard with an application-lifetime idle seat device",
+        "physicalDesktopAcceptance": False}, indent=2) + "\n")
     def interrupted(signum: int, _frame) -> None:
         raise SystemExit(128 + signum)
     signal.signal(signal.SIGTERM, interrupted)
@@ -134,11 +135,15 @@ def main() -> int:
         for key in ("LD_LIBRARY_PATH", "LD_PRELOAD", "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH"):
             if key in os.environ:
                 client_env[key] = os.environ[key]
+        # Isolated test protocol evidence only: diagnose capabilities, keyboard
+        # binding, enter/key and selection events on the actual Qt connection.
+        client_env["WAYLAND_DEBUG"] = "client"
         config = Path(__file__).resolve().parents[1] / "tests/platform/sway-parent.conf"
-        with (artifacts / "sway.log").open("wb") as log:
+        with (artifacts / "sway.log").open("wb") as log, (artifacts / "keyboard.stderr.log").open("wb") as keyboard_errors:
             compositor = subprocess.Popen([sway, "--config", str(config), "--debug"], env=host_env,
                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True, preexec_fn=child_guard)
             process = None
+            keyboard = None
             try:
                 deadline = time.monotonic() + 10
                 socket = None
@@ -160,6 +165,16 @@ def main() -> int:
                 host_env["WAYLAND_DISPLAY"] = socket.name
                 host_env["SWAYSOCK"] = str(ipc_socket)
                 client_env["WAYLAND_DISPLAY"] = socket.name
+                # wtype 0.4 main.c creates the real virtual keyboard and uploads
+                # its keymap before run_text_stdin() blocks in fgetc(). Keeping
+                # stdin open therefore keeps a genuine keyboard capability on
+                # this otherwise device-less headless seat. Without it, a short
+                # one-shot wtype can send its key before Qt has reacted to the
+                # newly advertised capability and bound wl_keyboard. It also
+                # lets independently started receivers obtain keyboard focus.
+                keyboard = subprocess.Popen([wtype, "-"], env=host_env, stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL, stderr=keyboard_errors, start_new_session=True,
+                    preexec_fn=child_guard)
                 with (artifacts / "probe.stderr.log").open("wb") as errors, (artifacts / "probe.stdout.log").open("wb") as output:
                     process = subprocess.Popen([str(probe)], env=client_env, stdout=subprocess.PIPE,
                                                stderr=errors, start_new_session=True, preexec_fn=child_guard, bufsize=0)
@@ -174,6 +189,8 @@ def main() -> int:
                                 raise TimeoutError("The real clipboard owner/receiver did not terminate")
                             if compositor.poll() is not None:
                                 raise RuntimeError("The owned compositor exited during clipboard validation")
+                            if keyboard.poll() is not None:
+                                raise RuntimeError("The owned idle keyboard exited before clipboard validation completed")
                             for key, _ in selector.select(timeout=0.1):
                                 chunk = os.read(key.fd, 65536)
                                 if not chunk:
@@ -200,6 +217,10 @@ def main() -> int:
             finally:
                 if process is not None:
                     terminate(process)
+                if keyboard is not None:
+                    terminate(keyboard)
+                    if keyboard.stdin is not None:
+                        keyboard.stdin.close()
                 terminate(compositor)
     print("Real Wayland publication receipts and separate-process PNG/URI reception passed", flush=True)
     return 0

@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: video-inspection-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve the same-byte Linux/Windows decoder evidence for an active run.
+  cancel-in-progress: false
 
 jobs:
   linux:

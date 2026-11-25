@@ -40,7 +40,8 @@ enum HuhuStatus {
     HUHU_DURABILITY_UNKNOWN = -10,
     HUHU_CLOSED = -11,
     HUHU_PANIC = -12,
-    HUHU_LIMIT_EXCEEDED = -13
+    HUHU_LIMIT_EXCEEDED = -13,
+    HUHU_ADDRESS_IN_USE = -14
 };
 
 enum HuhuEventKind {
@@ -52,7 +53,8 @@ enum HuhuEventKind {
     HUHU_DISCOVERY_CHANGED = 6,
     HUHU_DISCOVERY_END = 7,
     HUHU_LISTENER_ERROR = 8,
-    HUHU_STOPPED = 9
+    HUHU_STOPPED = 9,
+    HUHU_DISCOVERY_REFRESH_END = 10
 };
 
 enum HuhuMediaKind {
@@ -132,6 +134,11 @@ int32_t huhu_gif_validate_file(const uint8_t* path, size_t length,
  * do not log its private key or silently regenerate a damaged saved identity.
  */
 int32_t huhu_identity_generate(HuhuBuffer** result);
+/* Validates the exact generated JSON, including RSA private key/certificate
+ * consistency and the DER fingerprint, without starting any runtime/socket.
+ * Success returns public JSON {"fingerprint":"..."}; errors never echo input.
+ */
+int32_t huhu_identity_validate(const uint8_t* json, size_t length, HuhuBuffer** result);
 int32_t huhu_buffer_view(const HuhuBuffer* buffer, HuhuSlice* result);
 void huhu_buffer_free(HuhuBuffer* buffer);
 
@@ -215,6 +222,11 @@ int32_t huhu_transfer_send(HuhuTransfer* transfer, const uint8_t* peer,
     uint64_t* operation);
 int32_t huhu_transfer_discover(HuhuTransfer* transfer, const uint8_t* address,
     size_t address_length, uint16_t port, uint64_t* operation);
+/* Runs the existing official multicast announcement on selected interfaces.
+ * No subnet scan. Requires discovery=true. Bounded admission reserves exactly
+ * one DISCOVERY_REFRESH_END, including cancellation and failure.
+ */
+int32_t huhu_transfer_refresh(HuhuTransfer* transfer, uint64_t* operation);
 int32_t huhu_transfer_devices(const HuhuTransfer* transfer, HuhuBuffer** result);
 int32_t huhu_transfer_cancel(HuhuTransfer* transfer, uint64_t operation);
 

@@ -18,6 +18,7 @@
 #include <exception>
 #include <limits>
 #include <new>
+#include <optional>
 #include <utility>
 
 #ifdef Q_OS_WIN
@@ -82,6 +83,8 @@ struct PreparedClipboard::State {
     QImage image;
     QByteArray png;
     QUrl file;
+    std::optional<QString> text;
+    QByteArray utf8;
 #endif
     void release() noexcept
     {
@@ -90,6 +93,7 @@ struct PreparedClipboard::State {
         native = {};
 #else
         image = {}; png.clear(); file = QUrl{};
+        text.reset(); utf8.clear();
 #endif
     }
 };
@@ -128,6 +132,38 @@ ClipboardPreparation prepareImage(const QImage& image, ClipboardLimits limits, s
             return {stop.stop_requested() ? cancelled() : Failure{Error::Encoding, writer.error(), writer.errorString()}, {}};
         content->state_->image = std::move(pixels); content->state_->png = std::move(buffer.bytes);
         content->state_->formats = {QStringLiteral("image/png"), QStringLiteral("application/x-qt-image")};
+#endif
+        if (stop.stop_requested()) return {cancelled(), {}};
+        return {{}, std::move(content)};
+    } catch (const std::bad_alloc&) { return {allocation(), {}}; }
+}
+
+ClipboardPreparation prepareText(const QString& text, ClipboardLimits limits, std::stop_token stop)
+{
+    try {
+        if (stop.stop_requested()) return {cancelled(), {}};
+        if (!limits.maximumTextBytes ||
+            limits.maximumTextBytes > static_cast<quint64>((std::numeric_limits<qsizetype>::max)() / 4) ||
+            static_cast<quint64>(text.size()) > limits.maximumTextBytes / sizeof(char16_t))
+            return {{Error::InvalidArgument, 0, QStringLiteral("The text exceeds the clipboard memory budget")}, {}};
+        if (!text.isValidUtf16() || text.contains(QChar(u'\0')))
+            return {{Error::Encoding, 0, QStringLiteral("The complete value cannot be represented as Unicode plain text")}, {}};
+        auto content = std::shared_ptr<PreparedClipboard>(new PreparedClipboard);
+#ifdef Q_OS_WIN
+        auto native = Platform::Windows::prepareClipboardText(text.toStdWString(),
+            static_cast<std::size_t>(limits.maximumTextBytes));
+        if (native.result.error != Platform::Windows::ClipboardError::None) return {fromNative(native.result), {}};
+        content->state_->native = std::move(native.payload);
+        content->state_->formats = {QStringLiteral("CF_UNICODETEXT")};
+#else
+        QString owned = text;
+        owned.detach(); // Also own QString::fromRawData inputs before their producer resumes.
+        auto utf8 = owned.toUtf8();
+        if (static_cast<quint64>(utf8.size()) > limits.maximumTextBytes)
+            return {{Error::InvalidArgument, 0, QStringLiteral("The UTF-8 text exceeds the clipboard memory budget")}, {}};
+        content->state_->text = std::move(owned);
+        content->state_->utf8 = std::move(utf8);
+        content->state_->formats = {QStringLiteral("text/plain"), QStringLiteral("text/plain;charset=utf-8")};
 #endif
         if (stop.stop_requested()) return {cancelled(), {}};
         return {{}, std::move(content)};
@@ -271,11 +307,15 @@ void SystemClipboard::publishPrepared(quint64 token)
         if (result.publishedFormats & Platform::Windows::ClipboardDibV5) formats.push_back(QStringLiteral("CF_DIBV5"));
         if (result.publishedFormats & Platform::Windows::ClipboardDib) formats.push_back(QStringLiteral("CF_DIB"));
         if (result.publishedFormats & Platform::Windows::ClipboardFiles) formats.push_back(QStringLiteral("CF_HDROP"));
+        if (result.publishedFormats & Platform::Windows::ClipboardText) formats.push_back(QStringLiteral("CF_UNICODETEXT"));
         finish(token, {fromNative(result), std::move(formats)});
 #else
         auto mime = std::make_unique<QMimeData>();
         const auto& prepared = *content->state_;
-        if (!prepared.file.isEmpty()) mime->setUrls({prepared.file});
+        if (prepared.text) {
+            mime->setText(*prepared.text);
+            mime->setData(QStringLiteral("text/plain;charset=utf-8"), prepared.utf8);
+        } else if (!prepared.file.isEmpty()) mime->setUrls({prepared.file});
         else { mime->setImageData(prepared.image); mime->setData(QStringLiteral("image/png"), prepared.png); }
         const auto marker = QByteArrayLiteral("application/x-huhucapture-clipboard-") + QUuid::createUuid().toByteArray(QUuid::Id128);
         mime->setData(QString::fromLatin1(marker), QByteArrayLiteral("1"));

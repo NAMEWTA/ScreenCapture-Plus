@@ -107,6 +107,10 @@ impl Shared {
         if operations.len() >= 3 || (sending && operations.values().any(|operation| operation.sending)) {
             return Err(Error::new(status::BUSY, "Transfer operation budget is full"));
         }
+        if !sending && address.is_empty() && operations.values().any(|operation|
+            !operation.sending && operation.address.is_empty()) {
+            return Err(Error::new(status::BUSY, "A discovery refresh is already running"));
+        }
         let terminal = self.events.clone().try_reserve_owned()
             .map_err(|_| Error::new(status::BUSY, "Event queue cannot reserve a terminal result"))?;
         let id = self.next_id.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_add(1))
@@ -221,7 +225,13 @@ impl HuhuTransfer {
         let server = Arc::new(runtime.block_on(server::start_bound_v2(config.addresses.clone(), config.port,
             TlsConfig { cert: config.identity.cert_pem.clone(), private_key: config.identity.private_key_pem.clone() },
             config.info.clone(), ServerConfigV2 { pin: config.pin, verify_checksums: true, event_tx: server_events },
-            config.limits, server_stop_rx)).map_err(|error| Error::new(status::IO, error.to_string()))?);
+            config.limits, server_stop_rx)).map_err(|error| {
+                let code = if error.downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::AddrInUse) {
+                    status::ADDRESS_IN_USE
+                } else { status::IO };
+                Error::new(code, "Could not start the selected LocalSend listeners")
+            })?);
         let info = config::register(&config.info, server.port());
         let (discovery_events, discovery_rx) = mpsc::channel(16);
         let mut discovery_stop = None;

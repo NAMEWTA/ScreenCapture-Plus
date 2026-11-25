@@ -18,6 +18,7 @@ pub const DURABILITY_UNKNOWN: i32 = -10;
 pub const CLOSED: i32 = -11;
 pub const PANIC: i32 = -12;
 pub const LIMIT_EXCEEDED: i32 = -13;
+pub const ADDRESS_IN_USE: i32 = -14;
 
 #[derive(Debug)]
 pub struct Error {
@@ -41,7 +42,10 @@ impl Error {
 }
 
 impl From<std::io::Error> for Error {
-    fn from(error: std::io::Error) -> Self { Self::new(IO, error.to_string()) }
+    fn from(error: std::io::Error) -> Self {
+        Self::new(if error.kind() == std::io::ErrorKind::AddrInUse { ADDRESS_IN_USE } else { IO },
+            error.to_string())
+    }
 }
 
 impl From<serde_json::Error> for Error {

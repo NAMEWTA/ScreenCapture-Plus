@@ -8,6 +8,7 @@ mod config;
 mod engine;
 mod event;
 mod gif_validation;
+mod identity;
 mod lease;
 mod outbound;
 mod receive;
@@ -132,6 +133,21 @@ pub unsafe extern "C" fn huhu_identity_generate(result: *mut *mut HuhuBuffer) ->
         let json = serde_json::json!({"certPem": identity.certificate_pem,
             "privateKeyPem": identity.private_key_pem, "fingerprint": identity.fingerprint});
         *result = Box::into_raw(Box::new(HuhuBuffer(json.to_string().into_bytes())));
+        Ok(())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn huhu_identity_validate(json: *const u8, length: usize,
+    result: *mut *mut HuhuBuffer) -> i32 {
+    boundary(|| {
+        let result = unsafe { output(result) }?;
+        let identity: identity::Identity = serde_json::from_slice(unsafe { input(json, length, 65536) }?)
+            .map_err(|_| Error::new(status::INVALID_ARGUMENT, "Invalid stored identity document"))?;
+        let fingerprint = identity::validate(&identity.cert_pem, &identity.private_key_pem,
+            Some(&identity.fingerprint))?;
+        *result = Box::into_raw(Box::new(HuhuBuffer(serde_json::json!({"fingerprint": fingerprint})
+            .to_string().into_bytes())));
         Ok(())
     })
 }
@@ -287,6 +303,17 @@ pub unsafe extern "C" fn huhu_transfer_discover(transfer: *mut HuhuTransfer, add
         *operation = 0;
         let transfer = unsafe { reference(transfer) }?;
         *operation = outbound::discover(&transfer.shared, unsafe { text(address, address_length, 15) }?, port)?;
+        Ok(())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn huhu_transfer_refresh(transfer: *mut HuhuTransfer, operation: *mut u64) -> i32 {
+    boundary(|| {
+        let operation = unsafe { mutable(operation) }?;
+        *operation = 0;
+        let transfer = unsafe { reference(transfer) }?;
+        *operation = outbound::refresh(&transfer.shared)?;
         Ok(())
     })
 }

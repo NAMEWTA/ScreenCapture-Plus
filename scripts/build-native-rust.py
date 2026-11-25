@@ -25,6 +25,15 @@ def run(arguments, cwd, capture=False):
     return result.stdout, result.stderr
 
 
+def source_fingerprints(root):
+    paths = [root / "scripts/build-native-rust.py"]
+    for directory in ("src/platform/rust", "third_party/localsend", "third_party/gifski"):
+        paths.extend(path for path in (root / directory).rglob("*")
+                     if path.is_file() and not {"target", ".git", "__pycache__"}.intersection(path.parts))
+    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(paths)}
+
+
 def main():
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -80,6 +89,7 @@ def main():
     metadata, _ = run(cargo + ["metadata", "--format-version", "1", "--locked"], workspace, capture=True)
     (evidence / "cargo-metadata.json").write_text(metadata, encoding="utf-8")
     target = options.target_dir.resolve()
+    source_inputs = source_fingerprints(root)
     # Keep debug information in the production CRT configuration. A Cargo dev
     # build does not turn the Windows Rust standard library into /MDd.
     command = cargo + ["rustc", "-p", native["package"], "--release", "--locked",
@@ -144,11 +154,14 @@ def main():
     library = target / "release" / ("huhucapture_native.lib" if windows else "libhuhucapture_native.a")
     if not library.is_file():
         raise SystemExit("Cargo did not produce the aggregate static library")
+    if source_fingerprints(root) != source_inputs:
+        raise SystemExit("Native source files changed during the build")
     result = {
         "schemaVersion": 1, "rustVersion": toolchain, "host": host, "pythonVersion": sys.version,
         "crate": native["package"], "library": library.as_posix(),
         "librarySha256": hashlib.sha256(library.read_bytes()).hexdigest(),
         "cargoLockSha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+        "sourceFiles": source_inputs,
         "nativeLibraries": libraries, "nativeLinkOptions": link_options,
         "nativeLibraryFiles": library_files, "codecPackages": pins,
         "windowsCrt": "MD" if windows else None,

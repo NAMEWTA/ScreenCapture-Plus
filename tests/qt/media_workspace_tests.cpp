@@ -264,6 +264,56 @@ void workspaceJourneys(const QString& root)
     require(!workspace.openEditor(source) && !workspace.openHistory(), "Shutdown refuses new media journeys");
     std::cout << "PASS actual editor, history, Save As, clipboard failure/success and destroyed-view lifetimes\n";
 }
+
+void directImageOutput(const QString& root)
+{
+    auto archive = std::make_shared<media::MediaArchiveService>(root + QStringLiteral("/capture-output-archive"));
+    desktop::SystemClipboard clipboard; desktop::FileRevealer revealer;
+    application::MediaWorkspace workspace(archive, clipboard, revealer);
+    QObject requestOwner; QWidget dialogParent; dialogParent.show();
+    QImage source(71, 53, QImage::Format_ARGB32); source.fill(QColor(47, 99, 151, 173));
+    unsigned editorWindows{}, completions{}; ui::OutputResult last{ui::OutputResult::Failed};
+    QObject::connect(&workspace, &application::MediaWorkspace::editorOpened, &workspace, [&](auto*) { ++editorWindows; });
+    const auto finished = [&](ui::OutputResult value, const QString&) { last = value; ++completions; };
+    require(workspace.outputImage(&requestOwner, &dialogParent, 1, ui::OutputIntent::Archive, source, finished),
+        "A capture owner uses the same actual archive pipeline without an editor");
+    require(!workspace.outputImage(&requestOwner, &dialogParent, 1, ui::OutputIntent::Archive, source, finished),
+        "The same live capture token cannot publish a second archive");
+    waitFor([&] { return completions == 1 && !workspace.busy(); }, "Direct capture output reaches real durable completion");
+    require(last == ui::OutputResult::Succeeded && editorWindows == 0, "Direct output does not construct a hidden editor");
+    auto listing = worker([&] { return archive->list(); });
+    require(!listing.failure && listing.entries.size() == 1, "Exactly one direct output is present in actual history");
+    worker([&] { assertPixels(listing.entries.front().path, source); return true; });
+
+    require(workspace.outputImage(&requestOwner, &dialogParent, 2, ui::OutputIntent::SaveAs, source, finished),
+        "Direct capture Save As opens the real shared chooser");
+    auto* dialog = dialogParent.findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog"));
+    require(dialog, "The capture's actual parent owns its destination dialog");
+    dialog->setDirectory(root); dialog->selectFile(QStringLiteral("direct-capture-cancelled.png"));
+    static_cast<QDialog*>(dialog)->accept();
+    workspace.cancelOutput(&requestOwner, 2);
+    waitFor([&] { return completions == 2 && !workspace.busy(); }, "Direct capture cancellation suppresses queued continuations");
+    require(last == ui::OutputResult::Cancelled && !QFile::exists(root + QStringLiteral("/direct-capture-cancelled.png")) &&
+        archive->list().entries.size() == 1, "Direct capture cancellation creates neither an export nor an extra archive");
+
+    auto separateParent = std::make_unique<QWidget>(); separateParent->show();
+    require(workspace.outputImage(&requestOwner, separateParent.get(), 3, ui::OutputIntent::SaveAs, source, finished),
+        "A real dialog parent may have a shorter lifetime than its capture session");
+    separateParent.reset();
+    waitFor([&] { return completions == 3 && !workspace.busy(); }, "Destroying the dialog parent settles its output without a finished signal");
+    require(last == ui::OutputResult::Cancelled && archive->list().entries.size() == 1,
+        "A destroyed dialog releases the original request and preserves media");
+
+    auto disposable = std::make_unique<QObject>();
+    require(workspace.outputImage(disposable.get(), &dialogParent, 4, ui::OutputIntent::SaveAs, source, finished),
+        "Begin a real direct output before destroying its owner");
+    disposable.reset();
+    waitFor([&] { return !workspace.busy(); }, "Destroying the capture owner rejects its outstanding chooser");
+    require(completions == 3 && editorWindows == 0 && archive->list().entries.size() == 1,
+        "A destroyed capture owner receives no late completion or extra media");
+    workspace.shutdown();
+    std::cout << "PASS direct capture output shares real archive, chooser and cancellation without an editor\n";
+}
 }
 
 int main(int argc, char** argv)
@@ -276,6 +326,7 @@ int main(int argc, char** argv)
         QTemporaryDir temporary; require(temporary.isValid(), "Create isolated real media workspace");
         worker([&] { exportAndCache(temporary.path()); return true; });
         workspaceJourneys(temporary.path());
+        directImageOutput(temporary.path());
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

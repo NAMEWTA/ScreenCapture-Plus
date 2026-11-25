@@ -111,6 +111,39 @@
       "license": "LGPL-2.1-or-later",
       "copyright": "Red Hat, Inc., 2006-2007; author Alexander Larsson",
       "use": "public asynchronous GIO file-manager launch and finish; no copied implementation"
+    },
+    {
+      "name": "qmimedata.cpp",
+      "path": "src/corelib/kernel/qmimedata.cpp",
+      "sha": "6a46aa888e7a443a0df658bec8b4fa028d091ad5",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/kernel/qmimedata.cpp",
+      "use": "source-reviewed text MIME, Unicode validation and native newline semantics; public APIs, no copied private converter",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qwindowsmimeregistry.cpp",
+      "path": "src/plugins/platforms/windows/qwindowsmimeregistry.cpp",
+      "sha": "9c5d332a9e80900eb6a11f17f63da2a584ec70db",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/windows/qwindowsmimeregistry.cpp",
+      "use": "source-reviewed text MIME, Unicode validation and native newline semantics; public APIs, no copied private converter",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qstring.h",
+      "path": "src/corelib/text/qstring.h",
+      "sha": "38acf46b6da918fca53298e07eca3a8593128a77",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/text/qstring.h",
+      "use": "source-reviewed text MIME, Unicode validation and native newline semantics; public APIs, no copied private converter",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "Ling Util.cpp",
+      "path": "src/Util.cpp",
+      "sha": "12189bac277634b2923a0079c9d19e37e3361b0d",
+      "url": "https://github.com/xland/Ling/blob/2ae45005b2863b004b4432bfe85d6e63d7ee44ca/src/Util.cpp",
+      "license": "MIT",
+      "copyright": "2025 liulun",
+      "use": "existing production CF_UNICODETEXT behavior reviewed; native publication uses the shared owned payload/result implementation"
     }
   ]
 }

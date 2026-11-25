@@ -44,6 +44,7 @@ inline QString status(const DesktopTranslator& translator, int value, int httpSt
         case HUHU_DURABILITY_UNKNOWN: key = u"lan.durabilityUnknown"; break;
         case HUHU_CLOSED: key = u"lan.closed"; break;
         case HUHU_LIMIT_EXCEEDED: key = u"lan.limit"; break;
+        case HUHU_ADDRESS_IN_USE: key = u"lan.portInUse"; break;
         default: break;
         }
     }

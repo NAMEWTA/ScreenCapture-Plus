@@ -18,7 +18,8 @@ import tarfile
 HOST_LIBRARIES = re.compile(r"^(ld-linux.*|lib(c|m|pthread|dl|rt|util|resolv|anl|nss_.*)\.so(?:\..*)?|libstdc\+\+\.so(?:\..*)?|libgcc_s\.so(?:\..*)?)$")
 HOST_PACKAGES = {"libc6", "libc6-dev", "libc-dev-bin", "linux-libc-dev", "libstdc++6", "libgcc-s1"}
 MODULES = ("gio-2.0", "gio-unix-2.0", "gobject-2.0", "gthread-2.0", "glib-2.0",
-           "wayland-client", "wayland-cursor", "wayland-egl", "xkbcommon", "gl", "egl")
+           "wayland-client", "wayland-cursor", "wayland-egl", "xkbcommon", "gl", "egl",
+           "xcb", "xcb-keysyms", "xcb-randr")
 
 
 def output(*arguments, env=None):
@@ -142,6 +143,34 @@ def make_bundle(options):
                     "mkspecs/modules/qt_lib_sql*.pri", "metatypes/qt6sql_*.json"):
         for path in sorted((bundle / "qt").glob(pattern)):
             metadata["excludedQtModule"]["paths"].append(str(path.relative_to(bundle / "qt")))
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+    # QtWayland's archive contains both the desktop-client implementation used
+    # by Widgets and an unrelated compositor/QML product. The latter requires
+    # Qt Quick, which is not an application dependency. Keep the client, its
+    # plugins, private headers and protocol generator intact. Remove the unused
+    # compositor modules and QML imports together with their import metadata.
+    # Source: qt/qtwayland v6.12.1 src/compositor/CMakeLists.txt,
+    # src/imports/texture-sharing/CMakeLists.txt, and the compositor hardware
+    # integration CMakeLists.txt. Retained ELF closure still must be complete.
+    excluded_wayland = {"name": "QtWaylandCompositor and QML imports",
+        "reason": "huhucapture uses Qt Widgets as a Wayland client, not a compositor or QML application",
+        "source": "https://github.com/qt/qtwayland/tree/v6.12.1/src", "paths": []}
+    metadata["excludedQtWaylandComponents"] = excluded_wayland
+    patterns = ["qml", "plugins/wayland-graphics-integration-server",
+                "plugins/wayland-hardware-layer-integration"]
+    for module, configuration in (("WaylandCompositor", "waylandcompositor"),
+                                  ("WaylandEglCompositorHwIntegration", "wayland_egl_compositor_hw_integration"),
+                                  ("WaylandTextureSharing", "waylandtexturesharing")):
+        patterns.extend((f"include/Qt{module}*", f"lib/cmake/Qt6{module}*",
+                         f"lib/libQt6{module}*", f"lib/pkgconfig/Qt6{module}*.pc",
+                         f"modules/{module}*.json", f"mkspecs/modules/qt_lib_{configuration}*.pri",
+                         f"metatypes/qt6{module.lower()}_*.json"))
+    for pattern in patterns:
+        for path in sorted((bundle / "qt").glob(pattern)):
+            excluded_wayland["paths"].append(str(path.relative_to(bundle / "qt")))
             if path.is_dir() and not path.is_symlink():
                 shutil.rmtree(path)
             else:

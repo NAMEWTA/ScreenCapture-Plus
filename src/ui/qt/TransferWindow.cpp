@@ -16,6 +16,7 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QStyle>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -125,14 +126,14 @@ struct TransferWindow::State {
     QJsonObject selectedPeer;
     QString directory, expectedFingerprint, selectedPeerKey, preferredPeerKey;
     quint64 nextToken{1}, reviewToken{}, preparationToken{};
-    Transfer::RequestId discoveryRequest{};
-    bool reviewed{}, reviewFailed{}, rebuilding{}, subscribed{}, retryAfterReview{}, closed{};
+    Transfer::RequestId discoveryRequest{}, announcementRequest{};
+    bool reviewed{}, reviewFailed{}, rebuilding{}, subscribed{}, retryAfterReview{}, closed{}, multicastAvailable{};
     QLabel *heading{}, *live{}, *selectionLabel{}, *peerIdentity{}, *trust{}, *tasksLabel{}, *status{}, *activityHint{};
     QTreeWidget *devices{}, *activity{};
     QListWidget* details{};
     QLineEdit *address{}, *pin{};
     QSpinBox* port{};
-    QPushButton *probe{}, *verify{}, *send{}, *settings{}, *close{}, *cancel{}, *retry{}, *answer{}, *reveal{};
+    QPushButton *probe{}, *verify{}, *send{}, *settings{}, *close{}, *cancel{}, *retry{}, *answer{}, *reveal{}, *refreshDevices{};
 };
 
 TransferWindow::TransferWindow(Transfer::TransferService& service, QWidget* parent)
@@ -144,7 +145,10 @@ TransferWindow::TransferWindow(Transfer::TransferService& service, QWidget* pare
     auto* heading = new QHBoxLayout;
     state_->heading = Theme::label(this, 22); state_->heading->setFont(Theme::font(22, QFont::DemiBold));
     state_->settings = Theme::button(this, "transferSettings"); state_->close = Theme::button(this, "transferClose");
-    heading->addWidget(state_->heading, 1); heading->addWidget(state_->settings); heading->addWidget(state_->close); outer->addLayout(heading);
+    state_->refreshDevices = Theme::button(this, "transferRefresh"); state_->refreshDevices->setFixedSize(32, 32);
+    state_->refreshDevices->setIcon(style()->standardIcon(QStyle::SP_BrowserReload)); state_->refreshDevices->setIconSize({18, 18});
+    heading->addWidget(state_->heading, 1); heading->addWidget(state_->refreshDevices);
+    heading->addWidget(state_->settings); heading->addWidget(state_->close); outer->addLayout(heading);
     state_->live = Theme::label(this, 12, true); outer->addWidget(state_->live);
     state_->selectionLabel = new Theme::ElidingLabel(this); state_->selectionLabel->setFont(Theme::font());
     state_->selectionLabel->setObjectName(QStringLiteral("transferSelection")); outer->addWidget(state_->selectionLabel);
@@ -200,6 +204,13 @@ TransferWindow::TransferWindow(Transfer::TransferService& service, QWidget* pare
     connect(&state_->refresh, &QTimer::timeout, this, &TransferWindow::refreshSnapshot);
     connect(state_->close, &QPushButton::clicked, this, &QWidget::close);
     connect(state_->settings, &QPushButton::clicked, this, &TransferWindow::settingsRequested);
+    connect(state_->refreshDevices, &QPushButton::clicked, this, [this] {
+        if (!state_->service || state_->announcementRequest) return;
+        const auto result = state_->service->refreshDiscovery();
+        if (result) state_->announcementRequest = result.request;
+        showStatus(result ? translated(u"lan.refreshingDevices") : Presentation::status(state_->translator, result.status), !result);
+        updateActions();
+    });
     connect(state_->devices, &QTreeWidget::itemSelectionChanged, this, &TransferWindow::selectedPeerChanged);
     connect(state_->activity, &QTreeWidget::itemSelectionChanged, this, &TransferWindow::taskSelected);
     connect(state_->details, &QListWidget::itemSelectionChanged, this, [this] { updateActions(); });
@@ -237,6 +248,13 @@ void TransferWindow::subscribe()
     if (state_->subscribed || !state_->service) return;
     state_->subscribed = true;
     state_->events = connect(state_->service, &Transfer::TransferService::eventReady, this, [this](const Transfer::Event& event) {
+        if (event.kind == Transfer::EventKind::DiscoveryRefreshed && event.request == state_->announcementRequest) {
+            state_->announcementRequest = 0;
+            showStatus(event.status == HUHU_OK ? translated(u"lan.devicesRefreshed") :
+                event.status == HUHU_IO ? translated(u"lan.discoveryUnavailable") : Presentation::status(state_->translator, event.status),
+                event.status != HUHU_OK);
+        }
+        if (event.kind == Transfer::EventKind::Disabled) state_->announcementRequest = 0;
         if (event.kind == Transfer::EventKind::DiscoveryFinished && event.request == state_->discoveryRequest) {
             state_->discoveryRequest = 0;
             showStatus(event.status == HUHU_OK ? translated(u"lan.deviceVerified") :
@@ -255,7 +273,7 @@ void TransferWindow::setTranslator(DesktopTranslator translator)
 { state_->translator = std::move(translator); refreshLanguage(); }
 QString TransferWindow::translated(QStringView key) const { return Presentation::text(state_->translator, key); }
 bool TransferWindow::preparationPending() const noexcept { return state_->preparationToken != 0; }
-qsizetype TransferWindow::deviceCount() const noexcept { return state_->peers.size(); }
+qsizetype TransferWindow::deviceCount() const noexcept { return state_->devices->topLevelItemCount(); }
 qsizetype TransferWindow::taskCount() const noexcept { return state_->tasks.size(); }
 QString TransferWindow::selectedEndpoint() const { return state_->selectedPeerKey; }
 void TransferWindow::setArchiveDirectory(const QString& directory) { state_->directory = directory; taskSelected(); }
@@ -278,6 +296,8 @@ void TransferWindow::refreshLanguage()
         {state_->verify, u"lan.verifyDevice"}, {state_->send, u"lan.send"}, {state_->answer, u"lan.reviewOffer"},
         {state_->cancel, u"lan.cancel"}, {state_->retry, u"lan.retry"}, {state_->reveal, u"lan.showFile"}};
     for (const auto& [button, key] : buttons) { button->setText(translated(key)); button->setAccessibleName(button->text()); }
+    state_->refreshDevices->setToolTip(translated(u"lan.refreshDevices"));
+    state_->refreshDevices->setAccessibleName(translated(u"lan.refreshDevices"));
     state_->address->setPlaceholderText(translated(u"lan.manualAddress")); state_->address->setAccessibleName(translated(u"lan.manualAddress"));
     state_->port->setAccessibleName(translated(u"lan.port"));
     state_->pin->setPlaceholderText(translated(u"lan.optionalPin")); state_->pin->setAccessibleName(translated(u"lan.optionalPin"));
@@ -313,17 +333,16 @@ Transfer::Submission TransferWindow::discover(const QString& address, quint16 po
 bool TransferWindow::selectEndpoint(const QString& address, quint16 port)
 {
     const auto key = address + u':' + QString::number(port);
-    for (int index = 0; index < state_->devices->topLevelItemCount(); ++index) {
-        auto* item = state_->devices->topLevelItem(index);
-        if (item->data(0, ::Qt::UserRole).toString() == key) { state_->devices->setCurrentItem(item); return true; }
-    }
-    return false;
+    if (!state_->peers.contains(key)) return false;
+    state_->preferredPeerKey = key; refreshSnapshot();
+    return state_->selectedPeerKey == key;
 }
 
 void TransferWindow::refreshSnapshot()
 {
     if (!state_->service) { updateActions(); return; }
     const auto snapshot = state_->service->viewSnapshot(); if (!snapshot) return;
+    state_->multicastAvailable = snapshot->service && snapshot->service->data.value(QStringLiteral("multicastAvailable")).toBool();
     state_->live->setText(Presentation::serviceState(state_->translator, snapshot->state));
     if (snapshot->service && snapshot->service->status != HUHU_OK)
         state_->live->setText(state_->live->text() + QStringLiteral(" · ") + Presentation::status(state_->translator, snapshot->service->status));
@@ -340,7 +359,16 @@ void TransferWindow::refreshSnapshot()
                 QJsonObject peer = device;
                 peer.remove(QStringLiteral("channels")); peer.insert(QStringLiteral("address"), address);
                 peer.insert(QStringLiteral("port"), channel.value(QStringLiteral("port")));
-                peers.insert(Presentation::endpoint(peer), peer);
+                const auto endpoint = Presentation::endpoint(peer);
+                const auto previous = peers.value(endpoint);
+                if (!previous.isEmpty() && previous.value(QStringLiteral("fingerprint")) != peer.value(QStringLiteral("fingerprint"))) {
+                    // An old certificate may remain in discovery's finite
+                    // cache. Conflicting claims for one endpoint require a
+                    // fresh actual TLS probe, never arbitrary map order.
+                    peer.insert(QStringLiteral("verified"), false);
+                    peer.insert(QStringLiteral("fingerprint"), QString());
+                }
+                peers.insert(endpoint, peer);
             }
         }
     }
@@ -379,22 +407,34 @@ void TransferWindow::refreshSnapshot()
     state_->rebuilding = true;
     {
         const QSignalBlocker blocked(state_->devices);
+        QMap<QString, QStringList> groups;
+        for (auto it = state_->peers.cbegin(); it != state_->peers.cend(); ++it) {
+            const auto fingerprint = it.value().value(QStringLiteral("fingerprint")).toString().toUpper();
+            groups[Presentation::fingerprint(fingerprint) ? fingerprint : QStringLiteral("endpoint/") + it.key()].append(it.key());
+        }
         QMap<QString, QTreeWidgetItem*> rows;
         for (int index = 0; index < state_->devices->topLevelItemCount(); ++index) {
             auto* item = state_->devices->topLevelItem(index); rows.insert(item->data(0, ::Qt::UserRole).toString(), item);
         }
-        for (auto it = rows.begin(); it != rows.end(); ++it) if (!state_->peers.contains(it.key())) delete it.value();
-        for (auto it = state_->peers.cbegin(); it != state_->peers.cend(); ++it) {
-            auto* item = rows.value(it.key(), nullptr); if (!item) item = new QTreeWidgetItem(state_->devices);
-            item->setData(0, ::Qt::UserRole, it.key()); item->setText(0, label(it.value())); item->setToolTip(0, item->text(0));
-            item->setText(1, it.key()); item->setText(2, translated(it.value().value(QStringLiteral("verified")).toBool() ?
-                u"lan.tlsVerified" : u"lan.needsVerification"));
-            item->setToolTip(2, it.value().value(QStringLiteral("fingerprint")).toString());
-        }
+        for (auto it = rows.begin(); it != rows.end(); ++it) if (!groups.contains(it.key())) delete it.value();
         const auto desired = state_->preferredPeerKey.isEmpty() ? state_->selectedPeerKey : state_->preferredPeerKey;
+        for (auto it = groups.cbegin(); it != groups.cend(); ++it) {
+            auto* item = rows.value(it.key(), nullptr); if (!item) item = new QTreeWidgetItem(state_->devices);
+            auto endpoint = item->data(0, ::Qt::UserRole + 1).toString();
+            if (it.value().contains(desired)) endpoint = desired;
+            else if (!it.value().contains(endpoint)) endpoint = it.value().front();
+            const auto peer = state_->peers.value(endpoint);
+            item->setData(0, ::Qt::UserRole, it.key()); item->setData(0, ::Qt::UserRole + 1, endpoint);
+            item->setText(0, label(peer)); item->setToolTip(0, item->text(0));
+            item->setText(1, endpoint + (it.value().size() > 1 ? QStringLiteral(" (+%1)").arg(it.value().size() - 1) : QString()));
+            item->setToolTip(1, it.value().join(u'\n'));
+            item->setText(2, translated(peer.value(QStringLiteral("verified")).toBool() ?
+                u"lan.tlsVerified" : u"lan.needsVerification"));
+            item->setToolTip(2, peer.value(QStringLiteral("fingerprint")).toString());
+        }
         for (int index = 0; index < state_->devices->topLevelItemCount(); ++index) {
             auto* item = state_->devices->topLevelItem(index);
-            if (item->data(0, ::Qt::UserRole).toString() == desired) { state_->devices->setCurrentItem(item); break; }
+            if (item->data(0, ::Qt::UserRole + 1).toString() == desired) { state_->devices->setCurrentItem(item); break; }
         }
         if (!state_->discoveryRequest) state_->preferredPeerKey.clear();
     }
@@ -427,13 +467,13 @@ void TransferWindow::selectedPeerChanged()
 {
     if (state_->rebuilding) return;
     const auto* row = state_->devices->currentItem();
-    const auto key = row ? row->data(0, ::Qt::UserRole).toString() : QString();
+    const auto key = row ? row->data(0, ::Qt::UserRole + 1).toString() : QString();
     const auto peer = state_->peers.value(key);
     const auto previousFingerprint = state_->selectedPeer.value(QStringLiteral("fingerprint")).toString();
     const auto currentFingerprint = peer.value(QStringLiteral("fingerprint")).toString();
     const bool changed = key != state_->selectedPeerKey || previousFingerprint != currentFingerprint;
     state_->selectedPeerKey = key; state_->selectedPeer = peer;
-    state_->peerIdentity->setText(currentFingerprint.isEmpty() ? translated(u"lan.selectDevice") :
+    state_->peerIdentity->setText(currentFingerprint.isEmpty() ? QString() :
         translated(u"lan.fingerprint") + QStringLiteral(": ") + currentFingerprint);
     if (changed) {
         state_->reviewed = false; state_->reviewFailed = false; state_->reviewToken = 0; state_->expectedFingerprint.clear();
@@ -616,6 +656,7 @@ void TransferWindow::retryTask()
 void TransferWindow::updateActions()
 {
     const bool enabled = state_->service && state_->service->state() == Transfer::ServiceState::Enabled;
+    state_->refreshDevices->setEnabled(enabled && state_->multicastAvailable && !state_->announcementRequest);
     state_->probe->setEnabled(enabled && !state_->discoveryRequest);
     state_->verify->setEnabled(enabled && !state_->discoveryRequest && !state_->selectedPeer.isEmpty());
     state_->send->setEnabled(enabled && state_->reviewed && !state_->selection.isEmpty() && !preparationPending() && !state_->discoveryRequest);

@@ -15,6 +15,8 @@
 | GIF 与 LocalSend 怎样只链接一个 Rust 库，CRT 和线程如何约束？ | [Rust 聚合库与原生 ABI](rust-bridge.md) |
 | 文件传输如何预留空间、展示进度并等待真实归档终态？ | [共享传输服务](transfer-service.md) |
 | 设备选择、证书确认、接收和任务窗口怎样连接同一传输服务？ | [局域网共享界面](lan-interface.md) |
+| 私有身份、网卡变化、任务和确认窗怎样由应用统一拥有？ | [局域网应用控制层](lan-controller.md) |
+| 截图九宫格调整怎样复用同一源像素选择模型？ | [截图选择模型](capture-selection.md) |
 | Linux Portal 如何与 Qt 共用上下文，怎样验证取消与父窗？ | [Linux Portal 控制面](linux-portal.md) |
 | PipeWire 帧如何归还、跨线程持有并验证实际采流？ | [Linux PipeWire 数据面](linux-pipewire.md) |
 | 软件 H.264 / AAC 如何固定构建，API 探针能证明什么？ | [软件编码依赖](software-codecs.md) |

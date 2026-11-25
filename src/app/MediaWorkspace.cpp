@@ -107,8 +107,21 @@ struct MediaWorkspace::State {
         quint64 token{};
         QPointer<QDialog> dialog;
         bool cancelled{}, finished{};
+        std::function<void(int)> completed;
     };
     std::vector<std::shared_ptr<DialogWait>> dialogs;
+    struct OutputTarget {
+        QObject* identity{};
+        QPointer<QObject> origin;
+        QPointer<QWidget> parent;
+        quint64 token{};
+        std::uint64_t bytes{};
+        bool cancelled{};
+        ImageOutputCompletion completed;
+        QMetaObject::Connection originDestroyed;
+    };
+    std::vector<std::shared_ptr<OutputTarget>> outputs;
+    std::uint64_t outputBytes{};
     struct Removal {
         QPointer<ui::HistoryWindow> view;
         quint64 token{};
@@ -129,7 +142,7 @@ struct MediaWorkspace::State {
     QString text(QStringView key) const
     { return translator ? translator(key) : key.toString(); }
     bool busy() const
-    { return !jobs.empty() || !clipboardWaits.empty() || !revealWaits.empty() || !dialogs.empty() || bool(removal); }
+    { return !jobs.empty() || !clipboardWaits.empty() || !revealWaits.empty() || !dialogs.empty() || !outputs.empty() || bool(removal); }
     void notifyBusy()
     {
         // Admission cannot call arbitrary listeners before its state is fully
@@ -189,6 +202,8 @@ struct MediaWorkspace::State {
     void cancel(QObject* origin, std::optional<quint64> token = {})
     {
         const QPointer<MediaWorkspace> alive(owner);
+        for (const auto& output : outputs)
+            if (output->identity == origin && (!token || output->token == *token)) output->cancelled = true;
         std::vector<std::shared_ptr<DialogWait>> pendingDialogs;
         for (const auto& dialog : dialogs)
             if (dialog->origin == origin && (!token || dialog->token == *token)) {
@@ -208,22 +223,37 @@ struct MediaWorkspace::State {
             if (!alive) return;
         }
     }
+    void finishOutput(const std::shared_ptr<OutputTarget>& target, ui::OutputResult result, const QString& detail = {})
+    {
+        const auto found = std::find(outputs.begin(), outputs.end(), target);
+        if (found == outputs.end()) return;
+        outputBytes -= target->bytes; outputs.erase(found);
+        QObject::disconnect(target->originDestroyed);
+        notifyBusy();
+        if (!stopping && target->origin)
+            target->completed(target->cancelled ? ui::OutputResult::Cancelled : result, detail);
+    }
+    void finishDialog(const std::shared_ptr<DialogWait>& pending, int status)
+    {
+        if (pending->finished) return;
+        pending->finished = true;
+        dialogs.erase(std::remove(dialogs.begin(), dialogs.end(), pending), dialogs.end());
+        auto done = std::move(pending->completed);
+        const QPointer<MediaWorkspace> alive(owner);
+        if (!stopping) done(pending->cancelled ? QDialog::Rejected : status);
+        if (alive) notifyBusy();
+    }
     void showDialog(QDialog* dialog, QObject* origin, quint64 token, std::function<void(int)> done)
     {
         auto pending = std::make_shared<DialogWait>();
-        pending->origin = origin; pending->token = token; pending->dialog = dialog;
+        pending->origin = origin; pending->token = token; pending->dialog = dialog; pending->completed = std::move(done);
         dialogs.push_back(pending);
-        QObject::connect(dialog, &QDialog::finished, owner, [this, pending, done = std::move(done)](int status) {
-            if (pending->finished) return;
-            pending->finished = true;
-            dialogs.erase(std::remove(dialogs.begin(), dialogs.end(), pending), dialogs.end());
-            const QPointer<MediaWorkspace> alive(owner);
-            if (!stopping) done(pending->cancelled ? QDialog::Rejected : status);
-            if (alive) notifyBusy();
-        });
+        QObject::connect(dialog, &QDialog::finished, owner,
+            [this, pending](int status) { finishDialog(pending, status); });
         QObject::connect(dialog, &QObject::destroyed, owner, [this, pending] {
-            dialogs.erase(std::remove(dialogs.begin(), dialogs.end(), pending), dialogs.end());
-            notifyBusy();
+            // Parent destruction/direct deletion does not emit finished(). It
+            // still settles the same owned output and releases its image budget.
+            finishDialog(pending, QDialog::Rejected);
         });
         const QPointer<MediaWorkspace> alive(owner);
         dialog->open(); if (alive) notifyBusy();
@@ -237,7 +267,9 @@ struct MediaWorkspace::State {
     {
         if (!history || !history->isVisible() || stopping) return;
         if (history->loading() || history->commandPending()) { refreshNeeded = true; return; }
-        refreshNeeded = !history->requestReload();
+        const QPointer<MediaWorkspace> alive(owner);
+        const bool accepted = history->requestReload();
+        if (alive) refreshNeeded = !accepted;
     }
     void afterCommand()
     { if (refreshNeeded) { refreshNeeded = false; refresh(); } }
@@ -261,49 +293,49 @@ struct MediaWorkspace::State {
         revealWaits.emplace(token, RevealWait{origin, originToken, std::move(done)}); notifyBusy();
     }
 
-    void selectDestination(ui::EditorWindow* window, quint64 token, ui::OutputIntent intent,
+    void selectDestination(const std::shared_ptr<OutputTarget>& target, ui::OutputIntent intent,
         QImage image, QString selectedPath)
     {
-        const QPointer<ui::EditorWindow> view(window);
+        if (!target->origin || target->cancelled) { finishOutput(target, ui::OutputResult::Cancelled); return; }
         const auto bytes = image.sizeInBytes();
-        if (bytes < 0 || !submit(window, token, static_cast<std::uint64_t>(bytes),
+        if (bytes < 0 || !submit(target->identity, target->token, static_cast<std::uint64_t>(bytes),
             [selectedPath = std::move(selectedPath)](std::stop_token stop) {
                 WorkResult result;
                 if (stop.stop_requested()) result.failure = {Media::Error::Cancelled, {}};
                 else { result.destination = Media::inspectExportDestination(selectedPath); result.failure = result.destination.failure; }
                 return result;
-            }, [this, view, token, intent, image = std::move(image)](WorkResult result) {
-                if (!view) return;
-                if (result.failure) { view->completeOutput(token, outputResult(result.failure), result.failure.detail); return; }
+            }, [this, target, intent, image = std::move(image)](WorkResult result) {
+                if (!target->origin || target->cancelled) { finishOutput(target, ui::OutputResult::Cancelled); return; }
+                if (result.failure) { finishOutput(target, outputResult(result.failure), result.failure.detail); return; }
                 const auto destination = result.destination.destination;
-                if (!destination.existing) { output(view, token, intent, image, destination); return; }
+                if (!destination.existing) { output(target, intent, image, destination); return; }
                 auto* question = new QMessageBox(QMessageBox::Question, text(u"tool.save"),
-                    text(u"clipboard.overwriteConfirm").arg(destination.path), QMessageBox::Yes | QMessageBox::No, view);
+                    text(u"clipboard.overwriteConfirm").arg(destination.path), QMessageBox::Yes | QMessageBox::No, target->parent);
                 question->setObjectName(QStringLiteral("mediaOverwriteConfirmation"));
                 question->setTextFormat(Qt::PlainText); question->setDefaultButton(QMessageBox::No);
                 question->setEscapeButton(QMessageBox::No); question->setAttribute(Qt::WA_DeleteOnClose);
-                showDialog(question, view, token,
-                    [this, view, token, intent, image, destination](int answer) {
-                        if (!view) return;
-                        if (answer != QMessageBox::Yes) view->completeOutput(token, ui::OutputResult::Cancelled);
-                        else output(view, token, intent, image, destination);
+                showDialog(question, target->identity, target->token,
+                    [this, target, intent, image, destination](int answer) {
+                        if (!target->origin || target->cancelled) { finishOutput(target, ui::OutputResult::Cancelled); return; }
+                        if (answer != QMessageBox::Yes) finishOutput(target, ui::OutputResult::Cancelled);
+                        else output(target, intent, image, destination);
                     });
-            })) if (view) view->completeOutput(token, ui::OutputResult::Failed, budgetFailure().detail);
+            })) finishOutput(target, ui::OutputResult::Failed, budgetFailure().detail);
     }
 
-    void output(ui::EditorWindow* window, quint64 token, ui::OutputIntent intent, QImage image,
+    void output(const std::shared_ptr<OutputTarget>& target, ui::OutputIntent intent, QImage image,
         std::optional<Media::ExportDestination> destination = {})
     {
-        const QPointer<ui::EditorWindow> view(window);
-        if (stopping || image.isNull()) { if (view) view->completeOutput(token, ui::OutputResult::Failed); return; }
+        if (stopping || !target->origin || target->cancelled) { finishOutput(target, ui::OutputResult::Cancelled); return; }
+        if (image.isNull()) { finishOutput(target, ui::OutputResult::Failed); return; }
         if (intent == ui::OutputIntent::Pin) {
             const QPointer<MediaWorkspace> alive(owner);
             const auto* opened = owner->openEditor(image, true);
-            if (alive && view) view->completeOutput(token, opened ? ui::OutputResult::Succeeded : ui::OutputResult::Failed);
+            if (alive) finishOutput(target, opened ? ui::OutputResult::Succeeded : ui::OutputResult::Failed);
             return;
         }
         if (intent == ui::OutputIntent::SaveAs && !destination) {
-            auto* dialog = new QFileDialog(window, text(u"tool.save"), archive->directory(), QStringLiteral("PNG (*.png)"));
+            auto* dialog = new QFileDialog(target->parent, text(u"tool.save"), archive->directory(), QStringLiteral("PNG (*.png)"));
             dialog->setObjectName(QStringLiteral("mediaSaveAsDialog"));
             dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->setAcceptMode(QFileDialog::AcceptSave);
             dialog->setFileMode(QFileDialog::AnyFile); dialog->setDefaultSuffix(QStringLiteral("png"));
@@ -311,19 +343,19 @@ struct MediaWorkspace::State {
             // subsequent question can authorize replacement of that snapshot.
             dialog->setOption(QFileDialog::DontConfirmOverwrite);
             dialog->selectFile(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")) + QStringLiteral(".png"));
-            showDialog(dialog, window, token, [this, dialog, view, token, intent, image](int status) {
-                if (!view) return;
-                if (status != QDialog::Accepted) { view->completeOutput(token, ui::OutputResult::Cancelled); return; }
+            showDialog(dialog, target->identity, target->token, [this, dialog, target, intent, image](int status) {
+                if (!target->origin || target->cancelled) { finishOutput(target, ui::OutputResult::Cancelled); return; }
+                if (status != QDialog::Accepted) { finishOutput(target, ui::OutputResult::Cancelled); return; }
                 const auto paths = dialog->selectedFiles();
                 if (paths.size() != 1 || paths.front().isEmpty())
-                    view->completeOutput(token, ui::OutputResult::Cancelled);
-                else selectDestination(view, token, intent, image, paths.front());
+                    finishOutput(target, ui::OutputResult::Cancelled);
+                else selectDestination(target, intent, image, paths.front());
             });
             return;
         }
         const auto bytes = image.sizeInBytes();
         const auto archiveService = archive;
-        const bool accepted = bytes >= 0 && submit(window, token, static_cast<std::uint64_t>(bytes),
+        const bool accepted = bytes >= 0 && submit(target->identity, target->token, static_cast<std::uint64_t>(bytes),
             [archiveService, image = std::move(image), intent, destination](std::stop_token stop) {
                 WorkResult result; result.archived = archiveService->archiveImage(image, stop);
                 if (!result.archived.durable()) {
@@ -347,24 +379,24 @@ struct MediaWorkspace::State {
                 } catch (const std::bad_alloc&) { result.failure = budgetFailure(); }
                 catch (...) { result.failure = {Media::Error::Write, QStringLiteral("The archive is preserved, but output did not complete")}; }
                 return result;
-            }, [this, view, token, intent](WorkResult result) {
-                if (!view) return;
+            }, [this, target, intent](WorkResult result) {
+                if (!target->origin || target->cancelled) { finishOutput(target, ui::OutputResult::Cancelled); return; }
                 if (result.failure) {
                     auto message = result.failure.detail;
                     if (!result.archived.path.isEmpty()) message += QChar(u'\n') + result.archived.path;
-                    view->completeOutput(token, outputResult(result.failure), message); return;
+                    finishOutput(target, outputResult(result.failure), message); return;
                 }
                 if (intent != ui::OutputIntent::Clipboard) {
-                    view->completeOutput(token, ui::OutputResult::Succeeded); return;
+                    finishOutput(target, ui::OutputResult::Succeeded); return;
                 }
-                publish(std::move(result.clipboard), view, token, view->windowHandle(), [view, token](const auto& completion) {
-                    if (!view) return;
+                publish(std::move(result.clipboard), target->identity, target->token, target->parent ? target->parent->windowHandle() : nullptr, [this, target](const auto& completion) {
+                    if (!target->origin || target->cancelled) { finishOutput(target, ui::OutputResult::Cancelled); return; }
                     const auto status = !completion.failure ? ui::OutputResult::Succeeded :
                         completion.failure.code == Desktop::Error::Cancelled ? ui::OutputResult::Cancelled : ui::OutputResult::Failed;
-                    view->completeOutput(token, status, completion.failure.detail);
+                    finishOutput(target, status, completion.failure.detail);
                 });
             });
-        if (!accepted && view) view->completeOutput(token, ui::OutputResult::Failed, budgetFailure().detail);
+        if (!accepted) finishOutput(target, ui::OutputResult::Failed, budgetFailure().detail);
     }
 
     void historyCommand(ui::HistoryWindow* window, quint64 token, ui::HistoryCommand command, const Media::Entry& entry)
@@ -552,8 +584,31 @@ void MediaWorkspace::shutdown()
         if (dialog->dialog && !dialog->finished) dialog->dialog->reject();
         if (!alive) return;
     }
+    for (const auto& output : state_->outputs) QObject::disconnect(output->originDestroyed);
+    state_->outputs.clear(); state_->outputBytes = 0;
     state_->removal.reset(); state_->capabilities();
 }
+bool MediaWorkspace::outputImage(QObject* origin, QWidget* dialogParent, quint64 token,
+    ui::OutputIntent intent, QImage image, ImageOutputCompletion completion)
+{
+    constexpr std::uint64_t maximumBytes = 512ull * 1024 * 1024;
+    if (state_->stopping || !state_->archive || !origin || origin->thread() != thread() ||
+        (dialogParent && dialogParent->thread() != thread()) || !token || !completion || image.isNull()) return false;
+    const auto bytes = image.sizeInBytes();
+    if (bytes < 0 || state_->outputs.size() >= 8 || static_cast<std::uint64_t>(bytes) > maximumBytes - state_->outputBytes ||
+        std::any_of(state_->outputs.begin(), state_->outputs.end(), [&](const auto& existing) {
+            return existing->identity == origin && existing->token == token;
+        })) return false;
+    auto target = std::make_shared<State::OutputTarget>();
+    target->identity = origin; target->origin = origin; target->parent = dialogParent;
+    target->token = token; target->bytes = static_cast<std::uint64_t>(bytes); target->completed = std::move(completion);
+    target->originDestroyed = connect(origin, &QObject::destroyed, this, [this, origin, token] { state_->cancel(origin, token); });
+    state_->outputs.push_back(target); state_->outputBytes += target->bytes;
+    state_->output(target, intent, std::move(image));
+    return true;
+}
+void MediaWorkspace::cancelOutput(QObject* origin, quint64 token)
+{ if (origin && token) state_->cancel(origin, token); }
 ui::EditorWindow* MediaWorkspace::openEditor(const QImage& image, bool pinned)
 {
     if (state_->stopping || image.isNull() || !state_->archive) return nullptr;
@@ -568,7 +623,10 @@ ui::EditorWindow* MediaWorkspace::openEditor(const QImage& image, bool pinned)
     state_->editors.erase(std::remove_if(state_->editors.begin(), state_->editors.end(), [](const auto& value) { return value.isNull(); }), state_->editors.end());
     state_->editors.push_back(window);
     connect(window, &ui::EditorWindow::outputRequested, this, [this, window](quint64 token, ui::OutputIntent intent, const QImage& image) {
-        state_->output(window, token, intent, image);
+        const QPointer<ui::EditorWindow> view(window);
+        if (!outputImage(window, window, token, intent, image, [view, token](ui::OutputResult result, const QString& detail) {
+            if (view) view->completeOutput(token, result, detail);
+        })) if (view) view->completeOutput(token, ui::OutputResult::Failed, budgetFailure().detail);
     });
     connect(window, &ui::EditorWindow::outputCancellationRequested, this, [this, window](quint64 token) { state_->cancel(window, token); });
     connect(window, &QObject::destroyed, this, [this, window] { state_->cancel(window); });
@@ -608,7 +666,7 @@ ui::HistoryWindow* MediaWorkspace::openHistory()
                 }
                 return result;
             }, [view, generation](WorkResult result) {
-                if (view) for (const auto& [entry, image] : result.covers) view->completeThumbnail(generation, entry, image);
+                if (view) for (const auto& cover : result.covers) view->completeThumbnail(generation, cover.first, cover.second);
             }, true);
         });
     connect(window, &ui::HistoryWindow::commandRequested, this,

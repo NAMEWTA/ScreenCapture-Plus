@@ -239,6 +239,9 @@
     <ClInclude Include="..\..\src\capture\CapLong.h">
       <Filter>src\capture</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\capture\SelectionModel.h">
+      <Filter>src\capture</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\capture\CutMask.h">
       <Filter>src\capture</Filter>
     </ClInclude>

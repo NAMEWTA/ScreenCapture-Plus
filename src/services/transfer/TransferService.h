@@ -89,6 +89,7 @@ enum class EventKind : std::uint32_t {
     SendFinished = HUHU_SEND_END,
     DevicesChanged = HUHU_DISCOVERY_CHANGED,
     DiscoveryFinished = HUHU_DISCOVERY_END,
+    DiscoveryRefreshed = HUHU_DISCOVERY_REFRESH_END,
     ListenerFailed = HUHU_LISTENER_ERROR,
     Enabled = 100,
     Disabled = 101,
@@ -171,6 +172,9 @@ public:
     Submission send(QByteArray verifiedPeer, std::vector<std::shared_ptr<const PreparedMedia>> media,
         QString displayAlias = {});
     Submission discover(QString address, std::uint16_t port);
+    // Official multicast announce only; no subnet scan. Admission and its
+    // DiscoveryRefreshed terminal share the same bounded operation budget.
+    Submission refreshDiscovery();
     Submission accept(QString sessionId, QStringList fileIds);
     Submission cancelSend(RequestId request);
     Submission cancelReceive(QString sessionId);

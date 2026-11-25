@@ -68,7 +68,8 @@ Qt Debug 的既有独立组件测试继续执行，Windows `/MDd` 聚合仍是�
 且只释放一次。C ABI 检查空指针、长度和状态；不能把任意失效地址变成安全指针。
 
 一个引擎使用两个 Tokio worker、最多四个阻塞 IO worker。控制事件队列固定
-64 项；最多同时接受一个发送任务和两个手动发现任务。发送/手动发现先预留
+64 项；最多同时接受 3 个 operation，其中发送最多 1 个、公告最多 1 个，
+定点发现共享剩余容量。发送/发现先预留
 终态位置再返回 operation ID；接收会话也预留终态位置。进度和设备刷新是可以
 合并的快照，并为接收文件交接留下队列空间。不得通过无限任务或无限消息队列
 掩盖消费端阻塞。
@@ -100,6 +101,14 @@ HTTP 连接 worker 的 panic 同样进入持久失败状态，并取消监听和
 必须进入录制结果。
 
 ## 发送和接收
+
+ABI v1 的兼容扩展提供 `huhu_identity_validate` 和 `huhu_transfer_refresh`。
+前者复用官方证书验证及 Rustls RSA 私钥/SPKI 匹配，不启动网络；后者只调用
+已有 `DiscoveryHandle::announce`，保留一个 `DISCOVERY_REFRESH_END` 终态，
+不扫描子网。监听绑定保留 OS 的 `AddrInUse` 为 `HUHU_ADDRESS_IN_USE`，供
+应用明确选择备用端口；其他错误不通过字符串判断。新应用须链接同提交重建的
+聚合库，不能拿旧 SDK 缺少扩展符号的 staticlib 完成链接。应用身份与私有存储
+政策见 [LanController](lan-controller.md)。
 
 发送先打开选定的普通文件并取得稳定 OS 句柄，拒绝最终路径上的符号链接 /
 reparse point。Windows lease 允许重命名/删除共享，拒绝同时写入共享；Linux

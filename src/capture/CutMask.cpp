@@ -5,7 +5,7 @@
 
 using namespace Microsoft::WRL;
 
-CutMask::CutMask(Ling::WinBase* win) :win{ win }
+CutMask::CutMask(Ling::WinBase* win) :win{ win }, selection{ win->w, win->h }
 {
 	strokeWidth = 2 * win->dpi;
 	paddingTop *= win->dpi;
@@ -19,25 +19,17 @@ CutMask::CutMask(Ling::WinBase* win) :win{ win }
 
 bool CutMask::highlight(POINT pos)
 {
-	for (auto& rect : winRect)
-	{
-		if (pos.x > rect.left && pos.y > rect.top && pos.x < rect.right && pos.y < rect.bottom) {
-			if (maskRect.left != rect.left || maskRect.top != rect.top ||
-				maskRect.right != rect.right || maskRect.bottom != rect.bottom) {
-				maskRect = rect;
-				makeLayout();
-				win->refresh();
-				return true;
-			}
-			break;
-		}
-	}
-	return false;
+	if (!selection.highlight({ (float)pos.x, (float)pos.y })) return false;
+	selectionChanged();
+	return true;
 }
 
 void CutMask::initWinRect()
 {
-	winRect.clear();
+	struct Enumeration {
+		CutMask* owner;
+		std::vector<HuhuCapture::Capture::SelectionBounds> rectangles;
+	} enumeration{ this, {} };
 	EnumWindows([](HWND hwnd, LPARAM lparam)
 		{
 			if (!hwnd) return TRUE;
@@ -45,10 +37,11 @@ void CutMask::initWinRect()
 			BOOL cloaked = FALSE;
 			DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
 			if (cloaked) return TRUE;
-			RECT rect;
-			DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(RECT));
+			RECT rect{};
+			if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect)))) return TRUE;
 			if (rect.right - rect.left <= 6 || rect.bottom - rect.top <= 6) return TRUE;
-			auto self = (CutMask*)lparam;
+			auto& result = *(Enumeration*)lparam;
+			auto self = result.owner;
 			auto win = self->win;
 			if (rect.left < win->x) rect.left = win->x;
 			if (rect.top < win->y) rect.top = win->y;
@@ -58,9 +51,18 @@ void CutMask::initWinRect()
 			auto y = (float)(rect.top - win->y);
 			auto r = (float)(rect.right - win->x);
 			auto b = (float)(rect.bottom - win->y);
-			self->winRect.push_back(D2D1::RectF(x, y, r, b));
+			result.rectangles.push_back({ x, y, r, b });
 			return TRUE;
-		}, (LPARAM)this);
+		}, (LPARAM)&enumeration);
+	selection.setWindowCandidates(std::move(enumeration.rectangles));
+}
+
+void CutMask::selectionChanged()
+{
+	const auto& rect = selection.bounds();
+	maskRect = D2D1::RectF(rect.left, rect.top, rect.right, rect.bottom);
+	makeLayout();
+	win->refresh();
 }
 
 void CutMask::makeLayout()
@@ -89,103 +91,32 @@ void CutMask::makeLayout()
 
 void CutMask::startMakeRect(POINT pos)
 {
-	pressPos = pos;
+	selection.beginCreation({ (float)pos.x, (float)pos.y });
 }
 
 void CutMask::makeRect(POINT pos)
 {
-	auto [left, right] = std::minmax(pressPos.x, pos.x);
-	auto [top, bottom] = std::minmax(pressPos.y, pos.y);
-	maskRect.left = (float)left;
-	maskRect.right = (float)right;
-	maskRect.top = (float)top;
-	maskRect.bottom = (float)bottom;
-	makeLayout();
-	win->refresh();
+	if (selection.createTo({ (float)pos.x, (float)pos.y })) selectionChanged();
 }
 
 bool CutMask::hasRect() const
 {
-	return maskRect.right > maskRect.left && maskRect.bottom > maskRect.top;
+	return selection.hasSelection();
 }
 
 MaskHit CutMask::hitTest(POINT pos) const
 {
-	if (!hasRect()) return MaskHit::None;
-	const auto& r = maskRect;
-	const float px = (float)pos.x, py = (float)pos.y;
-	// 选区的四条边各自延长，把整个窗口切成九块：中间那块就是选区自己，
-	// 落在里面一律整体拖动；外面八块各对应一个方位，落在哪块就调哪条边/哪个角
-	const int col = px < r.left ? 0 : (px > r.right ? 2 : 1);
-	const int row = py < r.top ? 0 : (py > r.bottom ? 2 : 1);
-	static constexpr MaskHit grid[3][3]{
-		{ MaskHit::TopLeft,    MaskHit::Top,    MaskHit::TopRight },
-		{ MaskHit::Left,       MaskHit::Inside, MaskHit::Right },
-		{ MaskHit::BottomLeft, MaskHit::Bottom, MaskHit::BottomRight },
-	};
-	return grid[row][col];
+	return selection.hitTest({ (float)pos.x, (float)pos.y });
 }
 
 void CutMask::startAdjust(POINT pos)
 {
-	adjustHit = hitTest(pos);
-	adjustStartRect = maskRect;
-	adjustPressPos = pos;
-	// 抓边或抓角：按下这一下就把对应的边挪到光标位置。
-	// 内部整体拖动不能这么干 —— 那会让选区瞬间跳到光标为中心的位置。
-	if (adjustHit != MaskHit::None && adjustHit != MaskHit::Inside) {
-		adjust(pos);
-	}
+	if (selection.beginAdjustment({ (float)pos.x, (float)pos.y })) selectionChanged();
 }
 
 void CutMask::adjust(POINT pos)
 {
-	if (adjustHit == MaskHit::None) return;
-	auto r = adjustStartRect;
-	const float px = (float)pos.x, py = (float)pos.y;
-	if (adjustHit == MaskHit::Inside) {
-		// 整体平移，尺寸不变，夹在宿主客户区内
-		const float rw = r.right - r.left, rh = r.bottom - r.top;
-		const float left = std::clamp(r.left + px - adjustPressPos.x, 0.f, win->w - rw);
-		const float top = std::clamp(r.top + py - adjustPressPos.y, 0.f, win->h - rh);
-		r = D2D1::RectF(left, top, left + rw, top + rh);
-	}
-	else {
-		const float cx = std::clamp(px, 0.f, win->w);
-		const float cy = std::clamp(py, 0.f, win->h);
-		switch (adjustHit)
-		{
-		case MaskHit::Left: r.left = cx; break;
-		case MaskHit::Right: r.right = cx; break;
-		case MaskHit::Top: r.top = cy; break;
-		case MaskHit::Bottom: r.bottom = cy; break;
-		case MaskHit::TopLeft: r.left = cx; r.top = cy; break;
-		case MaskHit::TopRight: r.right = cx; r.top = cy; break;
-		case MaskHit::BottomRight: r.right = cx; r.bottom = cy; break;
-		case MaskHit::BottomLeft: r.left = cx; r.bottom = cy; break;
-		default: break;
-		}
-		// 拖过头（比如左边越过右边）时归一化，接下来就自然变成"在拖另一条边"
-		const float l = std::min(r.left, r.right), rr = std::max(r.left, r.right);
-		const float t = std::min(r.top, r.bottom), b = std::max(r.top, r.bottom);
-		r = D2D1::RectF(l, t, rr, b);
-		// 塌到最小尺寸以下时，把动着的那条边推回来，不动锚定的那条
-		const bool moveLeft = adjustHit == MaskHit::Left || adjustHit == MaskHit::TopLeft || adjustHit == MaskHit::BottomLeft;
-		const bool moveTop = adjustHit == MaskHit::Top || adjustHit == MaskHit::TopLeft || adjustHit == MaskHit::TopRight;
-		if (r.right - r.left < minSize) {
-			if (moveLeft) r.left = r.right - minSize;
-			else r.right = r.left + minSize;
-		}
-		if (r.bottom - r.top < minSize) {
-			if (moveTop) r.top = r.bottom - minSize;
-			else r.bottom = r.top + minSize;
-		}
-	}
-	if (r.left == maskRect.left && r.top == maskRect.top &&
-		r.right == maskRect.right && r.bottom == maskRect.bottom) return;
-	maskRect = r;
-	makeLayout();
-	win->refresh();
+	if (selection.adjustTo({ (float)pos.x, (float)pos.y })) selectionChanged();
 }
 
 void CutMask::paint(ID2D1DeviceContext* ctx)

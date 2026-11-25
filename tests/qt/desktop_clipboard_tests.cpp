@@ -13,11 +13,13 @@
 #include <QThread>
 #include <QWidget>
 #include <QWindow>
+#include <algorithm>
 #include <functional>
 #include <future>
 #include <iostream>
 #include <map>
 #include <stdexcept>
+#include <vector>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -125,6 +127,22 @@ void receiveFile(const QString& expected)
     path.resize(length);
     require(QDir::fromNativeSeparators(QString::fromStdWString(path)) == QDir::fromNativeSeparators(expected), "CF_HDROP preserves the full Unicode media path");
 }
+void receiveText(const QString& expected)
+{
+    ClipboardLock lock;
+    const GlobalRead unicode(CF_UNICODETEXT);
+    require(unicode.size >= sizeof(wchar_t) && unicode.size % sizeof(wchar_t) == 0,
+        "the real text clipboard exposes complete UTF-16 storage");
+    const auto* begin = reinterpret_cast<const wchar_t*>(unicode.data);
+    const auto* end = begin + unicode.size / sizeof(wchar_t);
+    const auto* terminator = std::find(begin, end, L'\0');
+    require(terminator != end, "the transferred CF_UNICODETEXT contains its explicit terminator");
+    auto nativeExpected = expected;
+    nativeExpected.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    nativeExpected.replace(QStringLiteral("\n"), QStringLiteral("\r\n"));
+    require(QString::fromWCharArray(begin, static_cast<int>(terminator - begin)) == nativeExpected,
+        "the independent native receiver gets complete Unicode text with platform CRLF line endings");
+}
 #else
 void receiveImage(const QImage& expected)
 {
@@ -141,6 +159,14 @@ void receiveFile(const QString& expected)
     require(urls.size() == 1 && urls.front().isLocalFile() && urls.front().toLocalFile() == expected,
         "the file-manager receiver gets the complete Unicode local URI");
 }
+void receiveText(const QString& expected)
+{
+    auto* clipboard = QApplication::clipboard();
+    waitFor([&] { return clipboard->mimeData()->hasFormat(QStringLiteral("text/plain;charset=utf-8")); },
+        "the independent process receives the explicit UTF-8 text offer");
+    require(clipboard->mimeData()->data(QStringLiteral("text/plain;charset=utf-8")) == expected.toUtf8() &&
+        clipboard->text() == expected, "the receiver gets exact Unicode, non-BMP text, tabs and line endings");
+}
 #endif
 
 void receiver(const QString& kind, const QString& expected)
@@ -148,7 +174,11 @@ void receiver(const QString& kind, const QString& expected)
     Origin window; show(window);
     if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland")))
         waitFor([&] { return QGuiApplication::focusWindow() == window.windowHandle(); }, "the compositor focuses the actual receiver window");
-    if (kind == QStringLiteral("--read-image")) receiveImage(QImage(expected)); else receiveFile(expected);
+    if (kind == QStringLiteral("--read-image")) receiveImage(QImage(expected));
+    else if (kind == QStringLiteral("--read-text")) {
+        QFile file(expected); require(file.open(QIODevice::ReadOnly), "open the real UTF-8 text reference");
+        receiveText(QString::fromUtf8(file.readAll()));
+    } else receiveFile(expected);
 }
 void runReceiver(const QString& kind, const QString& expected)
 {
@@ -178,11 +208,12 @@ public:
         if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
             // show() only submits the initial surface/configure work. The real
             // compositor must expose it before the harness may send input.
-            // The headless seat has no keyboard until wtype connects, so Qt's
-            // keyboard focus cannot be a prerequisite for creating that device;
-            // the harness verifies the compositor's actual focused view instead.
-            waitFor([&] { return origin.isVisible() && origin.windowHandle() && origin.windowHandle()->isExposed(); },
-                "the real compositor exposes the clipboard origin before requesting input");
+            // The harness now retains a real idle keyboard on the headless seat.
+            // Qt keyboard focus proves it has bound wl_keyboard and received
+            // enter; compositor focus alone cannot prove this client is ready.
+            waitFor([&] { return origin.isVisible() && origin.windowHandle() && origin.windowHandle()->isExposed() &&
+                QGuiApplication::focusWindow() == origin.windowHandle(); },
+                "the compositor exposes and delivers keyboard focus to the clipboard origin before input");
             origin.action = [&] { token = clipboard.publish(content, origin.windowHandle()); };
             std::cout << "NEED_INPUT\n" << std::flush;
             waitFor([&] { return token != 0; }, "the owned compositor delivers a real F8 input serial");
@@ -224,9 +255,13 @@ void contracts(const QString& root)
     waitFor([&] { holderOutput += holder.readAll(); return holderOutput.contains("HELD"); }, "the other process holds the Windows clipboard open");
     auto blocked = worker([&] { return Desktop::prepareImage(pixels(33)); });
     const auto busy = results.result(results.request(blocked.content, *origin));
+    auto blockedText = worker([&] { return Desktop::prepareText(QStringLiteral("owned clipboard text")); });
+    const auto textBusy = results.result(results.request(blockedText.content, *origin));
     holder.write("release\n"); holder.closeWriteChannel();
     waitFor([&] { return holder.state() == QProcess::NotRunning; }, "the competing process releases the clipboard");
     require(busy.failure.code == Desktop::Error::Busy && busy.publishedFormats.isEmpty(), "real OpenClipboard contention reports Busy, never false success");
+    require(textBusy.failure.code == Desktop::Error::Busy && textBusy.publishedFormats.isEmpty(),
+        "real competing clipboard ownership also rejects text without emptying the previous image");
     require(holder.exitCode() == 0, "actual clipboard holder exits cleanly");
     runReceiver(QStringLiteral("--read-image"), expected);
 #endif
@@ -264,10 +299,26 @@ void contracts(const QString& root)
         "the asynchronous final identity check rejects changed history before native publication");
     runReceiver(QStringLiteral("--read-file"), gifPath);
 
+    const QString text = QStringLiteral("HEX FF8000\nrgb(255,128,0)\n中文 QR \U0001f680\r\nhttps://example.org/路径\tvalue");
+    const auto textPath = root + QStringLiteral("/expected-text.txt");
+    { QFile file(textPath); require(file.open(QIODevice::WriteOnly), "write the Unicode receiver reference");
+      const auto bytes = text.toUtf8(); require(file.write(bytes) == bytes.size() && file.flush(), "save every UTF-8 reference byte"); }
+    std::vector<QChar> external(text.cbegin(), text.cend());
+    const QString borrowed = QString::fromRawData(external.data(), static_cast<qsizetype>(external.size()));
+    auto textContent = worker([&] { return Desktop::prepareText(borrowed); });
+    require(!textContent.failure && textContent.content, "prepare real Unicode text independently of borrowed storage");
+    std::fill(external.begin(), external.end(), QChar(u'x'));
+    const auto textResult = results.result(results.request(textContent.content, *origin));
+    require(textResult.completed() && !textResult.publishedFormats.isEmpty(), "actual platform receipt confirms Unicode text publication");
+    runReceiver(QStringLiteral("--read-text"), textPath);
+    require(worker([&] { return Desktop::prepareText(text, {}, stopped.get_token()); }).failure.code == Desktop::Error::Cancelled,
+        "cancelled text preparation leaves the actual clipboard untouched");
+    runReceiver(QStringLiteral("--read-text"), textPath);
+
     auto finalImage = worker([&] { return Desktop::prepareImage(image); });
     require(results.result(results.request(finalImage.content, *origin)).completed(), "final real owner image publication");
     origin.reset(); events(); runReceiver(QStringLiteral("--read-image"), expected);
-    std::cout << "PASS real independent image/file receiver, bounded preparation, cancellation, changed-file rejection and application-owned clipboard\n";
+    std::cout << "PASS real independent image/file/text receiver, bounded preparation, cancellation, changed-file rejection and application-owned clipboard\n";
 }
 }
 
@@ -276,7 +327,8 @@ int main(int argc, char** argv)
     QApplication app(argc, argv); app.setQuitOnLastWindowClosed(false);
     try {
         const auto arguments = app.arguments();
-        if (arguments.size() >= 3 && (arguments[1] == QStringLiteral("--read-image") || arguments[1] == QStringLiteral("--read-file"))) {
+        if (arguments.size() >= 3 && (arguments[1] == QStringLiteral("--read-image") || arguments[1] == QStringLiteral("--read-file") ||
+            arguments[1] == QStringLiteral("--read-text"))) {
             receiver(arguments[1], arguments[2]); std::cout << "PASS separate system clipboard receiver\n"; return 0;
         }
 #ifdef Q_OS_WIN

@@ -86,8 +86,8 @@ jobs:
       - name: Exercise real GIF, TLS, transfer interfaces, durable commit and shutdown
         working-directory: .
         run: |
-          cmake --build artifacts/cmake/native-validation --config Release --target qt_rust_bridge qt_transfer_service qt_transfer_ui --parallel 2
-          ctest --test-dir artifacts/cmake/native-validation -C Release --output-on-failure --no-tests=error -R '^qt_(rust_bridge|transfer_service|transfer_ui)$'
+          cmake --build artifacts/cmake/native-validation --config Release --target qt_rust_bridge qt_transfer_service qt_transfer_ui qt_lan_controller --parallel 2
+          ctest --test-dir artifacts/cmake/native-validation -C Release --output-on-failure --no-tests=error -R '^qt_(rust_bridge|transfer_service|transfer_ui|lan_controller)$'
       - name: Retain the actual workspace dependency resolution
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -96,10 +96,13 @@ jobs:
           path: |
             third_party/localsend/Cargo.lock
             artifacts/native-rust/
+            artifacts/cargo/localsend/release/libhuhucapture_native.a
+            artifacts/cargo/localsend/release/huhucapture_native.lib
             artifacts/cmake/native-validation/CMakeCache.txt
             artifacts/cmake/native-validation/CMakeFiles/CMakeConfigureLog.yaml
             artifacts/cmake/native-validation/Testing/Temporary/
             artifacts/cmake/native-validation/rust-bridge/
             artifacts/cmake/native-validation/transfer-render/
+            artifacts/cmake/native-validation/lan-controller-render/
           if-no-files-found: error
           retention-days: 14

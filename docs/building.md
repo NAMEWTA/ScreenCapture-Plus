@@ -45,6 +45,24 @@ ctest --preset qt-validation
 
 真实桌面授权 probe 与自动故障测试的区别见 [Linux Portal](linux-portal.md)。LocalSend 的 Cargo workspace 使用 Rust 1.97.1 和提交的实际锁文件，构建命令见 [core 适配](localsend-core.md)。这些验证入口没有发布权限，也不会创建正式 Release。Qt SDK 资产哈希、聚合 Rust 库、软件编码和最终部署工具仍须按 P00 完成验证，P11 / P12 / P13 通过后才能切换生产发布。
 
+受限开发环境可使用独立的 [开发依赖工作流](../.github/workflows/development-dependencies.yml)
+生成 Linux amd64 SDK。它保留固定 Qt Widgets / Wayland client、Portal、PipeWire、
+软件媒体依赖、CMake、Ninja、pkg-config、所需系统开发文件及许可证，并生成逐文件
+SHA256 与相对符号链接清单。Qt 官方归档中的未使用 QtSql、Wayland compositor 和
+QML imports 连同其导入元数据被明确排除，排除清单记录在 `metadata.json`；所有
+保留 ELF 的依赖仍须完整。Qt Wayland client、平台插件和匹配的私有头不会因此删除。
+
+恢复使用 `scripts/bundle-development-dependencies.py restore`，必须指定下载产物的
+实际 `--sha256` 与一个空 `--destination`，随后加载恢复目录中的 `sdk/environment.sh`。
+脚本逐项验证内容、权限、链接和原始前缀替换；CI 还将原依赖前缀改名，再用恢复后的
+SDK 实际构建 Portal / PipeWire / 软件编码目标。该产物是开发依赖，不是用户安装包，
+构建或恢复成功不能计作产品安装验收。宿主 C++ ABI / glibc 要求保留在元数据中，
+不复制或替换宿主加载器。
+
+Rust 聚合库由独立验证工作流保留实际 `.a` / `.lib` 和 `build-info.json`。CMake 会核对
+静态库、Cargo.lock 以及全部已记录桥接和上游源文件的 SHA256，拒绝用同一 Cargo.lock
+下的旧桥接库代替当前源码。Windows 还核对实际依赖导入库及匹配的动态 Release CRT。
+
 ## 现有 Windows 生产构建
 
 本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。唯一版本号来自根目录 [VERSION](../VERSION)，发布意图来自 [publish.json](../releases/publish.json)。

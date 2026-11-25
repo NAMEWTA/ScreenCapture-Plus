@@ -11,6 +11,7 @@
 | --- | --- | --- |
 | `prepareImage` | 工作线程 | 持有独立像素，编码真实 PNG；Windows 同时准备 DIBV5、DIB |
 | `prepareFile` | 工作线程 | 接收历史读租约；PNG 复用 `inspectPng(..., decoded)` 一次完整校验和解码，GIF/MP4 准备真实文件路径 |
+| `prepareText` | 工作线程 | 持有独立的完整 Unicode 文本；Windows 准备 `CF_UNICODETEXT`，Linux 准备 UTF-8 MIME 内容 |
 | `SystemClipboard::publish` | GUI 线程 | 最后一次文件身份核对仍由工作线程执行；只在平台实际提交或确认后完成 |
 | `recycle` | 工作线程 | 按已确认 `Entry` 取得独占删除租约并再次检查 `unchanged()` |
 | `permanentlyRemove` | 工作线程 | 只接受此前真实回收失败所生成、经第二次用户确认的 permit |
@@ -41,6 +42,9 @@ GIF/MP4 文件不另写一套解码器；需要严格媒体准入的宿主先调
 
 图片一次准备三种实际格式：PNG、带 alpha mask 的顶向下 BGRA DIBV5、兼容旧应用
 的 24 位底向上 DIB。GIF/MP4 继续使用含完整 UTF-16 路径的 `CF_HDROP`。
+取色、坐标和 QR 文本使用同一 payload/发布通道的 `CF_UNICODETEXT`，不调用一个
+无法报告结果的额外复制入口。按照 Windows 格式规范，裸 LF 在原生输出中转换为
+CRLF，已有 CRLF 不重复插入；Unicode 与非 BMP 字符保持完整。
 每个 `HGLOBAL` 仅在其 `SetClipboardData()` 真正成功后移交系统，其余内存由 RAII
 释放。`OpenClipboard()` 被其他进程占用时直接返回 `Busy`，不先清空原内容。
 
@@ -53,6 +57,9 @@ GIF/MP4 文件不另写一套解码器；需要严格媒体准入的宿主先调
 
 Linux 使用 Qt 的 `QMimeData` 与系统剪贴板后端。图片显式提供 `image/png` 和
 Qt 图像数据，GIF/MP4 提供 `text/uri-list`；没有自写像素传输或 Wayland 管道。
+文本同时提供 `text/plain` 与 `text/plain;charset=utf-8`，保留输入换行；与图像
+使用相同的真实 owner/offer 确认和生命周期。来自 `QString::fromRawData()` 的内容
+也在准备结束前成为独立内存，不借用随后可能复用的外部字符缓冲。
 剪贴板内容由持续运行的 Qt 应用拥有，不依附发起操作的窗口。
 
 X11 路径依据固定 Qt 源码，同时检查拥有权和 `mimeData()` 返回的实际选择对象；
@@ -72,6 +79,12 @@ Wayland 复制必须来自可见且有焦点的窗口或其临时子窗口，并
 像素预算默认 512 MiB，编码输出也有限额。Windows 的三种兼容格式会各自占用
 系统剪贴板内存；该预算是源图像预算，并非整个进程峰值内存承诺。完整性能验收仍需
 测量目标分辨率、多屏和长截图负载。
+
+文字默认上限为 16 MiB，分别检查 UTF-16 输入与平台编码后的完整 payload，
+Windows 的终止符及新增 CR 字符也计入限额。它是 payload 限额而非进程峰值承诺。
+Qt 的 UTF-16 验证负责 Unicode 准入；含内嵌 NUL 的值无法完整表示为原生纯文本，
+因此返回 `Encoding`，不截断后报成功。QR 服务仍持有原始 payload，宿主在复制失败
+时应保留结果窗口。空文本可以表示为合法的空纯文本。
 
 ## 回收与第二次确认
 
@@ -125,6 +138,11 @@ DBus 单次请求两点五秒；与 Portal 一样复用 Qt 的 GLib 主上下文
   `5af1a37e31a869cd6eb8a73d82e2c71a450e6634`：阅读了 QFile、Unix/Windows filesystem
   engine、XCB/Wayland clipboard/data source/data device、公开 native/extension API
   和 Unix desktop services 源码。使用公开 API，Qt 按统一依赖与许可证清单分发。
+- 文本路径另阅读固定 Ling `src/Util.cpp` 的既有 `CF_UNICODETEXT` 实现
+  （MIT，2025 liulun）、Qt `qmimedata.cpp` 的文本编码与
+  `qwindowsmimeregistry.cpp` 的换行处理。采用已有服务的 RAII 和真实返回结果，
+  不复制 Qt 私有 MIME converter。原生换行依据
+  [Windows 标准剪贴板格式](https://learn.microsoft.com/en-us/windows/win32/dataxchg/standard-clipboard-formats)。
 - GLib/GIO 2.80.0，固定 commit `763cc3b238398614c20069fd67642730e3a6519b`：阅读
   `gio/gappinfo.c` 完整异步默认应用查询、启动、Portal 回退及 finish 路径。
   LGPL-2.1-or-later；Red Hat, Inc.，原作者 Alexander Larsson。运行时使用系统
@@ -137,9 +155,11 @@ DBus 单次请求两点五秒；与 Portal 一样复用 Qt 的 GLib 主上下文
 
 ## 验证入口与当前边界
 
-- `desktop_clipboard_tests`：真实独立接收进程读取 PNG/URI；Windows 还逐字节
+- `desktop_clipboard_tests`：真实独立接收进程读取 PNG/URI/Unicode 文本；Windows 还逐字节
   检查 DIBV5 alpha、DIB 行方向和 CF_HDROP，并让另一个进程实际占用剪贴板。
   覆盖取消、一次性内存移交、发布前文件变化、读租约释放及窗口关闭后内容有效。
+  文本用例包含中文、非 BMP、LF/CRLF、制表符、外部缓冲独立所有权；Windows
+  实际竞争进程占用时也必须返回文本发布 `Busy` 并保留先前图像。
 - `desktop_files_tests`：真实文件回收、读租约冲突、变化快照、取消、独立永久
   确认许可；Windows 用真实文件共享锁触发失败，Linux 用真实不可用垃圾箱和
   无写权限目录触发失败。Linux 权限测试必须由普通用户运行。
@@ -156,3 +176,6 @@ DBus 单次请求两点五秒；与 Portal 一样复用 Qt 的 GLib 主上下文
 不得把这些测试入口或文件存在写成测试通过。X11/Wayland 普通接收程序、GNOME、
 Plasma、物理混合 DPI、进程退出后的剪贴板管理器接管，以及整套应用 UI/升级流程
 仍需各自的真实验收证据。
+
+新增文本迁移在本地完成源码/API 检查，尚未在本地编译或执行 Qt/Win32 测试；
+不能以此前图像和文件复制的 CI 结果代替新增文本路径验收。

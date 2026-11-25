@@ -293,6 +293,38 @@ pub fn discover(shared: &Arc<Shared>, address: &str, port: u16) -> Result<u64> {
     Ok(operation)
 }
 
+pub fn refresh(shared: &Arc<Shared>) -> Result<u64> {
+    let discovery = shared.discovery.clone()
+        .ok_or_else(|| Error::new(status::INVALID_STATE, "Multicast discovery is disabled"))?;
+    let (operation, cancel, terminal) = shared.admit(false, String::new())?;
+    let state = shared.clone();
+    shared.tasks.spawn_on(async move {
+        let result = AssertUnwindSafe(async {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => Err(Error::new(status::CANCELLED, "Discovery refresh cancelled")),
+                _ = discovery.announce() => {
+                    if discovery.multicast_error().is_some() || discovery.multicast_failed() {
+                        Err(Error::new(status::IO, "Multicast discovery is unavailable"))
+                    } else { Ok(()) }
+                }
+            }
+        }).catch_unwind().await;
+        let event = match result {
+            Ok(Ok(())) => HuhuEvent::new(event::DISCOVERY_REFRESH_END, status::OK, operation, json!({})),
+            Ok(Err(error)) => HuhuEvent::error(event::DISCOVERY_REFRESH_END, operation, error),
+            Err(_) => {
+                state.record_panic();
+                HuhuEvent::error(event::DISCOVERY_REFRESH_END, operation,
+                    Error::new(status::PANIC, "Discovery refresh worker panicked"))
+            }
+        };
+        state.finish_operation(operation);
+        terminal.send(event);
+    }, &shared.runtime);
+    Ok(operation)
+}
+
 async fn probe(shared: &Shared, address: &str, port: u16) -> Result<Value> {
     if let Some(discovery) = &shared.discovery {
         let device = discovery.discover(address, port, ProtocolType::Https).await?

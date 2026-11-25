@@ -1,13 +1,10 @@
 use crate::lease::MAX_FILE_BYTES;
 use crate::status::{self, Error, Result};
-use localsend::crypto::cert::{fingerprint_from_cert_der, verify_cert_from_pem};
 use localsend::discovery::DeviceIdentity;
 use localsend::http::dto_v2::RegisterDtoV2;
 use localsend::http::limits::TransferLimits;
 use localsend::http::state::ClientInfo;
 use localsend::model::discovery::{DeviceType, ProtocolType};
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::CertificateDer;
 use serde::Deserialize;
 use std::net::Ipv4Addr;
 use std::time::Duration;
@@ -59,14 +56,8 @@ impl Config {
         let mut addresses = self.addresses.iter().map(|text| ipv4(text)).collect::<Result<Vec<_>>>()?;
         addresses.sort();
         addresses.dedup();
-        verify_cert_from_pem(self.cert_pem.clone(), None)
-            .map_err(|_| Error::new(status::INVALID_ARGUMENT, "Invalid or expired LocalSend certificate"))?;
-        let certificate = CertificateDer::from_pem_slice(self.cert_pem.as_bytes())
-            .map_err(|_| Error::new(status::INVALID_ARGUMENT, "Invalid LocalSend PEM certificate"))?;
-        let fingerprint = fingerprint_from_cert_der(&certificate);
-        if self.fingerprint.is_some_and(|claimed| !claimed.eq_ignore_ascii_case(&fingerprint)) {
-            return Err(Error::new(status::INVALID_ARGUMENT, "Stored identity fingerprint differs from its certificate"));
-        }
+        let fingerprint = crate::identity::validate(&self.cert_pem, &self.private_key_pem,
+            self.fingerprint.as_deref())?;
         let mut limits = TransferLimits::default();
         limits.max_file_bytes = self.max_file_bytes.unwrap_or(MAX_FILE_BYTES);
         limits.max_total_bytes = limits.max_file_bytes.checked_mul(64)

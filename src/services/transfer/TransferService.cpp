@@ -180,7 +180,7 @@ struct TransferService::Impl {
         }
     }
 
-    enum class CommandKind { Enable, Send, Discover, Accept, CancelSend, CancelReceive };
+    enum class CommandKind { Enable, Send, Discover, RefreshDiscovery, Accept, CancelSend, CancelReceive };
     struct Command {
         CommandKind kind{};
         RequestId request{};
@@ -197,7 +197,7 @@ struct TransferService::Impl {
     struct Notice { Event event; std::size_t bytes{}; };
     struct Operation {
         RequestId request{};
-        bool sending{};
+        EventKind terminalKind{EventKind::DiscoveryFinished};
         std::size_t terminalBudget{};
         std::vector<std::shared_ptr<const PreparedMedia>> media;
     };
@@ -407,6 +407,7 @@ struct TransferService::Impl {
         EventKind kind = EventKind::CommandFinished;
         if (command.kind == CommandKind::Send) kind = EventKind::SendFinished;
         if (command.kind == CommandKind::Discover) kind = EventKind::DiscoveryFinished;
+        if (command.kind == CommandKind::RefreshDiscovery) kind = EventKind::DiscoveryRefreshed;
         QJsonObject data;
         switch (command.kind) {
         case CommandKind::Accept: data.insert(QStringLiteral("command"), QStringLiteral("accept")); break;
@@ -503,6 +504,9 @@ struct TransferService::Impl {
                 command.port, &operation);
             break;
         }
+        case CommandKind::RefreshDiscovery:
+            result = huhu_transfer_refresh(native, &operation);
+            break;
         case CommandKind::Accept: {
             auto session = incoming.find(command.text);
             if (session == incoming.end() || session->second.terminal || session->second.answered) {
@@ -568,8 +572,11 @@ struct TransferService::Impl {
         }
         case CommandKind::Enable: break;
         }
-        if ((command.kind == CommandKind::Send || command.kind == CommandKind::Discover) && result == HUHU_OK) {
-            operations.emplace(operation, Operation{command.request, command.kind == CommandKind::Send,
+        if ((command.kind == CommandKind::Send || command.kind == CommandKind::Discover ||
+            command.kind == CommandKind::RefreshDiscovery) && result == HUHU_OK) {
+            const auto terminalKind = command.kind == CommandKind::Send ? EventKind::SendFinished :
+                (command.kind == CommandKind::Discover ? EventKind::DiscoveryFinished : EventKind::DiscoveryRefreshed);
+            operations.emplace(operation, Operation{command.request, terminalKind,
                 command.terminalBudget, std::move(command.media)});
         } else commandEnd(command, result);
     }
@@ -751,15 +758,16 @@ struct TransferService::Impl {
             break;
         }
         case HUHU_SEND_END:
-        case HUHU_DISCOVERY_END: {
+        case HUHU_DISCOVERY_END:
+        case HUHU_DISCOVERY_REFRESH_END: {
             const auto operation = operations.find(view.operation);
             if (operation == operations.end()) { fail(HUHU_PROTOCOL, "Operation terminal has no admission"); break; }
-            const auto expected = operation->second.sending ? HUHU_SEND_END : HUHU_DISCOVERY_END;
+            const auto expected = operation->second.terminalKind;
             if (view.kind != static_cast<std::uint32_t>(expected)) {
                 fail(HUHU_PROTOCOL, "Operation terminal changed its kind"); break;
             }
             eraseProgress(operation->second.request);
-            publish(makeEvent(operation->second.sending ? EventKind::SendFinished : EventKind::DiscoveryFinished,
+            publish(makeEvent(operation->second.terminalKind,
                 view.status, operation->second.request, generation, std::move(parsed.data)), operation->second.terminalBudget);
             // Both native and history leases remain owned through the actual
             // native END, regardless of any view's lifetime or subscriptions.
@@ -817,7 +825,7 @@ struct TransferService::Impl {
         // the owning runtime/workers have actually joined, never fake success.
         for (const auto& [id, operation] : operations) {
             (void)id;
-            publish(makeEvent(operation.sending ? EventKind::SendFinished : EventKind::DiscoveryFinished,
+            publish(makeEvent(operation.terminalKind,
                 HUHU_PROTOCOL, operation.request, generation, errorData("Native stop omitted an operation terminal")),
                 operation.terminalBudget);
             if (firstFailure == HUHU_OK) firstFailure = HUHU_PROTOCOL;
@@ -979,6 +987,14 @@ Submission TransferService::discover(QString address, std::uint16_t port)
     command.kind = Impl::CommandKind::Discover;
     command.text = std::move(address);
     command.port = port;
+    return impl_->submit(std::move(command));
+}
+
+Submission TransferService::refreshDiscovery()
+{
+    if (QThread::currentThread() != thread()) return {HUHU_INVALID_STATE, 0};
+    Impl::Command command;
+    command.kind = Impl::CommandKind::RefreshDiscovery;
     return impl_->submit(std::move(command));
 }
 

@@ -433,8 +433,8 @@ void run()
     const auto conflict = conflicted.enable(QJsonDocument(conflictConfig).toJson(QJsonDocument::Compact),
         std::make_unique<transfer::ReceiveArchiveSink>(destination));
     require(bool(conflict), "Queue port-conflict startup outside the GUI");
-    require(conflictEvents.wait(transfer::EventKind::Enabled, conflict.request).status == HUHU_IO &&
-        conflictEvents.wait(transfer::EventKind::Disabled, conflict.request).status == HUHU_IO,
+    require(conflictEvents.wait(transfer::EventKind::Enabled, conflict.request).status == HUHU_ADDRESS_IN_USE &&
+        conflictEvents.wait(transfer::EventKind::Disabled, conflict.request).status == HUHU_ADDRESS_IN_USE,
         "A real bind failure is neither enabled nor a clean successful startup");
     require(!conflicted.statistics().nativeRunning && occupied.isListening(), "Failed enable leaves the existing port owner intact");
     occupied.close();

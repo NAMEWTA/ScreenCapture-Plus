@@ -206,6 +206,24 @@ void StagingFile::cleanup() noexcept
     } catch (...) { /* A failed cleanup retains its private temporary file. */ }
     path_.clear(); owner_.reset();
 }
+Failure StagingFile::discard()
+{
+    if (path_.isEmpty()) { owner_.reset(); return {}; }
+    if (!owner_) return {Error::InvalidManagedFile, QStringLiteral("The temporary file is not owned by this recording")};
+    std::error_code error;
+    const auto path = nativePath(path_);
+    const auto current = Platform::readFileSnapshot(path, error);
+    if (!current) {
+        if (error != std::errc::no_such_file_or_directory)
+            return {Error::Read, QString::fromStdString(error.message())};
+    } else {
+        if (current->identity != identity_)
+            return {Error::ChangedOnDisk, QStringLiteral("The recording temporary file was replaced; it has been retained")};
+        fs::remove(path, error);
+        if (error) return {Error::Write, QString::fromStdString(error.message())};
+    }
+    path_.clear(); owner_.reset(); return {};
+}
 QString StagingFile::retainForRecovery() noexcept
 {
     owner_.reset(); return std::exchange(path_, {});

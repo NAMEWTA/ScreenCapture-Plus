@@ -179,6 +179,7 @@
     <ClInclude Include="..\..\src\app\App.h" />
     <ClInclude Include="..\..\src\app\Brand.h" />
     <ClInclude Include="..\..\src\capture\CapLong.h" />
+    <ClInclude Include="..\..\src\capture\SelectionModel.h" />
     <ClInclude Include="..\..\src\capture\CutMask.h" />
     <ClInclude Include="..\..\src\capture\WinCap.h" />
     <ClInclude Include="..\..\src\core\Annotation.h" />

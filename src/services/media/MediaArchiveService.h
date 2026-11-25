@@ -94,6 +94,10 @@ public:
     // Adopt with QFile::DontCloseHandle and ReadWrite; identity is checked on
     // this nontruncating writer. Close it explicitly before media publication.
     Platform::FileHandle openWriter(std::error_code& error) const;
+    // Explicit discard reports cleanup failure and retains this token/path for
+    // recovery. Call only after every writer is closed. A missing name has no
+    // remaining owned file to remove; a changed identity is never deleted.
+    Failure discard();
     QString retainForRecovery() noexcept;
 private:
     friend class MediaArchiveService;

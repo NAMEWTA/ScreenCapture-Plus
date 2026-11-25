@@ -26,6 +26,8 @@ struct LanSettingsSnapshot {
     QString fingerprint;
     QString archiveDirectory;
     QString unavailableReason;
+    QStringList listeningAddresses;
+    quint16 listeningPort{};
 };
 
 struct LanSettingsChange {

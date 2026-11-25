@@ -10,7 +10,7 @@
 namespace HuhuCapture::Platform::Windows {
 
 enum class ClipboardError { None, InvalidInput, Allocation, Encoding, Busy, Publication, Partial };
-enum ClipboardFormat : unsigned { ClipboardPng = 1, ClipboardDibV5 = 2, ClipboardDib = 4, ClipboardFiles = 8 };
+enum ClipboardFormat : unsigned { ClipboardPng = 1, ClipboardDibV5 = 2, ClipboardDib = 4, ClipboardFiles = 8, ClipboardText = 16 };
 
 struct ClipboardResult {
     ClipboardError error{ClipboardError::None};
@@ -36,13 +36,14 @@ public:
     bool ready() const noexcept { return required_ != 0 && !consumed_; }
 private:
     void clear() noexcept;
-    HGLOBAL png_{}, dibV5_{}, dib_{}, files_{};
+    HGLOBAL png_{}, dibV5_{}, dib_{}, files_{}, text_{};
     UINT pngFormat_{};
     unsigned required_{};
     bool consumed_{};
     friend struct ClipboardPreparation;
     friend ClipboardPreparation prepareClipboardImage(int, int, std::size_t, std::span<const std::uint8_t>);
     friend ClipboardPreparation prepareClipboardFile(std::wstring_view);
+    friend ClipboardPreparation prepareClipboardText(std::wstring_view, std::size_t);
     friend ClipboardResult publishClipboard(ClipboardPayload&, HWND);
 };
 
@@ -55,6 +56,9 @@ HRESULT encodeDesktopPng(IStream* stream, int width, int height, std::size_t str
 ClipboardPreparation prepareClipboardImage(int width, int height, std::size_t stride,
     std::span<const std::uint8_t> pixels);
 ClipboardPreparation prepareClipboardFile(std::wstring_view path);
+// CF_UNICODETEXT is NUL-terminated UTF-16 with CRLF line endings. Embedded NUL
+// cannot represent complete plain text and fails instead of silently truncating.
+ClipboardPreparation prepareClipboardText(std::wstring_view text, std::size_t maximumBytes = 16 * 1024 * 1024);
 // Call on the GUI thread with a live owner HWND. Busy does not empty or replace
 // the old clipboard. Partial publication is observable and is never full success.
 ClipboardResult publishClipboard(ClipboardPayload& payload, HWND owner);

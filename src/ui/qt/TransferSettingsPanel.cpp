@@ -28,7 +28,7 @@ struct TransferSettingsPanel::State {
     LanSettingsSnapshot snapshot;
     quint64 nextToken{1}, pending{};
     QMetaObject::Connection events, destroyed;
-    bool subscribed{}, closed{};
+    bool subscribed{}, closed{}, edited{}, updating{};
     QLabel *heading{}, *live{}, *aliasLabel{}, *portLabel{}, *networkLabel{}, *identity{}, *directory{}, *hint{}, *status{};
     QCheckBox *enable{}, *discovery{};
     QLineEdit* alias{};
@@ -46,6 +46,7 @@ TransferSettingsPanel::TransferSettingsPanel(Transfer::TransferService& service,
     auto* outer = new QVBoxLayout(this); outer->setContentsMargins(20, 18, 20, 16); outer->setSpacing(12);
     state_->heading = Theme::label(this, 22); state_->heading->setFont(Theme::font(22, QFont::DemiBold));
     state_->live = Theme::label(this, 12, true); state_->live->setObjectName(QStringLiteral("lanServiceState"));
+    state_->live->setWordWrap(true);
     outer->addWidget(state_->heading); outer->addWidget(state_->live);
     state_->enable = new QCheckBox(this); state_->enable->setObjectName(QStringLiteral("lanEnable")); outer->addWidget(state_->enable);
     auto* form = new QFormLayout; form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
@@ -75,7 +76,12 @@ TransferSettingsPanel::TransferSettingsPanel(Transfer::TransferService& service,
     connect(state_->apply, &QPushButton::clicked, this, [this] { requestApply(); });
     connect(state_->close, &QPushButton::clicked, this, &QWidget::close);
     connect(state_->transfers, &QPushButton::clicked, this, &TransferSettingsPanel::transfersRequested);
-    connect(state_->enable, &QCheckBox::toggled, this, [this] { updateActions(); });
+    const auto edited = [this] { if (!state_->updating) state_->edited = true; };
+    connect(state_->enable, &QCheckBox::toggled, this, [this, edited] { edited(); updateActions(); });
+    connect(state_->discovery, &QCheckBox::toggled, this, edited);
+    connect(state_->alias, &QLineEdit::textEdited, this, edited);
+    connect(state_->port, &QSpinBox::valueChanged, this, edited);
+    connect(state_->interfaces, &QListWidget::itemChanged, this, edited);
     subscribe();
     refreshLanguage(); setSnapshot({});
 }
@@ -101,6 +107,7 @@ void TransferSettingsPanel::setTranslator(DesktopTranslator translator)
 
 void TransferSettingsPanel::refreshLanguage()
 {
+    const QSignalBlocker interfaces(state_->interfaces);
     auto text = [this](QStringView key) { return Presentation::text(state_->translator, key); };
     setWindowTitle(text(u"lan.settings")); state_->heading->setText(windowTitle());
     state_->enable->setText(text(u"lan.enable")); state_->discovery->setText(text(u"lan.discovery"));
@@ -115,7 +122,7 @@ void TransferSettingsPanel::refreshLanguage()
         auto* item = state_->interfaces->item(index);
         auto value = item->data(::Qt::UserRole + 1).toString();
         if (item->data(::Qt::UserRole + 2).toBool()) value += QStringLiteral(" · ") + text(u"lan.virtualNetwork");
-        if (!item->flags().testFlag(::Qt::ItemIsEnabled)) value += QStringLiteral(" · ") + text(u"lan.unavailable");
+        if (!item->data(::Qt::UserRole + 3).toBool()) value += QStringLiteral(" · ") + text(u"lan.unavailable");
         item->setText(value); item->setToolTip(value);
     }
     updateServiceState();
@@ -123,8 +130,10 @@ void TransferSettingsPanel::refreshLanguage()
 
 void TransferSettingsPanel::setSnapshot(const LanSettingsSnapshot& snapshot)
 {
+    const bool hadFailure = !state_->snapshot.unavailableReason.isEmpty();
     state_->snapshot = snapshot;
-    if (!state_->pending) {
+    if (!state_->pending && !state_->edited) {
+        state_->updating = true;
         const QSignalBlocker enable(state_->enable), discovery(state_->discovery);
         state_->enable->setChecked(snapshot.enabled); state_->discovery->setChecked(snapshot.discovery);
         state_->alias->setText(snapshot.alias); state_->port->setValue(snapshot.port ? snapshot.port : 53317);
@@ -137,12 +146,17 @@ void TransferSettingsPanel::setSnapshot(const LanSettingsSnapshot& snapshot)
             item->setData(::Qt::UserRole, network.address);
             item->setData(::Qt::UserRole + 1, network.name + QStringLiteral(" · ") + network.address);
             item->setData(::Qt::UserRole + 2, network.virtualNetwork);
-            item->setFlags(network.available ? ::Qt::ItemIsEnabled | ::Qt::ItemIsSelectable | ::Qt::ItemIsUserCheckable :
+            item->setData(::Qt::UserRole + 3, network.available);
+            // A saved missing adapter must remain removable. It still cannot
+            // be applied while selected; the host rechecks actual NICs too.
+            item->setFlags(network.available || network.selected ? ::Qt::ItemIsEnabled | ::Qt::ItemIsSelectable | ::Qt::ItemIsUserCheckable :
                 ::Qt::ItemIsSelectable | ::Qt::ItemIsUserCheckable);
             item->setCheckState(network.selected ? ::Qt::Checked : ::Qt::Unchecked);
         }
+        state_->updating = false;
     }
     if (!snapshot.unavailableReason.isEmpty()) showStatus(snapshot.unavailableReason, true);
+    else if (hadFailure) showStatus({}, false);
     refreshLanguage(); updateActions();
 }
 
@@ -160,7 +174,7 @@ bool TransferSettingsPanel::requestApply()
     for (int index = 0; index < state_->interfaces->count(); ++index) {
         const auto* item = state_->interfaces->item(index);
         if (item->checkState() == ::Qt::Checked) {
-            unavailable = unavailable || !item->flags().testFlag(::Qt::ItemIsEnabled);
+            unavailable = unavailable || !item->data(::Qt::UserRole + 3).toBool();
             change.addresses.append(item->data(::Qt::UserRole).toString());
         }
     }
@@ -177,7 +191,7 @@ void TransferSettingsPanel::completeChange(quint64 token, DesktopResult result,
     const LanSettingsSnapshot& effective, const QString& message)
 {
     if (!state_->pending || token != state_->pending) return;
-    state_->pending = 0; setSnapshot(effective);
+    state_->pending = 0; state_->edited = false; setSnapshot(effective);
     showStatus(message.isEmpty() ? Presentation::text(state_->translator, result == DesktopResult::Succeeded ?
         u"lan.settingsSaved" : result == DesktopResult::Cancelled ? u"lan.cancelled" : u"lan.failed") : message,
         result == DesktopResult::Failed);
@@ -186,8 +200,15 @@ void TransferSettingsPanel::completeChange(quint64 token, DesktopResult result,
 
 void TransferSettingsPanel::updateServiceState()
 {
-    state_->live->setText(Presentation::serviceState(state_->translator,
-        state_->service ? state_->service->state() : Transfer::ServiceState::Closed));
+    const auto service = state_->service ? state_->service->state() : Transfer::ServiceState::Closed;
+    auto value = Presentation::serviceState(state_->translator, service);
+    if (service == Transfer::ServiceState::Enabled && state_->snapshot.listeningPort) {
+        QStringList endpoints;
+        for (const auto& address : state_->snapshot.listeningAddresses)
+            endpoints.append(address + u':' + QString::number(state_->snapshot.listeningPort));
+        value += QStringLiteral(" · ") + endpoints.join(QStringLiteral(", "));
+    }
+    state_->live->setText(value);
     updateActions();
 }
 

@@ -11,6 +11,7 @@ pub const DISCOVERY_CHANGED: u32 = 6;
 pub const DISCOVERY_END: u32 = 7;
 pub const LISTENER_ERROR: u32 = 8;
 pub const STOPPED: u32 = 9;
+pub const DISCOVERY_REFRESH_END: u32 = 10;
 pub const EVENT_CAPACITY: usize = 64;
 
 pub struct HuhuBuffer(pub Vec<u8>);

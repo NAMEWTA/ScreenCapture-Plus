@@ -12,7 +12,10 @@ class QWindow;
 
 namespace HuhuCapture::Desktop {
 
-struct ClipboardLimits { std::uint64_t maximumImageBytes{512ull * 1024 * 1024}; };
+struct ClipboardLimits {
+    std::uint64_t maximumImageBytes{512ull * 1024 * 1024};
+    std::uint64_t maximumTextBytes{16ull * 1024 * 1024};
+};
 struct ClipboardPreparation;
 
 class PreparedClipboard final {
@@ -25,6 +28,7 @@ private:
     struct State;
     std::unique_ptr<State> state_;
     friend ClipboardPreparation prepareImage(const QImage&, ClipboardLimits, std::stop_token);
+    friend ClipboardPreparation prepareText(const QString&, ClipboardLimits, std::stop_token);
     friend ClipboardPreparation prepareFile(std::shared_ptr<const Media::MediaLease>, ClipboardLimits, std::stop_token);
     friend class SystemClipboard;
 };
@@ -42,6 +46,9 @@ struct ClipboardResult {
 ClipboardPreparation prepareImage(const QImage& image, ClipboardLimits limits = {}, std::stop_token stop = {});
 ClipboardPreparation prepareFile(std::shared_ptr<const Media::MediaLease> lease,
     ClipboardLimits limits = {}, std::stop_token stop = {});
+// Plain text is owned, valid Unicode. Windows publishes CF_UNICODETEXT (CRLF);
+// Linux publishes explicit UTF-8 MIME data through the same receipt/owner path.
+ClipboardPreparation prepareText(const QString& text, ClipboardLimits limits = {}, std::stop_token stop = {});
 
 // QApplication-owned, GUI-thread service. A history/editor window is only a
 // request origin; closing it must not destroy the Linux clipboard owner.

@@ -51,6 +51,7 @@ ClipboardPayload& ClipboardPayload::operator=(ClipboardPayload&& other) noexcept
         clear();
         png_ = std::exchange(other.png_, nullptr); dibV5_ = std::exchange(other.dibV5_, nullptr);
         dib_ = std::exchange(other.dib_, nullptr); files_ = std::exchange(other.files_, nullptr);
+        text_ = std::exchange(other.text_, nullptr);
         pngFormat_ = std::exchange(other.pngFormat_, 0); required_ = std::exchange(other.required_, 0);
         consumed_ = std::exchange(other.consumed_, false);
     }
@@ -62,6 +63,7 @@ void ClipboardPayload::clear() noexcept
     if (dibV5_) GlobalFree(std::exchange(dibV5_, nullptr));
     if (dib_) GlobalFree(std::exchange(dib_, nullptr));
     if (files_) GlobalFree(std::exchange(files_, nullptr));
+    if (text_) GlobalFree(std::exchange(text_, nullptr));
     required_ = 0; consumed_ = false;
 }
 
@@ -183,6 +185,37 @@ ClipboardPreparation prepareClipboardFile(std::wstring_view path)
     return output;
 }
 
+ClipboardPreparation prepareClipboardText(std::wstring_view text, std::size_t maximumBytes)
+{
+    ClipboardPreparation output;
+    if (maximumBytes < sizeof(wchar_t)) return failed(std::move(output), ClipboardError::InvalidInput, E_INVALIDARG);
+    const auto maximumCharacters = maximumBytes / sizeof(wchar_t);
+    std::size_t characters = 1; // The explicit UTF-16 terminator is part of the budget.
+    bool previousCr = false;
+    for (const wchar_t character : text) {
+        const auto added = std::size_t{1} + (character == L'\n' && !previousCr ? 1u : 0u);
+        if (!character || added > maximumCharacters - characters)
+            return failed(std::move(output), ClipboardError::InvalidInput, E_INVALIDARG);
+        characters += added;
+        previousCr = character == L'\r';
+    }
+    output.payload.text_ = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, characters * sizeof(wchar_t));
+    if (!output.payload.text_) return failed(std::move(output), ClipboardError::Allocation, GetLastError());
+    {
+        const Locked memory(output.payload.text_);
+        if (!memory.get()) return failed(std::move(output), ClipboardError::Allocation, GetLastError());
+        auto* destination = static_cast<wchar_t*>(memory.get());
+        previousCr = false;
+        for (const wchar_t character : text) {
+            if (character == L'\n' && !previousCr) *destination++ = L'\r';
+            *destination++ = character;
+            previousCr = character == L'\r';
+        }
+    }
+    output.result.requiredFormats = output.payload.required_ = ClipboardText;
+    return output;
+}
+
 ClipboardResult publishClipboard(ClipboardPayload& payload, HWND owner)
 {
     ClipboardResult result; result.requiredFormats = payload.required_;
@@ -199,6 +232,7 @@ ClipboardResult publishClipboard(ClipboardPayload& payload, HWND owner)
     };
     publish(CF_DIBV5, payload.dibV5_, ClipboardDibV5); publish(CF_DIB, payload.dib_, ClipboardDib);
     publish(payload.pngFormat_, payload.png_, ClipboardPng); publish(CF_HDROP, payload.files_, ClipboardFiles);
+    publish(CF_UNICODETEXT, payload.text_, ClipboardText);
     if (result.publishedFormats != result.requiredFormats)
         result.error = result.publishedFormats ? ClipboardError::Partial : ClipboardError::Publication;
     if (!CloseClipboard() && result.error == ClipboardError::None) {
