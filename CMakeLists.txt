@@ -666,6 +666,10 @@ if(HUHUCAPTURE_QT_VALIDATION)
             src/services/desktop/WindowActivation.h src/services/desktop/WindowActivation.cpp)
         set_target_properties(huhucapture_window_activation PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
         target_link_libraries(huhucapture_window_activation PUBLIC huhucapture_core Qt6::Core Qt6::Gui)
+        if(WIN32)
+            target_sources(huhucapture_window_activation PRIVATE src/platform/windows/WindowFocus.h)
+            target_link_libraries(huhucapture_window_activation PRIVATE user32)
+        endif()
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             target_sources(huhucapture_window_activation PRIVATE
                 src/platform/linux/WindowActivation.h src/platform/linux/WindowActivation.cpp
@@ -871,7 +875,8 @@ if(HUHUCAPTURE_QT_VALIDATION)
             huhucapture_test(native_recording_probe tests/qt/native_recording_probe.cpp
                 "${PROJECT_BINARY_DIR}/native-recording/$<CONFIG>")
             target_link_libraries(native_recording_probe PRIVATE Qt6::Widgets Qt6::Concurrent
-                huhucapture_recording_session huhucapture_native_media huhucapture_video_inspection)
+                huhucapture_recording_session huhucapture_native_media huhucapture_video_inspection
+                huhucapture_video_ffmpeg)
             set_tests_properties(native_recording_probe PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE
                 ENVIRONMENT "QT_QPA_PLATFORM=windows"
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:huhucapture_ffmpeg_avformat>")

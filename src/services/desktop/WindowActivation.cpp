@@ -12,15 +12,30 @@
 #ifdef Q_OS_LINUX
 #include "platform/linux/WindowActivation.h"
 #endif
+#ifdef Q_OS_WIN
+#include "platform/windows/WindowFocus.h"
+#endif
 
 namespace HuhuCapture::Desktop {
+namespace {
+bool focused(QWindow* window)
+{
+    // isActive also includes transient ancestors. Activation completion needs
+    // the requested window's actual focus, not only its active decoration.
+    if (!window || !window->isVisible() || !window->isExposed() || QGuiApplication::focusWindow() != window) return false;
+#ifdef Q_OS_WIN
+    if (!window->handle() || !Platform::Windows::hasForegroundFocus(reinterpret_cast<HWND>(window->winId()))) return false;
+#endif
+    return true;
+}
+}
 struct WindowActivation::State {
     std::atomic<quint64> sequence{};
     quint64 active{};
     QPointer<QWindow> window;
     QString token;
     QTimer deadline;
-    bool requested{};
+    bool requested{}, confirmationQueued{};
     std::vector<QMetaObject::Connection> connections;
 #ifdef Q_OS_LINUX
     std::unique_ptr<Platform::Linux::WindowActivation> wayland;
@@ -98,18 +113,34 @@ void WindowActivation::attempt()
             if (!lifetime || !state_->active || !state_->window) return;
         }
     }
-    if (state_->window->isActive() || QGuiApplication::focusWindow() == state_->window) complete();
+    if (focused(state_->window)) complete();
 }
-void WindowActivation::complete(Failure failure)
+void WindowActivation::complete(Failure failure, bool confirmed)
 {
     if (!state_->active) return;
     const auto token = state_->active;
-    const WindowActivationResult result{state_->requested,
-        !failure && state_->window && (state_->window->isActive() || QGuiApplication::focusWindow() == state_->window), std::move(failure)};
+    if (!failure && !confirmed) {
+        if (state_->confirmationQueued) return;
+        state_->confirmationQueued = true;
+        QTimer::singleShot(0, this, [this, token] {
+            if (state_->active != token) return;
+            state_->confirmationQueued = false;
+            // Native focus notifications can be transitional (in particular
+            // SetFocus after a rejected Windows SetForegroundWindow). Keep
+            // observing until the next dispatcher turn corroborates focus.
+            if (focused(state_->window)) complete({}, true);
+        });
+        return;
+    }
+    const WindowActivationResult result{state_->requested, !failure && focused(state_->window), std::move(failure)};
     for (const auto& connection : state_->connections) disconnect(connection);
     state_->connections.clear();
     if (state_->window) state_->window->removeEventFilter(this);
-    state_->deadline.stop(); state_->window.clear(); state_->token.clear(); state_->active = 0; state_->requested = false;
+    state_->deadline.stop(); state_->window.clear(); state_->token.clear(); state_->active = 0;
+    state_->requested = state_->confirmationQueued = false;
+    // The successful path already runs in its queued confirmation callback.
+    // Do not freeze success and defer delivery into another focus-loss window.
+    if (confirmed) { Q_EMIT finished(token, result); return; }
     QTimer::singleShot(0, this, [this, token, result] { Q_EMIT finished(token, result); });
 }
 void WindowActivation::cancel(quint64 token)

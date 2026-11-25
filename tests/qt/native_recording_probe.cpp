@@ -1,4 +1,6 @@
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <Windows.h>
 
 #include "recording/RecordingSession.h"
@@ -8,6 +10,7 @@
 #else
 #include "platform/windows/NativeMp4Recording.h"
 #include "services/media/VideoInspection.h"
+#include "recording_timeline.h"
 #endif
 
 #include <QApplication>
@@ -222,10 +225,10 @@ void inspectRecording(const QString& path, const recording::BackendResult& recor
     evidence[QStringLiteral("sha256")] = digest(path);
     require(!inspection.failure && recorded.prepared &&
         inspection.dimensions == QSize(recorded.prepared->region.width, recorded.prepared->region.height) &&
-        (gifProbe ? inspection.frames <= recorded.media.framesWritten : inspection.frames == recorded.media.framesWritten) &&
+        (!gifProbe || inspection.frames <= recorded.media.framesWritten) &&
         inspection.frames >= 2,
         gifProbe ? "The actual animated GIF must contain complete decoded frames after finalization" :
-            "Every frame accepted by the real MF writer must survive finalization and strict all-track inspection");
+            "The actual MF recording must retain complete geometry and pass strict all-track inspection");
 #ifdef HUHUCAPTURE_GIF_RECORDING_PROBE
     const auto decoded = worker([path, coverPath, frames = inspection.frames] {
         QImageReader reader(path, "gif");
@@ -245,6 +248,13 @@ void inspectRecording(const QString& path, const recording::BackendResult& recor
     require(std::abs(static_cast<double>(decoded) - static_cast<double>(recorded.media.framesWritten) * 1000.0 / 16) <= 20,
         "Legal GIF frame merging must retain the complete submitted 16 FPS timeline");
 #else
+    const auto timeline = worker([path, recorded] {
+        return HuhuCapture::Tests::verifyNativeRecordingTimeline(path, recorded.media, 30,
+            QSize(recorded.prepared->region.width, recorded.prepared->region.height));
+    });
+    evidence[QStringLiteral("timeline")] = timeline;
+    require(timeline.value(QStringLiteral("framesDecoded")).toInteger() == static_cast<qint64>(inspection.frames),
+        "The independent complete timeline decoder and archive inspector must agree on every output frame");
     const auto cover = worker([path] { return media::videoThumbnail(path, 256); });
     evidence[QStringLiteral("coverFailure")] = cover.failure.detail;
     evidence[QStringLiteral("coverDecoder")] = static_cast<int>(cover.decoder);

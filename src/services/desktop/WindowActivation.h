@@ -31,7 +31,7 @@ private:
     struct State;
     std::unique_ptr<State> state_;
     void attempt();
-    void complete(Failure failure = {});
+    void complete(Failure failure = {}, bool confirmed = false);
 };
 }
 Q_DECLARE_METATYPE(HuhuCapture::Desktop::WindowActivationResult)

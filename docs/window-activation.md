@@ -9,7 +9,12 @@ show their window and keep QApplication's dispatcher alive until completion.
 
 The result separates `requested` from `active`: sending a native request does
 not prove that the operating system gave the application focus. Success requires
-an actual `QWindow::isActive()` / `QGuiApplication::focusWindow()` observation.
+an actual exposed target matching `QGuiApplication::focusWindow()` on the next
+Qt dispatcher turn, immediately before result delivery. `QWindow::isActive()`
+also includes transient ancestors and alone cannot prove focus on the requested
+window. Windows additionally checks `GetForegroundWindow` and the GUI thread's
+actual `GetFocus` target (or its child). A rejected foreground request does not
+become success merely because a thread-local focus notification arrived.
 Non-desktop QPA backends such as offscreen and minimal return `Unavailable`.
 
 Windows, X11 and requests without an external token use Qt's normal
@@ -40,3 +45,23 @@ actually compiled the manager, generated protocol, service and tests, and run
 the offscreen refusal. Windows focus and externally supplied Wayland tokens still
 require their distinct real desktop/compositor runs; the existence of this
 adapter or a successful compile is not that evidence.
+
+The Windows CI run `45599557690`, job `139154681846`, found a focus assertion
+failure after 0.15 seconds; its original log did not include native focus state,
+so its exact competing-window sequence cannot be inferred. The follow-up keeps
+the positive actual-focus assertion, adds native/Qt state and typed-error
+diagnostics, and checks an actual window hidden during its focus notification
+cannot publish a stale success. A denied focus request remains a real timeout.
+
+The fix was checked against fixed Qt 6.12.1 commit
+`5af1a37e31a869cd6eb8a73d82e2c71a450e6634`: `qwindowswindow.cpp`
+(`ac396ee00df52f74a59fe6298a5a7d0fa86ac813`) calls `SetForegroundWindow`
+then `SetFocus`; `qguiapplication.cpp`
+(`fec2e580d808fe46a6715aee1e5e217fb8dbcef0`) delivers actual focus changes;
+`qwindow.cpp` (`84699bcf882937a261b38460254e0023e1cf562e`)
+defines the broader transient-chain semantics of `isActive`. No Qt code is
+copied. Microsoft documents the distinction between
+[foreground ownership](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getforegroundwindow),
+[thread-local focus](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setfocus),
+and an OS-permitted
+[foreground request](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow).
