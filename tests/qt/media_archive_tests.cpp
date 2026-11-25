@@ -170,7 +170,9 @@ void completeValidationAndOwnership(const QTemporaryDir& root)
     const auto good = archive.archiveImage(pixels());
     require(good.durable(), "create complete decoder reference");
     const auto png = read(good.path);
-    for (const auto cut : {qsizetype{0}, qsizetype{8}, png.size() / 2, png.size() - 1, png.size() - 12}) {
+    std::vector<qsizetype> cuts{0, 8, png.size() / 2};
+    for (qsizetype missing = 1; missing <= 12; ++missing) cuts.push_back(png.size() - missing);
+    for (const auto cut : cuts) {
         auto temporary = archive.createStaging();
         require(!temporary.failure, "create isolated incomplete receive");
         write(temporary.file.path(), png.first(cut));

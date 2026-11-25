@@ -24,6 +24,7 @@
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
 | `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；KWindowSystem 异步父窗导出已通过指定 Sway 生命周期测试 | PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
+| `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease 与 CPU / MemFd 数据面，固定客户端和受控失败路径补丁 | 实际采流 CI、X11 / GNOME / Plasma、音频及完整录制接线 |
 | `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭 | 双平台同进程 ABI 与依赖锁验证、Qt 设备和任务服务、完整媒体解码及两端互传 |
 
 同一工具的交互规则不能因为平台迁移而被“统一”成不同语义。例如普通矩形越过对边时可以翻转，批注范围则限制在原图内；普通序号按活动最大值加一，批注高水位编号永不复用。移动、文字与样式修改仍遵循现有历史语义，不借模型抽取改变撤销行为。

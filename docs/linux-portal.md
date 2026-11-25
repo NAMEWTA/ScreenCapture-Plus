@@ -1,6 +1,6 @@
 # Linux Portal 控制面
 
-本模块是 Issue #5 的 P00/P05 前置工作。它提供真实 Portal 能力查询、截图请求、ScreenCast 授权与 PipeWire remote 文件描述符交接，以及 GlobalShortcuts 会话、绑定和触发控制。它没有实现 PipeWire 视频帧消费、音频或正式 Qt 截图界面。编译通过、故障测试通过和桌面采集/快捷键验收必须分别记录。
+本模块是 Issue #5 的 P00/P05 前置工作。它提供真实 Portal 能力查询、截图请求、ScreenCast 授权与 PipeWire remote 文件描述符交接，以及 GlobalShortcuts 会话、绑定和触发控制。视频帧消费在独立的 [PipeWire 数据面](linux-pipewire.md)，音频或正式 Qt 截图界面仍需后续集成。编译通过、故障测试通过和桌面采集/快捷键验收必须分别记录。
 
 ## 模块边界
 
@@ -9,6 +9,7 @@
 - 直接链接 libportal 的 Screenshot、CreateSession、SelectSources、Start、Session.Close。X11 直接用其 Qt parent helper；Wayland 使用成熟异步导出后再交给 libportal 的 parent 抽象。仅用 GIO 查询公共 `Properties.GetAll` 能力，不另写一套 Portal 请求协议。
 - Screenshot 成功返回 Portal 给出的有效本地文件 URI。它不代表图片已经解码、导入历史或复制到剪贴板；那些操作由共享媒体服务完成。
 - ScreenCast 成功必须经过授权、非空 stream 元数据解析和真实 `OpenPipeWireRemote` FD 获取。`takePipeWireFd()` 只转移一次 FD，调用方负责关闭或将其所有权交给 PipeWire。
+- 存在 v6 `pipewire-serial` 时保留并校验其真实 uint64 值；数据面优先按 serial 连接同一授权 remote。旧 node ID 不能当成 serial，也不能据此回连到无关的全局源。
 - `PortalStream` 的 position/size 是 compositor 坐标，不能当作实际视频像素或 DPI 比例。后续 PipeWire 层必须依据协商格式读取像素尺寸、stride、buffer 类型与时间戳。
 - 不使用 X11 截图代替 Wayland 授权。Qt 的 xcb/Wayland 平台名仅作为环境记录；可用能力来自当前 Portal 的真实属性与请求结果。
 
@@ -131,4 +132,4 @@ artifacts/portal/portal_shortcuts_probe --bind --rebind-trigger CTRL+SHIFT+F12 -
 
 Shortcuts 探针的 `--bind` 必须观察到真实 Activated 信号才通过，默认等待 15 秒，可用 `--hold-ms` 调整人工观察时间。成功重绑或取消重绑后会重新统计激活；取消重绑还检查旧列表与 session 保留。未收到真实激活不会用能力版本或绑定返回值替代通过结果。
 
-当前工作环境没有可声明的 GNOME/Plasma Wayland 桌面，因此接受/拒绝/取消授权、Portal 对话框 parent 销毁、session 外部关闭、restore token 失效、真实截图内容、多屏缩放、快捷键实际绑定/触发/重绑均是 **not run**。异步 parent 的真实 Sway 检查与实际桌面 Portal 验收分开记录；PipeWire 帧/音频、完整应用退出和发行包部署仍需后续实现与验收。具体编译和自动故障检查结果以对应提交的 CI 为准，不用本说明预先宣称通过。
+当前工作环境没有可声明的 GNOME/Plasma Wayland 桌面，因此接受/拒绝/取消授权、Portal 对话框 parent 销毁、session 外部关闭、restore token 失效、真实截图内容、多屏缩放、快捷键实际绑定/触发/重绑均是 **not run**。异步 parent 的真实 Sway 检查与实际桌面 Portal 验收分开记录；PipeWire 数据面另行记录其真实采流验证，音频、完整应用退出和发行包部署仍需后续实现与验收。具体编译和自动故障检查结果以对应提交的 CI 为准，不用本说明预先宣称通过。

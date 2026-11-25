@@ -52,6 +52,7 @@ licenses apply independently of the root application license.
 | gif 0.13.3 | `image-rs/image-gif` `acf2f6f7e6195962a9f455dab50a278b7dabc884` | MIT OR Apache-2.0, image-rs Developers / nwin; [sources and checksums](gif/upstream.json), [MIT](gif/LICENSE-MIT), [Apache](gif/LICENSE-APACHE). Reuses the existing gifski dependency for strict complete-file decoding; no new GIF parser. |
 | windows-sys 0.52.0 | `microsoft/windows-rs` `3a605cba064b26f2a198ac58085f8c8836f47c38` | MIT OR Apache-2.0, Microsoft Corporation; [source and checksum](windows-rs/upstream.json), [MIT](windows-rs/LICENSE-MIT), [Apache](windows-rs/LICENSE-APACHE). Reuses the locked official bindings to identify the actual open Windows file handle. |
 | libportal 0.11.0 | `flatpak/libportal` `fc4d62cfe131e8494c82f597f92b2234d584c367` | LGPL-3.0-only; [COPYING](patches/libportal/COPYING) and [GPL text](patches/libportal/COPYING.GPL3) retained with the [reviewed patch](patches/libportal/0001-capture-request-lifetime-and-async-fd.patch). |
+| PipeWire 1.6.11 client | `PipeWire/pipewire` `4287f31510771fc999f8a58a024c81ca10b8d55f` | MIT for the selected client/examples, Wim Taymans and PipeWire contributors; [original COPYING](patches/pipewire/COPYING), [exact source blobs and controlled patches](../docs/linux-pipewire.md). The host daemon is not an application deployment dependency. |
 | FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Software validation configured with GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The mux example retains Fabrice Bellard's MIT notice and recorded frame-duration / finalization-error fixes. |
 | x264 API build 164 | VideoLAN x264 commit `3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3`, fetched from `mirror/x264` | GPL-2.0-or-later, x264 project; [license text](ffmpeg-examples/COPYING.x264). Runtime use through FFmpeg's existing libx264 adapter. |
 | KWindowSystem 6.32.0 | `KDE/kwindowsystem` `870fed584663656db8b5e3d4ec1a7048b5eff25f` | LGPL-2.0-or-later, Kai Uwe Broulik; only the two asynchronous xdg-foreign export classes are adapted. [Exact source blobs and changes](kwayland-parent/upstream.md), [license](kwayland-parent/LICENSES/LGPL-2.0-or-later.txt). |
@@ -62,8 +63,9 @@ source with the controlled LocalSend core into one Rust static library. It does
 not copy or replace gifski's encoder or original C API. Exact header, license and
 upstream lock-file provenance are retained in [gifski/upstream.json](gifski/upstream.json).
 The independent upstream lock is reference material; the aggregate's actual
-production resolution belongs to `third_party/localsend/Cargo.lock`. Initial
-aggregate resolution and matching-CRT validation remain explicit CI gates.
+production resolution belongs to `third_party/localsend/Cargo.lock`. The aggregate lock was recovered byte-for-byte from both platforms
+and normal builds now use `--locked`; matching-CRT executable validation remains
+an explicit CI gate.
 
 The software-codec probe also adapts the decode/drain API flow from FFmpeg's
 `doc/examples/demux_decode.c`, Copyright (c) 2012 Stefano Sabatini; the

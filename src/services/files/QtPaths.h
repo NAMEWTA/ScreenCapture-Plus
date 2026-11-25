@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDir>
 #include <QString>
 #include <filesystem>
 
@@ -18,7 +19,9 @@ inline std::filesystem::path nativePath(const QString& path)
 inline QString qtPath(const std::filesystem::path& path)
 {
 #ifdef _WIN32
-    return QString::fromStdWString(path.native());
+    // Qt paths use forward separators. Keep this representation consistent
+    // with QDir/QFileInfo values while retaining the exact Unicode filename.
+    return QDir::fromNativeSeparators(QString::fromStdWString(path.native()));
 #else
     return QString::fromUtf8(path.native().data(), static_cast<qsizetype>(path.native().size()));
 #endif

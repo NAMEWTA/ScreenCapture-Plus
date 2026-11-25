@@ -26,6 +26,9 @@ struct PortalCapabilities {
 
 struct PortalStream {
     quint32 nodeId{};
+    // ScreenCast v6 object.serial targets the same authorized remote. Never
+    // reinterpret this as a node ID, or reconnect it on an unrelated global FD.
+    std::optional<quint64> pipeWireSerial;
     quint32 sourceType{};
     QString id;
     // These are compositor coordinates, not negotiated PipeWire pixel geometry.

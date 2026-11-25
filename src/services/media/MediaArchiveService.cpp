@@ -125,6 +125,18 @@ Inspection inspectPng(const QString& path, const Limits& limits, std::stop_token
     if (file.size() <= 0 || static_cast<std::uint64_t>(file.size()) > limits.maximumFileBytes) {
         result.failure = {Error::Budget, QStringLiteral("Media file exceeds the byte budget")}; return result;
     }
+    // The pinned Qt iod_read_fn synthesizes missing IEND CRC bytes for a
+    // seekable device. Keep its mature decoder, but require the actual complete
+    // zero-length IEND chunk before it can apply that compatibility behavior.
+    // This is a physical completion check, not another PNG chunk parser.
+    constexpr std::array<char, 12> endChunk{
+        0, 0, 0, 0, 'I', 'E', 'N', 'D', char(0xae), char(0x42), char(0x60), char(0x82)};
+    if (file.size() < static_cast<qint64>(endChunk.size()) ||
+        !file.seek(file.size() - static_cast<qint64>(endChunk.size())) ||
+        file.read(static_cast<qint64>(endChunk.size())) != QByteArray(endChunk.data(), endChunk.size()) ||
+        !file.seek(0)) {
+        result.failure = {Error::InvalidMedia, QStringLiteral("PNG has no complete physical IEND chunk")}; return result;
+    }
     QImageReader reader(&file, "png");
     reader.setAutoDetectImageFormat(false);
     reader.setDecideFormatFromContent(false);
@@ -134,8 +146,9 @@ Inspection inspectPng(const QString& path, const Limits& limits, std::stop_token
     if (!layout || layout->bytes > limits.maximumImageBytes) {
         result.failure = {Error::Budget, QStringLiteral("Decoded image exceeds the pixel budget")}; return result;
     }
-    // The pinned Qt QPngHandler calls png_read_image AND png_read_end. A
-    // short read reaches libpng's error path; no partial image is accepted.
+    // Qt then calls png_read_image AND png_read_end; short body reads still
+    // reach libpng's error path. The physical IEND check above closes Qt's
+    // documented-in-source truncated-final-CRC compatibility exception.
     const auto image = reader.read();
     if (image.isNull() || image.size() != size || reader.error() != QImageReader::UnknownError) {
         result.failure = {Error::InvalidMedia, reader.errorString()}; return result;

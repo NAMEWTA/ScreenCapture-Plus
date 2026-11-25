@@ -28,10 +28,17 @@ cargo test -p huhucapture-native --locked --no-fail-fast
 cargo rustc -p huhucapture-native --release --locked -- --print native-static-libs
 ```
 
-首次加入聚合成员时，需要真实 Cargo 解析并收回 Windows/Linux 的锁文件，然后
-恢复 `--locked`。不能把 core 阶段的旧锁称为已经验证的聚合锁，不能补造 checksum。
+聚合锁已从提交 `c16aba4c1662645a93817706b8b35e85a6511fab` 的 Windows/Linux
+真实 Cargo 构建收回；两端字节完全一致，SHA-256 为
+`02579ba6cce8b2a4e55a464834b895f40dfb8b677e5211b5883fdd0b8369172c`。
+CI 恢复 `--locked`，不会在每次构建重新解析。锁中的 registry checksum 来自
+实际 Cargo 输出；既有依赖的 checksum 均未改变。
 编码依赖以固定上游锁中的实际版本为基准；版本漂移需要独立说明及编码对照。
 最终 C++ 链接使用该次构建打印的 `native-static-libs`，不猜测系统库列表。
+Windows 的 `/defaultlib:msvcrt` 原样保留为链接选项。官方 windows-sys 使用的
+`windows.0.52.0.lib` 从同一次 Cargo metadata 指向的 `windows_x86_64_msvc`
+0.52.6 包取得，记录 registry checksum 与导入库 SHA-256，复制到构建证据目录后
+按验证过的绝对路径链接。缺失或变化必须失败，不依赖开发机的额外 LIB 路径。
 
 gifski 的 AGPL-3.0-or-later、LocalSend 的 Apache-2.0 及依赖许可证各自保留。
 自有桥代码使用项目许可；它不把最终组合产物重新标为 MIT-only。正式发行还需

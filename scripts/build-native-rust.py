@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -91,6 +92,8 @@ def main():
         raise SystemExit("Rust did not report one exact native-static-libs list")
     libraries = []
     link_options = []
+    library_files = []
+    cargo_packages = json.loads(metadata)["packages"]
     for item in matches[0].split():
         # The fixed Windows standard library reports its dynamic CRT as an
         # actual linker directive, not a filename. Preserve this directive;
@@ -101,6 +104,37 @@ def main():
         value = item[2:] if item.startswith("-l") else item
         if not re.fullmatch(r"[A-Za-z0-9_.+-]+", value):
             raise SystemExit("Unrecognized native link input: " + item)
+        if host.endswith("windows-msvc") and re.fullmatch(r"windows\.\d+\.\d+\.\d+\.lib", value):
+            # Official windows-sys bindings use their matching windows-targets
+            # import library. Rust reports its name but not Cargo's -L search
+            # directory. Resolve only the actual locked host package, preserve
+            # its bytes, and pass that verified absolute path to CMake.
+            matches = []
+            for package in cargo_packages:
+                if package["name"] != "windows_x86_64_msvc":
+                    continue
+                candidate = Path(package["manifest_path"]).parent / "lib" / value
+                if candidate.is_file():
+                    matches.append((package, candidate))
+            if len(matches) != 1:
+                raise SystemExit("Missing or ambiguous official Windows import library: " + value)
+            package, source = matches[0]
+            locked_package = [entry for entry in resolved if entry["name"] == package["name"]
+                              and entry["version"] == package["version"]
+                              and entry.get("source") == package.get("source")]
+            if len(locked_package) != 1 or not locked_package[0].get("checksum"):
+                raise SystemExit("Windows import library is not from the resolved registry lock")
+            destination = evidence / "native-libraries" / value
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+                raise SystemExit("Windows import library changed during retention")
+            library_files.append({"path": destination.as_posix(), "sha256": digest,
+                                  "package": package["name"], "version": package["version"],
+                                  "registryChecksum": locked_package[0]["checksum"],
+                                  "source": package["source"]})
+            value = destination.as_posix()
         libraries.append(value)
     windows = host.endswith("windows-msvc")
     if windows and any(re.fullmatch(r"libcmt(?:d)?(?:\.lib)?", item, re.IGNORECASE) for item in libraries):
@@ -115,7 +149,8 @@ def main():
         "crate": native["package"], "library": library.as_posix(),
         "librarySha256": hashlib.sha256(library.read_bytes()).hexdigest(),
         "cargoLockSha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
-        "nativeLibraries": libraries, "nativeLinkOptions": link_options, "codecPackages": pins,
+        "nativeLibraries": libraries, "nativeLinkOptions": link_options,
+        "nativeLibraryFiles": library_files, "codecPackages": pins,
         "windowsCrt": "MD" if windows else None,
         "bootstrapResolution": options.bootstrap_lock,
     }

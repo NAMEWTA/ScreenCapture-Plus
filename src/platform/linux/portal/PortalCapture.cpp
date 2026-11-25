@@ -345,6 +345,7 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
             return;
         }
         QSet<quint32> nodes;
+        QSet<quint64> serials;
         GVariantIter iterator;
         g_variant_iter_init(&iterator, streams);
         guint32 node;
@@ -358,6 +359,20 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
             nodes.insert(node);
             PortalStream stream;
             stream.nodeId = node;
+            g_autoptr(GVariant) serial = g_variant_lookup_value(values, "pipewire-serial", nullptr);
+            if (serial) {
+                if (!g_variant_is_of_type(serial, G_VARIANT_TYPE_UINT64) || g_variant_get_uint64(serial) == 0) {
+                    state->finish(pending, failure(Code::Failed, QStringLiteral("ScreenCast Portal returned an invalid PipeWire serial")));
+                    return;
+                }
+                const auto value = g_variant_get_uint64(serial);
+                if (serials.contains(value)) {
+                    state->finish(pending, failure(Code::Failed, QStringLiteral("ScreenCast Portal returned duplicate PipeWire serials")));
+                    return;
+                }
+                serials.insert(value);
+                stream.pipeWireSerial = value;
+            }
             gint32 x, y;
             if (g_variant_lookup(values, "position", "(ii)", &x, &y)) stream.position = QPoint(x, y);
             if (g_variant_lookup(values, "size", "(ii)", &x, &y)) {

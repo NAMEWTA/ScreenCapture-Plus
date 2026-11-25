@@ -144,6 +144,59 @@
       "sourceManifest": "third_party/kwayland-parent/upstream.md",
       "protocolBlob": "cc3271dca4d6211bf6d04c34c0ca973c52f9b552",
       "qtPrivateAbi": "6.12.1"
+    },
+    "pipewire": {
+      "repository": "https://github.com/PipeWire/pipewire.git",
+      "version": "1.6.11",
+      "commit": "4287f31510771fc999f8a58a024c81ca10b8d55f",
+      "clientLicense": "MIT",
+      "patches": [
+        {
+          "path": "third_party/patches/pipewire/0001-owned-remote-fd-on-setup-error.patch",
+          "sha256": "5886887cfdbec4f2ee148358aa52f1b626dab60d29b2d01b4a0876c2eaf7a5c6"
+        },
+        {
+          "path": "third_party/patches/pipewire/0002-core-new-error-cleanup.patch",
+          "sha256": "4086eda6e2288c0059753783f709452013e7f50683cb50ee0749cc0068c7c694"
+        },
+        {
+          "path": "third_party/patches/pipewire/0003-unlink-other-failed-loop-sources.patch",
+          "sha256": "2eb40e839bb252e7a434b93e61d873bfff8bdd8b686b6d51b5d9aa4dde0a1ba1"
+        }
+      ],
+      "mesonOptions": [
+        "--buildtype=release",
+        "-Dauto_features=disabled",
+        "-Ddocs=disabled",
+        "-Dman=disabled",
+        "-Dexamples=disabled",
+        "-Dtests=disabled",
+        "-Dinstalled_tests=disabled",
+        "-Dsession-managers=[]",
+        "-Dpipewire-alsa=disabled",
+        "-Dpipewire-jack=disabled",
+        "-Dpipewire-v4l2=disabled",
+        "-Dspa-plugins=enabled",
+        "-Dsupport=enabled",
+        "-Dvideoconvert=enabled",
+        "-Daudioconvert=enabled",
+        "-Daudiomixer=disabled",
+        "-Dcontrol=disabled",
+        "-Daudiotestsrc=disabled",
+        "-Dvideotestsrc=disabled",
+        "-Ddbus=disabled",
+        "-Dflatpak=disabled",
+        "-Dlegacy-rtkit=false",
+        "-Dv4l2=disabled",
+        "-Dgstreamer=disabled",
+        "-Dffmpeg=disabled",
+        "-Dpw-cat=disabled",
+        "-Dpw-cat-ffmpeg=disabled",
+        "-Dsystemd-user-service=disabled",
+        "-Dsystemd-system-service=disabled",
+        "-Dlibsystemd=disabled",
+        "-Dlogind=disabled"
+      ]
     }
   }
 }

@@ -8,9 +8,13 @@ include(CTest)
 option(HUHUCAPTURE_QT_VALIDATION "Build the pinned Qt migration validation targets" OFF)
 option(HUHUCAPTURE_PORTAL_VALIDATION "Build the real Linux Portal control-plane validation" OFF)
 option(HUHUCAPTURE_FFMPEG_VALIDATION "Build the pinned software-codec API validation" OFF)
+option(HUHUCAPTURE_PIPEWIRE_VALIDATION "Build the fixed Linux PipeWire data-plane validation" OFF)
 option(HUHUCAPTURE_RUST_VALIDATION "Link one Rust aggregate into the real Qt ABI probe" OFF)
 if(HUHUCAPTURE_PORTAL_VALIDATION AND NOT HUHUCAPTURE_QT_VALIDATION)
     message(FATAL_ERROR "Portal validation requires HUHUCAPTURE_QT_VALIDATION=ON")
+endif()
+if(HUHUCAPTURE_PIPEWIRE_VALIDATION AND NOT HUHUCAPTURE_PORTAL_VALIDATION)
+    message(FATAL_ERROR "PipeWire validation requires HUHUCAPTURE_PORTAL_VALIDATION=ON")
 endif()
 if(HUHUCAPTURE_FFMPEG_VALIDATION AND NOT HUHUCAPTURE_QT_VALIDATION)
     message(FATAL_ERROR "Software-codec validation requires HUHUCAPTURE_QT_VALIDATION=ON")
@@ -33,6 +37,11 @@ target_compile_features(huhucapture_core INTERFACE cxx_std_20)
 if(MSVC)
     target_compile_options(huhucapture_core INTERFACE /utf-8 /permissive-)
 endif()
+
+find_package(Threads REQUIRED)
+add_library(huhucapture_media_frames STATIC src/core/MediaFrame.cpp)
+target_link_libraries(huhucapture_media_frames PUBLIC huhucapture_core Threads::Threads)
+set_target_properties(huhucapture_media_frames PROPERTIES CXX_EXTENSIONS OFF)
 
 # Filesystem publication is an OS seam; the archive naming/ownership rules stay
 # shared. This target never depends on Qt or the presentation layer.
@@ -63,6 +72,8 @@ function(huhucapture_test name source)
 endfunction()
 
 if(BUILD_TESTING)
+    huhucapture_test(media_frame_tests tests/media_frame_tests.cpp)
+    target_link_libraries(media_frame_tests PRIVATE huhucapture_media_frames)
     huhucapture_test(pixel_buffer tests/PixelBufferTests.cpp)
     huhucapture_test(annotations tests/annotation_tests.cpp)
     huhucapture_test(annotation_regions tests/annotation_region_tests.cpp)
@@ -72,6 +83,7 @@ if(BUILD_TESTING)
     huhucapture_test(toolbar_layout tests/toolbar_layout_tests.cpp)
     huhucapture_test(media_file_names tests/media_file_name_tests.cpp)
     huhucapture_test(release_versions tests/release_version_tests.cpp)
+    huhucapture_test(shortcut_keys tests/shortcut_keys_tests.cpp)
     huhucapture_test(annotation_model tests/annotation_model_tests.cpp)
     huhucapture_test(box_model tests/box_model_tests.cpp)
     huhucapture_test(stroke_model tests/stroke_model_tests.cpp)
@@ -127,6 +139,18 @@ if(HUHUCAPTURE_QT_VALIDATION)
         "${PROJECT_BINARY_DIR}/editor-render/$<CONFIG>")
     target_link_libraries(qt_editor_components PRIVATE huhucapture_editor)
     set_tests_properties(qt_editor_components PROPERTIES TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
+    add_library(huhucapture_desktop STATIC
+        src/ui/qt/DesktopTypes.h src/ui/qt/DesktopTheme.h
+        src/ui/qt/HistoryWindow.h src/ui/qt/HistoryWindow.cpp
+        src/ui/qt/SettingsWindow.h src/ui/qt/SettingsWindow.cpp
+        src/ui/qt/AboutPanel.h src/ui/qt/AboutPanel.cpp)
+    set_target_properties(huhucapture_desktop PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+    target_link_libraries(huhucapture_desktop PUBLIC huhucapture_core Qt6::Widgets)
+    huhucapture_test(qt_desktop_components tests/qt/desktop_component_tests.cpp
+        "${PROJECT_BINARY_DIR}/desktop-render/$<CONFIG>")
+    target_link_libraries(qt_desktop_components PRIVATE huhucapture_desktop)
+    set_tests_properties(qt_desktop_components PROPERTIES TIMEOUT 120
         ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
     if(WIN32)
         add_test(NAME qt_annotation_missing_font
@@ -210,12 +234,34 @@ if(HUHUCAPTURE_QT_VALIDATION)
             endforeach()
         endif()
         add_library(huhucapture_rust STATIC IMPORTED)
+        string(JSON native_file_count LENGTH "${native_metadata}" nativeLibraryFiles)
+        if(native_file_count GREATER 0)
+            math(EXPR native_file_last "${native_file_count} - 1")
+            foreach(index RANGE ${native_file_last})
+                string(JSON native_file GET "${native_metadata}" nativeLibraryFiles ${index} path)
+                string(JSON native_file_expected GET "${native_metadata}" nativeLibraryFiles ${index} sha256)
+                if(NOT EXISTS "${native_file}")
+                    message(FATAL_ERROR "A locked native dependency import library is missing")
+                endif()
+                file(SHA256 "${native_file}" native_file_actual)
+                if(NOT native_file_actual STREQUAL native_file_expected)
+                    message(FATAL_ERROR "A locked native dependency import library changed")
+                endif()
+            endforeach()
+        endif()
         set_target_properties(huhucapture_rust PROPERTIES IMPORTED_LOCATION "${native_library}"
             INTERFACE_LINK_LIBRARIES "${native_system_libraries}"
             INTERFACE_LINK_OPTIONS "${native_link_options}"
             INTERFACE_INCLUDE_DIRECTORIES "${PROJECT_SOURCE_DIR}/src/platform/rust/include;${PROJECT_SOURCE_DIR}/third_party/gifski")
         add_library(huhucapture_gif_inspection STATIC src/services/media/GifInspection.cpp)
         target_link_libraries(huhucapture_gif_inspection PUBLIC huhucapture_media_archive huhucapture_rust)
+        add_library(huhucapture_transfer STATIC
+            src/services/transfer/ReceiveSink.h
+            src/services/transfer/TransferService.h
+            src/services/transfer/TransferService.cpp)
+        set_target_properties(huhucapture_transfer PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+        target_link_libraries(huhucapture_transfer PUBLIC huhucapture_core Qt6::Core
+            PRIVATE huhucapture_rust Threads::Threads)
         huhucapture_test(qt_rust_bridge tests/qt/rust_bridge_probe.cpp
             "${PROJECT_BINARY_DIR}/rust-bridge/$<CONFIG>")
         target_link_libraries(qt_rust_bridge PRIVATE huhucapture_gif_inspection)
@@ -307,6 +353,22 @@ if(HUHUCAPTURE_QT_VALIDATION)
             PkgConfig::WAYLAND_CLIENT PkgConfig::LIBPORTAL PkgConfig::GIO)
         # This executable requires a real desktop and user authorization. It is
         # deliberately not reported as a passing offscreen CTest capture test.
+    endif()
+    if(HUHUCAPTURE_PIPEWIRE_VALIDATION)
+        pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3=1.6.11)
+        add_library(huhucapture_pipewire STATIC src/platform/linux/pipewire/PipeWireCapture.cpp)
+        target_link_libraries(huhucapture_pipewire PUBLIC huhucapture_media_frames
+            PRIVATE PkgConfig::PIPEWIRE Threads::Threads)
+        set_target_properties(huhucapture_pipewire PROPERTIES CXX_EXTENSIONS OFF)
+        target_compile_options(huhucapture_pipewire PRIVATE -Wall -Wextra -Wpedantic)
+        huhucapture_test(pipewire_fd_tests tests/platform/pipewire_fd_tests.cpp)
+        target_link_libraries(pipewire_fd_tests PRIVATE huhucapture_pipewire PkgConfig::PIPEWIRE)
+        add_executable(pipewire_capture_probe tests/platform/pipewire_capture_probe.cpp)
+        target_compile_definitions(pipewire_capture_probe PRIVATE QT_NO_KEYWORDS)
+        target_link_libraries(pipewire_capture_probe PRIVATE huhucapture_pipewire
+            huhucapture_portal Qt6::Widgets)
+        # Actual Portal/PipeWire frames require an owned compositor and daemon;
+        # the isolated wrapper in CI produces the corresponding evidence.
     endif()
     if(HUHUCAPTURE_FFMPEG_VALIDATION)
         if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")

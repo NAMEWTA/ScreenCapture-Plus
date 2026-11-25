@@ -50,10 +50,8 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.13.17'
-      - name: Resolve and build the first aggregate lock with preserved GIF dependencies
-        # Review-only bootstrap. The actual lock is retained on both platforms;
-        # remove --bootstrap-lock once that resolution is reviewed and committed.
-        run: python "$GITHUB_WORKSPACE/scripts/build-native-rust.py" --bootstrap-lock
+      - name: Build the reviewed aggregate lock and preserve its actual native link inputs
+        run: python "$GITHUB_WORKSPACE/scripts/build-native-rust.py"
       - name: Run real TLS, filesystem and bounded transfer tests
         run: |
           cargo test --locked -p localsend --features discovery --no-fail-fast
@@ -82,7 +80,7 @@ jobs:
       - name: Exercise real GIF, TLS, complete decode, durable commit and shutdown
         working-directory: .
         run: |
-          cmake --build artifacts/cmake/native-validation --config Release --target qt_rust_bridge --parallel 2
+          cmake --build artifacts/cmake/native-validation --config Release --target qt_rust_bridge huhucapture_transfer --parallel 2
           ctest --test-dir artifacts/cmake/native-validation -C Release --output-on-failure --no-tests=error -R '^qt_rust_bridge$'
       - name: Retain the actual workspace dependency resolution
         if: always()

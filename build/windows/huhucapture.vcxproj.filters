@@ -398,6 +398,9 @@
     <ClInclude Include="..\..\src\core\MosaicPixels.h">
       <Filter>src\core</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\core\ShortcutKeys.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\editor\ToolSettings.h">
       <Filter>src\editor</Filter>
     </ClInclude>
@@ -435,6 +438,9 @@
       <Filter>src\ui</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\ui\settings\SettingsTheme.h">
+      <Filter>src\ui\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ui\SettingsMetrics.h">
       <Filter>src\ui\settings</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\ui\settings\SettingsSelectPopup.h">

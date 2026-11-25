@@ -98,6 +98,7 @@ int main(int argc, char** argv)
             for (const auto& stream : streams) {
                 QJsonObject node{{"nodeId", static_cast<qint64>(stream.nodeId)},
                                  {"sourceType", static_cast<qint64>(stream.sourceType)}, {"id", stream.id}};
+                if (stream.pipeWireSerial) node["pipeWireSerial"] = QString::number(*stream.pipeWireSerial);
                 if (stream.position) node["logicalPosition"] = QJsonArray{stream.position->x(), stream.position->y()};
                 if (stream.size) node["logicalSize"] = QJsonArray{stream.size->width(), stream.size->height()};
                 nodes.push_back(node);

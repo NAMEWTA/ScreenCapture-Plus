@@ -171,6 +171,7 @@
     <ClInclude Include="..\..\src\core\MediaFileName.h" />
     <ClInclude Include="..\..\src\core\MediaClock.h" />
     <ClInclude Include="..\..\src\core\MosaicPixels.h" />
+    <ClInclude Include="..\..\src\core\ShortcutKeys.h" />
     <ClInclude Include="..\..\src\editor\ToolSettings.h" />
     <ClInclude Include="..\..\src\core\RecordingResult.h" />
     <ClInclude Include="..\..\src\core\ReleaseVersion.h" />
@@ -217,6 +218,7 @@
     <ClInclude Include="..\..\src\ui\Tray.h" />
     <ClInclude Include="..\..\src\ui\WinClipboard.h" />
     <ClInclude Include="..\..\src\ui\settings\SettingsTheme.h" />
+    <ClInclude Include="..\..\src\ui\SettingsMetrics.h" />
     <ClInclude Include="..\..\src\ui\settings\SettingsSelectPopup.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSetting.h" />
     <ClInclude Include="..\..\src\ui\settings\WinSettingAbout.h" />
