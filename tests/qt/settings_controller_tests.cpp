@@ -162,7 +162,7 @@ void launchRegistered()
 }
 void injectChord()
 {
-    const std::array<WORD, 3> keys{VK_CONTROL, VK_MENU, VK_F9};
+    const std::array<WORD, 3> keys{VK_CONTROL, VK_SHIFT, VK_F9};
     std::array<INPUT, 6> input{};
     for (std::size_t index = 0; index < 3; ++index) {
         input[index].type = INPUT_KEYBOARD; input[index].ki.wVk = keys[index];
@@ -216,7 +216,7 @@ void injectChord(bool notifyUnchangedMapping = false)
     std::unique_ptr<xcb_test_get_version_reply_t, decltype(&std::free)> version(
         xcb_test_get_version_reply(connection, xcb_test_get_version(connection, 2, 2), nullptr), std::free);
     require(version && version->major_version >= 2, "Actual server provides XTEST");
-    std::array<xcb_keycode_t, 3> keys{}; const std::array<xcb_keysym_t, 3> wanted{XKB_KEY_Control_L, XKB_KEY_Alt_L, XKB_KEY_F9};
+    std::array<xcb_keycode_t, 3> keys{}; const std::array<xcb_keysym_t, 3> wanted{XKB_KEY_Control_L, XKB_KEY_Shift_L, XKB_KEY_F9};
     for (std::size_t index = 0; index < keys.size(); ++index) {
         auto* codes = xcb_key_symbols_get_keycode(symbols, wanted[index]); require(codes && *codes, "Translate real XTEST chord");
         keys[index] = *codes; std::free(codes);
@@ -294,8 +294,11 @@ void initializationOwnerLifetime()
 
 void nativeContracts(const QString& root)
 {
-    const auto firstKeys = desktop::parseShortcut(QStringLiteral("Ctrl+Alt+F9"));
-    const auto secondKeys = desktop::parseShortcut(QStringLiteral("Ctrl+Alt+F10"));
+    // Default XKB maps Ctrl+Alt+Fn to the server's SwitchScreen action. The
+    // server consumes that action before delivering any passive-grab KeyPress,
+    // including on Xvfb. Keep real input checks clear of those reserved chords.
+    const auto firstKeys = desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F9"));
+    const auto secondKeys = desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F10"));
     require(desktop::parseShortcut(QStringLiteral("ctrl++")) == QStringList{QStringLiteral("Ctrl"), QStringLiteral("+")}, "Legacy literal plus survives parsing");
     require(desktop::parseShortcut(QStringLiteral("Ctrl+Alt+A")) == QStringList{QStringLiteral("Ctrl"), QStringLiteral("Alt"), QStringLiteral("A")}, "Explicit migrated custom shortcut stays unchanged");
     require(desktop::parseShortcut(QStringLiteral("Ctrl+C")).isEmpty(), "Shared reserved shortcut policy is reused");
@@ -305,7 +308,7 @@ void nativeContracts(const QString& root)
     config::SettingsStore conflict(QDir(root).filePath(QStringLiteral("native-conflict.json"))); require(conflict.load().ok(), "Load actual missing settings");
     write(conflict.path(), "{\"outside\":true}");
     bool attempted{};
-    const auto rejected = a.bind(secondKeys, [&] { attempted = true; return conflict.setValue({"shortcutKey", "cap"}, "Ctrl+Alt+F10").ok(); });
+    const auto rejected = a.bind(secondKeys, [&] { attempted = true; return conflict.setValue({"shortcutKey", "cap"}, "Ctrl+Shift+F10").ok(); });
     require(attempted && rejected.code == desktop::ShortcutError::SaveFailed, "Real stale-config write rejects a successfully registered candidate");
     require(first.snapshot().registered && first.snapshot().requestedKeys == firstKeys, "Previous actual binding survives failed persistence");
     require(b.bind(firstKeys).code == desktop::ShortcutError::Conflict, "Preserved binding still conflicts at the OS");
@@ -428,36 +431,36 @@ void render(QWidget& window, const QString& directory, const QString& name)
 void controllerContracts(const QString& root, const QString& executable, const QString& artifacts)
 {
     const auto path = QDir(root).filePath(QStringLiteral("controller-config.json"));
-    const QByteArray original = "{\"common\":{\"autoStart\":true,\"language\":\"en-US\",\"future\":42},\"shortcutKey\":{\"cap\":\"Ctrl+Alt+F8\"},\"outside\":\"preserve\"}";
+    const QByteArray original = "{\"common\":{\"autoStart\":true,\"language\":\"en-US\",\"future\":42},\"shortcutKey\":{\"cap\":\"Ctrl+Shift+F8\"},\"outside\":\"preserve\"}";
     write(path, original); config::SettingsStore store(path); require(store.load().ok(), "Load actual controller config");
     localization::LanguageCatalog catalog(languagePaths(root)); require(catalog.load(QStringLiteral("en-US")).usable, "Load actual embedded language catalog");
     app::SettingsController controller(store, catalog, executable);
     require(controller.initialize(), "Initialize the production controller with shared loaded services");
     waitFor([&] { return !controller.busy(); }, "Application-owned original shortcut registers");
-    require(controller.snapshot().captureShortcut == QStringLiteral("Ctrl+Alt+F8"), "UI reflects actual registered shortcut");
+    require(controller.snapshot().captureShortcut == QStringLiteral("Ctrl+Shift+F8"), "UI reflects actual registered shortcut");
     require(!controller.snapshot().autoStart && startupBytes().isNull() && read(path) == original,
         "Initialization reports actual disabled OS state and neither applies saved autoStart=true nor rewrites config");
     QPointer<ui::SettingsWindow> window(controller.openSettings(ui::SettingsWindow::Page::Shortcut)); require(window, "Open the production shared settings window"); settle();
     child<QPushButton>(*window, "settingsCaptureShortcut")->click(); settle(); require(window->capturingShortcut(), "Actual shortcut recorder enters capture state");
     {
         desktop::GlobalShortcut competitor; Bindings events(competitor); initializeNative(competitor);
-        require(!events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Alt+F8"))), "UI capture signal actually releases the OS hotkey"); competitor.shutdown();
+        require(!events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F8"))), "UI capture signal actually releases the OS hotkey"); competitor.shutdown();
     }
-    key(*child<QKeySequenceEdit>(*window, "settingsShortcutRecorder"), Qt::Key_F10, Qt::ControlModifier | Qt::AltModifier);
+    key(*child<QKeySequenceEdit>(*window, "settingsShortcutRecorder"), Qt::Key_F10, Qt::ControlModifier | Qt::ShiftModifier);
     waitFor([&] { return !controller.busy() && !window->changePending(); }, "Actual settings shortcut request completes");
-    require(store.value({"shortcutKey", "cap"}).toString() == QStringLiteral("Ctrl+Alt+F10") &&
-        controller.snapshot().captureShortcut == QStringLiteral("Ctrl+Alt+F10"), "UI chord flows through native registration and real persistence");
+    require(store.value({"shortcutKey", "cap"}).toString() == QStringLiteral("Ctrl+Shift+F10") &&
+        controller.snapshot().captureShortcut == QStringLiteral("Ctrl+Shift+F10"), "UI chord flows through native registration and real persistence");
     desktop::GlobalShortcut competitor; Bindings events(competitor); initializeNative(competitor);
-    require(events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Alt+F10"))).code == desktop::ShortcutError::Conflict,
+    require(events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F10"))).code == desktop::ShortcutError::Conflict,
         "Controller's new binding is genuinely owned at the OS");
     auto external = store.document(); external.insert(QStringLiteral("externalWriter"), true);
     const auto externalBytes = QJsonDocument(external).toJson(); write(path, externalBytes);
     child<QPushButton>(*window, "settingsCaptureShortcut")->click(); settle();
-    key(*child<QKeySequenceEdit>(*window, "settingsShortcutRecorder"), Qt::Key_F11, Qt::ControlModifier | Qt::AltModifier);
+    key(*child<QKeySequenceEdit>(*window, "settingsShortcutRecorder"), Qt::Key_F11, Qt::ControlModifier | Qt::ShiftModifier);
     waitFor([&] { return !controller.busy() && !window->changePending(); }, "Failed settings write reaches actual UI terminal state");
-    require(controller.snapshot().captureShortcut == QStringLiteral("Ctrl+Alt+F10") && read(path) == externalBytes,
+    require(controller.snapshot().captureShortcut == QStringLiteral("Ctrl+Shift+F10") && read(path) == externalBytes,
         "Failed UI change preserves old native binding and outside config bytes");
-    require(!events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Alt+F11"))), "Failed UI candidate is released for a real other client");
+    require(!events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F11"))), "Failed UI candidate is released for a real other client");
     render(*window, artifacts, QStringLiteral("settings-shortcut-rollback-en"));
     window->setPage(ui::SettingsWindow::Page::General);
     child<QCheckBox>(*window, "settingsAutoStart")->click(); settle();
@@ -465,11 +468,11 @@ void controllerContracts(const QString& root, const QString& executable, const Q
     require(!controller.snapshot().autoStart && startupBytes().isNull() && read(path) == externalBytes,
         "Controller restores actual startup when shared settings save conflicts");
     window->close(); settle(); require(!window, "Closing settings deletes only its view");
-    require(events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Alt+F10"))).code == desktop::ShortcutError::Conflict,
+    require(events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F10"))).code == desktop::ShortcutError::Conflict,
         "Closing the view leaves the application shortcut registered");
     bool stopped{}; QObject::connect(&controller, &app::SettingsController::shutdownFinished, &controller, [&] { stopped = true; });
     controller.shutdown(); waitFor([&] { return stopped; }, "Settings controller shutdown reaches completion");
-    require(!events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Alt+F10"))), "Controller shutdown unregisters the shortcut"); competitor.shutdown();
+    require(!events.bind(desktop::parseShortcut(QStringLiteral("Ctrl+Shift+F10"))), "Controller shutdown unregisters the shortcut"); competitor.shutdown();
 
     require(store.load().ok(), "Explicit fixture reload acknowledges newer settings");
     app::SettingsController restarted(store, catalog, executable); require(restarted.initialize(), "Restart uses the same store and catalog");
