@@ -246,6 +246,8 @@ inline T Peak(T* d, size_t s)
 }
 struct REBUFFER
 {
+    explicit REBUFFER(size_t byteLimit) : maximumBytes(byteLimit) {}
+    const size_t maximumBytes;
     std::recursive_mutex m;
     std::vector<char> d;
     AHANDLE Has = CreateEvent(0, TRUE, 0, 0);
@@ -256,10 +258,14 @@ struct REBUFFER
         mb.Fin(sz / sizeof(float), A);
     }
 
-    size_t PushX(const char* dd, size_t sz, float* A = 0, float V = 1.0f)
+    bool PushX(const char* dd, size_t sz, float* A = 0, float V = 1.0f)
     {
         REBUFFERLOCK l(m);
-        auto s = d.size();
+        const auto s = d.size();
+        // Reject the entire packet before allocation/copy. Keeping the already
+        // queued bytes intact avoids silently dropping PCM or shifting time.
+        if (s > maximumBytes || sz > maximumBytes - s) return false;
+        if (!sz) return true;
         d.resize(s + sz);
         if (dd)
             memcpy(d.data() + s, dd, sz);
@@ -286,7 +292,7 @@ struct REBUFFER
         }
 
 
-        return s + sz;
+        return true;
     }
 
     size_t Av()
@@ -1335,6 +1341,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
         std::thread captureThread;
         std::thread silenceThread;
         std::shared_ptr<REBUFFER> AudioDataX;
+        size_t convertedBufferLimit{};
         std::vector<char> PopBuffer;
         std::atomic<HRESULT>* firstError = nullptr;
 
@@ -1439,10 +1446,10 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                     try {
                         if (!data && !(flags & AUDCLNT_BUFFERFLAGS_SILENT))
                             packetError = E_POINTER;
-                        else
-                            AudioDataX->PushX((flags & AUDCLNT_BUFFERFLAGS_SILENT)
+                        else if (!AudioDataX->PushX((flags & AUDCLNT_BUFFERFLAGS_SILENT)
                                 ? nullptr : reinterpret_cast<const char*>(data),
-                                static_cast<size_t>(frames) * wfx.Format.nBlockAlign);
+                                static_cast<size_t>(frames) * wfx.Format.nBlockAlign))
+                            packetError = HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA);
                     }
                     catch (const std::bad_alloc&) { packetError = E_OUTOFMEMORY; }
                     catch (...) { packetError = E_FAIL; }
@@ -1523,7 +1530,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
     CComPtr<IMMDeviceEnumerator> deviceEnumerator = 0;
     if (dp.HasAudio) {
-        if (dp.AudioFrom.empty() || dp.AudioFrom.size() > MAXIMUM_WAIT_OBJECTS)
+        if (dp.AudioFrom.empty() || dp.AudioFrom.size() > MAXIMUM_WAIT_OBJECTS ||
+            !dp.MaximumQueuedAudioBytes || dp.MaximumQueuedAudioBytes > 64ull * 1024 * 1024)
             return failAudioPreparation(E_INVALIDARG);
         hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator);
         if (FAILED(hr) || !deviceEnumerator) return failAudioPreparation(hr);
@@ -1652,7 +1660,10 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                     if (FAILED(vm.preparationResult)) return failAudioPreparation(vm.preparationResult);
                     std::shared_ptr<AUDIOIN> ain = std::make_shared<AUDIOIN>();
                     ain->firstError = &firstAudioError;
-                    ain->AudioDataX = std::make_shared<REBUFFER>();
+                    // Split the combined raw-PCM payload budget between every
+                    // selected source before its capture worker starts.
+                    const auto queueLimit = static_cast<size_t>(dp.MaximumQueuedAudioBytes / dp.AudioFrom.size());
+                    ain->AudioDataX = std::make_shared<REBUFFER>(queueLimit);
                     if (!static_cast<HANDLE>(ain->AudioDataX->Has))
                         return failAudioPreparation(HRESULT_FROM_WIN32(GetLastError()));
                     ain->id = x;
@@ -1698,9 +1709,16 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                         || ww.Format.nBlockAlign != ww.Format.nChannels * ww.Format.wBitsPerSample / 8)
                         return failAudioPreparation(AUDCLNT_E_UNSUPPORTED_FORMAT);
                     ain->chm = std::get<1>(xy);
-                    if (ain->chm.empty() || std::any_of(ain->chm.begin(), ain->chm.end(), [&](int channel) {
+                    if (ain->chm.empty() || ain->chm.size() > ww.Format.nChannels ||
+                        std::any_of(ain->chm.begin(), ain->chm.end(), [&](int channel) {
                         return channel < 0 || channel >= ww.Format.nChannels;
                     })) return failAudioPreparation(AUDCLNT_E_UNSUPPORTED_FORMAT);
+                    if (queueLimit < ww.Format.nBlockAlign) return failAudioPreparation(E_INVALIDARG);
+                    // A selected float channel holds at most the number of
+                    // source frames that fit in its bounded raw input queue.
+                    // Across mapped channels this is <= twice the raw payload
+                    // for supported PCM16/float32, without changing mixing.
+                    ain->convertedBufferLimit = (queueLimit / ww.Format.nBlockAlign) * sizeof(float);
                     const auto bytesPerSecond = static_cast<std::uint64_t>(dp.SR) * ww.Format.nBlockAlign;
                     if (bytesPerSecond > (std::numeric_limits<DWORD>::max)())
                         return failAudioPreparation(E_INVALIDARG);
@@ -2092,7 +2110,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                         auto& aa = ain->buffer[i];
                         auto& ch = ain->chm[i];
                         if (!aa)
-                            aa = std::make_shared<REBUFFER>();
+                            aa = std::make_shared<REBUFFER>(ain->convertedBufferLimit);
                         ain->tempf.resize(AvailableSamples);
 
                         if (ain->wfx.Format.wBitsPerSample == 16)
@@ -2119,10 +2137,16 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                             }
                         }
 
-                        aa->PushX((const char*)ain->tempf.data(), AvailableSamples * sizeof(float));
+                        if (!aa->PushX((const char*)ain->tempf.data(), AvailableSamples * sizeof(float))) {
+                            hr = HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA);
+                            failureStage = RecordingStage::Encode;
+                            break;
+                        }
                         TotalBuffers++;
                     }
+                    if (FAILED(hr)) break;
                 }
+                if (FAILED(hr)) break;
 
                 for (int i = 0; i < dp.NCH; i++)
                     v[i].resize(AvailableSamples);

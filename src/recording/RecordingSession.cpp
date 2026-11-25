@@ -2,6 +2,7 @@
 
 #include <QMetaObject>
 #include <QFutureWatcher>
+#include <QFileInfo>
 #include <QPointer>
 #include <QThread>
 #include <QtConcurrent/QtConcurrentRun>
@@ -13,6 +14,15 @@
 
 namespace HuhuCapture::Recording {
 namespace {
+std::filesystem::path nativePath(const QString& path)
+{
+#ifdef Q_OS_WIN
+    return path.toStdWString();
+#else
+    return std::filesystem::path(path.toUtf8().toStdString());
+#endif
+}
+
 Media::Failure backendFailure(const Core::RecordingResult& result)
 {
     if (!result.firstError)
@@ -104,6 +114,13 @@ struct RecordingSession::State {
             std::error_code error;
             auto writer = staging.openWriter(error);
             if (!writer) { finishFailure({Media::Error::Write, QString::fromStdString(error.message())}); return result; }
+            const auto ownedFile = Platform::readFileDescriptorSnapshot(writer.get(), error);
+            if (!ownedFile) {
+                auto detail = QString::fromStdString(error.message());
+                if (!writer.close(error)) detail += QStringLiteral("; closing the staging writer: ") +
+                    QString::fromStdString(error.message());
+                finishFailure({Media::Error::Read, std::move(detail)}); return result;
+            }
             const BackendEvents events{
                 [work](const PreparedRecording& prepared) {
                     post(work->delivery, [work, prepared](RecordingSession& owner) {
@@ -159,14 +176,22 @@ struct RecordingSession::State {
                 return result;
             }
             if (!result.backend.media.canArchive()) { finishFailure(backendFailure(result.backend.media)); return result; }
+            const auto finalizedFile = Platform::readFileSnapshot(nativePath(staging.path()), error);
+            if (!finalizedFile) {
+                finishFailure({Media::Error::Read, QString::fromStdString(error.message())}); return result;
+            }
+            if (finalizedFile->identity != ownedFile->identity || !finalizedFile->bytes) {
+                finishFailure({Media::Error::ChangedOnDisk, QStringLiteral("The finalized recording is no longer the owned staging file")});
+                return result;
+            }
             post(work->delivery, [work](RecordingSession& owner) {
                 auto& state = *owner.state_;
                 if (state.active != work || state.closing) return;
                 state.phase = SessionState::Archiving;
                 Q_EMIT owner.stateChanged(work->token, SessionState::Archiving);
             });
-            result.archive = work->archive->commitStaged(staging,
-                work->request.format == Format::Mp4 ? Media::Kind::Mp4 : Media::Kind::Gif,
+            const auto kind = work->request.format == Format::Mp4 ? Media::Kind::Mp4 : Media::Kind::Gif;
+            result.archive = work->archive->commitStaged(staging, kind,
                 work->processingStop.get_token());
             if (!result.archive.durable()) {
                 result.failure = result.archive.failure;
@@ -175,7 +200,26 @@ struct RecordingSession::State {
                 // temporary file. Preserve it in result.archive on every error.
                 if (result.archive.path.isEmpty()) retain();
                 result.state = SessionState::RecoverableFailure;
-            } else result.state = SessionState::Completed;
+            } else {
+                // Rename may change native change-time, so pre/post publication
+                // snapshots are not compared byte-for-byte. The commit service
+                // already verifies the full snapshot around complete decoding.
+                // Bind the returned path to the original open object and final
+                // byte count, then retain the complete post-rename snapshot for
+                // every later lease. A pathname alone is not an output permit.
+                const auto published = Platform::readFileSnapshot(nativePath(result.archive.path), error);
+                if (!published) {
+                    result.failure = {Media::Error::Read, QString::fromStdString(error.message())};
+                } else if (published->identity != ownedFile->identity ||
+                    published->bytes != finalizedFile->bytes || result.archive.media.kind != kind) {
+                    result.failure = {Media::Error::ChangedOnDisk,
+                        QStringLiteral("The published recording no longer matches its finalized file")};
+                } else {
+                    result.archivedEntry = Media::Entry{result.archive.path,
+                        QFileInfo(result.archive.path).fileName(), result.archive.media.kind, *published};
+                }
+                result.state = result.archivedEntry ? SessionState::Completed : SessionState::RecoverableFailure;
+            }
         } catch (const std::bad_alloc&) {
             finishFailure({Media::Error::Budget, QStringLiteral("The recording exceeded available memory")});
         } catch (...) {

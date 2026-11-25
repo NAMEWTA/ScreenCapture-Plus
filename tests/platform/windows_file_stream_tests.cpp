@@ -137,6 +137,12 @@ void checkBackendPreflight(const std::filesystem::path& directory)
     require(failed.media.firstError && failed.media.firstError->stage == HuhuCapture::Core::RecordingStage::Prepare &&
         !failed.media.canArchive() && !prepared && !finalizing, "Invalid native request never reports prepared or complete media");
     request.framesPerSecond = 30;
+    request.maximumQueuedAudioBytes = 65ull * 1024 * 1024;
+    OwnedFile unbounded(directory);
+    const auto budget = platform::Windows::runNativeMp4(request, std::move(unbounded.writer), events);
+    require(budget.media.firstError && budget.media.firstError->stage == HuhuCapture::Core::RecordingStage::Prepare &&
+        !prepared && !finalizing, "Out-of-contract PCM queue budgets are rejected before opening capture devices");
+    request.maximumQueuedAudioBytes = 16ull * 1024 * 1024;
     std::stop_source cancelled; cancelled.request_stop();
     OwnedFile stopped(directory);
     const auto aborted = platform::Windows::runNativeMp4(request, std::move(stopped.writer), events, cancelled.get_token());

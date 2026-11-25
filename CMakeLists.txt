@@ -18,6 +18,7 @@ option(HUHUCAPTURE_VIDEO_VALIDATION "Inspect the same real complete and malforme
 option(HUHUCAPTURE_DESKTOP_VALIDATION "Build real system clipboard, trash and file-manager service validation" OFF)
 option(HUHUCAPTURE_PIPEWIRE_VALIDATION "Build the fixed Linux PipeWire data-plane validation" OFF)
 option(HUHUCAPTURE_RUST_VALIDATION "Link one Rust aggregate into the real Qt ABI probe" OFF)
+option(HUHUCAPTURE_NATIVE_INPUT_VALIDATION "Build the real OS shortcut/input validation (requires XTEST development files on Linux)" ON)
 if(HUHUCAPTURE_PORTAL_VALIDATION AND NOT HUHUCAPTURE_QT_VALIDATION)
     message(FATAL_ERROR "Portal validation requires HUHUCAPTURE_QT_VALIDATION=ON")
 endif()
@@ -583,6 +584,97 @@ if(HUHUCAPTURE_QT_VALIDATION)
             huhucapture_portal Qt6::Widgets PkgConfig::PIPEWIRE)
         # Actual Portal/PipeWire frames require an owned compositor and daemon;
         # the isolated wrapper in CI produces the corresponding evidence.
+    endif()
+    if(WIN32 OR HUHUCAPTURE_PORTAL_VALIDATION)
+        add_library(huhucapture_window_activation STATIC
+            src/services/desktop/WindowActivation.h src/services/desktop/WindowActivation.cpp)
+        set_target_properties(huhucapture_window_activation PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+        target_link_libraries(huhucapture_window_activation PUBLIC huhucapture_core Qt6::Core Qt6::Gui)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_sources(huhucapture_window_activation PRIVATE
+                src/platform/linux/WindowActivation.h src/platform/linux/WindowActivation.cpp
+                third_party/kwayland-activation/WaylandActivation.h
+                third_party/kwayland-activation/WaylandActivation.cpp)
+            target_include_directories(huhucapture_window_activation PRIVATE "${PROJECT_SOURCE_DIR}/third_party/kwayland-activation")
+            target_link_libraries(huhucapture_window_activation PRIVATE
+                Qt6::WaylandClient Qt6::GuiPrivate PkgConfig::WAYLAND_CLIENT)
+            qt6_generate_wayland_protocol_client_sources(huhucapture_window_activation PRIVATE_CODE
+                FILES "${PROJECT_SOURCE_DIR}/third_party/wayland-protocols/xdg-activation-v1.xml")
+        endif()
+        add_library(huhucapture_capture_ui STATIC
+            src/ui/qt/CaptureCanvas.h src/ui/qt/CaptureCanvas.cpp
+            src/ui/qt/CaptureWindow.h src/ui/qt/CaptureWindow.cpp)
+        set_target_properties(huhucapture_capture_ui PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+        target_link_libraries(huhucapture_capture_ui PUBLIC huhucapture_capture
+            huhucapture_editor huhucapture_window_activation Qt6::Widgets)
+        huhucapture_test(qt_capture_window tests/qt/capture_window_tests.cpp
+            "${PROJECT_BINARY_DIR}/capture-render/$<CONFIG>")
+        target_link_libraries(qt_capture_window PRIVATE huhucapture_capture_ui huhucapture_languages)
+        set_tests_properties(qt_capture_window PROPERTIES TIMEOUT 120
+            ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
+        add_executable(window_activation_tests tests/qt/window_activation_tests.cpp)
+        target_link_libraries(window_activation_tests PRIVATE huhucapture_window_activation Qt6::Widgets)
+        set_target_properties(window_activation_tests PROPERTIES CXX_EXTENSIONS OFF)
+        add_test(NAME window_activation_unavailable COMMAND window_activation_tests)
+        set_tests_properties(window_activation_unavailable PROPERTIES TIMEOUT 30
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        if(WIN32)
+            add_test(NAME window_activation_native COMMAND window_activation_tests)
+            set_tests_properties(window_activation_native PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows")
+        else()
+            find_program(XVFB_RUN xvfb-run)
+            if(NOT XVFB_RUN)
+                set(XVFB_RUN xvfb-run)
+            endif()
+            add_test(NAME window_activation_native COMMAND "${XVFB_RUN}" -a
+                "${CMAKE_COMMAND}" -E env "QT_QPA_PLATFORM=xcb" $<TARGET_FILE:window_activation_tests>)
+        endif()
+        set_tests_properties(window_activation_native PROPERTIES TIMEOUT 45 RUN_SERIAL TRUE)
+        add_library(huhucapture_settings_controller STATIC
+            src/app/SettingsController.h src/app/SettingsController.cpp
+            src/services/desktop/GlobalShortcut.h src/services/desktop/GlobalShortcut.cpp
+            src/services/desktop/LaunchCommand.h src/services/desktop/LaunchCommand.cpp
+            src/services/desktop/AutoStart.h src/platform/GlobalShortcutBackend.h)
+        set_target_properties(huhucapture_settings_controller PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+        target_compile_definitions(huhucapture_settings_controller PRIVATE QT_NO_KEYWORDS)
+        target_link_libraries(huhucapture_settings_controller PUBLIC
+            huhucapture_desktop huhucapture_settings huhucapture_languages Qt6::Widgets)
+        if(WIN32)
+            target_sources(huhucapture_settings_controller PRIVATE
+                src/platform/windows/GlobalShortcut.cpp src/platform/windows/AutoStart.cpp)
+            target_link_libraries(huhucapture_settings_controller PRIVATE user32 advapi32 shell32)
+        else()
+            pkg_check_modules(XCB_INPUT REQUIRED IMPORTED_TARGET xcb xcb-keysyms xkbcommon)
+            target_sources(huhucapture_settings_controller PRIVATE
+                src/platform/linux/GlobalShortcut.cpp src/platform/linux/AutoStart.cpp)
+            target_link_libraries(huhucapture_settings_controller PRIVATE
+                huhucapture_portal PkgConfig::GIO PkgConfig::XCB_INPUT)
+        endif()
+        if(HUHUCAPTURE_NATIVE_INPUT_VALIDATION)
+            add_executable(qt_settings_controller tests/qt/settings_controller_tests.cpp)
+            target_link_libraries(qt_settings_controller PRIVATE huhucapture_settings_controller)
+            set_target_properties(qt_settings_controller PROPERTIES CXX_EXTENSIONS OFF)
+            if(WIN32)
+                target_link_libraries(qt_settings_controller PRIVATE user32 advapi32 shell32)
+                add_test(NAME qt_settings_controller COMMAND qt_settings_controller
+                    "${PROJECT_BINARY_DIR}/settings-controller/$<CONFIG>")
+                set_tests_properties(qt_settings_controller PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows")
+            else()
+                pkg_check_modules(XCB_XTEST REQUIRED IMPORTED_TARGET xcb-xtest)
+                target_compile_definitions(qt_settings_controller PRIVATE QT_NO_KEYWORDS)
+                target_link_libraries(qt_settings_controller PRIVATE PkgConfig::XCB_XTEST PkgConfig::XCB_INPUT PkgConfig::GIO)
+                add_test(NAME qt_settings_controller COMMAND "${XVFB_RUN}" -a
+                    "${CMAKE_COMMAND}" -E env "QT_QPA_PLATFORM=xcb" $<TARGET_FILE:qt_settings_controller>
+                    "${PROJECT_BINARY_DIR}/settings-controller/$<CONFIG>")
+                add_test(NAME qt_settings_controller_unavailable COMMAND qt_settings_controller
+                    "${PROJECT_BINARY_DIR}/settings-controller-unavailable/$<CONFIG>" --unavailable)
+                set_tests_properties(qt_settings_controller_unavailable PROPERTIES TIMEOUT 90
+                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+            endif()
+            set_tests_properties(qt_settings_controller PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+        else()
+            message(STATUS "Real native shortcut/input validation explicitly disabled for this component build; not a full Qt test run")
+        endif()
     endif()
     if(HUHUCAPTURE_FFMPEG_VALIDATION)
         if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")

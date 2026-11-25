@@ -19,7 +19,7 @@ HOST_LIBRARIES = re.compile(r"^(ld-linux.*|lib(c|m|pthread|dl|rt|util|resolv|anl
 HOST_PACKAGES = {"libc6", "libc6-dev", "libc-dev-bin", "linux-libc-dev", "libstdc++6", "libgcc-s1"}
 MODULES = ("gio-2.0", "gio-unix-2.0", "gobject-2.0", "gthread-2.0", "glib-2.0",
            "wayland-client", "wayland-cursor", "wayland-egl", "xkbcommon", "gl", "egl",
-           "xcb", "xcb-keysyms", "xcb-randr")
+           "xcb", "xcb-keysyms", "xcb-randr", "xcb-shm", "xcb-xfixes", "xcb-xtest")
 
 
 def output(*arguments, env=None):

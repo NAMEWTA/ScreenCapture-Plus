@@ -43,6 +43,10 @@ GlobalShortcuts 的能力单独查询。控制器直接调用 libportal 的 Crea
 
 活动会话不依赖已经完成授权的窗口寿命。激活/释放事件只转发当前活动会话，带有 Portal 原始毫秒时间戳和可选 activation token；token 不持久化、不写入探针日志。收到 ShortcutsChanged 后用真实 ListShortcuts 刷新完整绑定，合并重复刷新请求并按会话代次忽略旧回调。刷新失败显式报告，不覆盖当前已知列表。服务或 bus 消失、外部 session close 会关闭活动绑定并报告不可用。
 
+共享 [设置控制器](settings-controller.md) 可传入候选提交回调：完整授权之后、关闭旧 session 之前保存实际配置；返回 false 时只清理候选。回调持有 shared state / operation，并在返回后重新检查 owner、取消、parent 和 candidate 寿命，防止 UI 重入使旧会话被错误关闭。此回调不得进入嵌套事件循环。typed 保存失败由上层回调结果表达，不解析底层英语消息。
+
+普通 `bindShortcuts` 继续要求真实可见的 QWindow parent。只有显式 `restoreShortcuts` 请求使用规范允许的空 parent 字符串，复用原 libportal BindShortcuts API；它不调用要求非空 parent 的包装，也不构造虚假的 Wayland 句柄。桌面仍可能要求授权，不能把恢复请求视作已获得许可。`cancelInitialization` 取消真实 GTask 初始化，终态仍通过原 initialized 回调返回，供应用退出编排等待。
+
 ## 固定上游与受控补丁
 
 依赖版本、源码 SHA 和补丁 SHA 以 [依赖锁](../build/dependencies.lock.json) 为唯一构建输入。目标基线为 libportal 0.11.0，提交 `fc4d62cfe131e8494c82f597f92b2234d584c367`；Qt parent 库必须与应用的 Qt 6.12.1 及其 private headers 同源构建。

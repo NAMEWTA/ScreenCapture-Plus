@@ -130,6 +130,11 @@ QJsonObject resultJson(const recording::SessionResult& result)
     item[QStringLiteral("failure")] = result.failure.detail;
     item[QStringLiteral("archivePath")] = result.archive.path;
     item[QStringLiteral("archiveDurable")] = result.archive.durable();
+    item[QStringLiteral("hasArchivedEntry")] = result.archivedEntry.has_value();
+    if (result.archivedEntry) {
+        item[QStringLiteral("archiveEntryName")] = result.archivedEntry->name;
+        item[QStringLiteral("archiveEntryBytes")] = static_cast<qint64>(result.archivedEntry->snapshot.bytes);
+    }
     item[QStringLiteral("recoveryPath")] = result.recoveryPath;
     if (result.backend.media.firstError) {
         item[QStringLiteral("nativeStage")] = static_cast<int>(result.backend.media.firstError->stage);
@@ -291,10 +296,19 @@ int main(int argc, char** argv)
                 "Prepared, one admitted session, first stop intent and finalized real media must agree");
             if (intent == recording::StopIntent::Discard) {
                 require(completed->state == recording::SessionState::Discarded && completed->archive.path.isEmpty() &&
-                    completed->recoveryPath.isEmpty(), "Explicit discard removes owned staging without publishing media");
+                    !completed->archivedEntry && completed->recoveryPath.isEmpty(),
+                    "Explicit discard removes owned staging without publishing media");
             } else {
-                require(completed->state == recording::SessionState::Completed && completed->archive.durable(),
+                require(completed->state == recording::SessionState::Completed && completed->archive.durable() &&
+                    completed->archivedEntry && completed->archivedEntry->path == completed->archive.path &&
+                    completed->archivedEntry->name == QFileInfo(completed->archive.path).fileName() &&
+                    completed->archivedEntry->kind == media::Kind::Mp4 && completed->archivedEntry->snapshot.bytes,
                     "Save/copy intent must first publish a fully inspected durable recording");
+                const auto verifiedEntry = *completed->archivedEntry;
+                require(worker([archive, verifiedEntry] {
+                    const auto leased = archive->lease(verifiedEntry);
+                    return !leased.failure && leased.lease && leased.lease->unchanged();
+                }), "The worker-provided archive identity must acquire a real unchanged media lease");
                 ++expectedEntries;
                 try {
                     inspectRecording(completed->archive.path, completed->backend,
@@ -317,7 +331,7 @@ int main(int argc, char** argv)
         cases.append(stopped); saveReport();
         require(completed->state == recording::SessionState::RecoverableFailure &&
             completed->failure.code == media::Error::Cancelled && !completed->recoveryPath.isEmpty() &&
-            completed->archive.path.isEmpty() && completed->backend.media.canArchive(),
+            completed->archive.path.isEmpty() && !completed->archivedEntry && completed->backend.media.canArchive(),
             "Shutdown must retain actual finalized staging instead of claiming it was saved or deleting it");
         try {
             inspectRecording(completed->recoveryPath, completed->backend,

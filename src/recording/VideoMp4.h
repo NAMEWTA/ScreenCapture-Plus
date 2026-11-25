@@ -49,6 +49,7 @@ struct DESKTOPCAPTUREPARAMS
     bool UseGdiCapture{};
     RECT GdiRegion{}; // physical virtual-desktop coordinates, never monitor-local
     std::uint64_t MaximumFrameBytes{256ull * 1024 * 1024};
+    std::uint64_t MaximumQueuedAudioBytes{16ull * 1024 * 1024};
     unsigned long long FirstFrameTimeoutMS{5000};
     bool DurationLimitReached{}; // worker-owned, read after completion
 

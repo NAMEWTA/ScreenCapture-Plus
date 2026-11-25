@@ -30,6 +30,7 @@ struct SettingsSnapshot {
     QString captureShortcut;
     ShortcutEditing shortcutEditing{ShortcutEditing::Unavailable};
     QString shortcutUnavailableReason;
+    QString shortcutCommand;
 };
 
 enum class SettingField { AutoStart, Language, CaptureShortcut };

@@ -27,7 +27,7 @@ jobs:
       - name: Install official runner build prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config nasm dbus libglib2.0-dev libglib2.0-dev-bin libwayland-dev libwayland-bin libxkbcommon-dev libgl-dev libegl-dev libxcb1-dev libxcb-keysyms1-dev libxcb-randr0-dev
+          sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config nasm dbus libglib2.0-dev libglib2.0-dev-bin libwayland-dev libwayland-bin libxkbcommon-dev libgl-dev libegl-dev libxcb1-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb-xtest0-dev
       - name: Restore the fixed official Qt SDK archives
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
         with:

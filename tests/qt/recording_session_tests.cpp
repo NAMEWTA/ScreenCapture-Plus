@@ -58,7 +58,7 @@ void preflightFailures(const QString& root)
     const auto& failure = completed.front();
     require(!session.busy() && !prepared && failure.token == first &&
         failure.state == recording::SessionState::Failed && failure.failure &&
-        failure.backend.media.firstError && !failure.backend.media.canArchive(),
+        failure.backend.media.firstError && !failure.backend.media.canArchive() && !failure.archivedEntry,
         "A real native prepare failure cannot report recording or successful media");
     require(!failure.recoveryPath.isEmpty() && QFileInfo(failure.recoveryPath).isFile() &&
         QFileInfo(failure.recoveryPath).size() == 0 && archive->list().entries.empty(),
@@ -82,7 +82,7 @@ void preflightFailures(const QString& root)
     require(cannotStage.start(invalidRequest()) != 0, "Admit actual filesystem preflight");
     waitFor([&] { return blockedResult.has_value(); }, "Blocked directory did not finish");
     require(blockedResult->state == recording::SessionState::Failed && blockedResult->failure &&
-        blockedResult->recoveryPath.isEmpty() && !blockedResult->backend.prepared,
+        blockedResult->recoveryPath.isEmpty() && !blockedResult->backend.prepared && !blockedResult->archivedEntry,
         "A staging failure remains separate from a native capture result");
     require(obstacle.open(QIODevice::ReadOnly) && obstacle.readAll() == QByteArray("keep"),
         "Failed staging preserves the unrelated blocking file");

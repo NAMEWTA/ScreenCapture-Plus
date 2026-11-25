@@ -21,6 +21,9 @@ struct SessionResult {
     BackendResult backend;
     Media::Failure failure;
     Media::ArchiveResult archive;
+    // Created and verified by the worker after durable publication. Output
+    // actions lease this exact identity; the GUI must not resnapshot the path.
+    std::optional<Media::Entry> archivedEntry;
     QString recoveryPath;
 };
 
@@ -54,7 +57,7 @@ Q_SIGNALS:
     void stateChanged(quint64 token, HuhuCapture::Recording::SessionState state);
     void prepared(quint64 token, const HuhuCapture::Recording::PreparedRecording& recording);
     // Completed means the full recording is durably archived. A shared output
-    // controller uses intent + archive.path for Save As or clipboard, and must
+    // controller uses intent + archivedEntry for Save As or clipboard, and must
     // report that subsequent action's actual result separately.
     void finished(const HuhuCapture::Recording::SessionResult& result);
     void shutdownFinished();

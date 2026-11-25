@@ -26,13 +26,18 @@ public:
     void setSendAvailable(bool available);
     UI::Qt::EditorWindow* openEditor(const QImage& image, bool pinned = true);
     UI::Qt::HistoryWindow* openHistory();
-    using ImageOutputCompletion = std::function<void(UI::Qt::OutputResult, const QString&)>;
+    using OutputCompletion = std::function<void(UI::Qt::OutputResult, const QString&)>;
     // Capture and editor surfaces share this output pipeline. origin owns the
     // request token, dialogParent is only its actual visible presentation, and
     // completion runs on this object's GUI thread while origin remains alive.
     // A rejected admission returns false without invoking completion.
     bool outputImage(QObject* origin, QWidget* dialogParent, quint64 token,
-        UI::Qt::OutputIntent intent, QImage image, ImageOutputCompletion completion);
+        UI::Qt::OutputIntent intent, QImage image, OutputCompletion completion);
+    // A completed recording already owns one durable archive entry. Reuse the
+    // same chooser, overwrite confirmation and clipboard receipt with its exact
+    // identity. Cancellation/failure never deletes or archives that file again.
+    bool outputArchived(QObject* origin, QWidget* dialogParent, quint64 token,
+        UI::Qt::OutputIntent intent, Media::Entry entry, OutputCompletion completion);
     void cancelOutput(QObject* origin, quint64 token);
     void notifyArchiveChanged();
     void revealArchivedFile(const QString& path);

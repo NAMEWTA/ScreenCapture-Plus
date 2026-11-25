@@ -316,6 +316,55 @@ void directImageOutput(const QString& root)
 }
 }
 
+void completedArchiveOutput(const QString& root)
+{
+    auto archive = std::make_shared<media::MediaArchiveService>(root + QStringLiteral("/completed-recording-output"));
+    QImage source(37, 29, QImage::Format_ARGB32); source.fill(QColor(35, 75, 169, 203));
+    const auto archived = worker([&] { return archive->archiveImage(source); });
+    require(archived.durable(), "Create an actual completed archive before asking for output");
+    const auto entry = worker([&] { return entryAt(*archive, archived.path); });
+    const auto original = read(entry.path);
+    desktop::SystemClipboard clipboard;
+    desktop::FileRevealer revealer;
+    application::MediaWorkspace workspace(archive, clipboard, revealer);
+    QObject requestOwner; QWidget parent; parent.show();
+    unsigned completions{}; ui::OutputResult last = ui::OutputResult::Failed;
+    const auto finished = [&](ui::OutputResult result, const QString&) { ++completions; last = result; };
+    require(workspace.outputArchived(&requestOwner, &parent, 1, ui::OutputIntent::SaveAs, entry, finished),
+        "Admit already archived media through the shared output controller");
+    auto* dialog = parent.findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog"));
+    require(dialog && dialog->defaultSuffix() == QStringLiteral("png"), "Use the actual archived type in the shared chooser");
+    const QPointer<QFileDialog> cancelledChooser(dialog);
+    dialog->reject();
+    waitFor([&] { return completions == 1 && !workspace.busy() && !cancelledChooser; },
+        "Settle actual completed-media Save As cancellation and deferred dialog destruction");
+    require(last == ui::OutputResult::Cancelled && read(entry.path) == original && archive->list().entries.size() == 1,
+        "Cancelling completed-media output retains its one durable archive byte for byte");
+    require(workspace.outputArchived(&requestOwner, &parent, 2, ui::OutputIntent::SaveAs, entry, finished),
+        "Retry Save As of the same completed entry without re-encoding");
+    dialog = parent.findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog"));
+    require(dialog, "Find the real completed-media destination chooser");
+    const auto destination = root + QStringLiteral("/completed-export.png");
+    dialog->setDirectory(root); dialog->selectFile(QFileInfo(destination).fileName());
+    static_cast<QDialog*>(dialog)->accept();
+    waitFor([&] { return completions == 2 && !workspace.busy(); }, "Complete the real archived-file export worker");
+    require(last == ui::OutputResult::Succeeded && read(destination) == original && read(entry.path) == original &&
+        archive->list().entries.size() == 1, "Save As exports exact bytes and creates no duplicate history file");
+    QFile changed(entry.path);
+    require(changed.open(QIODevice::WriteOnly | QIODevice::Truncate) && changed.write("externally replaced") == 19,
+        "Change the actual archived bytes after the output identity was recorded");
+    changed.close();
+    require(workspace.outputArchived(&requestOwner, &parent, 3, ui::OutputIntent::Clipboard, entry, finished),
+        "Queue actual immutable-identity validation before clipboard publication");
+    waitFor([&] { return completions == 3 && !workspace.busy(); }, "Reject changed archived media without hanging a receipt");
+    require(last == ui::OutputResult::Failed && read(entry.path) == QByteArray("externally replaced") &&
+        read(destination) == original, "Changed archive identity reports failure and preserves both remaining files");
+    require(!workspace.outputArchived(&requestOwner, &parent, 4, ui::OutputIntent::Pin, entry, finished),
+        "Completed video output does not infer an image-editor action");
+    workspace.shutdown();
+    std::cout << "PASS completed archive output reuses real chooser/export/identity checks without duplicate publication\n";
+}
+
 int main(int argc, char** argv)
 {
     // These checks drive actual Qt dialog widgets. Native OS file pickers and
@@ -327,6 +376,7 @@ int main(int argc, char** argv)
         worker([&] { exportAndCache(temporary.path()); return true; });
         workspaceJourneys(temporary.path());
         directImageOutput(temporary.path());
+        completedArchiveOutput(temporary.path());
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

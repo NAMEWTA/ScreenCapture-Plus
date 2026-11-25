@@ -4,6 +4,7 @@
 
 #include <QObject>
 #include <QVector>
+#include <functional>
 #include <memory>
 
 class QWindow;
@@ -34,14 +35,24 @@ struct PortalShortcutCapabilities {
 class PortalShortcuts final : public QObject {
     Q_OBJECT
 public:
+    using Commit = std::function<bool()>;
     explicit PortalShortcuts(QObject* parent = nullptr);
     ~PortalShortcuts() override;
 
     void initialize();
-    quint64 bindShortcuts(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts);
+    void cancelInitialization();
+    // Commit runs on the GUI thread after the candidate is completely granted
+    // and before the old session is closed. Returning false retains the old
+    // session. It must not spin an event loop or claim the candidate is active.
+    quint64 bindShortcuts(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts, Commit commit = {});
+    // An explicit background restoration request. The protocol permits an
+    // empty parent string; the desktop may still display authorization. This
+    // is never a fabricated Wayland handle or proof of a remembered grant.
+    quint64 restoreShortcuts(const QVector<PortalShortcutRequest>& shortcuts, Commit commit = {});
     void cancelRequest(quint64 requestId);
     void closeBindings();
     bool hasActiveBindings() const;
+    bool available() const;
     QVector<PortalShortcutBinding> bindings() const;
 
 Q_SIGNALS:
@@ -57,6 +68,7 @@ Q_SIGNALS:
     void deactivated(const QString& id, quint64 timestamp, const QString& activationToken);
 
 private:
+    quint64 beginBinding(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts, Commit commit, bool unparented);
     struct Private;
     std::shared_ptr<Private> d;
 };

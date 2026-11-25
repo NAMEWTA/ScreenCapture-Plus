@@ -36,6 +36,9 @@ struct BackendRequest {
     std::chrono::milliseconds maximumDuration{std::chrono::minutes(120)};
     std::chrono::milliseconds firstFrameTimeout{5000};
     std::uint64_t maximumFrameBytes{256ull * 1024 * 1024};
+    // Combined raw PCM pending in all selected input queues. This is not a
+    // promise about the codec's private working set or every mixer allocation.
+    std::uint64_t maximumQueuedAudioBytes{16ull * 1024 * 1024};
 };
 
 struct PreparedRecording {

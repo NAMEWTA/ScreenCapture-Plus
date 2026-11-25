@@ -82,7 +82,9 @@ BackendResult capture(const BackendRequest& request, int descriptor,
     if (request.format != Format::Mp4 || !region || !request.framesPerSecond ||
         request.framesPerSecond > 240 || request.maximumDuration.count() <= 0 ||
         request.maximumDuration > std::chrono::minutes(120) || request.firstFrameTimeout.count() <= 0 ||
-        request.firstFrameTimeout > std::chrono::minutes(1)) return fail(E_INVALIDARG);
+        request.firstFrameTimeout > std::chrono::minutes(1) ||
+        !request.maximumQueuedAudioBytes || request.maximumQueuedAudioBytes > 64ull * 1024 * 1024)
+        return fail(E_INVALIDARG);
     if (stop.stop_requested()) { result.stopRequested = true; return result; }
     std::error_code fileError;
     const auto file = readFileDescriptorSnapshot(descriptor, fileError);
@@ -113,6 +115,7 @@ BackendResult capture(const BackendRequest& request, int descriptor,
     parameters.EndMS = static_cast<unsigned long long>(request.maximumDuration.count());
     parameters.FirstFrameTimeoutMS = static_cast<unsigned long long>(request.firstFrameTimeout.count());
     parameters.MaximumFrameBytes = request.maximumFrameBytes;
+    parameters.MaximumQueuedAudioBytes = request.maximumQueuedAudioBytes;
     std::stop_callback cancellation(stop, [&parameters] { parameters.MustEnd = true; });
     if (parameters.MustEnd) { result.stopRequested = true; return result; }
     if (!VideoMp4::setAudio(&parameters, request.systemAudio, request.microphone)) {

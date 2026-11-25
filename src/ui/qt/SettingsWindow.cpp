@@ -198,6 +198,8 @@ QString normalKeyName(::Qt::Key key, bool keypad)
     case ::Qt::Key_Print: return QStringLiteral("PrintScreen");
     case ::Qt::Key_ScrollLock: return QStringLiteral("ScrollLock");
     case ::Qt::Key_Pause: return QStringLiteral("Pause");
+    case ::Qt::Key_CapsLock: return QStringLiteral("CapsLock");
+    case ::Qt::Key_NumLock: return QStringLiteral("NumLock");
     default: break;
     }
     if (key >= ::Qt::Key_Exclam && key <= ::Qt::Key_AsciiTilde) return QString(QChar(static_cast<char16_t>(key)));
@@ -225,10 +227,12 @@ QLabel* localizedLabel(QWidget* parent, const char16_t* key, int size = 14, bool
     label->setWordWrap(true); return label;
 }
 
-void heading(QVBoxLayout* layout, QWidget* parent, const char16_t* title, const char16_t* description)
+QLabel* heading(QVBoxLayout* layout, QWidget* parent, const char16_t* title, const char16_t* description)
 {
     auto* label = localizedLabel(parent, title, 22); label->setFont(Theme::font(22, QFont::DemiBold));
-    layout->addWidget(label); layout->addSpacing(2); layout->addWidget(localizedLabel(parent, description, 12, true)); layout->addSpacing(16);
+    auto* detail = localizedLabel(parent, description, 12, true);
+    layout->addWidget(label); layout->addSpacing(2); layout->addWidget(detail); layout->addSpacing(16);
+    return detail;
 }
 }
 
@@ -240,7 +244,7 @@ struct SettingsWindow::State {
     bool captureActive{};
     QVBoxLayout* contentLayout{};
     QStackedWidget *pages{}, *shortcutControls{};
-    QWidget *general{}, *shortcut{}, *lanRow{};
+    QWidget *general{}, *shortcut{}, *lanRow{}, *shortcutFallback{};
     AboutPanel* about{};
     std::array<QPushButton*, 3> navigation{};
     QPushButton *close{}, *archive{}, *shortcutButton{}, *reset{}, *lan{};
@@ -248,7 +252,8 @@ struct SettingsWindow::State {
     LanguageChoice* language{};
     ShortcutRecorder* recorder{};
     Theme::ElidingLabel* archivePath{};
-    QLabel *footer{}, *archiveDescription{}, *shortcutHint{}, *status{};
+    QLabel *footer{}, *archiveDescription{}, *shortcutDescription{}, *shortcutHint{}, *status{};
+    QLineEdit* shortcutCommand{};
 };
 
 SettingsWindow::SettingsWindow(QWidget* parent) : QWidget(parent), state_(std::make_unique<State>())
@@ -363,7 +368,7 @@ void SettingsWindow::makeShortcut()
 {
     state_->shortcut = new QWidget; state_->shortcut->setObjectName(QStringLiteral("settingsShortcutPage"));
     auto* layout = new QVBoxLayout(state_->shortcut); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(0);
-    heading(layout, state_->shortcut, u"setting.shortcut", u"shortcut.description");
+    state_->shortcutDescription = heading(layout, state_->shortcut, u"setting.shortcut", u"shortcut.description");
     auto* card = Theme::card(state_->shortcut); auto* row = new QHBoxLayout(card); row->setContentsMargins(18, 12, 18, 12); row->setSpacing(12);
     row->addWidget(localizedLabel(card, u"shortcut.cap"), 1);
     state_->shortcutControls = new QStackedWidget(card); state_->shortcutControls->setFixedSize(180, 32);
@@ -374,7 +379,19 @@ void SettingsWindow::makeShortcut()
     auto* action = new QHBoxLayout; state_->shortcutHint = Theme::label(state_->shortcut, 12, true); state_->shortcutHint->setWordWrap(true);
     state_->shortcutHint->setObjectName(QStringLiteral("settingsShortcutHint")); action->addWidget(state_->shortcutHint, 1);
     state_->reset = Theme::button(state_->shortcut, "settingsResetShortcut"); state_->reset->setProperty("languageKey", QStringLiteral("shortcut.reset"));
-    action->addWidget(state_->reset); layout->addLayout(action); layout->addStretch(); state_->pages->addWidget(state_->shortcut);
+    action->addWidget(state_->reset); layout->addLayout(action); layout->addSpacing(12);
+    state_->shortcutFallback = Theme::card(state_->shortcut);
+    state_->shortcutFallback->setObjectName(QStringLiteral("settingsShortcutFallback"));
+    auto* fallback = new QVBoxLayout(state_->shortcutFallback); fallback->setContentsMargins(18, 12, 18, 12); fallback->setSpacing(8);
+    fallback->addWidget(localizedLabel(state_->shortcutFallback, u"shortcut.fallbackDescription", 12, true));
+    state_->shortcutCommand = new QLineEdit(state_->shortcutFallback); state_->shortcutCommand->setReadOnly(true);
+    state_->shortcutCommand->setObjectName(QStringLiteral("settingsShortcutCommand"));
+    fallback->addWidget(state_->shortcutCommand);
+    auto* fallbackActions = new QHBoxLayout; fallbackActions->addStretch();
+    auto* run = Theme::button(state_->shortcutFallback, "settingsShortcutRun"); run->setProperty("languageKey", QStringLiteral("shortcut.runCapture"));
+    fallbackActions->addWidget(run); fallback->addLayout(fallbackActions);
+    connect(run, &QPushButton::clicked, this, &SettingsWindow::captureRequested);
+    layout->addWidget(state_->shortcutFallback); layout->addStretch(); state_->pages->addWidget(state_->shortcut);
     connect(state_->shortcutButton, &QPushButton::clicked, this, [this] {
         if (state_->snapshot.shortcutEditing == ShortcutEditing::SystemDialog) {
             SettingChange change; change.field = SettingField::CaptureShortcut; requestChange(change);
@@ -428,6 +445,7 @@ void SettingsWindow::refreshLanguage()
     state_->autoStart->setAccessibleName(translated(u"setting.autoStart"));
     state_->language->setAccessibleName(translated(u"setting.language"));
     state_->recorder->setAccessibleName(translated(u"shortcut.cap"));
+    state_->shortcutCommand->setAccessibleName(translated(u"shortcut.fallbackCommand"));
     state_->about->refreshLanguage(); refreshValues();
 }
 
@@ -454,7 +472,17 @@ void SettingsWindow::refreshValues()
     state_->language->setToolTip(selected >= 0 ? state_->language->itemText(selected) : QString());
     state_->archivePath->setFullText(snapshot.archiveDirectory); state_->archive->setToolTip(snapshot.archiveDirectory);
     state_->shortcutButton->setText(snapshot.captureShortcut); state_->shortcutButton->setToolTip(snapshot.captureShortcut);
-    state_->shortcutHint->setText(snapshot.shortcutEditing == ShortcutEditing::SystemDialog ? translated(u"shortcut.systemManaged") : snapshot.shortcutUnavailableReason);
+    state_->shortcutDescription->setVisible(snapshot.shortcutEditing == ShortcutEditing::LocalCapture);
+    auto hint = snapshot.shortcutUnavailableReason;
+    if (snapshot.shortcutEditing == ShortcutEditing::SystemDialog)
+        hint = translated(u"shortcut.systemManaged") + (hint.isEmpty() ? QString() : QStringLiteral("\n") + hint);
+    state_->shortcutHint->setText(hint);
+    if (state_->shortcutCommand->text() != snapshot.shortcutCommand) {
+        state_->shortcutCommand->setText(snapshot.shortcutCommand);
+        state_->shortcutCommand->setCursorPosition(0);
+    }
+    state_->shortcutCommand->setToolTip(snapshot.shortcutCommand);
+    state_->shortcutFallback->setVisible(!snapshot.shortcutCommand.isEmpty());
     state_->about->setLinksEnabled(snapshot.canOpenLinks); updateActions();
 }
 
