@@ -1,7 +1,7 @@
 #include "services/update/ReleaseManifest.h"
 
 #include "app/Brand.h"
-#include "core/ReleaseVersion.h"
+#include "core/ReleasePackage.h"
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -31,33 +31,21 @@ QString architecture(PackageKind kind) { return windows(kind) ? QStringLiteral("
 bool bounded(const QString& value, qsizetype maximum)
 { return !value.isEmpty() && !value.contains(QChar::Null) && value.toUtf8().size() <= maximum; }
 bool hex(const QString& value, qsizetype length)
-{
-    return value.size() == length && std::all_of(value.cbegin(), value.cend(), [](QChar c) {
-        return (c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f');
-    });
-}
+{ return Core::ReleasePackage::lowerHex(value.toStdWString(), static_cast<std::size_t>(length)); }
 bool size(const QJsonValue& value, quint64 maximum, quint64& result, bool empty = false)
 {
     if (!value.isDouble()) return false;
-    const auto number = value.toDouble();
-    if (!std::isfinite(number) || number < (empty ? 0 : 1) || number > maximum || std::floor(number) != number) return false;
-    result = static_cast<quint64>(number); return true;
+    std::uint64_t parsed{};
+    if (!Core::ReleasePackage::byteCount(value.toDouble(), maximum, parsed, empty)) return false;
+    result = parsed; return true;
 }
 bool name(const QString& value)
 {
-    return bounded(value, 256) && value != QStringLiteral(".") && value != QStringLiteral("..") &&
-        std::all_of(value.cbegin(), value.cend(), [](QChar c) {
-            return (c >= u'a' && c <= u'z') || (c >= u'A' && c <= u'Z') ||
-                (c >= u'0' && c <= u'9') || c == u'.' || c == u'-' || c == u'_';
-        });
+    return Core::ReleasePackage::assetName(value.toStdWString());
 }
 bool relativeFile(const QString& value)
 {
-    if (!bounded(value, 4096) || value.startsWith(u'/') || value.contains(u'\\') || value.contains(u':')) return false;
-    const auto components = value.split(u'/');
-    return std::all_of(components.cbegin(), components.cend(), [](const QString& part) {
-        return !part.isEmpty() && part != QStringLiteral(".") && part != QStringLiteral("..");
-    });
+    return bounded(value, 4096) && Core::ReleasePackage::relativeFile(value.toStdWString());
 }
 bool document(const QByteArray& bytes, quint64 maximum, QJsonObject& object)
 {
@@ -114,10 +102,7 @@ QUrl assetUrl(const QString& tag, const QString& name)
 
 bool canonicalVersion(const QString& value, bool tag)
 {
-    const auto parsed = Core::parseReleaseVersion(value.toStdWString());
-    if (!parsed) return false;
-    const auto expected = QStringLiteral("%1.%2.%3").arg((*parsed)[0]).arg((*parsed)[1]).arg((*parsed)[2]);
-    return value == (tag ? u'v' + expected : expected);
+    return Core::ReleasePackage::canonicalVersion(value.toStdWString(), tag);
 }
 
 bool parseRelease(const QByteArray& bytes, Release& result)
@@ -202,6 +187,30 @@ bool validateBuildInfo(const QByteArray& bytes, const Selection& selected)
     }
     for (const auto* required : {"qt", "gifski", "localsend", "ffmpeg"})
         if (!names.contains(QString::fromLatin1(required))) return false;
+    const auto packages = object.value(QStringLiteral("packages"));
+    if (!packages.isArray() || packages.toArray().isEmpty() || packages.toArray().size() > 16) return false;
+    unsigned matches{};
+    QString contentRoot;
+    QSet<QString> packageNames;
+    for (const auto& value : packages.toArray()) {
+        if (!value.isObject()) return false;
+        const auto item = value.toObject();
+        const auto packageName = item.value(QStringLiteral("name")).toString();
+        if (!name(packageName) || packageNames.contains(packageName)) return false;
+        packageNames.insert(packageName);
+        if (packageName != selected.package.name) continue;
+        quint64 length{};
+        if (item.value(QStringLiteral("packageKind")).toString() != packageKindName(selected.kind) ||
+            !size(item.value(QStringLiteral("size")), packageBudget(selected.kind), length) || length != selected.package.size ||
+            item.value(QStringLiteral("sha256")).toString().toLatin1() != selected.package.sha256) return false;
+        if (item.contains(QStringLiteral("contentRoot"))) {
+            contentRoot = item.value(QStringLiteral("contentRoot")).toString();
+            if (!relativeFile(contentRoot)) return false;
+            contentRoot += u'/';
+        }
+        ++matches;
+    }
+    if (matches != 1) return false;
     const auto files = object.value(QStringLiteral("files"));
     if (!files.isArray() || files.toArray().isEmpty() || files.toArray().size() > 8192) return false;
     QSet<QString> paths;
@@ -215,6 +224,9 @@ bool validateBuildInfo(const QByteArray& bytes, const Selection& selected)
         if (!relativeFile(path) || paths.contains(comparisonPath) || !size(item.value(QStringLiteral("size")), maximumPackageBytes, length, true) ||
             !hex(item.value(QStringLiteral("sha256")).toString(), 64)) return false;
         paths.insert(comparisonPath);
+        // Each packaged form has its own inventory prefix. Another form's Qt
+        // runtime cannot make an incomplete selected package pass validation.
+        if (!path.startsWith(contentRoot)) continue;
         const auto leaf = path.mid(path.lastIndexOf(u'/') + 1);
         executable = executable || (length && leaf == (windows(selected.kind) ? QStringLiteral("huhucapture.exe") : QStringLiteral("huhucapture")));
         qt = qt || (length && (windows(selected.kind) ? leaf == QStringLiteral("Qt6Core.dll") :
@@ -224,25 +236,7 @@ bool validateBuildInfo(const QByteArray& bytes, const Selection& selected)
             wayland = wayland || (leaf.startsWith(QStringLiteral("libqwayland")) && leaf.endsWith(QStringLiteral(".so")));
         }
     }
-    if (!executable || !qt || !platformPlugin || (!windows(selected.kind) && !wayland)) return false;
-    const auto packages = object.value(QStringLiteral("packages"));
-    if (!packages.isArray() || packages.toArray().isEmpty() || packages.toArray().size() > 16) return false;
-    unsigned matches{};
-    QSet<QString> packageNames;
-    for (const auto& value : packages.toArray()) {
-        if (!value.isObject()) return false;
-        const auto item = value.toObject();
-        const auto packageName = item.value(QStringLiteral("name")).toString();
-        if (!name(packageName) || packageNames.contains(packageName)) return false;
-        packageNames.insert(packageName);
-        if (packageName != selected.package.name) continue;
-        quint64 length{};
-        if (item.value(QStringLiteral("packageKind")).toString() != packageKindName(selected.kind) ||
-            !size(item.value(QStringLiteral("size")), packageBudget(selected.kind), length) || length != selected.package.size ||
-            item.value(QStringLiteral("sha256")).toString().toLatin1() != selected.package.sha256) return false;
-        ++matches;
-    }
-    return matches == 1;
+    return executable && qt && platformPlugin && (windows(selected.kind) || wayland);
 }
 
 bool validTestOrigin(const QUrl& origin)

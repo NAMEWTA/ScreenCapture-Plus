@@ -1,6 +1,7 @@
 #pragma once
 
 #include "services/update/UpdateService.h"
+#include "core/ReleasePackage.h"
 
 #include <QByteArray>
 #include <QJsonArray>
@@ -11,14 +12,14 @@
 
 namespace HuhuCapture::Updates::Manifest {
 
-inline constexpr quint64 maximumMetadataBytes = 1024 * 1024;
-inline constexpr quint64 maximumBuildInfoBytes = 8 * 1024 * 1024;
-inline constexpr quint64 maximumPackageBytes = 2ull * 1024 * 1024 * 1024;
+inline constexpr quint64 maximumMetadataBytes = Core::ReleasePackage::metadataBudget;
+inline constexpr quint64 maximumBuildInfoBytes = Core::ReleasePackage::buildInfoBudget;
+inline constexpr quint64 maximumPackageBytes = Core::ReleasePackage::archiveBudget;
 constexpr quint64 packageBudget(PackageKind kind)
 {
     switch (kind) {
     case PackageKind::WindowsInstaller: case PackageKind::LinuxDeb:
-        return 1024ull * 1024 * 1024;
+        return Core::ReleasePackage::installerBudget;
     case PackageKind::WindowsPortableZip: case PackageKind::LinuxAppImage:
         return maximumPackageBytes;
     }

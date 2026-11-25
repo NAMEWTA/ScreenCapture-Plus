@@ -15,6 +15,7 @@ private:
     Ling::Button* downloadButton{ nullptr };
     Ling::Button* folderButton{ nullptr };
     Ling::Label* updateStatus{ nullptr };
+    Ling::Label* updateInstructions{ nullptr };
     Ling::Label* downloadPath{ nullptr };
     std::unique_ptr<Tip> tip;
     winrt::event_token updateToken{};

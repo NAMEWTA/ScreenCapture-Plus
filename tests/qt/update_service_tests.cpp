@@ -327,6 +327,45 @@ void developmentReleasesRejected(FixtureServer& server, const QString& root)
     }
 }
 
+void selectedPackageInventory(FixtureServer& server, const QString& root)
+{
+    Fixture fixture;
+    auto packages = fixture.build.value(QStringLiteral("packages")).toArray();
+    auto selected = packages[0].toObject();
+    selected.insert(QStringLiteral("contentRoot"), QStringLiteral("portable-zip"));
+    packages[0] = selected; fixture.build.insert(QStringLiteral("packages"), packages);
+    auto files = fixture.build.value(QStringLiteral("files")).toArray();
+    for (qsizetype i = 0; i < files.size(); ++i) {
+        auto file = files[i].toObject();
+        file.insert(QStringLiteral("path"), QStringLiteral("installer/") + file.value(QStringLiteral("path")).toString());
+        files[i] = file;
+    }
+    fixture.build.insert(QStringLiteral("files"), files);
+    fixture.publish(server);
+    const auto before = server.requests.value(fixture.path(fixture.packageName));
+    updates::UpdateService service(options(QDir(root).filePath(QStringLiteral("wrong-inventory-root")), server));
+    require(service.download(), "Admit aggregate build inventory fixture");
+    waitFor([&] { return !service.busy(); }, "Wrong inventory root rejection did not terminate");
+    require(service.snapshot().stage == updates::Stage::Failed && service.snapshot().error == updates::Error::Metadata &&
+        server.requests.value(fixture.path(fixture.packageName)) == before,
+        "Another package's files cannot satisfy the selected package's required runtime inventory");
+    stop(service);
+
+    for (qsizetype i = 0; i < files.size(); ++i) {
+        auto file = files[i].toObject();
+        auto path = file.value(QStringLiteral("path")).toString();
+        path.replace(0, QStringLiteral("installer").size(), QStringLiteral("portable-zip"));
+        file.insert(QStringLiteral("path"), path); files[i] = file;
+    }
+    fixture.build.insert(QStringLiteral("files"), files); fixture.publish(server);
+    updates::UpdateService complete(options(QDir(root).filePath(QStringLiteral("matching-inventory-root")), server));
+    require(complete.download(), "Admit selected inventory fixture");
+    waitFor([&] { return !complete.busy(); }, "Matching selected inventory did not terminate");
+    require(complete.snapshot().stage == updates::Stage::Downloaded && read(complete.snapshot().file) == fixture.package,
+        "Selected package runtime files and canonical inventory prefix remain accepted");
+    stop(complete);
+}
+
 void subscriberReentrancy(FixtureServer& server, const QString& root)
 {
     Fixture fixture; fixture.publish(server);
@@ -365,6 +404,7 @@ int main(int argc, char** argv)
         FixtureServer server;
         downloadsAndLifetime(server, temporary.path()); rejectedInputs(server, temporary.path());
         developmentReleasesRejected(server, temporary.path());
+        selectedPackageInventory(server, temporary.path());
         cancellationAndRedirect(server, temporary.path()); subscriberReentrancy(server, temporary.path());
         std::cout << "Qt updater: real loopback HTTP, canonical metadata chain, streaming/hash, duplicate names, subscriber destruction, rejection and joined cancellation passed. Transport fixture only; packaged product installation is a separate gate.\n";
         return 0;

@@ -187,7 +187,8 @@ void inspectRecording(const QString& path, const recording::BackendResult& recor
         "Every frame accepted by the real MF writer must survive finalization and strict all-track inspection");
     const auto cover = worker([path] { return media::videoThumbnail(path, 256); });
     evidence[QStringLiteral("coverFailure")] = cover.failure.detail;
-    evidence[QStringLiteral("coverDecoder")] = static_cast<int>(cover.decoder);
+    evidence[QStringLiteral("coverWidth")] = cover.image.width();
+    evidence[QStringLiteral("coverHeight")] = cover.image.height();
     require(!cover.failure, "Generate a real native/software-decoded recording cover");
     require(cover.image.save(coverPath, "PNG"), "Preserve actual decoded cover evidence");
     checkCover(cover.image);

@@ -29,6 +29,7 @@
 #else
 #include "platform/linux/DesktopClipboard.h"
 #include <QDBusConnection>
+#include <QDBusError>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
@@ -286,11 +287,22 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
                 QStringLiteral("/org/freedesktop/portal/documents"), QStringLiteral("org.freedesktop.DBus.Properties"),
                 QStringLiteral("Get"));
             message.setArguments({QStringLiteral("org.freedesktop.portal.FileTransfer"), QStringLiteral("version")});
-            auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message, 3000), this);
+            const auto bus = QDBusConnection::sessionBus();
+            if (!bus.isConnected()) {
+                const auto error = bus.lastError();
+                finish(token, {{Error::Unavailable, static_cast<qint64>(error.type()),
+                    QStringLiteral("The desktop document portal is unavailable for file copying: ") + error.message()}, {}});
+                return token;
+            }
+            auto* watcher = new QDBusPendingCallWatcher(bus.asyncCall(message, 3000), this);
             state_->filePortal = watcher;
-            connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, token, watcher] {
+            const auto complete = [this, token, watcher] {
+                // A disconnected Qt DBus call may already be finished without
+                // ever emitting the watcher's signal. Both completion paths
+                // consume the same pending operation exactly once.
+                if (state_->filePortal != watcher) return;
                 const QDBusPendingReply<QDBusVariant> reply = *watcher;
-                if (state_->filePortal == watcher) state_->filePortal.clear();
+                state_->filePortal.clear();
                 watcher->deleteLater();
                 if (state_->active != token) return;
                 bool numeric = false;
@@ -302,7 +314,9 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
                     return;
                 }
                 validatePrepared(token);
-            });
+            };
+            connect(watcher, &QDBusPendingCallWatcher::finished, this, complete);
+            if (watcher->isFinished()) QTimer::singleShot(0, watcher, complete);
             return token;
         }
 #endif

@@ -251,6 +251,13 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python scripts/package-qt.py package --installed artifacts/install/windows --output artifacts/packages/windows --minimum-system 'Windows 10 1809 x64; desktop acceptance pending' --symbols artifacts/install/windows-symbols/symbols --nsis-installer artifacts/packaging-tools/nsis/nsis-3.11-setup.exe --development
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Exercise the actual per-user installer, upgrade and uninstall ownership
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem artifacts/packages/windows -File -Filter '*-setup.exe')
+          if ($installers.Count -ne 1) { throw 'Expected exactly one generated Windows setup package' }
+          python scripts/test-windows-installer.py --installer $installers[0].FullName --evidence artifacts/tests/windows/installer
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Preserve actual Windows results and development artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -266,6 +273,8 @@ jobs:
             artifacts/legacy-mp3-fixtures/
             artifacts/cmake/application-windows/package/
             artifacts/cmake/application-windows/package-runtime.json
+            artifacts/cmake/application-windows/update-bridge/
+            artifacts/tests/windows/installer/
             artifacts/native-rust/build-info.json
             .deps/video-inspection-windows/build-info.json
           if-no-files-found: warn

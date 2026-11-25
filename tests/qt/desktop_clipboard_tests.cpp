@@ -26,6 +26,8 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <shellapi.h>
+#else
+#include <QDBusConnection>
 #endif
 
 using namespace HuhuCapture;
@@ -252,6 +254,7 @@ Media::Entry entryAt(Media::MediaArchiveService& archive, const QString& path)
 void unavailableFilePortal(const QString& path, const QString& expectedImage)
 {
     require(QGuiApplication::platformName().startsWith(QStringLiteral("wayland")), "document portal admission uses the real Wayland backend");
+    require(!QDBusConnection::sessionBus().isConnected(), "the capability test uses a genuinely disconnected session bus");
     Results results; Origin origin; show(origin);
     waitFor([&] { return QGuiApplication::focusWindow() == origin.windowHandle(); }, "the unavailable-portal process receives real keyboard focus");
     Media::MediaArchiveService archive(QFileInfo(path).absolutePath());
@@ -259,9 +262,12 @@ void unavailableFilePortal(const QString& path, const QString& expectedImage)
     auto lease = worker([&] { return archive.lease(entry); }); require(!lease.failure && lease.lease, "reserve actual media for portal capability validation");
     auto prepared = worker([owned = std::move(lease.lease)]() mutable { return Desktop::prepareFile(std::move(owned)); });
     require(!prepared.failure && prepared.content, "prepare the complete real file without publishing it");
+    QElapsedTimer elapsed; elapsed.start();
     const auto result = results.result(results.clipboard.publish(prepared.content, origin.windowHandle()));
     require(result.failure.code == Desktop::Error::Unavailable && result.publishedFormats.isEmpty(),
         "an absent real session bus rejects the portal-dependent file before replacing the system clipboard");
+    require(elapsed.elapsed() < 2000 && !results.clipboard.busy(),
+        "a disconnected bus promptly releases the publication instead of waiting for a signal that cannot arrive");
     require(!worker([&] { return archive.reserveRemoval(entry); }).failure, "failed file admission releases its real read reservation");
     receiveImage(QImage(expectedImage));
     std::cout << "PASS unavailable Documents portal retains the previous real clipboard and releases history\n";

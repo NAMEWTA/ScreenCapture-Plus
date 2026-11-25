@@ -5,8 +5,9 @@ RequestExecutionLevel user
 SetCompressor /SOLID lzma
 Name "huhucapture"
 OutFile "@OUTPUT@"
-InstallDir "$LOCALAPPDATA\Programs\huhucapture"
-InstallDirRegKey HKCU "Software\huhucapture\Installation" "Location"
+; Leave empty so .onInit can distinguish an explicit /D= from the default.
+; InstallDirRegKey ignores SetRegView; read our 64-bit HKCU view explicitly.
+InstallDir ""
 ShowInstDetails show
 ShowUninstDetails show
 VIProductVersion "@VERSION@.0"
@@ -24,6 +25,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "NAMEWTA; see bundled component noti
 !define MUI_UNICON "@ICON@"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "@LICENSE@"
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE CheckRegisteredLocation
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -48,6 +50,26 @@ Function .onInit
         MessageBox MB_OK|MB_ICONSTOP "This package requires Windows 10 build 17763 (1809) or later."
         Abort
     supported:
+    ${If} $INSTDIR == ""
+        ReadRegStr $INSTDIR HKCU "Software\huhucapture\Installation" "Location"
+        ${If} $INSTDIR == ""
+            StrCpy $INSTDIR "$LOCALAPPDATA\Programs\huhucapture"
+        ${EndIf}
+    ${EndIf}
+    Call CheckRegisteredLocation
+FunctionEnd
+
+Function CheckRegisteredLocation
+    ReadRegStr $1 HKCU "Software\huhucapture\Installation" "Location"
+    ${If} $1 != ""
+    ${AndIf} $1 != $INSTDIR
+        IfSilent location_abort
+        MessageBox MB_OK|MB_ICONSTOP "huhucapture is already installed in $1. Update that location, or uninstall it before choosing a different directory. Captures and user settings will be preserved."
+        location_abort:
+        SetErrorLevel 2
+        Abort
+    ${EndIf}
+    SetErrorLevel 0
 FunctionEnd
 
 Function CheckApplicationClosed
@@ -59,7 +81,10 @@ Function CheckApplicationClosed
         FileClose $0
         Goto done
     in_use:
+        IfSilent app_busy_abort
         MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Close huhucapture before installing or removing these program files. Your captures and settings will be retained." IDRETRY retry
+        app_busy_abort:
+        SetErrorLevel 1
         Abort
     done:
 FunctionEnd
@@ -67,6 +92,8 @@ FunctionEnd
 Section "huhucapture" Main
     SetShellVarContext current
     SetRegView 64
+    ; Repeat after the directory page (and in silent mode) before any mutation.
+    Call CheckRegisteredLocation
     Call CheckApplicationClosed
     ; Only run our registered previous per-user uninstaller, at the same path.
     ; It removes its explicit file list, which also retires obsolete DLL/plugins.
@@ -75,7 +102,10 @@ Section "huhucapture" Main
         IfFileExists "$INSTDIR\uninstall.exe" 0 old_removed
         ExecWait '"$INSTDIR\uninstall.exe" /S _?=$INSTDIR' $2
         ${If} $2 != 0
+            IfSilent old_remove_abort
             MessageBox MB_OK|MB_ICONSTOP "The previous version could not be removed. Existing program files were retained."
+            old_remove_abort:
+            SetErrorLevel 1
             Abort
         ${EndIf}
     ${EndIf}
@@ -124,11 +154,13 @@ Section "Uninstall"
 @REMOVE_FILES@
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"
-    Delete "$SMPROGRAMS\huhucapture\huhucapture.lnk"
-    Delete "$SMPROGRAMS\huhucapture\Uninstall.lnk"
-    RMDir "$SMPROGRAMS\huhucapture"
     ReadRegStr $0 HKCU "Software\huhucapture\Installation" "Location"
     ${If} $0 == $INSTDIR
+        ; A copied/stale uninstaller may only remove its own explicit files.
+        ; Shared shortcuts and HKCU belong to the currently registered path.
+        Delete "$SMPROGRAMS\huhucapture\huhucapture.lnk"
+        Delete "$SMPROGRAMS\huhucapture\Uninstall.lnk"
+        RMDir "$SMPROGRAMS\huhucapture"
         DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\huhucapture"
         DeleteRegKey HKCU "Software\huhucapture\Installation"
     ${EndIf}

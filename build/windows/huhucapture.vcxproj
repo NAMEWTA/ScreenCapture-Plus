@@ -138,6 +138,9 @@
     <ClCompile Include="..\..\src\services\MediaHistory.cpp" />
     <ClCompile Include="..\..\src\services\Setting.cpp" />
     <ClCompile Include="..\..\src\services\Update.cpp" />
+    <ClCompile Include="..\..\src\services\update\WindowsUpdateDownload.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\ui\AnnotationPanel.cpp" />
     <ClCompile Include="..\..\src\ui\Tip.cpp" />
     <ClCompile Include="..\..\src\ui\Tray.cpp" />
@@ -205,6 +208,7 @@
     <ClInclude Include="..\..\src\editor\ToolSettings.h" />
     <ClInclude Include="..\..\src\core\RecordingResult.h" />
     <ClInclude Include="..\..\src\core\ReleaseVersion.h" />
+    <ClInclude Include="..\..\src\core\ReleasePackage.h" />
     <ClInclude Include="..\..\src\core\ScrollStitch.h" />
     <ClInclude Include="..\..\src\editor\History.h" />
     <ClInclude Include="..\..\src\editor\AnnotationModel.h" />
@@ -252,6 +256,7 @@
     <ClInclude Include="..\..\src\services\MediaHistory.h" />
     <ClInclude Include="..\..\src\services\Setting.h" />
     <ClInclude Include="..\..\src\services\Update.h" />
+    <ClInclude Include="..\..\src\services\update\WindowsUpdateDownload.h" />
     <ClInclude Include="..\..\src\ui\AnnotationPanel.h" />
     <ClInclude Include="..\..\src\ui\AnnotationPanelLayout.h" />
     <ClInclude Include="..\..\src\ui\Tip.h" />

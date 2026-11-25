@@ -42,6 +42,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -199,20 +200,57 @@ void launchRegistered()
     g_autoptr(GError) error = nullptr;
     require(g_app_info_launch(G_APP_INFO(info), nullptr, nullptr, &error), "GLib launches the exact desktop Exec entry");
 }
-void injectChord()
+void injectChord(bool notifyUnchangedMapping = false)
 {
-    auto* connection = xcb_connect(nullptr, nullptr); require(connection && !xcb_connection_has_error(connection), "Connect to the actual X11 test server");
-    auto* symbols = xcb_key_symbols_alloc(connection); require(symbols, "Use actual server keyboard map");
+    const auto disconnect = [](xcb_connection_t* value) { if (value) xcb_disconnect(value); };
+    std::unique_ptr<xcb_connection_t, decltype(disconnect)> connectionOwner(xcb_connect(nullptr, nullptr), disconnect);
+    auto* connection = connectionOwner.get();
+    require(connection && !xcb_connection_has_error(connection), "Connect to the actual X11 test server");
+    std::unique_ptr<xcb_key_symbols_t, decltype(&xcb_key_symbols_free)> symbolsOwner(xcb_key_symbols_alloc(connection), xcb_key_symbols_free);
+    auto* symbols = symbolsOwner.get(); require(symbols, "Use actual server keyboard map");
+    const auto checked = [connection](xcb_void_cookie_t request, const char* context) {
+        std::unique_ptr<xcb_generic_error_t, decltype(&std::free)> error(xcb_request_check(connection, request), std::free);
+        if (error) throw std::runtime_error(std::string(context) + " (X11 error " + std::to_string(error->error_code) + ")");
+        require(!xcb_connection_has_error(connection), "Actual XTEST connection remains usable");
+    };
+    std::unique_ptr<xcb_test_get_version_reply_t, decltype(&std::free)> version(
+        xcb_test_get_version_reply(connection, xcb_test_get_version(connection, 2, 2), nullptr), std::free);
+    require(version && version->major_version >= 2, "Actual server provides XTEST");
     std::array<xcb_keycode_t, 3> keys{}; const std::array<xcb_keysym_t, 3> wanted{XKB_KEY_Control_L, XKB_KEY_Alt_L, XKB_KEY_F9};
     for (std::size_t index = 0; index < keys.size(); ++index) {
         auto* codes = xcb_key_symbols_get_keycode(symbols, wanted[index]); require(codes && *codes, "Translate real XTEST chord");
         keys[index] = *codes; std::free(codes);
     }
-    for (const auto code : keys) xcb_test_fake_input(connection, XCB_KEY_PRESS, code, XCB_CURRENT_TIME, XCB_WINDOW_NONE, 0, 0, 0);
-    for (auto iterator = keys.rbegin(); iterator != keys.rend(); ++iterator) xcb_test_fake_input(connection, XCB_KEY_RELEASE, *iterator, XCB_CURRENT_TIME, XCB_WINDOW_NONE, 0, 0, 0);
-    auto* barrier = xcb_get_input_focus_reply(connection, xcb_get_input_focus(connection), nullptr);
-    require(barrier && !xcb_connection_has_error(connection), "Actual X server processes XTEST input");
-    std::free(barrier); xcb_key_symbols_free(symbols); xcb_disconnect(connection);
+    if (notifyUnchangedMapping) {
+        // Re-submit exactly the current F9 map on this isolated X server. This
+        // creates a real MappingNotify immediately before the actual input;
+        // no Qt event, slot, keyboard symbol or registration is substituted.
+        std::unique_ptr<xcb_get_keyboard_mapping_reply_t, decltype(&std::free)> mapping(
+            xcb_get_keyboard_mapping_reply(connection, xcb_get_keyboard_mapping(connection, keys.back(), 1), nullptr), std::free);
+        require(mapping && mapping->keysyms_per_keycode, "Read exact existing native F9 mapping");
+        checked(xcb_change_keyboard_mapping_checked(connection, 1, keys.back(), mapping->keysyms_per_keycode,
+            xcb_get_keyboard_mapping_keysyms(mapping.get())), "Re-submit unchanged actual keyboard mapping");
+    }
+    // Queue every release before inspecting errors, so a failed assertion
+    // cannot leave modifiers pressed in the actual server.
+    std::array<xcb_void_cookie_t, 6> input{};
+    std::size_t index{};
+    for (const auto code : keys) input[index++] = xcb_test_fake_input_checked(connection, XCB_KEY_PRESS, code, XCB_CURRENT_TIME, XCB_WINDOW_NONE, 0, 0, 0);
+    for (auto iterator = keys.rbegin(); iterator != keys.rend(); ++iterator)
+        input[index++] = xcb_test_fake_input_checked(connection, XCB_KEY_RELEASE, *iterator, XCB_CURRENT_TIME, XCB_WINDOW_NONE, 0, 0, 0);
+    for (const auto request : input) checked(request, "Actual server accepts the XTEST key event");
+    std::unique_ptr<xcb_query_keymap_reply_t, decltype(&std::free)> released(
+        xcb_query_keymap_reply(connection, xcb_query_keymap(connection), nullptr), std::free);
+    require(released && !xcb_connection_has_error(connection), "Query actual server keyboard state after input");
+    for (const auto code : keys)
+        require(!(static_cast<unsigned char>(released->keys[code / 8]) & (1u << (code % 8))), "Actual injected chord releases every key");
+    int mappingNotifications{};
+    while (auto* event = xcb_poll_for_event(connection)) {
+        if ((event->response_type & 0x7f) == XCB_MAPPING_NOTIFY &&
+            reinterpret_cast<xcb_mapping_notify_event_t*>(event)->request == XCB_MAPPING_KEYBOARD) ++mappingNotifications;
+        std::free(event);
+    }
+    if (notifyUnchangedMapping) require(mappingNotifications > 0, "Server actually emitted the unchanged-map notification");
 }
 #endif
 
@@ -238,6 +276,22 @@ void initializeNative(desktop::GlobalShortcut& shortcut)
         "This test requires actual Windows or true X11, not a local/Wayland substitute");
 }
 
+#ifndef _WIN32
+void initializationOwnerLifetime()
+{
+    auto shortcut = std::make_unique<desktop::GlobalShortcut>();
+    const QPointer<desktop::GlobalShortcut> life(shortcut.get());
+    bool initialized{};
+    QObject::connect(shortcut.get(), &desktop::GlobalShortcut::initialized, QCoreApplication::instance(), [&] {
+        initialized = true;
+        shortcut.reset();
+    });
+    shortcut->initialize();
+    waitFor([&] { return initialized; }, "Actual initialization can synchronously destroy its shortcut owner");
+    require(!life, "Initialization completion releases the actual owner before the backend returns");
+}
+#endif
+
 void nativeContracts(const QString& root)
 {
     const auto firstKeys = desktop::parseShortcut(QStringLiteral("Ctrl+Alt+F9"));
@@ -262,9 +316,17 @@ void nativeContracts(const QString& root)
 
     int activations{};
     QObject::connect(&first, &desktop::GlobalShortcut::activated, &first, [&](const QString& token) { require(token.isEmpty(), "Native shortcut does not invent an activation token"); ++activations; });
-    injectChord(); waitFor([&] { return activations == 1; }, "Real OS hotkey input reaches the application-owned service");
+    const auto expectActivations = [&](int expected, const char* message) {
+        waitFor([&] { return activations >= expected; }, message);
+        require(activations == expected, "One actual native chord emits exactly one activation");
+    };
+    int expectedActivations = 1;
+    injectChord(); expectActivations(expectedActivations, "Real OS hotkey input reaches the application-owned service");
+#ifndef _WIN32
+    injectChord(true); expectActivations(++expectedActivations, "A real unchanged keyboard map preserves the following native activation");
+#endif
     require(!first.setCaptureActive(true) && first.snapshot().suspended, "Shortcut recording unregisters this application's binding");
-    injectChord(); settleFor(100); require(activations == 1, "Recording suppresses actual global shortcut activation");
+    injectChord(); settleFor(100); require(activations == expectedActivations, "Recording suppresses actual global shortcut activation");
     {
         desktop::GlobalShortcut competitor; Bindings other(competitor); initializeNative(competitor);
         require(!other.bind(firstKeys), "Released binding is available to a separate real registration");
@@ -273,8 +335,20 @@ void nativeContracts(const QString& root)
         competitor.shutdown();
     }
     require(!first.setCaptureActive(true) && !first.setCaptureActive(false) && first.snapshot().registered, "Retry restores the original actual native registration");
-    injectChord(); waitFor([&] { return activations == 2; }, "Restored registration receives real OS input");
+    injectChord(); expectActivations(++expectedActivations, "Restored registration receives real OS input");
     first.shutdown();
+#ifndef _WIN32
+    auto disposable = std::make_unique<desktop::GlobalShortcut>();
+    initializeNative(*disposable);
+    const QPointer<desktop::GlobalShortcut> life(disposable.get());
+    desktop::ShortcutFailure completed;
+    bool finished{};
+    QObject::connect(disposable.get(), &desktop::GlobalShortcut::bindingFinished, QCoreApplication::instance(),
+        [&](quint64, desktop::ShortcutFailure failure) { completed = failure; finished = true; disposable.reset(); });
+    require(disposable->bind(firstKeys, nullptr) != 0, "Queue the actual binding with owner destruction in its completion");
+    waitFor([&] { return finished; }, "Binding completion can synchronously release the actual shortcut owner");
+    require(!completed && !life, "Successful native binding completes once before its owner is destroyed");
+#endif
     desktop::GlobalShortcut released; Bindings releasedEvents(released); initializeNative(released);
     require(!releasedEvents.bind(firstKeys), "Application shutdown releases its native global shortcut"); released.shutdown();
     std::cout << "Native shortcut registration, conflict, rollback, suspension and OS input passed; physical keyboard not tested.\n";
@@ -296,7 +370,7 @@ void startupContracts(const QString& root, const QString& executable)
     require(store.load().ok(), "Explicit fixture reload acknowledges the external edit");
     require(startup.setEnabled(true, [&] { return store.setValue({"common", "autoStart"}, true).ok(); }).ok(), "Enable actual owned system startup and persist preference");
     require(startup.snapshot().enabled, "Actual OS registration is enabled");
-    const auto saved = startupBytes();
+    [[maybe_unused]] const auto saved = startupBytes();
     const auto proof = QDir(root).filePath(QStringLiteral("startup-proof.txt")); Environment environment;
     environment.set("HUHU_STARTUP_TEST_PROOF", proof.toUtf8()); launchRegistered();
     waitFor([&] { return QFileInfo::exists(proof); }, "Registered Unicode executable produces an actual child-process proof");
@@ -446,6 +520,9 @@ int main(int argc, char** argv)
         QTemporaryDir directory; require(directory.isValid(), "Create actual isolated filesystem fixture");
         StartupIsolation startup(directory.path());
         QApplication application(argc, argv); application.setQuitOnLastWindowClosed(false);
+#ifndef _WIN32
+        initializationOwnerLifetime();
+#endif
         const auto arguments = application.arguments();
         const bool unavailable = arguments.contains(QStringLiteral("--unavailable"));
         const auto artifacts = arguments.size() > 1 && !arguments[1].startsWith(QStringLiteral("--")) ? arguments[1] :

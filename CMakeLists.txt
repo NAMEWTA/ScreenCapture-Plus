@@ -167,6 +167,21 @@ if(BUILD_TESTING)
             target_link_options(file_commit PRIVATE -Wl,--wrap=fsync)
         endif()
     endif()
+    if(WIN32)
+        enable_language(RC)
+        add_executable(WindowsUpdateDownloadTests
+            tests/windows/WindowsUpdateDownloadTests.cpp tests/windows/WindowsUpdateDownloadTests.rc
+            src/services/update/WindowsUpdateDownload.cpp)
+        set_target_properties(WindowsUpdateDownloadTests PROPERTIES CXX_EXTENSIONS OFF)
+        target_link_libraries(WindowsUpdateDownloadTests PRIVATE huhucapture_file_committer
+            windowsapp runtimeobject ole32 shell32 version uuid)
+        target_compile_definitions(WindowsUpdateDownloadTests PRIVATE _WIN32_WINNT=0x0A00 NOMINMAX WIN32_LEAN_AND_MEAN)
+        add_test(NAME windows_update_bridge COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/scripts/test-windows-update-bridge.py"
+            --client $<TARGET_FILE:WindowsUpdateDownloadTests>
+            --evidence "${PROJECT_BINARY_DIR}/update-bridge/$<CONFIG>")
+        set_tests_properties(windows_update_bridge PROPERTIES TIMEOUT 240)
+    endif()
 endif()
 
 if(HUHUCAPTURE_QT_VALIDATION)
@@ -333,6 +348,9 @@ if(HUHUCAPTURE_QT_VALIDATION)
                 ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
             add_executable(desktop_clipboard_tests tests/qt/desktop_clipboard_tests.cpp)
             target_link_libraries(desktop_clipboard_tests PRIVATE huhucapture_desktop_services Qt6::Widgets)
+            if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+                target_link_libraries(desktop_clipboard_tests PRIVATE Qt6::DBus)
+            endif()
             set_target_properties(desktop_clipboard_tests PROPERTIES CXX_EXTENSIONS OFF)
         endif()
         if(WIN32)

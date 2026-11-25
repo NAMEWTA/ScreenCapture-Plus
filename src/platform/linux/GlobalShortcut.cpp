@@ -174,12 +174,13 @@ public:
             return;
         }
         const auto released = releaseExcept(active_, candidate);
-        if (released) { closeX11(); finish(released); Q_EMIT owner_.changed(); return; }
+        if (released) { closeX11(); finish(released); if (life) Q_EMIT owner_.changed(); return; }
         active_ = std::move(candidate); candidate_.clear();
         drainStaleKeys();
+        if (!life) return;
         state_.requestedKeys = keys; state_.actualTrigger = keys.join(QChar(u'+'));
         state_.registered = true; state_.failure = {};
-        finish({}); Q_EMIT owner_.changed();
+        finish({}); if (life) Q_EMIT owner_.changed();
     }
     void cancel(quint64 request) override
     {
@@ -193,6 +194,7 @@ public:
         if (state_.suspended == active) return {};
         state_.suspended = active; heldKey_ = 0;
         ShortcutFailure failure;
+        const QPointer<LinuxShortcut> life(this);
         if (!portal_) {
             if (active) {
                 failure = releaseExcept(active_, {}); active_.clear(); state_.registered = false;
@@ -202,6 +204,7 @@ public:
                 if (failure) failure.code = ShortcutError::RestoreFailed;
             }
             drainStaleKeys();
+            if (!life) return failure;
         }
         state_.failure = failure; Q_EMIT owner_.changed(); return failure;
     }
@@ -217,7 +220,8 @@ private:
     {
         initializing_ = false; state_.initialized = true; state_.failure = failure;
         if (failure) state_.editing = ShortcutEditing::Unavailable;
-        Q_EMIT owner_.initialized(); Q_EMIT owner_.changed();
+        const QPointer<LinuxShortcut> life(this);
+        Q_EMIT owner_.initialized(); if (life) Q_EMIT owner_.changed();
     }
     void initializePortal()
     {
@@ -238,7 +242,8 @@ private:
                 if (cancelled_ || stopped_) result = {ShortcutError::Cancelled};
                 else if (commitRejected_) result = {ShortcutError::SaveFailed};
                 if (!result) state_.requestedKeys = pendingKeys_;
-                readPortalBindings(); finish(result); Q_EMIT owner_.changed();
+                readPortalBindings(); const QPointer<LinuxShortcut> life(this);
+                finish(result); if (life) Q_EMIT owner_.changed();
             });
         connect(portal_.get(), &Linux::PortalShortcuts::bindingsChanged, this,
             [this] { if (!stopped_) { readPortalBindings(); Q_EMIT owner_.changed(); } });
@@ -372,27 +377,33 @@ private:
         if (!connection_ || stopped_) return;
         while (auto* value = xcb_poll_for_event(connection_)) {
             CPointer<xcb_generic_event_t> event(value);
+            if (event->response_type & 0x80) continue;
             const auto type = event->response_type & 0x7f;
             if (type == XCB_MAPPING_NOTIFY) {
-                xcb_refresh_keyboard_mapping(symbols_, reinterpret_cast<xcb_mapping_notify_event_t*>(event.get()));
-                scheduleRemap(); continue;
+                auto* mapping = reinterpret_cast<xcb_mapping_notify_event_t*>(event.get());
+                if (mapping->request == XCB_MAPPING_KEYBOARD || mapping->request == XCB_MAPPING_MODIFIER) {
+                    xcb_refresh_keyboard_mapping(symbols_, mapping);
+                    scheduleRemap();
+                }
+                continue;
             }
-            if (discardKeys || (event->response_type & 0x80) || state_.suspended || !state_.registered) continue;
+            if (discardKeys || state_.suspended || !state_.registered) continue;
             if (type == XCB_KEY_RELEASE) {
                 const auto* key = reinterpret_cast<const xcb_key_release_event_t*>(event.get());
                 if (heldKey_ == key->detail) heldKey_ = 0;
                 lastReleaseTime_ = key->time; lastReleaseKey_ = key->detail;
             } else if (type == XCB_KEY_PRESS) {
                 const auto* key = reinterpret_cast<const xcb_key_press_event_t*>(event.get());
-                const bool matches = std::any_of(active_.begin(), active_.end(), [key](const Grab& grab) {
-                    return grab.root == key->root && grab.key == key->detail && grab.modifiers == (key->state & 0xff);
-                });
+                const Grab pressed{key->root, key->detail, static_cast<uint16_t>(key->state & 0xff)};
+                const bool matches = std::find(active_.begin(), active_.end(), pressed) != active_.end();
                 if (!matches || heldKey_ == key->detail) continue;
                 heldKey_ = key->detail;
                 if (lastReleaseKey_ == key->detail && lastReleaseTime_ == key->time) continue;
                 const auto generation = keyGeneration_;
-                QTimer::singleShot(0, this, [this, generation] {
-                    if (!stopped_ && state_.registered && !state_.suspended && generation == keyGeneration_) Q_EMIT owner_.activated({});
+                QTimer::singleShot(0, this, [this, generation, pressed] {
+                    const bool stillBound = std::find(active_.begin(), active_.end(), pressed) != active_.end();
+                    if (!stopped_ && state_.registered && !state_.suspended && generation == keyGeneration_ && stillBound)
+                        Q_EMIT owner_.activated({});
                 });
             }
         }
@@ -423,7 +434,16 @@ private:
                 active_.clear(); state_.registered = false;
                 failure.code = ShortcutError::RestoreFailed;
             }
-            state_.failure = failure; drainStaleKeys(); Q_EMIT owner_.changed();
+            state_.failure = failure;
+            if (!std::any_of(active_.begin(), active_.end(), [this](const Grab& grab) { return grab.key == heldKey_; })) {
+                heldKey_ = 0; lastReleaseTime_ = 0;
+            }
+            const QPointer<LinuxShortcut> life(this);
+            // Checked replies may buffer events in XCB. A mapping update can
+            // leave the pressed grab valid even if another lock variant changed;
+            // judge queued input by that exact grab instead of discarding it.
+            drainEvents();
+            if (life) Q_EMIT owner_.changed();
         });
     }
     ShortcutSnapshot state_;

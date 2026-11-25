@@ -101,7 +101,7 @@ latest API 和 release manifest 各最多 1 MiB，平台 build-info 最多 8 MiB
 }
 ```
 
-`files` 要包含实际部署目录的完整清单，示例仅展示必需类型。路径必须是唯一的相对路径，使用 `/` 分隔，禁止根路径、空分量、`.`、`..`、反斜杠和冒号。Windows 比较路径时忽略大小写。`size` 允许空文件为零；产品及必需 Qt 库、插件必须非空。实际打包器同时记录该平台两种包的完整树，因此给路径加 `portable-zip/`、`installer/`、`deb/` 或 `appimage/` 前缀，并在相应 `packages` 条目增加 `contentRoot`。这保留了两种安装标记和目录布局的差异，不用一份共同文件列表冒充所有包的实际内容。`packages` 的名称、大小和哈希必须与 manifest 及 GitHub 资产一致。调试符号可以另行发布，但不作为用户默认下载项。
+`files` 要包含实际部署目录的完整清单，示例仅展示必需类型。路径必须是唯一的相对路径，使用 `/` 分隔，禁止根路径、空分量、`.`、`..`、反斜杠和冒号。Windows 比较路径时忽略大小写。`size` 允许空文件为零；产品及必需 Qt 库、插件必须非空。实际打包器同时记录该平台两种包的完整树，因此给路径加 `portable-zip/`、`installer/`、`deb/` 或 `appimage/` 前缀，并在相应 `packages` 条目增加 `contentRoot`。服务只从所选包的 `contentRoot` 内寻找必需运行库；另一个包中的文件不能补足当前包的缺项。`packages` 的名称、大小和哈希必须与 manifest 及 GitHub 资产一致。调试符号可以另行发布，但不作为用户默认下载项。
 
 生成顺序为：准备并验证部署目录 → 生成安装包并计算包哈希 → 生成平台 build-info 并计算其哈希 → 生成 release manifest。这样不形成哈希循环。只有同仓库、同 Release 的资产才能被引用；清单不携带任意下载 URL。
 

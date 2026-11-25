@@ -102,7 +102,19 @@ python scripts/package-qt.py package `
 
 两个包从同一实际安装目录复制得到，每一份目录独立审计。ZIP 重新打开后校验 CRC、条目集合、长度和每个条目的 SHA256。受控 NSIS 模板使用 `RequestExecutionLevel user`、LocalAppData、HKCU 的安装/卸载登记及当前用户开始菜单。它检查 x64 和 Windows 10 build 17763 下限，安装/卸载前提示关闭正在使用的可执行文件，不杀进程、不自动启动应用。
 
-同路径升级先调用已登记的旧用户级卸载器，移除旧版明确列出的程序文件，从而退休过期 DLL 和插件。卸载器只删除本次安装清单中的文件，不递归移除用户的 Documents、媒体、配置或任意自选目录。原生 Windows 还必须验证交互安装、运行中提示、重复安装、升级、静默卸载、中文/空格路径和重新安装；脚本生成 installer 成功不等于这些交互场景已通过。
+同路径升级先调用已登记的旧用户级卸载器，移除旧版明确列出的程序文件，从而退休过期 DLL 和插件。已有安装登记时，改变目标目录会在任何文件修改前被拒绝；迁移位置需要先卸载，用户媒体与配置继续保留。静默 `/S` 下的更换目录、运行中程序及旧卸载失败均返回非零状态，不显示阻塞提示框。旧位置的卸载器只有仍持有当前 HKCU 安装位置登记时，才能删除共享快捷方式和登记；复制或遗留的卸载器不能清理另一处活动安装的所有权。
+
+模板显式从 64 位 HKCU 视图读取目录，并保留用户 `/D=` 的输入。NSIS 官方说明指出 [InstallDirRegKey 不受 SetRegView 影响](https://nsis.sourceforge.io/Reference/SetRegView)，因此这里使用 `.onInit` 读取；[NSIS 命令行规范](https://nsis.sourceforge.io/Docs/Chapter3.html)要求 `/D=` 为最后一项、路径包含空格时也不加引号。卸载器只删除本次安装清单中的文件，不递归移除用户的 Documents、媒体、配置或任意自选目录。
+
+实际生成的安装器可在全新 Windows CI 账户运行以下有界回归：
+
+```powershell
+python scripts/test-windows-installer.py --installer artifacts/packages/windows/huhucapture-vX.Y.Z-windows-x64-setup.exe --evidence artifacts/tests/windows/installer
+```
+
+测试首先拒绝既有品牌 HKCU 安装/卸载登记或当前用户开始菜单目录，然后在自己创建的中文/空格路径检查安装、同目录重装、原样保留无关文件与 `config.json`、静默拒绝变更目录、遗留卸载器不影响活动安装、正常卸载仍保留用户文件。它只调用已观察到且仍匹配哈希/登记的本次卸载器作失败清理，不直接删除未知注册表或递归清理目录。每步有实际进程期限，报告保留真实安装器哈希。
+
+交互安装、运行中提示、跨版本升级、重新安装、物理桌面和干净机器依赖仍须分别验证；生成 installer 或这组原生自动化通过，均不能替代那些验收。
 
 ### Linux DEB 与 AppImage
 
