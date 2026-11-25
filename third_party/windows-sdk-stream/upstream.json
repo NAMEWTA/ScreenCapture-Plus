@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/microsoft/Windows-classic-samples",
+  "commit": "434f6002bdf9cf9829406c3ff2b33387982d6168",
+  "license": "MIT",
+  "author": "Microsoft Corporation",
+  "files": [
+    {
+      "upstream": "Samples/XmlLiteReaderWriter/cpp/XmlLiteReaderWriter.cpp",
+      "blob": "e69c1564cb3c8159e32cd45dae92e40a5e469491",
+      "used": "FileStream HANDLE ownership, COM identity/reference counting, Read/Write/Seek/Stat structure"
+    },
+    {
+      "upstream": "LICENSE",
+      "blob": "02a131eabfe560723b3a70efc5ac2a150eac967a"
+    }
+  ],
+  "adaptation": "src/platform/windows/FileHandleStream.cpp",
+  "changes": [
+    "Accept and duplicate an existing identity-checked CRT file object instead of reopening/truncating a filename.",
+    "Use serialized 64-bit logical positions and bounded CopyTo; Clone shares the open object with an independent position.",
+    "Implement SetSize and FlushFileBuffers-backed Commit for the existing MF MP4 muxer; preserve optional unsupported direct-stream transaction/region-lock semantics as explicit errors.",
+    "Validate pointers, EOF/short writes, file kind, allocations and sizes; initialize all STATSTG fields."
+  ],
+  "officialBridge": "https://learn.microsoft.com/windows/win32/api/mfidl/nf-mfidl-mfcreatemfbytestreamonstream",
+  "notClaimed": "This file-object adapter is not a codec, container implementation, filesystem sandbox or hardware recording acceptance."
+}

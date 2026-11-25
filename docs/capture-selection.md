@@ -67,6 +67,13 @@ results cannot complete a later selection. An explicit CLI entry takes
 precedence over Ctrl-release pinning. Dismissing a QR result closes capture,
 matching the old QR dialog journey.
 
+The capture toolbar's existing mark action uses `Action::Edit` to open the same
+shared `EditorWindow`/`EditorCanvas` with all nine tools and range annotations.
+It passes the actual prepared source crop to the host, without making the user
+pin first or creating another editor implementation. `Action::Pin`, Ctrl-release
+and the explicit pin CLI entry retain the pinned-window policy. The host accepts
+the real editor before completing capture; failed admission retains the source.
+
 `tests/capture_selection_tests.cpp` checks candidate order/clipping, exact edge
 hits, unchanged hover, click acceptance, four drag directions, one-pixel regions,
 all nine hit regions, immediate snapping, press-based movement, crossed edges

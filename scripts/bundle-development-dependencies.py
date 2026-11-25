@@ -462,7 +462,10 @@ def restore_bundle(options):
             # Include direct -I/usr and -L/usr flags, while avoiding a partial
             # match in another absolute path. /lib is the runner's /usr merge.
             system = str(bundle / "system/usr")
-            after = re.sub(r"(?:(?<=-I)|(?<=-L)|(?<![A-Za-z0-9_/]))/(usr|lib)(?=/|\s|$)",
+            # A variable suffix such as ${prefix}/lib is already relative to
+            # the rewritten prefix. Rewriting that suffix prepends the SDK a
+            # second time after pkg-config expands the variable.
+            after = re.sub(r"(?:(?<=-I)|(?<=-L)|(?<![A-Za-z0-9_/${}]))/(usr|lib)(?=/|\s|$)",
                            lambda match: system + ("/lib" if match.group(1) == "lib" else ""), after)
         if after != before:
             before_hash = digest(path)

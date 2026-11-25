@@ -144,6 +144,34 @@
       "license": "MIT",
       "copyright": "2025 liulun",
       "use": "existing production CF_UNICODETEXT behavior reviewed; native publication uses the shared owned payload/result implementation"
+    },
+    {
+      "name": "qwaylanddataoffer.cpp",
+      "path": "src/plugins/platforms/wayland/qwaylanddataoffer.cpp",
+      "sha": "5ec7f075aa7fda82e4b1cd33711dfe99bb0e696f",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylanddataoffer.cpp",
+      "use": "source-reviewed actual Wayland local-file MIME and Documents portal transfer; no copied private implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "copyright": "2016 The Qt Company Ltd."
+    },
+    {
+      "name": "qxdgdesktopportalfiletransfer.cpp",
+      "path": "src/gui/platform/unix/qxdgdesktopportalfiletransfer.cpp",
+      "sha": "6301dea40e27cc7f77a5fb727933a9da052c0e16",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/gui/platform/unix/qxdgdesktopportalfiletransfer.cpp",
+      "use": "source-reviewed actual Wayland local-file MIME and Documents portal transfer; no copied private implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "copyright": "2026 David Redondo"
+    },
+    {
+      "name": "org.freedesktop.portal.FileTransfer.xml",
+      "path": "data/org.freedesktop.portal.FileTransfer.xml",
+      "sha": "72b6d40b99534c2474dfe20998ae5e1d6743631e",
+      "url": "https://github.com/flatpak/xdg-desktop-portal/blob/1.18.4/data/org.freedesktop.portal.FileTransfer.xml",
+      "version": "1.18.4",
+      "license": "LGPL-2.0-or-later",
+      "copyright": "2018 Red Hat, Inc.; author Matthias Clasen",
+      "use": "source-reviewed official FileTransfer version property and real service dependencies; no copied implementation"
     }
   ]
 }

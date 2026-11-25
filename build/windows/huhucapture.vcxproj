@@ -100,6 +100,15 @@
     <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileIdentity.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileHandleStream.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\NativeMp4Recording.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\recording\CapVideo.cpp" />
     <ClCompile Include="..\..\src\recording\VideoGif.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -222,10 +231,14 @@
     <ClInclude Include="..\..\src\platform\windows\ComApartment.h" />
     <ClInclude Include="..\..\src\platform\windows\AudioFormat.h" />
     <ClInclude Include="..\..\src\platform\FileCommitter.h" />
+    <ClInclude Include="..\..\src\platform\FileIdentity.h" />
+    <ClInclude Include="..\..\src\platform\windows\FileHandleStream.h" />
+    <ClInclude Include="..\..\src\platform\windows\NativeMp4Recording.h" />
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h" />
     <ClInclude Include="..\..\src\platform\windows\DesktopClipboard.h" />
     <ClInclude Include="..\..\src\platform\windows\DesktopFiles.h" />
     <ClInclude Include="..\..\src\recording\CapVideo.h" />
+    <ClInclude Include="..\..\src\recording\RecordingBackend.h" />
     <ClInclude Include="..\..\src\recording\VideoGif.h" />
     <ClInclude Include="..\..\src\recording\VideoMp4.h" />
     <ClInclude Include="..\..\src\services\AnnotationRenderer.h" />

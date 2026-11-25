@@ -135,6 +135,7 @@ if(BUILD_TESTING)
     huhucapture_test(editor_document tests/editor_document_tests.cpp)
     huhucapture_test(mosaic_pixels tests/mosaic_pixels_tests.cpp)
     huhucapture_test(recording_results tests/recording_result_tests.cpp)
+    huhucapture_test(recording_geometry tests/recording_geometry_tests.cpp)
     if(TARGET huhucapture_file_committer)
         find_package(Threads REQUIRED)
         huhucapture_test(file_commit tests/platform/file_commit_tests.cpp)
@@ -243,6 +244,13 @@ if(HUHUCAPTURE_QT_VALIDATION)
     target_link_libraries(huhucapture_media_archive PUBLIC huhucapture_core Qt6::Gui
         PRIVATE huhucapture_file_committer Threads::Threads)
     set_target_properties(huhucapture_media_archive PROPERTIES CXX_EXTENSIONS OFF)
+    add_library(huhucapture_recording_session STATIC
+        src/recording/RecordingSession.h src/recording/RecordingSession.cpp)
+    set_target_properties(huhucapture_recording_session PROPERTIES AUTOMOC ON CXX_EXTENSIONS OFF)
+    target_link_libraries(huhucapture_recording_session PUBLIC huhucapture_media_archive Qt6::Core
+        PRIVATE Qt6::Concurrent)
+    huhucapture_test(qt_recording_admission tests/qt/recording_admission_tests.cpp)
+    target_link_libraries(qt_recording_admission PRIVATE huhucapture_recording_session)
     huhucapture_test(qt_media_archive tests/qt/media_archive_tests.cpp)
     target_link_libraries(qt_media_archive PRIVATE huhucapture_media_archive Threads::Threads)
     set_tests_properties(qt_media_archive PROPERTIES TIMEOUT 120)
@@ -269,7 +277,7 @@ if(HUHUCAPTURE_QT_VALIDATION)
             target_compile_definitions(huhucapture_desktop_services PRIVATE
                 UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00)
         elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            find_package(Qt6 6.12.1 EXACT REQUIRED COMPONENTS WaylandClient)
+            find_package(Qt6 6.12.1 EXACT REQUIRED COMPONENTS WaylandClient DBus)
             find_package(PkgConfig REQUIRED)
             pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client>=1.22)
             pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.80)
@@ -277,7 +285,7 @@ if(HUHUCAPTURE_QT_VALIDATION)
                 src/platform/linux/DesktopClipboard.h src/platform/linux/DesktopClipboard.cpp
                 src/platform/linux/DesktopFiles.h src/platform/linux/DesktopFiles.cpp)
             target_link_libraries(huhucapture_desktop_services PRIVATE
-                Qt6::WaylandClient PkgConfig::WAYLAND_CLIENT PkgConfig::GIO)
+                Qt6::WaylandClient Qt6::DBus PkgConfig::WAYLAND_CLIENT PkgConfig::GIO)
         else()
             message(FATAL_ERROR "Desktop integration targets Windows x64 and Linux amd64")
         endif()
@@ -309,7 +317,13 @@ if(HUHUCAPTURE_QT_VALIDATION)
             set_tests_properties(file_revealer_windows_desktop PROPERTIES TIMEOUT 60
                 ENVIRONMENT "QT_QPA_PLATFORM=windows")
         else()
-            find_program(XVFB_RUN xvfb-run REQUIRED)
+            find_program(XVFB_RUN xvfb-run)
+            if(NOT XVFB_RUN)
+                # Keep the real X11 test registered. A host without Xvfb can
+                # build the production services, but this CTest still fails to
+                # start and cannot be reported as passed or silently skipped.
+                set(XVFB_RUN xvfb-run)
+            endif()
             add_test(NAME desktop_clipboard_no_backend COMMAND desktop_clipboard_tests --reject-backend)
             set_tests_properties(desktop_clipboard_no_backend PROPERTIES TIMEOUT 60
                 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -469,8 +483,10 @@ if(HUHUCAPTURE_QT_VALIDATION)
         # This verifies the Qt/native link boundary, not hardware capture.
         add_library(huhucapture_native_media STATIC
             src/platform/windows/GdiCapture.cpp
+            src/platform/windows/FileHandleStream.cpp
+            src/platform/windows/NativeMp4Recording.cpp
             src/recording/VideoMp4.cpp)
-        target_link_libraries(huhucapture_native_media PUBLIC huhucapture_core
+        target_link_libraries(huhucapture_native_media PUBLIC huhucapture_core huhucapture_file_committer
             gdi32 user32 ole32 oleaut32 uuid shell32 shlwapi propsys
             d3d11 dxgi windowscodecs mf mfplat mfreadwrite mfuuid
             wininet comctl32)
@@ -478,6 +494,12 @@ if(HUHUCAPTURE_QT_VALIDATION)
             UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00)
         target_compile_options(huhucapture_native_media PRIVATE /W4 /utf-8 /permissive-)
         target_link_libraries(qt_image_contract PRIVATE huhucapture_native_media)
+        huhucapture_test(windows_file_stream tests/platform/windows_file_stream_tests.cpp)
+        target_link_libraries(windows_file_stream PRIVATE huhucapture_native_media)
+        huhucapture_test(qt_recording_session tests/qt/recording_session_tests.cpp)
+        target_link_libraries(qt_recording_session PRIVATE
+            huhucapture_recording_session huhucapture_native_media)
+        set_tests_properties(qt_recording_session PROPERTIES TIMEOUT 120)
     endif()
     if(HUHUCAPTURE_PORTAL_VALIDATION)
         if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -614,6 +636,13 @@ if(HUHUCAPTURE_QT_VALIDATION)
         if(WIN32)
             set_tests_properties(qt_video_inspection qt_hevc_inspection PROPERTIES ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:huhucapture_ffmpeg_avformat>")
+            huhucapture_test(native_recording_probe tests/qt/native_recording_probe.cpp
+                "${PROJECT_BINARY_DIR}/native-recording/$<CONFIG>")
+            target_link_libraries(native_recording_probe PRIVATE Qt6::Widgets Qt6::Concurrent
+                huhucapture_recording_session huhucapture_native_media huhucapture_video_inspection)
+            set_tests_properties(native_recording_probe PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE
+                ENVIRONMENT "QT_QPA_PLATFORM=windows"
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:huhucapture_ffmpeg_avformat>")
         endif()
     endif()
 endif()

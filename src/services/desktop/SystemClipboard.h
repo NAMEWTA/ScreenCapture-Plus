@@ -67,6 +67,7 @@ Q_SIGNALS:
 private:
     struct State;
     std::unique_ptr<State> state_;
+    void validatePrepared(quint64 token);
     void publishPrepared(quint64 token);
     void finish(quint64 token, ClipboardResult result);
 };

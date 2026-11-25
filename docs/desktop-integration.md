@@ -62,6 +62,20 @@ Qt 图像数据，GIF/MP4 提供 `text/uri-list`；没有自写像素传输或 W
 也在准备结束前成为独立内存，不借用随后可能复用的外部字符缓冲。
 剪贴板内容由持续运行的 Qt 应用拥有，不依附发起操作的窗口。
 
+固定 Qt 6.12.1 会为本地文件 URL 额外提供
+`application/vnd.portal.filetransfer`；另一个 Qt Wayland 进程读取文件时优先
+通过会话总线的 `org.freedesktop.portal.Documents` 服务执行 FileTransfer。
+因此文件复制的完整支持环境必须包含实际运行的 `xdg-document-portal` 和
+`xdg-permission-store`（Ubuntu 由 `xdg-desktop-portal` 包提供），Linux 安装依赖
+及 AppImage 宿主要求需包含此项。单纯发布 `text/uri-list` 不能证明 Qt 接收端
+已取到文件：固定 Qt 在 Portal 返回空传输 key 时没有恢复到原始 URI。
+文件发布先以 QtDBus 异步调用实际 `FileTransfer.version` 属性，最多三秒；
+缺失或不支持的服务返回 `Unavailable`，不替换之前的剪贴板内容。检查通过后
+才执行既有 worker 磁盘身份校验和 Qt 发布。取消或失败均释放本次读租约。
+图像、纯文本和原始 URI 消费端不因此被当成文件 Portal 的验收证据。
+预检是当时的能力证明；服务在成功发布后中断或文件随后被用户清理时，不能
+保证未来取回仍成功。发布回执与之后接收端实际完成文件取回仍是不同事件。
+
 X11 路径依据固定 Qt 源码，同时检查拥有权和 `mimeData()` 返回的实际选择对象；
 后者会查询 X server 的 selection owner。`offscreen`、`minimal` 等非桌面后端
 返回 `Unavailable`，不能作为真实剪贴板成功。
@@ -166,8 +180,14 @@ DBus 单次请求两点五秒；与 Portal 一样复用 Qt 的 GLib 主上下文
 - `file_revealer_tests`：实际文件检查与变化保护。`--real-desktop` 才调用真实
   Explorer/FileManager1/GIO；默认模式明确不宣称已测试打开文件管理器。
 - `scripts/test-wayland-clipboard.py`：创建独占的 headless Sway，用系统 wtype
-  发送真实虚拟键盘事件，再运行两个独立 Qt 进程。不伪造输入 serial、选择 offer
-  或接收内容。wtype/Sway/Wayland 包版本和真实日志写入指定 artifact 目录。
+  发送真实虚拟键盘事件，再运行两个独立 Qt 进程；同时拥有独立的 session bus、
+  permission store 和 Documents portal，以实际 FileTransfer 调用验证 Unicode
+  文件 URI。停止服务并检查本次运行的 FUSE 挂载清理后再移除私有目录。
+  不伪造输入 serial、选择 offer 或接收内容，也不删除 Portal MIME 来绕过 Qt
+  接收路径。wtype/Sway/Wayland/Portal 包版本及真实日志写入指定 artifact 目录；
+  URI 不符时还记录实际格式、编码字节和接收 URL。
+  另外启动会话总线不可用的独立真实 Wayland 客户端，要求文件发布返回
+  `Unavailable`、释放历史租约，并仍能读取此前拥有者的完整 PNG。
 - `desktop_clipboard_tests --reject-backend`：仅 Linux offscreen 负测，应明确失败
   为 `Unavailable`，不算系统剪贴板正向验证。
 

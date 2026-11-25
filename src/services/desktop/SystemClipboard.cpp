@@ -25,6 +25,11 @@
 #include "platform/windows/DesktopClipboard.h"
 #else
 #include "platform/linux/DesktopClipboard.h"
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
+#include <QDBusVariant>
 #endif
 
 namespace HuhuCapture::Desktop {
@@ -214,6 +219,7 @@ struct SystemClipboard::State {
     QPointer<QFutureWatcher<Failure>> validation;
 #ifndef Q_OS_WIN
     std::unique_ptr<Platform::Linux::DesktopClipboard> observer;
+    QPointer<QDBusPendingCallWatcher> filePortal;
 #endif
 };
 
@@ -258,6 +264,46 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
     }
     try {
         state_->active = token; state_->content = std::move(content); state_->origin = origin;
+#ifndef Q_OS_WIN
+        if (!state_->content->state_->file.isEmpty() &&
+            QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
+            // Fixed Qt prefers the Documents transfer MIME for local files.
+            // Query the actual version asynchronously before replacing any
+            // clipboard data. A compositor receipt alone cannot establish that
+            // a missing document service can later resolve those file URLs.
+            auto message = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.portal.Documents"),
+                QStringLiteral("/org/freedesktop/portal/documents"), QStringLiteral("org.freedesktop.DBus.Properties"),
+                QStringLiteral("Get"));
+            message.setArguments({QStringLiteral("org.freedesktop.portal.FileTransfer"), QStringLiteral("version")});
+            auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message, 3000), this);
+            state_->filePortal = watcher;
+            connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, token, watcher] {
+                const QDBusPendingReply<QDBusVariant> reply = *watcher;
+                if (state_->filePortal == watcher) state_->filePortal.clear();
+                watcher->deleteLater();
+                if (state_->active != token) return;
+                bool numeric = false;
+                const auto version = reply.isValid() ? reply.value().variant().toUInt(&numeric) : 0u;
+                if (!numeric || version < 1) {
+                    const auto detail = reply.isError() ? reply.error().message() : QStringLiteral("FileTransfer version 1 is required");
+                    finish(token, {{Error::Unavailable, reply.isError() ? static_cast<qint64>(reply.error().type()) : 0,
+                        QStringLiteral("The desktop document portal is unavailable for file copying: ") + detail}, {}});
+                    return;
+                }
+                validatePrepared(token);
+            });
+            return token;
+        }
+#endif
+        validatePrepared(token);
+    } catch (const std::bad_alloc&) { finish(token, {allocation(), {}}); }
+    return token;
+}
+
+void SystemClipboard::validatePrepared(quint64 token)
+{
+    if (!token || state_->active != token) return;
+    try {
         if (auto lease = state_->content->state_->lease) {
             // This last identity check remains off the GUI thread. The application
             // read reservation bridges preparation and actual native publication.
@@ -281,7 +327,6 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
             QTimer::singleShot(0, this, [this, token] { if (state_->active == token) publishPrepared(token); });
         }
     } catch (const std::bad_alloc&) { finish(token, {allocation(), {}}); }
-    return token;
 }
 
 void SystemClipboard::publishPrepared(quint64 token)
@@ -342,6 +387,10 @@ void SystemClipboard::finish(quint64 token, ClipboardResult result)
     if (state_->active == token) {
 #ifndef Q_OS_WIN
         state_->observer->cancel();
+        if (state_->filePortal) {
+            disconnect(state_->filePortal, nullptr, this, nullptr);
+            state_->filePortal->deleteLater(); state_->filePortal.clear();
+        }
 #endif
         if (state_->validation) {
             disconnect(state_->validation, nullptr, this, nullptr);

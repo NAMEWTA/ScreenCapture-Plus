@@ -14,7 +14,8 @@ struct RecordingError {
     bool operator==(const RecordingError&) const = default;
 };
 
-// One writer (the recording worker), read by the owner only after joining it.
+// One writer (the recording worker); the owner reads only after synchronized
+// worker completion, through a join or its completed future.
 // Successful finalization must never erase an earlier capture/encoding error.
 // An error with some frames is recoverable data, not a successful archive item.
 struct RecordingResult {

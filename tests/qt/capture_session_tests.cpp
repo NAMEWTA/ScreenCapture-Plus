@@ -151,6 +151,24 @@ void authorizedImageClick()
     std::cout << "PASS authorized-source click acceptance without desktop-window inference\n";
 }
 
+void directEditorEntry()
+{
+    CaptureSession session;
+    require(!session.load(imageSource()), "load the complete source for direct annotation");
+    select(session);
+    available(session, Action::Edit);
+    std::vector<ActionRequest> requests;
+    QObject::connect(&session, &CaptureSession::actionRequested, &session, [&](const ActionRequest& value) { requests.push_back(value); });
+    const auto token = session.request(Action::Edit);
+    waitFor([&] { return !requests.empty(); });
+    require(token && requests.front().action == Action::Edit && requests.front().sourceRect == QRect(5, 4, 15, 14) &&
+        requests.front().image == session.snapshot().image.copy(5, 4, 15, 14),
+        "direct annotation receives the exact crop with its own editor intent, independent of Ctrl pinning");
+    session.complete(token, ActionResult::Completed);
+    require(session.stage() == Stage::Closed, "capture completes after the real shared editor accepts its image");
+    std::cout << "PASS direct shared-editor handoff distinct from explicit pinning\n";
+}
+
 void reentrantHost()
 {
     auto* session = new CaptureSession;
@@ -174,6 +192,6 @@ void reentrantHost()
 int main(int argc, char** argv)
 {
     QGuiApplication app(argc, argv);
-    try { actualPixelOutput(); entryAndCancellation(); colorAndCoordinates(); authorizedImageClick(); reentrantHost(); return 0; }
+    try { actualPixelOutput(); entryAndCancellation(); colorAndCoordinates(); authorizedImageClick(); directEditorEntry(); reentrantHost(); return 0; }
     catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

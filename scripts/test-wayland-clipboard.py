@@ -92,6 +92,9 @@ def main() -> int:
     helper = runpy.run_path(str(Path(__file__).with_name("test-pipewire-capture.py")))
     terminate = helper["terminate"]
     host_binary = helper["host_binary"]
+    wait_bus_name = helper["wait_bus_name"]
+    require_alive = helper["require_alive"]
+    unmount_owned_documents = helper["unmount_owned_documents"]
     sway, wtype, swaymsg = host_binary("sway"), host_binary("wtype"), host_binary("swaymsg")
     host_base = os.environ.copy()
     for key in list(host_base):
@@ -102,7 +105,7 @@ def main() -> int:
             "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH"):
             host_base.pop(key, None)
     version = subprocess.run([sway, "--version"], env=host_base, check=True, capture_output=True, text=True).stdout.strip()
-    packages = subprocess.run([host_binary("dpkg-query"), "-W", "sway", "wtype", "libwayland-client0"],
+    packages = subprocess.run([host_binary("dpkg-query"), "-W", "sway", "wtype", "libwayland-client0", "dbus", "xdg-desktop-portal"],
                               env=host_base, capture_output=True, text=True, check=True).stdout
     (artifacts / "environment.json").write_text(json.dumps({"compositor": version,
         "packages": packages, "input": "wtype virtual keyboard with an application-lifetime idle seat device",
@@ -126,8 +129,7 @@ def main() -> int:
         host_env.update({"XDG_RUNTIME_DIR": str(runtime), "XDG_SESSION_TYPE": "wayland", "XDG_CURRENT_DESKTOP": "sway",
             "XDG_CONFIG_DIRS": "/etc/xdg", "XDG_DATA_DIRS": "/usr/local/share:/usr/share",
             "WLR_BACKENDS": "headless", "WLR_RENDERER": "pixman", "WLR_HEADLESS_OUTPUTS": "1", "WLR_LIBINPUT_NO_DEVICES": "1",
-            "QT_QPA_PLATFORM": "wayland", "QT_WAYLAND_DISABLE_WINDOWDECORATION": "1",
-            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent/huhucapture-clipboard-probe"})
+            "QT_QPA_PLATFORM": "wayland", "QT_WAYLAND_DISABLE_WINDOWDECORATION": "1"})
         # Only the Qt sender and its independent Qt receiver inherit the fixed
         # application loader/plugin paths. Sway, wtype and package tools use
         # host libraries, never the application's Qt/libportal/PipeWire prefix.
@@ -140,11 +142,44 @@ def main() -> int:
         client_env["WAYLAND_DEBUG"] = "client"
         config = Path(__file__).resolve().parents[1] / "tests/platform/sway-parent.conf"
         with (artifacts / "sway.log").open("wb") as log, (artifacts / "keyboard.stderr.log").open("wb") as keyboard_errors:
-            compositor = subprocess.Popen([sway, "--config", str(config), "--debug"], env=host_env,
-                stdout=log, stderr=subprocess.STDOUT, start_new_session=True, preexec_fn=child_guard)
+            compositor = None
             process = None
             keyboard = None
+            services: list[tuple[str, subprocess.Popen]] = []
+            service_logs = []
+
+            def start_service(name: str, command: list[str], pipe_output=False) -> subprocess.Popen:
+                service_log = (artifacts / f"{name}.log").open("wb")
+                service_logs.append(service_log)
+                child = subprocess.Popen(command, env=host_env, stdout=subprocess.PIPE if pipe_output else service_log,
+                    stderr=service_log, start_new_session=True, preexec_fn=child_guard, bufsize=0)
+                services.append((name, child))
+                return child
+
             try:
+                # Qt 6.12 offers application/vnd.portal.filetransfer for local
+                # URLs, and another Qt process preferentially retrieves that
+                # format through the actual Documents portal. The complete
+                # desktop contract therefore needs a real session bus and
+                # document service; a nonexistent bus cannot validate URIs.
+                bus = start_service("dbus", [host_binary("dbus-daemon"), "--session", "--nofork", "--print-address=1",
+                    f"--address=unix:path={runtime / 'bus'}"], True)
+                assert bus.stdout is not None
+                with selectors.DefaultSelector() as selector:
+                    selector.register(bus.stdout, selectors.EVENT_READ)
+                    if not selector.select(timeout=5):
+                        raise TimeoutError("The owned clipboard session bus did not provide its address")
+                    address = os.read(bus.stdout.fileno(), 4096).decode().strip()
+                if not address.startswith("unix:") or "\n" in address:
+                    raise RuntimeError("The owned clipboard session bus returned an invalid address")
+                host_env["DBUS_SESSION_BUS_ADDRESS"] = address
+                client_env["DBUS_SESSION_BUS_ADDRESS"] = address
+                start_service("permission-store", [host_binary("xdg-permission-store")])
+                wait_bus_name("org.freedesktop.impl.portal.PermissionStore", host_env, services)
+                start_service("document-portal", [host_binary("xdg-document-portal")])
+                wait_bus_name("org.freedesktop.portal.Documents", host_env, services)
+                compositor = subprocess.Popen([sway, "--config", str(config), "--debug"], env=host_env,
+                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True, preexec_fn=child_guard)
                 deadline = time.monotonic() + 10
                 socket = None
                 ipc_socket = None
@@ -185,6 +220,7 @@ def main() -> int:
                     with selectors.DefaultSelector() as selector:
                         selector.register(process.stdout, selectors.EVENT_READ)
                         while process.poll() is None or selector.get_map():
+                            require_alive(services)
                             if time.monotonic() > deadline:
                                 raise TimeoutError("The real clipboard owner/receiver did not terminate")
                             if compositor.poll() is not None:
@@ -221,8 +257,25 @@ def main() -> int:
                     terminate(keyboard)
                     if keyboard.stdin is not None:
                         keyboard.stdin.close()
-                terminate(compositor)
-    print("Real Wayland publication receipts and separate-process PNG/URI reception passed", flush=True)
+                if compositor is not None:
+                    terminate(compositor)
+                cleanup_errors = []
+                for name, service in reversed(services):
+                    try:
+                        terminate(service)
+                        if name == "document-portal":
+                            unmount_owned_documents(runtime, host_env)
+                    except (OSError, subprocess.SubprocessError) as error:
+                        cleanup_errors.append(f"{name}: {error}")
+                    finally:
+                        if service.stdout is not None:
+                            service.stdout.close()
+                for service_log in service_logs:
+                    service_log.close()
+                (artifacts / "cleanup.json").write_text(json.dumps({"errors": cleanup_errors}, indent=2) + "\n")
+                if cleanup_errors:
+                    raise RuntimeError("Owned clipboard service cleanup failed: " + "; ".join(cleanup_errors))
+    print("Real Wayland publication receipts and separate-process PNG/URI/Unicode reception passed", flush=True)
     return 0
 
 

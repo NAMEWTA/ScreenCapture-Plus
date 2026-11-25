@@ -59,7 +59,7 @@ struct Snapshot {
     QString sourceName;
 };
 
-enum class Action { Pin, Scroll, Record, Qr, History, SaveAs, Clipboard, Hex, Rgb, Cmyk, Position, Count };
+enum class Action { Pin, Scroll, Record, Qr, History, SaveAs, Clipboard, Hex, Rgb, Cmyk, Position, Edit, Count };
 enum class ActionResult { Completed, Cancelled, Failed };
 enum class Stage { Empty, Selecting, Adjusting, Submitting, Closed };
 struct StartOptions {
