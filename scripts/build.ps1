@@ -8,7 +8,7 @@ param(
 . (Join-Path $PSScriptRoot 'BuildCommon.ps1')
 $productVersion = Get-ProductVersion
 if ($Version -and ((Get-ReleaseVersion $Version) -join '.') -cne "$productVersion.0") {
-    throw "Release $Version does not match the repository VERSION ($productVersion)."
+    throw "Release $Version does not match build/version.json ($productVersion)."
 }
 Initialize-WindowsToolchain
 if (-not $SkipRestore) { & (Join-Path $PSScriptRoot 'restore.ps1') }

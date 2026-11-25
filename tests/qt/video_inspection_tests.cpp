@@ -101,6 +101,7 @@ int main(int argc, char** argv)
             const auto preview = videoThumbnail(path, 128);
             const int expectedPreview = item.value(QStringLiteral("preview")).toInt(-1);
             outcome[QStringLiteral("previewAccepted")] = !preview.failure;
+            outcome[QStringLiteral("previewFailureCode")] = static_cast<int>(preview.failure.code);
             outcome[QStringLiteral("previewDetail")] = preview.failure.detail;
             if (expectedPreview >= 0) passed = passed && ((!preview.failure) == (expectedPreview == 1));
             if (!preview.failure) {
@@ -116,12 +117,13 @@ int main(int argc, char** argv)
             if (!passed) ++failures;
             outcomes.append(outcome);
             std::cout << (passed ? "PASS " : "FAIL ") << name.toStdString() << ": accepted=" << accepted
-                      << ", video_frames=" << inspected.frames << ", " << inspected.failure.detail.toStdString() << '\n';
+                      << ", video_frames=" << inspected.frames << ", " << inspected.failure.detail.toStdString()
+                      << ", preview=" << !preview.failure << ", " << preview.failure.detail.toStdString() << '\n';
         }
 
         QJsonObject report;
 #ifdef _WIN32
-        report[QStringLiteral("backend")] = QStringLiteral("Pinned strict FFmpeg 9.0.2 full inspection; Windows Media Foundation cover");
+        report[QStringLiteral("backend")] = QStringLiteral("Pinned strict FFmpeg 9.0.2 full inspection; Windows Media Foundation cover with unsupported-codec software fallback");
 #else
         report[QStringLiteral("backend")] = QStringLiteral("Pinned FFmpeg 9.0.2 MOV + H.264/HEVC/AAC software decoders");
 #endif

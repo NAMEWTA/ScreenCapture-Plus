@@ -130,6 +130,22 @@ invalid bounds and failed queries return a failure with no fabricated frame.
 bounds, including valid window-manager frame extents, for native control-window
 exclusion.
 
+Screenshot, scrolling and recording workers pass their stop token into this
+owned X11 connection. Once `xcb_connect` has returned, cancellation calls
+`shutdown(SHUT_RDWR)` on that connection's still-owned socket to interrupt a
+blocked reply. The callback neither closes the descriptor nor invokes XCB or
+Qt. It stays registered through worker cleanup and is deregistered before
+`xcb_disconnect` can close or recycle the descriptor. A stopped capture
+instance remains stopped across `reset()` and cannot silently reconnect.
+XCB calls temporarily block SIGPIPE on their worker and restore its previous
+mask/pending-signal policy; no process-wide signal handler is replaced.
+
+This does not make initial connection setup interruptible: libxcb performs its
+authentication/setup handshake before exposing the socket. A server already
+stalled during that first `xcb_connect` remains an explicit limitation. The
+adapter does not reimplement X11 authentication or close Qt's shared display
+connection to conceal that boundary.
+
 On Wayland, including an XWayland process inside a Wayland session,
 `DesktopCapture` uses the Screenshot Portal. The request has a real visible
 native parent. A returned URI must be a supported local file URI; decoding
@@ -242,6 +258,7 @@ kept explicit:
 | `qt_editor_components` | Real editor input/rendering, including top-level deactivation cancelling unfinished drawing while retaining completed geometry | Qt Widgets; native IME and physical screens remain separate |
 | `qt_capture_lifecycle` | Actual Qt/GLib dispatch and missing Portal service discovery, cancellation during discovery, source-owner deletion and screenshot/scroll shutdown | Private D-Bus session, Linux Portal build, offscreen Qt |
 | `x11_capture_tests` through `scripts/test-x11-capture.py` | Painted X11 pixels, actual RandR/window geometry, physical pointer motion, SHM/storage reuse, XFixes cursor, XTEST scrolling, screenshot token admission and worker drain, scroll-to-editor bytes and control recovery | Isolated owned Xvfb or dummy Xorg display; never the user's desktop |
+| `x11_capture_cancellation_tests` through `scripts/test-x11-capture.py --paused-server` | Established native connections with real SHM, confirmed blocked worker poll while the owned server is SIGSTOPped, cancellation/destructor drainage before resume, independent connection and recycled-FD safety, concurrent query cancellation and preserved signal policy | Owned Xvfb/dummy Xorg plus Linux `/proc` inspection; no Qt event dispatcher while the server is paused |
 
 The local Linux recovery run compiled and executed the shared selection,
 scroll accumulator, Qt capture, placement and editor component tests. The
@@ -256,9 +273,10 @@ The local attempt to start an isolated dummy Xorg server was blocked before
 the client ran: the executor could not create the server's local Unix
 listening socket. No native X11 runtime pass is claimed from that attempt.
 The harness records server logs and a result artifact only for an actual
-client run, and CI must run it with a working owned display. Native XCB reply
-operations remain synchronous on their worker connection; unresponsive-server
-shutdown behavior is a remaining robustness check.
+client run, and CI must run it with a working owned display. The established
+XCB cancellation probe has been compiled locally, but its paused-server
+runtime result requires that owned display. Initial `xcb_connect` handshake
+cancellation remains outside this repair and must not be reported as bounded.
 
 These component and isolated-server checks do not replace the required
 Windows runtime, GNOME/Plasma Portal permission and focus behavior, real

@@ -8,8 +8,12 @@
 #include <xcb/xtest.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sys/socket.h>
+#include <pthread.h>
+#include <signal.h>
 #include <algorithm>
 #include <bit>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -19,6 +23,45 @@
 namespace HuhuCapture::Platform::Linux {
 namespace {
 constexpr std::size_t maximumBytes = 512u * 1024u * 1024u;
+class NativeSignalMask {
+public:
+    NativeSignalMask() noexcept
+    {
+        sigemptyset(&pipe_); sigaddset(&pipe_, SIGPIPE);
+        if (pthread_sigmask(SIG_BLOCK, &pipe_, &previous_) != 0) return;
+        valid_ = true;
+        // A caller that already blocks SIGPIPE owns its pending-signal policy.
+        // Nested capture operations likewise leave the outer guard in charge.
+        changed_ = sigismember(&previous_, SIGPIPE) == 0;
+        if (!changed_) return;
+        sigset_t pending;
+        if (sigpending(&pending) != 0) {
+            pthread_sigmask(SIG_SETMASK, &previous_, nullptr);
+            changed_ = valid_ = false; return;
+        }
+        pendingBefore_ = sigismember(&pending, SIGPIPE) != 0;
+    }
+    ~NativeSignalMask()
+    {
+        if (!changed_) return;
+        const int previousError = errno;
+        if (!pendingBefore_) {
+            // libxcb may use writev without MSG_NOSIGNAL. Consume a SIGPIPE
+            // generated during this operation before restoring this worker's
+            // mask; never replace the process-wide signal disposition.
+            const timespec immediate{};
+            while (sigtimedwait(&pipe_, nullptr, &immediate) < 0 && errno == EINTR) {}
+        }
+        pthread_sigmask(SIG_SETMASK, &previous_, nullptr);
+        errno = previousError;
+    }
+    bool valid() const noexcept { return valid_; }
+    NativeSignalMask(const NativeSignalMask&) = delete;
+    NativeSignalMask& operator=(const NativeSignalMask&) = delete;
+private:
+    sigset_t pipe_{}, previous_{};
+    bool valid_{}, changed_{}, pendingBefore_{};
+};
 template<class T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
 template<class T> Reply<T> own(T* pointer) { return {pointer, &std::free}; }
 bool contains(const X11Rectangle& outer, int x, int y, int width, int height)
@@ -37,6 +80,18 @@ std::uint8_t channel(std::uint32_t pixel, std::uint32_t mask)
 }
 
 struct X11Capture::State {
+    struct InterruptConnection {
+        int descriptor;
+        void operator()() const noexcept
+        {
+            // The worker keeps the XCB-owned descriptor open until this
+            // callback is deregistered. Shutdown wakes its blocked I/O without
+            // an XCB lock, closing/reusing an FD, or touching Qt's connection.
+            static_cast<void>(::shutdown(descriptor, SHUT_RDWR));
+        }
+    };
+    std::stop_token stop;
+    std::optional<std::stop_callback<InterruptConnection>> interrupt;
     xcb_connection_t* connection{};
     xcb_screen_t screen{};
     X11Rectangle bounds;
@@ -54,15 +109,21 @@ struct X11Capture::State {
     xcb_window_t scrollTarget{};
     bool scrollPaused{};
 
-    void releaseShared() noexcept
+    explicit State(std::stop_token token) : stop(token) {}
+    bool stopped()
     {
-        if (segment && connection) xcb_shm_detach(connection, segment);
+        if (!stop.stop_requested()) return false;
+        error = "X11 capture was cancelled"; return true;
+    }
+    void releaseShared(bool notifyServer = true) noexcept
+    {
+        if (notifyServer && segment && connection) xcb_shm_detach(connection, segment);
         if (shared) shmdt(shared);
         if (segmentId != -1) shmctl(segmentId, IPC_RMID, nullptr);
         segment = 0; segmentId = -1; shared = nullptr; sharedBytes = 0;
     }
     bool fail(std::string message)
-    { error = std::move(message); return false; }
+    { if (!stopped()) error = std::move(message); return false; }
     xcb_atom_t atom(const char* name)
     {
         const auto reply = own(xcb_intern_atom_reply(connection,
@@ -107,7 +168,7 @@ struct X11Capture::State {
         shared = static_cast<std::uint8_t*>(memory); sharedBytes = bytes;
         segment = xcb_generate_id(connection);
         const auto failure = own(xcb_request_check(connection, xcb_shm_attach_checked(connection, segment, segmentId, false)));
-        if (failure) {
+        if (failure || xcb_connection_has_error(connection) || stopped()) {
             segment = 0; releaseShared(); shmAvailable = false; return false;
         }
         // Linux keeps the segment alive while this process and X server have it
@@ -117,11 +178,15 @@ struct X11Capture::State {
     }
 };
 
-X11Capture::X11Capture() : state_(std::make_unique<State>()) {}
+X11Capture::X11Capture(std::stop_token stop) : state_(std::make_unique<State>(stop)) {}
 X11Capture::~X11Capture() { reset(); }
 void X11Capture::reset() noexcept
 {
-    state_->releaseShared();
+    const NativeSignalMask signals;
+    state_->releaseShared(signals.valid());
+    // Keep cancellation active through any queued SHM detach. Destruction
+    // waits for an in-flight callback before xcb_disconnect can close the FD.
+    state_->interrupt.reset();
     if (state_->connection) xcb_disconnect(state_->connection);
     state_->connection = nullptr; state_->initialized = false; state_->pixels.clear();
     state_->width = state_->height = 0; state_->stride = 0;
@@ -129,12 +194,22 @@ void X11Capture::reset() noexcept
 }
 bool X11Capture::initialize()
 {
+    const NativeSignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    if (state_->stopped()) return false;
     if (state_->initialized && state_->connection && !xcb_connection_has_error(state_->connection)) return true;
     reset();
+    if (state_->stopped()) return false;
     int number{};
+    // libxcb performs its initial authentication/setup handshake here, before
+    // exposing a socket. This narrow adapter does not reimplement X11 auth.
     state_->connection = xcb_connect(nullptr, &number);
     if (!state_->connection || xcb_connection_has_error(state_->connection))
         return state_->fail("Cannot connect to the current X11 display");
+    const int descriptor = xcb_get_file_descriptor(state_->connection);
+    if (descriptor < 0) return state_->fail("The owned X11 connection has no socket");
+    state_->interrupt.emplace(state_->stop, State::InterruptConnection{descriptor});
+    if (state_->stopped()) return false;
     const auto* setup = xcb_get_setup(state_->connection);
     auto screens = xcb_setup_roots_iterator(setup);
     for (int index = 0; screens.rem && index < number; ++index) xcb_screen_next(&screens);
@@ -174,6 +249,7 @@ bool X11Capture::initialize()
             xcb_xfixes_query_version(state_->connection, 4, 0), nullptr));
         state_->xfixesAvailable = static_cast<bool>(version);
     }
+    if (state_->stopped()) return false;
     state_->error.clear();
     state_->initialized = state_->refreshBounds();
     return state_->initialized;
@@ -181,6 +257,8 @@ bool X11Capture::initialize()
 
 bool X11Capture::desktop(X11Desktop& result)
 {
+    const NativeSignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
     if (!initialize() || !state_->refreshBounds()) return false;
     X11Desktop desktop; desktop.bounds = state_->bounds;
     const auto* extension = xcb_get_extension_data(state_->connection, &xcb_randr_id);
@@ -227,6 +305,7 @@ bool X11Capture::desktop(X11Desktop& result)
     const auto stateAtom = state_->atom("_NET_WM_STATE");
     const auto hiddenAtom = state_->atom("_NET_WM_STATE_HIDDEN");
     for (auto i = windows.rbegin(); i != windows.rend(); ++i) {
+        if (state_->stopped()) return false;
         const auto attributes = own(xcb_get_window_attributes_reply(state_->connection,
             xcb_get_window_attributes(state_->connection, *i), nullptr));
         if (!attributes || attributes->map_state != XCB_MAP_STATE_VIEWABLE) continue;
@@ -244,11 +323,14 @@ bool X11Capture::desktop(X11Desktop& result)
         }
         desktop.windows.push_back(rect);
     }
+    if (state_->stopped()) return false;
     result = std::move(desktop); state_->error.clear(); return true;
 }
 
 bool X11Capture::windowRectangle(std::uintptr_t windowId, X11Rectangle& rectangle)
 {
+    const NativeSignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
     if (!initialize()) return false;
     if (!windowId || windowId > (std::numeric_limits<xcb_window_t>::max)())
         return state_->fail("The X11 control window identifier is invalid");
@@ -269,11 +351,14 @@ bool X11Capture::windowRectangle(std::uintptr_t windowId, X11Rectangle& rectangl
         result.x -= static_cast<int>(frame[0]); result.y -= static_cast<int>(frame[2]);
         result.width += static_cast<int>(frame[0] + frame[1]); result.height += static_cast<int>(frame[2] + frame[3]);
     }
+    if (state_->stopped()) return false;
     rectangle = result; state_->error.clear(); return true;
 }
 
 bool X11Capture::capture(int x, int y, int width, int height, bool includeCursor)
 {
+    const NativeSignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
     if (!initialize()) return false;
     // Geometry can change between recordings. The geometry query also reports a
     // disconnected display before handing old pixels to an encoder.
@@ -298,6 +383,7 @@ bool X11Capture::capture(int x, int y, int width, int height, bool includeCursor
     }
     // Remote servers and restricted SHM environments retain a real GetImage
     // path. A capture error is never replaced by a stale successful frame.
+    if (state_->stopped()) return false;
     if (!source) {
         ordinary = own(xcb_get_image_reply(state_->connection,
             xcb_get_image(state_->connection, XCB_IMAGE_FORMAT_Z_PIXMAP, state_->screen.root,
@@ -312,6 +398,7 @@ bool X11Capture::capture(int x, int y, int width, int height, bool includeCursor
     try { state_->pixels.resize(layout->bytes); }
     catch (...) { return state_->fail("The X11 frame buffer could not be allocated"); }
     for (int row = 0; row < height; ++row) {
+        if (state_->stopped()) return false;
         const auto* input = source + static_cast<std::size_t>(row) * sourceStride;
         auto* output = state_->pixels.data() + static_cast<std::size_t>(row) * layout->stride;
         if (state_->directBgra) {
@@ -355,12 +442,15 @@ bool X11Capture::capture(int x, int y, int width, int height, bool includeCursor
             }
         }
     }
+    if (state_->stopped()) return false;
     state_->width = width; state_->height = height; state_->stride = layout->stride;
     state_->error.clear(); return true;
 }
 
 bool X11Capture::scroll(int x, int y, int steps)
 {
+    const NativeSignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
     state_->scrollPaused = false;
     if (!initialize() || !state_->refreshBounds()) return false;
     if (!contains(state_->bounds, x, y, 1, 1) || x > 32767 || y > 32767 || steps == 0 || steps < -20 || steps > 20)
@@ -381,13 +471,19 @@ bool X11Capture::scroll(int x, int y, int steps)
     }
     const auto button = static_cast<std::uint8_t>(steps > 0 ? 5 : 4);
     for (int i = 0; i < std::abs(steps); ++i) {
-        const auto press = own(xcb_request_check(state_->connection,
-            xcb_test_fake_input_checked(state_->connection, XCB_BUTTON_PRESS, button, XCB_CURRENT_TIME, XCB_NONE, 0, 0, 0)));
-        const auto release = own(xcb_request_check(state_->connection,
-            xcb_test_fake_input_checked(state_->connection, XCB_BUTTON_RELEASE, button, XCB_CURRENT_TIME, XCB_NONE, 0, 0, 0)));
-        if (press || release) return state_->fail("The X11 server rejected automatic scrolling");
+        if (state_->stopped()) return false;
+        // Queue the release before waiting for the press acknowledgement; an
+        // interrupted reply must not prevent us from submitting that release.
+        const auto pressed = xcb_test_fake_input_checked(state_->connection, XCB_BUTTON_PRESS, button, XCB_CURRENT_TIME, XCB_NONE, 0, 0, 0);
+        const auto released = xcb_test_fake_input_checked(state_->connection, XCB_BUTTON_RELEASE, button, XCB_CURRENT_TIME, XCB_NONE, 0, 0, 0);
+        const auto press = own(xcb_request_check(state_->connection, pressed));
+        const auto release = own(xcb_request_check(state_->connection, released));
+        if (press || release || xcb_connection_has_error(state_->connection))
+            return state_->fail("The X11 server rejected automatic scrolling");
     }
-    xcb_flush(state_->connection); state_->error.clear(); return true;
+    if (xcb_flush(state_->connection) <= 0) return state_->fail("The X11 scroll connection closed");
+    if (state_->stopped()) return false;
+    state_->error.clear(); return true;
 }
 std::span<const std::uint8_t> X11Capture::pixels() const noexcept { return state_->pixels; }
 int X11Capture::width() const noexcept { return state_->width; }

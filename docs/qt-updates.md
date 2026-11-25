@@ -27,7 +27,7 @@ Qt 更新器不实现另一套 ZIP、DEB、AppImage 或安装器解包引擎。�
 
 ## 唯一发布清单格式
 
-清单均为 UTF-8 JSON。下列字段中的省略符只是格式说明，生成器必须填入真实值。版本来自根目录 `VERSION`，tag 由它生成；`sourceCommit` 是 40 位小写 Git 提交 SHA。同一 Release 内所有资产使用同一身份。
+清单均为 UTF-8 JSON。下列字段中的省略符只是格式说明，生成器必须填入真实值。版本来自唯一输入 `build/version.json`，tag 由它生成；根目录 `VERSION` 是受校验的生成输出。`sourceCommit` 是 40 位小写 Git 提交 SHA。同一 Release 内所有资产使用同一身份。
 
 `release-manifest.json`：
 

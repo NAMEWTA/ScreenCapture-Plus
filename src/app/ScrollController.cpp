@@ -119,7 +119,7 @@ ScrollResult runScroll(QRect region, std::unique_ptr<Core::FrameSource> stream,
     } stopSource{stream};
     const bool manual = static_cast<bool>(stream);
     std::unique_ptr<Platform::NativeScrollSource> native;
-    if (!manual) native = std::make_unique<Platform::NativeScrollSource>(region.x(), region.y(), region.width(), region.height());
+    if (!manual) native = std::make_unique<Platform::NativeScrollSource>(region.x(), region.y(), region.width(), region.height(), stop);
     const auto layout = Core::pixelLayout(region.width(), region.height(), 4);
     if (!layout || layout->bytes > 512ull * 1024 * 1024) return {{}, QStringLiteral("The scrolling region exceeds the pixel budget"), true};
     std::vector<std::uint8_t> normalized, preview;
@@ -135,6 +135,7 @@ ScrollResult runScroll(QRect region, std::unique_ptr<Core::FrameSource> stream,
                 return false;
             }
             const auto captured = native->capture(); afterNativeCapture();
+            if (stop.stop_requested()) return false;
             if (!captured) { error = QString::fromStdString(native->error()); return false; }
             frame = native->pixels(); return true;
         }
@@ -176,6 +177,7 @@ ScrollResult runScroll(QRect region, std::unique_ptr<Core::FrameSource> stream,
     while (delay(stop, wait)) {
         if (wheel) {
             const auto input = native->scroll();
+            if (stop.stop_requested()) break;
             if (input == Platform::ScrollInputResult::PointerOutsideTarget) {
                 publish(QStringLiteral("long.pointerPaused")); wait = 500ms; continue;
             }

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <stop_token>
 #include <string>
 
 namespace HuhuCapture::Platform {
@@ -15,7 +16,7 @@ enum class ScrollInputResult { Scrolled, PointerOutsideTarget, Failed };
 // accessed. User movement to a different target pauses automatic wheel input.
 class NativeScrollSource final {
 public:
-    NativeScrollSource(int x, int y, int width, int height);
+    NativeScrollSource(int x, int y, int width, int height, std::stop_token stop = {});
     ~NativeScrollSource();
     NativeScrollSource(const NativeScrollSource&) = delete;
     NativeScrollSource& operator=(const NativeScrollSource&) = delete;

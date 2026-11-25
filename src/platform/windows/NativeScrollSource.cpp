@@ -9,7 +9,7 @@ struct NativeScrollSource::State {
     HWND target{};
     std::string error;
 };
-NativeScrollSource::NativeScrollSource(int x, int y, int width, int height) : state_(std::make_unique<State>())
+NativeScrollSource::NativeScrollSource(int x, int y, int width, int height, std::stop_token) : state_(std::make_unique<State>())
 { state_->x = x; state_->y = y; state_->width = width; state_->height = height; }
 NativeScrollSource::~NativeScrollSource() = default;
 bool NativeScrollSource::capture()

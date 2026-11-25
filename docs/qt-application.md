@@ -6,7 +6,7 @@ P12 验收。正式版本仍为 v0.0.5；旧 Ling 产品及其回归入口在 P1
 
 ## 实际入口与所有权
 
-`src/app/QtMain.cpp` 创建唯一 `QApplication`，使用 `VERSION` 生成的版本头、现有
+`src/app/QtMain.cpp` 创建唯一 `QApplication`，使用 `build/version.json` 生成的版本头、现有
 启动参数解析器、真实用户目录和安装标记。`DesktopApplication` 持有设置、语言、媒体
 归档、剪贴板、文件定位、截图、滚动、录制、局域网和更新服务。历史、设置、传输、录制
 控制窗口可以关闭及重开；服务的寿命不依赖某个窗口是否可见。

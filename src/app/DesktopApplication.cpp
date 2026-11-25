@@ -56,8 +56,10 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <set>
 #include <stop_token>
 #include <utility>
+#include <vector>
 
 namespace HuhuCapture::Application {
 namespace {
@@ -138,12 +140,16 @@ struct DesktopApplication::State {
     QPointer<QDialog> permission;
     QPointer<QMessageBox> errorDialog;
     std::vector<QPointer<QDialog>> dialogs;
-    std::map<quint64, std::function<void(const Desktop::ClipboardResult&)>> textCopies;
+    struct TextCopy {
+        quint64 actionToken{};
+        std::function<void(const Desktop::ClipboardResult&)> completed;
+    };
+    std::map<quint64, TextCopy> textCopies;
+    std::map<quint64, std::stop_source> textPreparations;
+    std::set<quint64> directReveals;
     QThreadPool qrPool;
     std::stop_source qrStop;
-    std::stop_source textStop;
     QString activationToken;
-    unsigned textPreparations{};
     quint64 qrToken{}, captureToken{}, captureAttempt{};
     std::optional<Core::StartupRequest> pendingCapture;
     Core::StartupRequest initial;
@@ -192,7 +198,8 @@ struct DesktopApplication::State {
     {
         QTimer::singleShot(0, &owner, [this] {
             if (stopping) { finishExit(); return; }
-            if (!initial.oneShot || !servicesReady || captureBusy() || textPreparations || !textCopies.empty() ||
+            if (!initial.oneShot || !servicesReady || captureBusy() || !textPreparations.empty() || !textCopies.empty() ||
+                !directReveals.empty() ||
                 media->busy() || lan->busy() || (updates && updates->busy())) return;
             for (const auto* widget : QApplication::topLevelWidgets())
                 if (widget->isVisible() && widget->windowType() != Qt::ToolTip) return;
@@ -201,12 +208,29 @@ struct DesktopApplication::State {
     }
     void finishExit()
     {
-        if (!stopping || exitReported || qrBusy || captureToken || textPreparations ||
+        if (!stopping || exitReported || qrBusy || captureToken || !textPreparations.empty() ||
             !mediaStopped || !lanStopped || !recordingStopped || !scrollStopped || !updatesStopped ||
             !settingsStopped || !captureStopped || !clipboardStopped || !revealerStopped || !textCopies.empty() ||
+            !directReveals.empty() ||
             (capture && capture->busy())) return;
         exitReported = true;
         Q_EMIT owner.exitReady(exitCode);
+    }
+    void openDirectory(const QString& path, bool createIfMissing = false)
+    {
+        if (stopping) return;
+        const auto token = revealer->openDirectory(path, nullptr, createIfMissing);
+        if (token) directReveals.insert(token);
+        else showError(text(u"clipboard.failed"));
+    }
+    void cancelTextAction(quint64 actionToken)
+    {
+        if (const auto found = textPreparations.find(actionToken); found != textPreparations.end())
+            found->second.request_stop();
+        std::vector<quint64> tokens;
+        for (const auto& [token, copy] : textCopies)
+            if (copy.actionToken == actionToken) tokens.push_back(token);
+        for (const auto token : tokens) clipboard->cancel(token);
     }
     void rebuildTray()
     {
@@ -307,7 +331,7 @@ struct DesktopApplication::State {
         QObject::connect(settingsUi.get(), &SettingsController::shutdownFinished, &owner,
             [this] { settingsStopped = true; finishExit(); });
         QObject::connect(settingsUi.get(), &SettingsController::openArchiveRequested, &owner,
-            [this] { revealer->openDirectory(paths.archiveDirectory, nullptr, true); });
+            [this] { openDirectory(paths.archiveDirectory, true); });
         QObject::connect(settingsUi.get(), &SettingsController::lanSettingsRequested, &owner,
             [this] { lan->openSettings(); });
         QObject::connect(settingsUi.get(), &SettingsController::openLinkRequested, &owner,
@@ -315,7 +339,7 @@ struct DesktopApplication::State {
         QObject::connect(settingsUi.get(), &SettingsController::downloadRequested, &owner,
             [this] { if (updates) updates->download(); });
         QObject::connect(settingsUi.get(), &SettingsController::openUpdateFolderRequested, &owner,
-            [this](const QString& file) { if (!file.isEmpty()) revealer->openDirectory(QFileInfo(file).absolutePath()); });
+            [this](const QString& file) { if (!file.isEmpty()) openDirectory(QFileInfo(file).absolutePath()); });
         QObject::connect(settingsUi.get(), &SettingsController::operationFailed, &owner,
             [this](const QString& detail) { showError(detail); });
         settingsUi->setLanAvailable(configurationWritable);
@@ -351,7 +375,7 @@ struct DesktopApplication::State {
             [this](quint64 token, const Desktop::ClipboardResult& result) {
                 const auto found = textCopies.find(token);
                 if (found == textCopies.end()) return;
-                auto done = std::move(found->second); textCopies.erase(found);
+                auto done = std::move(found->second.completed); textCopies.erase(found);
                 if (!stopping) done(result);
                 queueIdleCheck();
             });
@@ -360,7 +384,12 @@ struct DesktopApplication::State {
         QObject::connect(revealer.get(), &Desktop::FileRevealer::shutdownFinished, &owner,
             [this] { revealerStopped = true; finishExit(); });
         QObject::connect(revealer.get(), &Desktop::FileRevealer::finished, &owner,
-            [this] { queueIdleCheck(); });
+            [this](quint64 token, const Desktop::RevealResult& result) {
+                if (directReveals.erase(token) && !stopping && !result.completed() &&
+                    result.failure.code != Desktop::Error::Cancelled)
+                    showError(result.failure.detail.isEmpty() ? text(u"clipboard.failed") : result.failure.detail);
+                queueIdleCheck();
+            });
         QObject::connect(capture.get(), &Capture::DesktopCapture::initialized, &owner, [this](const Capture::Capability&) {
             captureInitialized = true;
             if (pendingCapture) {
@@ -400,6 +429,7 @@ struct DesktopApplication::State {
             [this](const Capture::ActionRequest& request) { captureAction(request); });
         QObject::connect(selection.get(), &Capture::CaptureSession::actionCancelled, &owner, [this](quint64 token) {
             media->cancelOutput(selection.get(), token);
+            cancelTextAction(token);
             if (qrToken == token) qrStop.request_stop();
         });
         QObject::connect(captureUi.get(), &UI::CaptureWindow::closed, &owner, [this] {
@@ -469,29 +499,32 @@ struct DesktopApplication::State {
             }
         });
     }
-    void publishText(Desktop::ClipboardPreparation prepared, QWidget* parent,
+    void publishText(Desktop::ClipboardPreparation prepared, QWidget* parent, quint64 actionToken,
         std::function<void(const Desktop::ClipboardResult&)> done)
     {
         if (prepared.failure) { done({prepared.failure, {}}); return; }
         const auto token = clipboard->publish(std::move(prepared.content), parent ? parent->windowHandle() : nullptr);
         if (!token) { done({{Desktop::Error::Unavailable, 0, QStringLiteral("Clipboard admission failed")}, {}}); return; }
-        textCopies.emplace(token, std::move(done));
+        textCopies.emplace(token, TextCopy{actionToken, std::move(done)});
     }
-    void publishText(const QString& text, QWidget* parent,
+    void publishText(const QString& text, QWidget* parent, quint64 actionToken,
         std::function<void(const Desktop::ClipboardResult&)> done)
     {
-        ++textPreparations;
+        const auto [pending, admitted] = textPreparations.try_emplace(actionToken);
+        if (!admitted) { done({{Desktop::Error::Unavailable, 0, QStringLiteral("Text preparation is already active")}, {}}); return; }
+        const auto stop = pending->second.get_token();
         auto* watcher = new QFutureWatcher<Desktop::ClipboardPreparation>(&owner);
         const QPointer<QWidget> origin(parent);
         QObject::connect(watcher, &QFutureWatcher<Desktop::ClipboardPreparation>::finished, &owner,
-            [this, watcher, origin, done = std::move(done)]() mutable {
-                auto prepared = watcher->future().takeResult(); watcher->deleteLater(); --textPreparations;
+            [this, watcher, origin, actionToken, stop, done = std::move(done)]() mutable {
+                auto prepared = watcher->future().takeResult(); watcher->deleteLater(); textPreparations.erase(actionToken);
                 if (stopping) { finishExit(); return; }
-                if (!origin) done({{Desktop::Error::Cancelled, 0, {}}, {}});
-                else publishText(std::move(prepared), origin, std::move(done));
+                if (!origin || stop.stop_requested() || selection->activeRequest() != actionToken)
+                    done({{Desktop::Error::Cancelled, 0, {}}, {}});
+                else publishText(std::move(prepared), origin, actionToken, std::move(done));
                 queueIdleCheck();
             });
-        watcher->setFuture(QtConcurrent::run(&qrPool, [text, stop = textStop.get_token()] {
+        watcher->setFuture(QtConcurrent::run(&qrPool, [text, stop] {
             return Desktop::prepareText(text, {}, stop);
         }));
     }
@@ -522,16 +555,20 @@ struct DesktopApplication::State {
             std::erase_if(dialogs, [](const auto& view) { return view.isNull(); }); dialogs.push_back(dialog);
             QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
             QObject::connect(dialog, &QDialog::finished, &owner, [this, token] {
+                cancelTextAction(token);
                 selection->complete(token, Capture::ActionResult::Completed); queueIdleCheck();
             });
             QObject::connect(copy, &QPushButton::clicked, &owner,
-                [this, view = QPointer(dialog), copy, text = std::move(result.result.text)] {
+                [this, view = QPointer(dialog), copy, token, text = std::move(result.result.text)] {
                     if (!view || stopping) return;
                     copy->setEnabled(false);
-                    publishText(text, view, [this, view, copy](const auto& completion) {
+                    publishText(text, view, token, [this, view, copy](const auto& completion) {
                         if (!view) return;
                         if (completion.completed()) view->accept();
-                        else { copy->setEnabled(true); showError(completion.failure.detail); }
+                        else {
+                            copy->setEnabled(true);
+                            if (completion.failure.code != Desktop::Error::Cancelled) showError(completion.failure.detail);
+                        }
                     });
                 });
             dialog->resize(520, 340); dialog->open();
@@ -577,8 +614,10 @@ struct DesktopApplication::State {
                 request.image, complete)) complete(UI::OutputResult::Failed, text(u"app.outputUnavailable"));
             break;
         case Capture::Action::Hex: case Capture::Action::Rgb: case Capture::Action::Cmyk: case Capture::Action::Position:
-            publishText(request.text, captureUi->dialogParent(), [complete](const auto& result) {
-                complete(result.completed() ? UI::OutputResult::Succeeded : UI::OutputResult::Failed, result.failure.detail);
+            publishText(request.text, captureUi->dialogParent(), token, [complete](const auto& result) {
+                complete(result.completed() ? UI::OutputResult::Succeeded :
+                    result.failure.code == Desktop::Error::Cancelled ? UI::OutputResult::Cancelled : UI::OutputResult::Failed,
+                    result.failure.detail);
             }); break;
         default: complete(UI::OutputResult::Failed, text(u"app.outputUnavailable")); break;
         }
@@ -617,12 +656,16 @@ bool DesktopApplication::start(Core::StartupRequest request)
     state_->instance = std::make_unique<SingleInstance>(state_->paths.runtimeDirectory, scope,
         [this](const Core::StartupRequest& activation) { return activate(activation); });
     connect(state_->instance.get(), &SingleInstance::startupFinished, this, [this, loaded](const InstanceResult& result) {
-        if (result.role == InstanceRole::Forwarded) { Q_EMIT exitReady(0); return; }
+        if (state_->stopping || state_->exitReported) return;
+        if (result.role == InstanceRole::Forwarded) { state_->exitReported = true; Q_EMIT exitReady(0); return; }
         if (result.role == InstanceRole::Failed) {
             auto* box = new QMessageBox(QMessageBox::Critical, QStringLiteral("huhucapture"), result.detail, QMessageBox::Ok);
             box->setTextFormat(Qt::PlainText); box->setAttribute(Qt::WA_DeleteOnClose);
             state_->dialogs.push_back(box);
-            connect(box, &QDialog::finished, this, [this] { Q_EMIT exitReady(2); });
+            connect(box, &QDialog::finished, this, [this] {
+                if (state_->stopping || std::exchange(state_->exitReported, true)) return;
+                Q_EMIT exitReady(2);
+            });
             box->open(); return;
         }
         state_->initializeServices();
@@ -661,8 +704,12 @@ void DesktopApplication::requestExit()
     if (std::exchange(state_->stopping, true)) return;
     if (state_->instance) state_->instance->stopAccepting();
     state_->pendingCapture.reset(); state_->qrStop.request_stop();
-    state_->textStop.request_stop();
-    if (!state_->servicesReady) { state_->exitReported = true; Q_EMIT exitReady(0); return; }
+    for (auto& [token, stop] : state_->textPreparations) { Q_UNUSED(token); stop.request_stop(); }
+    if (!state_->servicesReady) {
+        for (const auto& dialog : state_->dialogs) if (dialog) dialog->reject();
+        if (!std::exchange(state_->exitReported, true)) Q_EMIT exitReady(0);
+        return;
+    }
     if (state_->tray) state_->tray->hide();
     if (state_->launcher) state_->launcher->hide();
     state_->settingsUi->shutdown();

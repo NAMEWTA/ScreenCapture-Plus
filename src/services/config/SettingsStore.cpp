@@ -167,6 +167,36 @@ SettingsResult backup(const QString& destination, const QByteArray& bytes, const
 }
 } // namespace
 
+QString resolvePortableDirectory(const QString& directory, const QString& appImageMount)
+{
+    if (directory.isEmpty() || directory.contains(QChar::Null) || !QDir::isAbsolutePath(directory)) return {};
+    const QFileInfo selected(directory);
+    if (selected.exists() && !selected.isDir()) return {};
+    std::error_code error;
+    const auto physical = std::filesystem::weakly_canonical(nativePath(directory), error);
+    if (error) return {};
+    const auto resolved = qtPath(physical);
+    if (!appImageMount.isEmpty()) {
+        if (appImageMount.contains(QChar::Null) || !QDir::isAbsolutePath(appImageMount)) return {};
+        const auto mount = qtPath(std::filesystem::weakly_canonical(nativePath(appImageMount), error));
+        if (error) return {};
+        const auto config = qtPath(std::filesystem::weakly_canonical(
+            nativePath(QDir(resolved).filePath(QStringLiteral("config.json"))), error));
+        if (error) return {};
+        const auto prefix = mount.endsWith(QChar(u'/')) ? mount : mount + QChar(u'/');
+        const auto inside = [&](const QString& path) {
+#ifdef Q_OS_WIN
+            constexpr auto sensitivity = Qt::CaseInsensitive;
+#else
+            constexpr auto sensitivity = Qt::CaseSensitive;
+#endif
+            return path.compare(mount, sensitivity) == 0 || path.startsWith(prefix, sensitivity);
+        };
+        if (inside(resolved) || inside(config)) return {};
+    }
+    return resolved;
+}
+
 QString settingsPath(PathPolicy policy, const QString& applicationDirectory,
     const QString& userConfigDirectory, const QString& explicitPortableDirectory)
 {

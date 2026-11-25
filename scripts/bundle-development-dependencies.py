@@ -372,6 +372,12 @@ def make_bundle(options):
         target = licenses / "system" / (package.replace(":", "_") + ".copyright")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(copyright_file.resolve(), target)
+    # Debian copyright files refer to these exact installed license texts.
+    # Preserve those references' contents as well as each package's notice.
+    common_licenses = Path("/usr/share/common-licenses")
+    if not common_licenses.is_dir() or not any(common_licenses.iterdir()):
+        raise RuntimeError("The runner's common license texts are missing")
+    shutil.copytree(common_licenses, licenses / "system/common-licenses", symlinks=False)
     for path in (root / "third_party").rglob("*"):
         if path.is_file() and (path.name.upper().startswith(("LICENSE", "COPYING", "NOTICE")) or path.name == "upstream.json"):
             target = licenses / "project" / path.relative_to(root / "third_party")

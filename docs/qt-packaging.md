@@ -2,7 +2,7 @@
 
 本实现对应 [Issue #5 第 13 节](https://github.com/NAMEWTA/huhucapture/issues/5)。统一 `huhucapture` 可执行目标先由 CMake 安装为真实运行目录，再使用 Qt 部署 API、NSIS、CPack/DEB、linuxdeploy 和 appimagetool 生成平台包。脚本不修改版本、创建 tag、上传资产、安装程序或公开 Release。旧 Windows 发行线在迁移门槛通过前继续保留。
 
-`scripts/package-qt.py --help` 列出入口，`build/cmake/qt-install.cmake` 定义唯一安装树。当前仓库的版本输入为根目录 `VERSION`，由已有 `build/cmake/version.cmake` 读取；打包身份、Windows RC 和清单均沿用这一值，不另维护独立版本。
+`scripts/package-qt.py --help` 列出入口，`build/cmake/qt-install.cmake` 定义唯一安装树。版本的唯一输入是 `build/version.json`；CMake 原生读取它，打包脚本通过 `scripts/version_source.py` 的 `read_version(ROOT)` 读取并核对生成文件。`VERSION` 与 Windows `Version.props` 是受校验的生成输出，不能独立改动。打包身份、Windows RC 和清单均沿用同一版本。
 
 ## 实际构建身份
 

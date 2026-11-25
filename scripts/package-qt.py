@@ -20,6 +20,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+from version_source import read_version
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
@@ -61,7 +62,7 @@ def marker(prefix: Path, kind: str):
 
 def verify_source(build: dict, development: bool):
     meta.identity(build, development=development)
-    version = (ROOT/'VERSION').read_text().strip()
+    version = read_version(ROOT)
     commit = run(['git','rev-parse','HEAD'], cwd=ROOT, capture=True).strip()
     dirty = bool(run(['git','status','--porcelain','--untracked-files=normal'], cwd=ROOT, capture=True).strip())
     meta.require(version == build['version'] and commit == build['sourceCommit'], 'Install receipt does not match the current source revision/version')
@@ -235,6 +236,9 @@ def cmake_quote(path):
 
 
 def linux_deb(appdir: Path, output: Path, workspace: Path, version: str):
+    # CPack otherwise falls back to only explicit Depends when shlibdeps is
+    # absent. This pipeline requires the actual ELF dependency calculation.
+    tool('dpkg-shlibdeps'); tool('file')
     root = workspace/'deb-root'; (root/'opt').mkdir(parents=True)
     shutil.copytree(appdir/'usr', root/'opt/huhucapture', symlinks=True)
     marker(root/'opt/huhucapture','deb')
@@ -248,6 +252,7 @@ def linux_deb(appdir: Path, output: Path, workspace: Path, version: str):
         'CPACK_GENERATOR':'DEB', 'CPACK_PACKAGE_NAME':'huhucapture', 'CPACK_PACKAGE_VERSION':version,
         'CPACK_PACKAGE_VENDOR':'NAMEWTA', 'CPACK_PACKAGE_CONTACT':'https://github.com/NAMEWTA/huhucapture/issues',
         'CPACK_PACKAGE_DESCRIPTION_SUMMARY':'Screen capture, annotation, recording and LAN sharing with Qt 6',
+        'CPACK_PACKAGE_DESCRIPTION':'Complete Qt 6 desktop application for screen capture, annotation, recording, scrolling capture and LAN sharing.',
         'CPACK_PACKAGE_FILE_NAME':output.stem, 'CPACK_DEBIAN_FILE_NAME':output.name,
         'CPACK_PACKAGE_DIRECTORY':str(output.parent), 'CPACK_PACKAGING_INSTALL_PREFIX':'/',
         'CPACK_DEBIAN_PACKAGE_ARCHITECTURE':'amd64', 'CPACK_DEBIAN_PACKAGE_SECTION':'graphics',
@@ -263,6 +268,14 @@ def linux_deb(appdir: Path, output: Path, workspace: Path, version: str):
     fields = run([dpkg,'--field',output,'Package','Version','Architecture'],capture=True)
     meta.require('Package: huhucapture' in fields and 'Version: '+version in fields and 'Architecture: amd64' in fields,
                  'Generated DEB control identity is wrong')
+    depends = run([dpkg,'--field',output,'Depends'],capture=True).strip()
+    # CPack intentionally uses --ignore-missing-info for private bundled libs.
+    # Without a real host dpkg symbols database that also silently drops every
+    # system ABI requirement. A syntactically valid DEB is not sufficient.
+    for dependency in ('libc6', 'libstdc++6', 'libgcc-s1'):
+        meta.require(re.search(r'(?:^|[,|])\s*'+re.escape(dependency)+r'(?::(?:amd64|any))?\s*\(>=\s*[^)]+\)', depends),
+                     'Generated DEB lacks the resolved host ABI dependency '+dependency+
+                     '; package on the actual baseline with its dpkg package/symbol database')
     extracted = workspace/'deb-verified'; run([dpkg,'--extract',output,extracted])
     meta.require(meta.inventory(root) == meta.inventory(extracted), 'DEB extraction differs from the real staged package')
     meta.audit_tree(extracted/'opt/huhucapture','deb',development=True)

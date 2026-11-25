@@ -232,11 +232,20 @@ if(BUILD_TESTING)
         add_executable(x11_capture_tests tests/platform/x11_capture_tests.cpp)
         set_target_properties(x11_capture_tests PROPERTIES CXX_EXTENSIONS OFF)
         target_link_libraries(x11_capture_tests PRIVATE huhucapture_application)
+        add_executable(x11_capture_cancellation_tests tests/platform/x11_capture_cancellation_tests.cpp)
+        set_target_properties(x11_capture_cancellation_tests PROPERTIES CXX_EXTENSIONS OFF)
+        target_link_libraries(x11_capture_cancellation_tests PRIVATE huhucapture_desktop_capture PkgConfig::XCB_CAPTURE)
+        add_test(NAME x11_capture_pre_cancel COMMAND x11_capture_cancellation_tests --pre-cancel)
+        set_tests_properties(x11_capture_pre_cancel PROPERTIES TIMEOUT 15)
         if(HUHUCAPTURE_X11_TESTS)
             add_test(NAME x11_capture_tests COMMAND "${Python3_EXECUTABLE}"
                 "${PROJECT_SOURCE_DIR}/scripts/test-x11-capture.py" $<TARGET_FILE:x11_capture_tests>
                 --artifacts "${PROJECT_BINARY_DIR}/x11-capture")
             set_tests_properties(x11_capture_tests PROPERTIES TIMEOUT 150)
+            add_test(NAME x11_capture_cancellation_tests COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/scripts/test-x11-capture.py" $<TARGET_FILE:x11_capture_cancellation_tests>
+                --paused-server --artifacts "${PROJECT_BINARY_DIR}/x11-capture-cancellation")
+            set_tests_properties(x11_capture_cancellation_tests PROPERTIES TIMEOUT 90)
         endif()
         target_link_libraries(qt_settings_controller PRIVATE PkgConfig::XCB_CAPTURE PkgConfig::XCB_SHORTCUT PkgConfig::GIO)
         add_test(NAME qt_settings_controller_unavailable COMMAND qt_settings_controller

@@ -162,6 +162,8 @@ pwsh ./scripts/package.ps1
 
 程序输出到 `artifacts/bin/x64/Release/huhucapture.exe`。首次恢复依赖后可打开 `huhucapture.slnx` 调试。CI 共用这些脚本，只有完整验证通过后才会发布声明的版本。脚本覆盖范围、桌面手工验收和实际证据应分别记录，不能相互替代。
 
+产品版本只在 [build/version.json](build/version.json) 中维护。变更后运行 `python scripts/version_source.py --write` 更新兼容生成文件；普通构建、直接 MSBuild 和打包都会拒绝过期版本，运行程序不需要 Python。版本与发布声明规则见[构建与发布](docs/building.md)。
+
 | 文档 | 内容 |
 | --- | --- |
 | [文档地图](docs/readme.md) | 按问题查找设计、工程和验证约定 |

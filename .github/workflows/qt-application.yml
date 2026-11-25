@@ -92,6 +92,10 @@ jobs:
           merge-multiple: true
       - name: Build the exact application dependencies
         run: |
+          # setup-python prepends its own pkg-config directory after install-qt.
+          # libportal's pkg-config metadata needs the actual Qt module .pc files.
+          export PKG_CONFIG_PATH="$QT_ROOT_DIR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          pkg-config --modversion Qt6Core Qt6Gui Qt6Widgets
           rustup toolchain install 1.97.1 --profile minimal
           python scripts/build-native-rust.py
           python scripts/build-portal.py
@@ -125,6 +129,9 @@ jobs:
               shutil.copy2(notice,folder/(package+'.copyright'))
               packages[owner]=subprocess.check_output(['dpkg-query','-W','-f=${Version}',owner],text=True)
           (destination/'system/packages.json').write_text(json.dumps(packages,indent=2)+'\n')
+          common=Path('/usr/share/common-licenses')
+          if not common.is_dir() or not any(common.iterdir()): raise RuntimeError('Actual common license texts absent')
+          shutil.copytree(common,destination/'system/common-licenses',symlinks=False)
           PY
       - name: Configure and link the complete application with real platform services
         run: |
@@ -151,6 +158,7 @@ jobs:
             artifacts/cmake/application-linux/CMakeCache.txt
             artifacts/cmake/application-linux/Testing/Temporary/
             artifacts/cmake/application-linux/x11-capture/
+            artifacts/cmake/application-linux/x11-capture-cancellation/
             artifacts/cmake/application-linux/settings-controller-render/
             artifacts/cmake/application-linux/editor-render/
             artifacts/cmake/application-linux/package/

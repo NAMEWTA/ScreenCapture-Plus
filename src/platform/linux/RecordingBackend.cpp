@@ -27,7 +27,7 @@ Backend desktopRecordingBackend(DesktopRecordingControls controls)
     return [controls](const BackendRequest& request, Platform::FileHandle writer, const BackendEvents& events, std::stop_token stop) {
         // Construct and destroy the X connection on the media worker. The GUI
         // routes Wayland/XWayland selections through a fresh ScreenCast grant.
-        auto capture = std::make_shared<Platform::Linux::X11Capture>();
+        auto capture = std::make_shared<Platform::Linux::X11Capture>(stop);
         auto source = makePollingFrameSource(request, CaptureSource::X11,
             [capture, controls, checked = false](PixelRegion region, bool cursor) mutable -> BorrowedBgraFrame {
                 if (!checked && controls.expectedOutside && controls.nativeWindow) {

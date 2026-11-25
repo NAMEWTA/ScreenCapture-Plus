@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import selectors
 import signal
 import subprocess
 import tempfile
@@ -39,10 +40,87 @@ def stop_owned(process: subprocess.Popen) -> None:
             process.wait(timeout=5)
 
 
+def paused_server_probe(probe: Path, environment: dict, server: subprocess.Popen, artifacts: Path) -> list:
+    """Only the actual server owner sends signals; the client has no Qt GUI loop."""
+    paused = False
+    cases = []
+    with (artifacts / "probe.stdout.log").open("wb") as output, (artifacts / "probe.stderr.log").open("wb") as errors:
+        client = subprocess.Popen([str(probe)], env={**environment, "HUHUCAPTURE_TEST_X11_PAUSED_SERVER": "1"},
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors)
+        pending = bytearray()
+        selector = selectors.DefaultSelector()
+        selector.register(client.stdout, selectors.EVENT_READ)
+
+        def line(timeout: float = 10) -> str:
+            deadline = time.monotonic() + timeout
+            while b"\n" not in pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise TimeoutError("The real paused-server probe did not acknowledge native worker completion")
+                data = os.read(client.stdout.fileno(), 4096)
+                if not data:
+                    raise RuntimeError("The paused-server probe exited before acknowledgement; inspect probe logs")
+                output.write(data)
+                output.flush()
+                pending.extend(data)
+            value, _, rest = pending.partition(b"\n")
+            pending[:] = rest
+            return value.decode("utf-8")
+
+        def command(value: str) -> None:
+            client.stdin.write((value + "\n").encode("utf-8"))
+            client.stdin.flush()
+
+        try:
+            for name in ("capture", "desktop", "window", "native-capture", "native-scroll"):
+                if line() != "READY " + name:
+                    raise RuntimeError("The capture probe did not establish its real source before pausing")
+                paused = True
+                server.send_signal(signal.SIGSTOP)
+                deadline = time.monotonic() + 3
+                while True:
+                    if server.poll() is not None:
+                        raise RuntimeError("The owned X server exited instead of pausing")
+                    state = os.waitid(os.P_PID, server.pid, os.WSTOPPED | os.WNOHANG)
+                    if state and state.si_code == os.CLD_STOPPED and state.si_status == signal.SIGSTOP:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("The owned X server did not enter the confirmed SIGSTOP state")
+                    time.sleep(.005)
+                command("PAUSED " + name)
+                response = line(8).split()
+                if len(response) != 4 or response[:2] != ["DRAINED", name]:
+                    raise RuntimeError("The capture worker did not drain while the actual X server remained paused")
+                callback_us, drain_us = int(response[2]), int(response[3])
+                if not 0 <= callback_us < 1_000_000 or not callback_us <= drain_us < 2_500_000:
+                    raise RuntimeError("Native cancellation exceeded its actual callback/worker completion budget")
+                cases.append({"operation": name, "callbackMicroseconds": callback_us,
+                    "workerDrainMicroseconds": drain_us, "serverPausedUntilDrained": True})
+                server.send_signal(signal.SIGCONT)
+                paused = False
+                command("RESUMED " + name)
+            if not line().startswith("PASS established-XCB cancellation,"):
+                raise RuntimeError("The real connection/descriptor cleanup checks did not complete")
+            if client.wait(timeout=5) != 0:
+                raise RuntimeError("The paused-server probe failed after its last acknowledgement")
+            return cases
+        finally:
+            # A failed assertion may leave a real native thread waiting in its
+            # destructor. Always resume only this owned server before cleanup.
+            if paused and server.poll() is None:
+                server.send_signal(signal.SIGCONT)
+            stop_owned(client)
+            selector.close()
+            client.stdin.close()
+            client.stdout.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("probe", type=Path)
     parser.add_argument("--artifacts", type=Path, default=Path("artifacts/tests/x11-capture"))
+    parser.add_argument("--paused-server", action="store_true",
+        help="Prove established capture cancellation while this owned X server is SIGSTOPped")
     parsed = parser.parse_args()
     owner_pid = os.getpid()
 
@@ -150,13 +228,21 @@ EndSection
                     "QT_SCALE_FACTOR": "1", "QT_ACCESSIBILITY": "0", "NO_AT_BRIDGE": "1",
                     "DBUS_SESSION_BUS_ADDRESS": f"unix:path={private / 'no-session-bus'}",
                     "HUHUCAPTURE_TEST_X11_ISOLATED": "1"})
-                with (artifacts / "probe.stdout.log").open("wb") as output, (artifacts / "probe.stderr.log").open("wb") as errors:
-                    result = subprocess.run([str(probe)], env=client_env, stdout=output, stderr=errors, timeout=120)
-                if result.returncode:
-                    raise RuntimeError(f"The isolated X11 capture probe failed ({result.returncode}); inspect probe logs")
-                (artifacts / "result.json").write_text(json.dumps({"passed": True, "server": kind,
+                cancellation = None
+                if parsed.paused_server:
+                    cancellation = paused_server_probe(probe, client_env, process, artifacts)
+                else:
+                    with (artifacts / "probe.stdout.log").open("wb") as output, (artifacts / "probe.stderr.log").open("wb") as errors:
+                        result = subprocess.run([str(probe)], env=client_env, stdout=output, stderr=errors, timeout=120)
+                    if result.returncode:
+                        raise RuntimeError(f"The isolated X11 capture probe failed ({result.returncode}); inspect probe logs")
+                evidence = {"passed": True, "server": kind,
                     "serverExecutable": str(server), "probe": str(probe), "physicalDisplay": False,
-                    "waylandAuthorization": False, "audioTested": False}, indent=2) + "\n", encoding="utf-8")
+                    "waylandAuthorization": False, "audioTested": False}
+                if cancellation is not None:
+                    evidence.update({"establishedConnectionCancellation": cancellation,
+                        "initialHandshakeInterruptible": False, "unrelatedConnectionAndRecycledDescriptorChecked": True})
+                (artifacts / "result.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
                 print(f"Real isolated {kind} capture probe passed", flush=True)
             finally:
                 stop_owned(process)

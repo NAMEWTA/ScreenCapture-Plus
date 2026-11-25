@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QPointer>
+#include <QPushButton>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
@@ -105,6 +106,57 @@ void primary(const QString& root)
     waitFor([&] { return exits == 1; }, "Primary services drain once before exit");
     std::cout << "PASS primary process services, native IPC lock and application-owned shutdown\n";
 }
+void cancelStartup(const QString& root)
+{
+    Application::DesktopApplication application(paths(root));
+    unsigned starts{}, exits{};
+    QObject::connect(&application, &Application::DesktopApplication::started, &application, [&] { ++starts; });
+    QObject::connect(&application, &Application::DesktopApplication::exitReady, &application,
+        [&](int code) { require(code == 0, "Cancelling startup exits normally"); ++exits; });
+    Core::StartupRequest request; request.oneShot = true;
+    require(application.start(request), "Admit actual startup before cancelling its queued initialization");
+    application.requestExit(); application.requestExit();
+    settle();
+    require(starts == 0 && exits == 1 && application.shuttingDown(),
+        "Pending startup cancellation emits exactly one exit and never assembles services");
+    for (auto* view : QApplication::topLevelWidgets())
+        require(!view->isVisible(), "Cancelling startup does not open an error dialog after exit");
+    settle();
+    require(exits == 1, "Queued startup completion cannot report a second exit");
+    std::cout << "PASS actual startup cancellation with no late dialog or duplicate exit\n";
+}
+void archiveFolderFailure(const QString& root)
+{
+    auto locations = paths(root);
+    require(QDir().mkpath(QFileInfo(locations.archiveDirectory).absolutePath()), "Create only the archive parent fixture");
+    QFile occupied(locations.archiveDirectory);
+    require(occupied.open(QIODevice::WriteOnly) && occupied.write("unrelated file") == 14,
+        "Occupy the requested archive directory with a real unrelated file");
+    occupied.close();
+    Application::DesktopApplication application(locations);
+    unsigned exits{}; bool folderFailed{};
+    QObject::connect(&application, &Application::DesktopApplication::exitReady, &application,
+        [&](int code) { require(code == 0, "Folder failure remains recoverable"); ++exits; });
+    QObject::connect(&application, &Application::DesktopApplication::operationFailed, &application,
+        [&](const QString& detail) { folderFailed |= detail == QStringLiteral("Cannot create the requested archive directory"); });
+    Core::StartupRequest request; request.oneShot = true;
+    require(application.start(request), "Start the application with the real occupied archive destination");
+    waitFor([&] { return application.ready(); }, "Actual services are ready for the archive button");
+    application.showSettings();
+    QPushButton* button{};
+    for (auto* view : QApplication::topLevelWidgets())
+        if (auto* settings = qobject_cast<UI::Qt::SettingsWindow*>(view))
+            button = settings->findChild<QPushButton*>(QStringLiteral("settingsArchiveFolder"));
+    require(button && button->isEnabled(), "Actual settings archive button is connected and enabled");
+    button->click();
+    waitFor([&] { return folderFailed; }, "Application reports the real file-manager validation failure");
+    require(occupied.open(QIODevice::ReadOnly) && occupied.readAll() == "unrelated file",
+        "Opening the archive never replaces the unrelated destination file");
+    occupied.close();
+    application.requestExit();
+    waitFor([&] { return exits == 1; }, "Folder request and all other workers drain before exit");
+    std::cout << "PASS actual settings archive-button failure reporting and owned shutdown\n";
+}
 }
 int main(int argc, char** argv)
 {
@@ -114,7 +166,12 @@ int main(int argc, char** argv)
         QTemporaryDir directory(QDir::temp().filePath(QStringLiteral("huhu-app-XXXXXX")));
         require(directory.isValid(), "Create isolated application files");
         if (app.arguments().contains(QStringLiteral("--primary"))) primary(directory.path());
-        else { oneShot(directory.path() + QStringLiteral("/normal"), false); settle(); oneShot(directory.path() + QStringLiteral("/invalid"), true); }
+        else {
+            cancelStartup(directory.path() + QStringLiteral("/cancelled")); settle();
+            archiveFolderFailure(directory.path() + QStringLiteral("/occupied")); settle();
+            oneShot(directory.path() + QStringLiteral("/normal"), false); settle();
+            oneShot(directory.path() + QStringLiteral("/invalid"), true);
+        }
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

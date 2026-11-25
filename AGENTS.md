@@ -109,8 +109,11 @@ and documentation rules live in [conventions](docs/conventions.md).
 
 - Use lowercase `huhucapture` for product, executable, solution, configuration,
   and release filenames; use `HuhuCapture` for the C++ namespace. Runtime brand
-  values belong in `src/app/Brand.h`; version values belong in the root `VERSION`. Both CMake and the retained Windows
-  build consume it; tag arguments verify it and must not relabel the source.
+  values belong in `src/app/Brand.h`; `build/version.json` is the sole
+  hand-maintained version source. Run `python scripts/version_source.py --write`
+  after changing it; root `VERSION` and `build/windows/Version.props` are
+  generated compatibility files. CMake, MSBuild and packaging reject stale
+  generated values; tag arguments verify the source and must not relabel it.
   Keep updater and package metadata consistent.
 - Follow [docs/brand.md](docs/brand.md) for SVG, PNG, and ICO assets. Brand family
   association does not imply an unimplemented integration with another product.
@@ -160,6 +163,6 @@ Record actual commands, results, and untested boundaries according to
 [docs/validation.md](docs/validation.md). Do not claim checks that did not run.
 
 Normal stable releases are declared by `releases/publish.json`, matched by
-`VERSION` and `releases/<tag>.md`. The main workflow publishes only after
+`build/version.json` and `releases/<tag>.md`. The main workflow publishes only after
 all required checks pass; an already published declaration is left unchanged.
 See [docs/building.md](docs/building.md) for asset validation and recovery steps.

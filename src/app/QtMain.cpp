@@ -34,11 +34,14 @@ int main(int argc, char** argv)
 
     std::vector<std::u16string> storage;
     QString portable;
+    bool portableRequested{};
     const auto args = app.arguments().mid(1);
     storage.reserve(args.size());
     for (const auto& argument : args) {
         storage.push_back(argument.toStdU16String());
-        if (argument.startsWith(QStringLiteral("--portable-dir="))) portable = argument.mid(15);
+        if (argument.startsWith(QStringLiteral("--portable-dir="))) {
+            portableRequested = true; portable = argument.mid(15);
+        }
     }
     std::vector<std::u16string_view> views;
     for (const auto& argument : storage) views.emplace_back(argument);
@@ -56,21 +59,14 @@ int main(int argc, char** argv)
 #else
     constexpr auto policy = HuhuCapture::Config::PathPolicy::Linux;
 #endif
-    const auto mount = QDir::cleanPath(qEnvironmentVariable("APPDIR"));
-    const auto portablePath = QDir::cleanPath(portable);
-    const auto portableCanonical = QFileInfo(portable).canonicalFilePath();
-    const auto mountCanonical = QFileInfo(mount).canonicalFilePath();
-    const auto inside = [](const QString& path, const QString& parent) {
-        return !parent.isEmpty() && (path == parent || path.startsWith(parent + QChar(u'/')));
-    };
-    const bool insideMount = !qEnvironmentVariable("APPDIR").isEmpty() &&
-        (inside(portablePath, mount) || (!portableCanonical.isEmpty() && inside(portableCanonical, mountCanonical)));
-    if (!portable.isEmpty() && (!QDir::isAbsolutePath(portable) || insideMount)) {
+    const auto resolvedPortable = !portableRequested ? QString() :
+        HuhuCapture::Config::resolvePortableDirectory(portable, qEnvironmentVariable("APPDIR"));
+    if (portableRequested && resolvedPortable.isEmpty()) {
         QMessageBox::critical(nullptr, QStringLiteral("huhucapture"),
             QStringLiteral("--portable-dir requires an absolute writable directory outside the AppImage mount."));
         return 2;
     }
-    paths.settingsFile = HuhuCapture::Config::settingsPath(policy, applicationDirectory, userConfig, portable);
+    paths.settingsFile = HuhuCapture::Config::settingsPath(policy, applicationDirectory, userConfig, resolvedPortable);
     const std::array candidates{
         QDir(applicationDirectory).filePath(QStringLiteral("installation.json")),
         QDir(applicationDirectory).filePath(QStringLiteral("../share/huhucapture/installation.json")),

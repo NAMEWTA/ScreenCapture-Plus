@@ -65,9 +65,11 @@ Rust 聚合库由独立验证工作流保留实际 `.a` / `.lib` 和 `build-info
 
 ## 现有 Windows 生产构建
 
-本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。唯一版本号来自根目录 [VERSION](../VERSION)，发布意图来自 [publish.json](../releases/publish.json)。
+本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。唯一手写版本来源是 [build/version.json](../build/version.json)，发布意图来自 [publish.json](../releases/publish.json)。
 
-CMake 从同一个 `VERSION` 设置 `PROJECT_VERSION` 并生成 `app/Version.h`；Qt 应用层通过 `huhucapture_version` 目标使用该头。保留的 Windows 工程通过 `Version.props` 读取相同值，资源的第四段固定为零。`build.ps1 -Version`、打包及发布声明只核对版本，不再覆盖资源值；不同标签或陈旧 EXE 会明确失败。版本格式为无前导零的 `MAJOR.MINOR.PATCH`，每段不超过 65535，以匹配 Windows 资源格式。修改 `VERSION` 会触发 CMake 重新配置。迁移分支保持当前正式版本号，只有发布门槛满足后才执行规定的 Patch 递增。
+CMake 使用原生 JSON 解析从同一个文件设置 `PROJECT_VERSION`，生成 `app/Version.h`、Qt Windows RC、About 版本和包身份；运行时不会读取版本 JSON 或启动 Python。根目录 `VERSION` 和保留 Windows 工程的 `build/windows/Version.props` 是兼容生成文件，不再独立维护。修改 JSON 后运行 `python scripts/version_source.py --write`，普通检查使用 `python scripts/version_source.py --check`；CMake、PowerShell 构建/打包脚本和直接 Visual Studio/MSBuild 构建都会拒绝未同步的生成值。MSBuild 在编译前核对 JSON 与模板的实际 SHA256、源版本和资源分量，正常构建不依赖 Python。
+
+资源的第四段固定为零。`build.ps1 -Version`、打包及发布声明只核对版本，不覆盖资源值；不同标签或陈旧 EXE 会明确失败。版本格式为无前导零的 `MAJOR.MINOR.PATCH`，每段不超过 65535，以匹配 Windows 资源格式。修改 JSON 或兼容生成文件会触发 CMake 重新配置。迁移分支保持当前正式版本号，只有发布门槛满足后才执行规定的 Patch 递增。
 
 ## 环境与依赖决策
 
@@ -135,7 +137,7 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 
 发行所指向的提交必须同时包含相互匹配的：
 
-1. 根目录 `VERSION` 中的产品版本；
+1. `build/version.json` 中的产品版本，以及由它重新生成的 `VERSION` 和 `build/windows/Version.props`；
 2. `releases/publish.json` 的稳定 tag 与说明路径；
 3. `releases/<tag>.md`、更新记录和当前下载说明。
 
@@ -149,7 +151,7 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 }
 ```
 
-稳定标签使用 `vMAJOR.MINOR.PATCH`，Windows 第四段固定为 0，各数字分量受 Windows 版本资源范围约束。可在手工预发布流程使用后缀，但内置更新器只处理稳定三段版本。构建参数覆盖版本时，构建与打包必须使用同一个标签。
+稳定标签使用 `vMAJOR.MINOR.PATCH`，Windows 第四段固定为 0，各数字分量受 Windows 版本资源范围约束。可在手工预发布流程使用后缀，但内置更新器只处理稳定三段版本。构建和打包传入的标签只能匹配源版本，不能覆盖它。
 
 main 构建成功后，[声明发布脚本](../scripts/publish-release.ps1) 使用本次已验证的 artifact，核对仓库、源 SHA、main 当前头、版本、架构、五个资产和哈希。只有一致才创建新 tag 和 Release。它不会通过重新构建另一份内容来完成这次发布，也不会自行推导下一个版本号。
 

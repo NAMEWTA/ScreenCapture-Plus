@@ -1,7 +1,8 @@
 // Native SourceReader, media-type and RGB-buffer flow reused from the shipping
 // services/MediaHistory.cpp videoThumbnail. Keep recording on the existing MF
-// backend; complete inspection uses the common strict FFmpeg service. This
-// platform adapter only produces Qt-owned covers from the native first frame.
+// backend; complete inspection uses the common strict FFmpeg service. Covers
+// retain this native first-frame path, with software fallback when the OS has
+// no supported decoder (for example HEVC without its optional codec).
 #define NOMINMAX
 #include <Windows.h>
 #include <mfapi.h>
@@ -12,6 +13,7 @@
 #include <wrl/client.h>
 
 #include "services/media/VideoInspection.h"
+#include "services/media/FfmpegVideoInspection.h"
 #include "services/media/Mp4Envelope.h"
 #include "core/MediaFrame.h"
 #include "core/PixelBuffer.h"
@@ -242,9 +244,7 @@ VideoThumbnailResult copyCover(IMFSample* sample, const VideoDescription& descri
     return result;
 }
 
-} // namespace
-
-VideoThumbnailResult videoThumbnail(const QString& path, unsigned edge, const Limits& limits, std::stop_token stop)
+VideoThumbnailResult nativeThumbnail(const QString& path, unsigned edge, const Limits& limits, std::stop_token stop)
 {
     try {
         if (stop.stop_requested()) return {cancelled(), {}};
@@ -275,6 +275,20 @@ VideoThumbnailResult videoThumbnail(const QString& path, unsigned edge, const Li
         }
         return {invalid("Video contains no usable decoded cover"), {}};
     } catch (const std::bad_alloc&) { return {budget("Cannot allocate video thumbnail state"), {}}; }
+}
+
+} // namespace
+
+VideoThumbnailResult videoThumbnail(const QString& path, unsigned edge, const Limits& limits, std::stop_token stop)
+{
+    auto result = nativeThumbnail(path, edge, limits, stop);
+    // Let the native reader, file reservation and COM apartment close before
+    // opening the same file through the strict software decoder. Other native
+    // failures remain failures; the fallback enforces its own input budgets,
+    // structural checks and cancellation before returning a decoded cover.
+    if (result.failure.code == Error::Unsupported)
+        return Detail::softwareVideoThumbnail(path, edge, limits, stop);
+    return result;
 }
 
 } // namespace HuhuCapture::Media

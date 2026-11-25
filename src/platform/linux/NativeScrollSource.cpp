@@ -5,8 +5,10 @@ namespace HuhuCapture::Platform {
 struct NativeScrollSource::State {
     int x{}, y{}, width{}, height{};
     Linux::X11Capture capture;
+    explicit State(std::stop_token stop) : capture(stop) {}
 };
-NativeScrollSource::NativeScrollSource(int x, int y, int width, int height) : state_(std::make_unique<State>())
+NativeScrollSource::NativeScrollSource(int x, int y, int width, int height, std::stop_token stop)
+    : state_(std::make_unique<State>(stop))
 { state_->x = x; state_->y = y; state_->width = width; state_->height = height; }
 NativeScrollSource::~NativeScrollSource() = default;
 bool NativeScrollSource::capture() { return state_->capture.capture(state_->x, state_->y, state_->width, state_->height); }

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -30,9 +31,12 @@ struct X11Desktop {
 // Callers must reject XWayland before constructing this native X11 adapter.
 // Returned pixels are owned, tightly packed top-down opaque BGRA, and borrowed
 // only until the next capture/reset/destruction. All failures preserve a reason.
+// Stop interrupts established connection I/O, and makes this instance terminal.
+// The initial xcb_connect handshake cannot be interrupted before it exposes its
+// owned socket; no global/Qt connection is closed to work around that limitation.
 class X11Capture final {
 public:
-    X11Capture();
+    explicit X11Capture(std::stop_token stop = {});
     ~X11Capture();
     X11Capture(const X11Capture&) = delete;
     X11Capture& operator=(const X11Capture&) = delete;

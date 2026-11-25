@@ -10,7 +10,7 @@ $versionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
 $fileVersion = $versionInfo.FileVersion
 $productVersion = Get-ProductVersion
 if ($fileVersion -cne "$productVersion.0") {
-    throw "Executable version $fileVersion does not match the repository VERSION ($productVersion)."
+    throw "Executable version $fileVersion does not match build/version.json ($productVersion)."
 }
 $expectedIdentity = @{
     ProductName = 'huhucapture'

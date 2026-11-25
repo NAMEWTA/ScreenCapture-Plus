@@ -11,12 +11,14 @@ if(WIN32)
     set(_huhu_bin .)
     set(_huhu_default_kind portable-zip)
     set(_huhu_licenses licenses)
+    set(_huhu_required_plugins "qwindows qschannelbackend")
 else()
     set(_huhu_platform linux)
     set(_huhu_architecture amd64)
     set(_huhu_bin bin)
     set(_huhu_default_kind appimage)
     set(_huhu_licenses share/huhucapture/licenses)
+    set(_huhu_required_plugins "qxcb qwayland qopensslbackend")
 endif()
 set(HUHUCAPTURE_PACKAGE_KIND "${_huhu_default_kind}" CACHE STRING "Actual installation form recorded beside the executable")
 set_property(CACHE HUHUCAPTURE_PACKAGE_KIND PROPERTY STRINGS installer portable-zip deb appimage)
@@ -101,6 +103,7 @@ qt_deploy_runtime_dependencies(
     NO_COMPILER_RUNTIME
     NO_TRANSLATIONS
     INCLUDE_PLUGIN_TYPES platforms imageformats tls
+    INCLUDE_PLUGINS @_huhu_required_plugins@
     PRE_EXCLUDE_REGEXES "^ld-linux.*" "^libc[.]so.*" "^libm[.]so.*" "^libpthread[.]so.*" "^libdl[.]so.*" "^librt[.]so.*" "^libGL.*" "^libEGL.*" "^libvulkan.*" "^libdrm.*"
 )
 ]=])
@@ -109,7 +112,7 @@ qt_generate_deploy_script(TARGET huhucapture OUTPUT_SCRIPT _huhu_deploy_script C
 install(SCRIPT "${_huhu_deploy_script}" COMPONENT Runtime)
 if(WIN32)
     install(DIRECTORY "${PROJECT_SOURCE_DIR}/Lang" DESTINATION . COMPONENT Runtime)
-    foreach(_huhu_component IN ITEMS avcodec avformat avutil)
+    foreach(_huhu_component IN ITEMS avcodec avformat avutil swscale)
         install(FILES "$<TARGET_FILE:huhucapture_ffmpeg_${_huhu_component}>" DESTINATION . COMPONENT Runtime)
     endforeach()
     # CMake's official redistributable discovery uses the selected MSVC toolset
