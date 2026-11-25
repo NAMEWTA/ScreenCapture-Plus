@@ -342,6 +342,7 @@ class SourceBundleTests(unittest.TestCase):
         self.assertFalse(result["complete"])
         self.assertTrue(any(gap.startswith("qtwayland:") for gap in result["gaps"]))
         self.assertTrue(any(gap.startswith("appimage-musl:") for gap in result["gaps"]))
+        self.assertIn("appimage-mimalloc: required source component is missing", result["gaps"])
         self.assertTrue(any(gap.startswith("deployment:") for gap in result["gaps"]))
         self.assertEqual(result["archive"]["sha256"], bundle.digest(self.root / "out" / result["archive"]["name"]))
         with self.assertRaisesRegex(ValueError, "existing results"):
@@ -349,6 +350,45 @@ class SourceBundleTests(unittest.TestCase):
         write_json(path, {**plan, "complete": True})
         with self.assertRaisesRegex(ValueError, "computed"):
             bundle.collect(path, self.root / "forged")
+
+    def test_locked_runtime_tar_keeps_source_separate_from_build_closure(self):
+        project, _, _ = self.project_fixture()
+        original = self.root / "runtime-source.tar.gz"
+        source_archive(original, {"src/runtime/runtime.c": "int runtime_fixture;\n",
+                                  "LICENSE": "Runtime source fixture license\n"}, prefix="runtime-fixture")
+        package_lock = project / "build/package/dependencies.lock.json"
+        value = json.loads(package_lock.read_text())
+        value["tools"]["appimageRuntime"]["sourceArchive"] = bundle.descriptor(original)
+        write_json(package_lock, value)
+        command(project, "git", "add", "build/package/dependencies.lock.json")
+        command(project, "git", "commit", "--quiet", "-m", "Pin actual runtime source fixture archive")
+        plan = {"schemaVersion": 1, "project": str(project), "platform": "linux", "sources": [
+            {"id": "appimage-runtime", "kind": "tar", "archive": str(original), "prefix": "runtime-fixture"}]}
+        path = self.root / "runtime-plan.json"
+        write_json(path, plan)
+        result = bundle.collect(path, self.root / "runtime-out")
+        runtime = next(component for component in result["components"] if component["id"] == "appimage-runtime")
+        self.assertEqual(runtime["source"]["archiveSha256"], bundle.digest(original))
+        self.assertEqual(runtime["source"]["lockFile"], "sources/huhucapture/build/package/dependencies.lock.json")
+        self.assertIn("LICENSE", runtime["licenses"])
+        self.assertNotIn("appimage-runtime: required source component is missing", result["gaps"])
+        self.assertIn("appimage-mimalloc: required source component is missing", result["gaps"])
+        self.assertIn("appimage-runtime: matching source/build-parameter receipt is missing", result["gaps"])
+        self.assertIn("appimage-runtime: matching built runtime/static-input closure receipt is missing", result["gaps"])
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["buildReceipts"], {})
+
+    def test_runtime_static_input_requirement_includes_mimalloc_and_runtime_binding(self):
+        # This tests the final presence rule after receipt validation. These are
+        # contract values, not invented files or an asserted official build.
+        previous_five = {"appimage-musl", "appimage-fuse", "appimage-squashfuse", "appimage-zstd", "appimage-zlib"}
+        receipt = {"sources": [{"id": "appimage-runtime"}],
+                   "staticInputs": [{"component": name} for name in sorted(previous_five)]}
+        self.assertFalse(bundle.appimage_static_inputs_present({"contract": receipt}))
+        receipt["staticInputs"].append({"component": "appimage-mimalloc"})
+        self.assertTrue(bundle.appimage_static_inputs_present({"contract": receipt}))
+        receipt["sources"] = [{"id": "another-built-component"}]
+        self.assertFalse(bundle.appimage_static_inputs_present({"contract": receipt}))
 
     def test_dirty_project_and_missing_exact_pin_are_not_silently_exported(self):
         project, _, dep = self.project_fixture()

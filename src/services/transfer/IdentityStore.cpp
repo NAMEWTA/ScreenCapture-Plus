@@ -49,15 +49,16 @@ bool addressValid(const QString& value)
         address.toString() == value;
 }
 
-IdentityError readPrivate(const QString& path, qsizetype limit, QByteArray& bytes, bool& exists)
+IdentityError readPrivate(const QString& path, qsizetype limit, QByteArray& bytes, bool& exists,
+    std::error_code& error)
 {
     bytes.clear();
     exists = false;
-    std::error_code error;
+    error.clear();
     if (!Platform::isPrivateStorage(nativePath(QFileInfo(path).absolutePath()), true, error))
         return IdentityError::Permissions;
     if (!Platform::isPrivateStorage(nativePath(path), false, error)) {
-        if (error == std::errc::no_such_file_or_directory) return IdentityError::None;
+        if (error == std::errc::no_such_file_or_directory) { error.clear(); return IdentityError::None; }
         return IdentityError::Permissions;
     }
     exists = true;
@@ -70,8 +71,9 @@ IdentityError readPrivate(const QString& path, qsizetype limit, QByteArray& byte
     bytes = input.read(limit + 1);
     if (input.error() != QFileDevice::NoError || bytes.size() > limit || !input.atEnd()) return IdentityError::Read;
     const auto after = Platform::readFileDescriptorSnapshot(handle.get(), error);
+    if (!after) return IdentityError::ChangedOnDisk;
     const auto named = Platform::readFileSnapshot(nativePath(path), error);
-    if (!after || !named || *before != *after || *after != *named ||
+    if (!named || *before != *after || *after != *named ||
         after->bytes != static_cast<std::uint64_t>(bytes.size())) return IdentityError::ChangedOnDisk;
     return IdentityError::None;
 }
@@ -117,10 +119,10 @@ bool trustValid(const QJsonObject& document)
     return true;
 }
 
-IdentityError publishNew(const QString& path, const QByteArray& bytes)
+IdentityError publishNew(const QString& path, const QByteArray& bytes, std::error_code& error)
 {
     const auto directory = nativePath(QFileInfo(path).absolutePath());
-    std::error_code error;
+    error.clear();
     const auto staging = Platform::createExclusiveTemporaryFile(directory, error);
     if (staging.empty()) return IdentityError::Write;
     const auto claimed = Platform::readFileSnapshot(staging, error);
@@ -132,9 +134,13 @@ IdentityError publishNew(const QString& path, const QByteArray& bytes)
         const auto current = Platform::readFileSnapshot(staging, ignored);
         if (current && current->identity == claimed->identity) std::filesystem::remove(staging, ignored);
     });
-    if (!Platform::isPrivateStorage(staging, false, error)) return IdentityError::Permissions;
     auto handle = Platform::openOwnedEmptyFileForWrite(staging, claimed->identity, error);
     if (!handle) return IdentityError::Write;
+    // Prepare only the new empty object, before it contains any identity bytes.
+    // Its inherited DACL must already be private; the current user's ownership
+    // must not depend on the process token's default owner.
+    if (!Platform::preparePrivateStagingFile(handle.get(), error) ||
+        !Platform::isPrivateStorage(staging, false, error)) return IdentityError::Permissions;
     QFile output;
     if (!output.open(handle.get(), QIODevice::ReadWrite, QFileDevice::DontCloseHandle) ||
         output.write(bytes) != bytes.size() || !output.flush()) return IdentityError::Write;
@@ -143,6 +149,7 @@ IdentityError publishNew(const QString& path, const QByteArray& bytes)
     const auto committed = Platform::commitFileNoReplace(staging, nativePath(path));
     published = committed.committed();
     if (committed.durable()) return IdentityError::None;
+    error = committed.error;
     if (committed.committed()) return IdentityError::DurabilityUnknown;
     return committed.error == std::errc::file_exists ? IdentityError::ChangedOnDisk : IdentityError::Write;
 }
@@ -202,17 +209,17 @@ IdentityResult IdentityStore::loadOrCreate(std::stop_token stop)
     if (directory_.isEmpty()) return current(IdentityError::Path);
     if (!QDir().mkpath(directory_, ownerDirectory)) return current(IdentityError::Path);
     std::error_code error;
-    if (!Platform::isPrivateStorage(nativePath(directory_), true, error)) return current(IdentityError::Permissions);
+    if (!Platform::isPrivateStorage(nativePath(directory_), true, error)) return current(IdentityError::Permissions, error.value());
     directory_ = QDir(directory_).canonicalPath();
     if (directory_.isEmpty()) return current(IdentityError::Path);
     QLockFile lock(identityPath() + QStringLiteral(".lock"));
     lock.setStaleLockTime(0);
     if (!lock.tryLock(0)) return current(IdentityError::Locked);
     bool exists{};
-    auto failure = readPrivate(identityPath(), maximumIdentityBytes, identityBytes_, exists);
-    if (failure != IdentityError::None) return current(failure);
-    failure = readPrivate(trustPath(), maximumTrustBytes, trustBytes_, trustExisted_);
-    if (failure != IdentityError::None) return current(failure);
+    auto failure = readPrivate(identityPath(), maximumIdentityBytes, identityBytes_, exists, error);
+    if (failure != IdentityError::None) return current(failure, error.value());
+    failure = readPrivate(trustPath(), maximumTrustBytes, trustBytes_, trustExisted_, error);
+    if (failure != IdentityError::None) return current(failure, error.value());
     trust_ = {{QStringLiteral("schema"), 1}, {QStringLiteral("peers"), QJsonArray{}}};
     if (trustExisted_ && (!parseObject(trustBytes_, trust_) || !trustValid(trust_)))
         return current(IdentityError::InvalidTrust);
@@ -228,8 +235,8 @@ IdentityResult IdentityStore::loadOrCreate(std::stop_token stop)
         status = validateIdentity(identityBytes_, identity_);
         if (status != HUHU_OK) return current(IdentityError::InvalidIdentity, status);
         if (stop.stop_requested()) return current(IdentityError::Cancelled);
-        failure = publishNew(identityPath(), identityBytes_);
-        if (failure != IdentityError::None) return current(failure);
+        failure = publishNew(identityPath(), identityBytes_, error);
+        if (failure != IdentityError::None) return current(failure, error.value());
         created = true;
     } else {
         const auto status = validateIdentity(identityBytes_, identity_);
@@ -252,10 +259,11 @@ IdentityResult IdentityStore::rememberPeer(const QString& address, quint16 port,
     if (!lock.tryLock(0)) return current(IdentityError::Locked);
     QByteArray currentIdentity, currentTrust;
     bool identityExists{}, trustExists{};
-    auto failure = readPrivate(identityPath(), maximumIdentityBytes, currentIdentity, identityExists);
-    if (failure != IdentityError::None) return current(failure);
-    failure = readPrivate(trustPath(), maximumTrustBytes, currentTrust, trustExists);
-    if (failure != IdentityError::None) return current(failure);
+    std::error_code error;
+    auto failure = readPrivate(identityPath(), maximumIdentityBytes, currentIdentity, identityExists, error);
+    if (failure != IdentityError::None) return current(failure, error.value());
+    failure = readPrivate(trustPath(), maximumTrustBytes, currentTrust, trustExists, error);
+    if (failure != IdentityError::None) return current(failure, error.value());
     if (!identityExists || identityBytes_ != currentIdentity || trustExisted_ != trustExists || trustBytes_ != currentTrust)
         return current(IdentityError::ChangedOnDisk);
 
@@ -288,16 +296,21 @@ IdentityResult IdentityStore::rememberPeer(const QString& address, quint16 port,
     if (encoded.size() > maximumTrustBytes || !trustValid(candidate)) return current(IdentityError::InvalidTrust);
     if (stop.stop_requested()) return current(IdentityError::Cancelled);
     if (!trustExisted_) {
-        failure = publishNew(trustPath(), encoded);
-        if (failure != IdentityError::None) return current(failure);
+        failure = publishNew(trustPath(), encoded, error);
+        if (failure != IdentityError::None) return current(failure, error.value());
     } else {
         QSaveFile output(trustPath());
         output.setDirectWriteFallback(false);
-        if (!output.open(QIODevice::WriteOnly) || output.write(encoded) != encoded.size()) return current(IdentityError::Write);
+        if (!output.open(QIODevice::WriteOnly)) return current(IdentityError::Write);
+        // QSaveFile owns a distinct empty temporary object while the old trust
+        // file remains intact. Establish its owner before writing, too.
+        if (!Platform::preparePrivateStagingFile(output.handle(), error))
+            return current(IdentityError::Permissions, error.value());
+        if (output.write(encoded) != encoded.size()) return current(IdentityError::Write);
         QByteArray latest;
         bool stillExists{};
-        failure = readPrivate(trustPath(), maximumTrustBytes, latest, stillExists);
-        if (failure != IdentityError::None) return current(failure);
+        failure = readPrivate(trustPath(), maximumTrustBytes, latest, stillExists, error);
+        if (failure != IdentityError::None) return current(failure, error.value());
         if (!stillExists || latest != trustBytes_) return current(IdentityError::ChangedOnDisk);
         if (stop.stop_requested()) return current(IdentityError::Cancelled);
         if (!output.commit()) return current(IdentityError::Write);

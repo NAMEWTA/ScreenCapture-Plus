@@ -15,9 +15,80 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode=True
 spec=importlib.util.spec_from_file_location('package_metadata',ROOT/'build/package/metadata.py')
 metadata=importlib.util.module_from_spec(spec);spec.loader.exec_module(metadata)
+sys.path.insert(0,str(ROOT/'scripts'))
+spec=importlib.util.spec_from_file_location('package_qt',ROOT/'scripts/package-qt.py')
+packager=importlib.util.module_from_spec(spec);spec.loader.exec_module(packager)
+
+
+def nsis_layout_fixture(root):
+    # Text-only directory contract fixture. These files are never executed or
+    # packaged as a product; the separate Windows test uses the real archive.
+    for relative in ('makensis.exe', 'Bin/makensis.exe', 'COPYING',
+                     'Include/MUI2.nsh', 'Include/LogicLib.nsh', 'Include/x64.nsh', 'Include/WinVer.nsh',
+                     'Stubs/uninst', 'Stubs/lzma_solid-x86-unicode',
+                     'Plugins/x86-unicode/nsDialogs.dll', 'Plugins/x86-unicode/System.dll',
+                     'Contrib/Modern UI 2/MUI2.nsh', 'Contrib/Language files/English.nsh'):
+        path=root/relative;path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text('Directory selection fixture only: '+relative+'\n')
 
 
 class MetadataBoundaries(unittest.TestCase):
+    def test_nsis_launcher_and_bin_compiler_are_one_distribution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            extracted=Path(directory); root=extracted/'distribution'
+            nsis_layout_fixture(root)
+            selected,compiler,evidence=packager.nsis_distribution(extracted)
+            self.assertEqual(selected,root)
+            self.assertEqual(compiler,root/'Bin/makensis.exe')
+            self.assertEqual(evidence['compilerPath'],'distribution/Bin/makensis.exe')
+            self.assertEqual({item['path'] for item in evidence['compilerCandidates']},
+                             {'distribution/makensis.exe','distribution/Bin/makensis.exe'})
+            for item in evidence['compilerCandidates']:
+                actual=extracted/item['path']
+                self.assertEqual(item['size'],actual.stat().st_size)
+                self.assertEqual(item['sha256'],metadata.sha256(actual))
+            # One launcher/compiler pair without the actual required stub is
+            # not a usable distribution, even though both names still exist.
+            stub=root/'Stubs/lzma_solid-x86-unicode'; saved=stub.read_bytes();stub.unlink()
+            with self.assertRaisesRegex(ValueError,'complete distribution root'):
+                packager.nsis_distribution(extracted)
+            stub.write_bytes(saved)
+            shutil.copytree(root,extracted/'second-distribution')
+            with self.assertRaisesRegex(ValueError,'exactly one complete distribution root'):
+                packager.nsis_distribution(extracted)
+
+    def test_nsis_does_not_pick_the_first_of_extra_compilers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            extracted=Path(directory);nsis_layout_fixture(extracted)
+            unexpected=extracted/'other/makensis.exe';unexpected.parent.mkdir()
+            shutil.copyfile(extracted/'Bin/makensis.exe',unexpected)
+            with self.assertRaisesRegex(ValueError,'Unexpected compiler candidates'):
+                packager.nsis_distribution(extracted)
+
+    def test_nsis_rejects_unreviewed_archive_before_extracting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);archive=root/'unreviewed.exe'
+            archive.write_text('This is deliberately not the reviewed official distribution.')
+            with self.assertRaisesRegex(ValueError,'exact reviewed NSIS distribution'):
+                packager.prepare_nsis(archive,root)
+            self.assertFalse((root/'nsis').exists())
+
+    @unittest.skipUnless(os.name == 'nt' and (ROOT/'artifacts/packaging-tools/nsis/nsis-3.11-setup.exe').is_file(),
+                         'Requires the restored official NSIS archive and a Windows compiler host')
+    def test_real_official_nsis_archive_selects_and_runs_bin_compiler(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace=Path(directory)
+            compiler,environment,evidence=packager.prepare_nsis(
+                ROOT/'artifacts/packaging-tools/nsis/nsis-3.11-setup.exe',workspace)
+            self.assertEqual(evidence['version'],'v3.11')
+            self.assertEqual(compiler,Path(environment['NSISDIR'])/'Bin/makensis.exe')
+            self.assertEqual(len(evidence['compilerCandidates']),2)
+            self.assertEqual(evidence['sha256'],metadata.sha256(compiler))
+            unexpected=workspace/'nsis/unexpected/makensis.exe';unexpected.parent.mkdir()
+            shutil.copyfile(compiler,unexpected)
+            with self.assertRaisesRegex(ValueError,'Unexpected compiler candidates'):
+                packager.nsis_distribution(workspace/'nsis')
+
     def test_real_inventory_changes_and_links(self):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as other:
             root=Path(directory); (root/'unicode 中文').mkdir()

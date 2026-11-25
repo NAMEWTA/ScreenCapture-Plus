@@ -15,6 +15,8 @@ enum class IdentityError {
 
 struct IdentityResult {
     IdentityError error{IdentityError::None};
+    // Original native ABI or platform error value when available. Qt-only
+    // failures leave it zero; QFileDevice::FileError is not a Win32 status.
     int nativeStatus{};
     // The native JSON contains the private key. Never log, put in a Qt signal,
     // or retain it in a presentation snapshot. Only the app builds native config.

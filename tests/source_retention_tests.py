@@ -129,6 +129,56 @@ class SourceRetentionTests(unittest.TestCase):
         self.assertEqual(len(retention.coverage["registryArchives"]), 1)
         self.assertFalse((retention.output / "inputs/registry-cache/beta-1.0.0.crate").exists())
 
+    def appimage_archive_fixture(self):
+        commit = "a" * 40
+        path = self.root / "artifacts/packaging-tools/appimageRuntime/source.tar.gz"
+        path.parent.mkdir(parents=True)
+        with tarfile.open(path, "w:gz") as stream:
+            for name, data in (("src/runtime/runtime.c", b"int runtime_fixture;\n"),
+                               ("LICENSE", b"Runtime source contract fixture license\n")):
+                entry = tarfile.TarInfo("type2-runtime-" + commit + "/" + name)
+                entry.size = len(data)
+                stream.addfile(entry, io.BytesIO(data))
+        pin = {"repository": "https://example.invalid/runtime-fixture", "commit": commit, "tag": "fixture",
+               "sourceArchive": {"size": path.stat().st_size, "sha256": profile.BUNDLE.digest(path)}}
+        write(self.root / "build/package/dependencies.lock.json", profile.BUNDLE.canonical({"tools": {"appimageRuntime": pin}}))
+        return path, pin
+
+    def test_absent_runtime_archive_remains_a_material_gap(self):
+        retention = self.retention()
+        self.assertIsNone(retention.appimage_runtime())
+        self.assertEqual(retention.materials, [])
+        self.assertNotIn("appimageRuntime", retention.coverage)
+        self.assertTrue(any("appimageRuntime/source.tar.gz" in item for item in retention.coverage["missingMaterials"]))
+
+    def test_locked_runtime_archive_uses_a_retained_snapshot_in_the_tar_plan(self):
+        original, pin = self.appimage_archive_fixture()
+        expected = original.read_bytes()
+        retention = self.retention()
+        source = retention.appimage_runtime()
+        retained = retention.output / source["archive"]
+        self.assertEqual(source, {"id": "appimage-runtime", "kind": "tar",
+                                  "archive": "materials/appimage-runtime-source/source.tar.gz",
+                                  "prefix": "type2-runtime-" + pin["commit"]})
+        self.assertEqual(retained.read_bytes(), expected)
+        self.assertEqual(retention.coverage["appimageRuntime"]["archive"]["sha256"], pin["sourceArchive"]["sha256"])
+        self.assertEqual(retention.materials, [{"id": "appimage-runtime-source", "path": source["archive"]}])
+        write(original, b"later mutation of the original input")
+        self.assertEqual(retained.read_bytes(), expected)
+
+    def test_runtime_archive_size_or_hash_mismatch_is_not_an_ordinary_gap(self):
+        original, _ = self.appimage_archive_fixture()
+        data = original.read_bytes()
+        for label, changed in (("size", data + b"extra"), ("hash", bytes([data[0] ^ 1]) + data[1:])):
+            with self.subTest(label=label):
+                write(original, changed)
+                retention = self.retention("runtime-" + label)
+                with self.assertRaisesRegex(ValueError, "differs from its packaging lock"):
+                    retention.appimage_runtime()
+                self.assertEqual(retention.materials, [])
+                self.assertNotIn("appimageRuntime", retention.coverage)
+                self.assertFalse((retention.output / "materials/appimage-runtime-source/source.tar.gz").exists())
+
     def test_fetch_results_keep_partial_bytes_and_actual_logs_without_changing_inputs(self):
         for exit_code in (0, 101):
             with self.subTest(exit_code=exit_code):

@@ -257,6 +257,26 @@ class Retention:
             self.coverage["registryArchives"].append({**record, "archive": retained,
                                                        "retained": target.relative_to(self.output).as_posix()})
 
+    def appimage_runtime(self):
+        archive = ROOT / "artifacts/packaging-tools/appimageRuntime/source.tar.gz"
+        if not os.path.lexists(archive):
+            self.coverage["missingMaterials"].append("The existing packaging step has not retained appimageRuntime/source.tar.gz")
+            return None
+        BUNDLE.require(archive.is_file() and not archive.is_symlink(), "Actual AppImage runtime source archive is not a regular file")
+        pin = BUNDLE.read_json(ROOT / "build/package/dependencies.lock.json")["tools"]["appimageRuntime"]
+        expected = pin["sourceArchive"]
+        actual = BUNDLE.descriptor(archive)
+        BUNDLE.require(actual["size"] == expected["size"] and actual["sha256"] == expected["sha256"],
+                       "Actual AppImage runtime source archive differs from its packaging lock")
+        BUNDLE.require(BUNDLE.HEX40.fullmatch(pin["commit"] or ""), "AppImage runtime has no exact locked commit")
+        retained = self.material("appimage-runtime-source", archive)
+        BUNDLE.require(BUNDLE.descriptor(retained) == actual, "AppImage runtime source archive changed during retention")
+        location = retained.relative_to(self.output).as_posix()
+        self.coverage["appimageRuntime"] = {"repository": pin["repository"], "commit": pin["commit"],
+                                            "tag": pin["tag"], "archive": actual, "retained": location}
+        return {"id": "appimage-runtime", "kind": "tar", "archive": location,
+                "prefix": "type2-runtime-" + pin["commit"]}
+
     def registry_coverage(self):
         return {key: list(self.coverage[key]) for key in ("registryArchives", "missingRegistryArchives")}
 
@@ -400,6 +420,7 @@ class Retention:
         self.coverage["qtPrefix"] = str(self.qt_prefix)
         for index, path in enumerate(files):
             self.material("qt-sbom-" + str(index), path)
+        runtime = self.appimage_runtime()
         vendor = self.prepare_vendor(packages, cargo_lock, cargo_home, cache, gifski_source)
         self.clean_project()
         write_new(self.output / "cargo-coverage.json", self.coverage)
@@ -417,6 +438,8 @@ class Retention:
                 "sources": [{"id": name, "directory": str(ROOT / location)} for name, location in NATIVE_SOURCES.items()] +
                            [{"id": "gifski", "directory": "inputs/gifski"}],
                 "materials": self.materials}
+        if runtime is not None:
+            plan["sources"].append(runtime)
         if vendor is not None:
             plan["rustVendor"] = vendor
         write_new(self.output / "collection-plan.json", plan)
@@ -431,6 +454,8 @@ class Retention:
         provided = {item["id"] for item in manifest["components"]}
         BUNDLE.require(set(NATIVE_SOURCES) | {"huhucapture", "localsend", "gifski"} <= provided,
                        "A required actual source disappeared during collection")
+        BUNDLE.require(runtime is None or "appimage-runtime" in provided,
+                       "The verified AppImage runtime source disappeared during collection")
         self.clean_project()
         fetch_failed = self.fetch_locked_sources and self.coverage["fetch"]["exitCode"] != 0
         self.report.update(status="incomplete-bundle-retained-fetch-failed" if fetch_failed else "incomplete-bundle-retained", complete=False,

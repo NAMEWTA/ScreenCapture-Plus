@@ -26,13 +26,20 @@ MAX_TREE = 32 * 1024**3
 MAX_FILES = 500_000
 COMMON = {"huhucapture", "localsend", "gifski", "rust-vendor", "rust-toolchain-source", "ffmpeg",
           "qtbase", "qtsvg", "qttranslations"}
-LINUX = {"qtwayland", "libportal", "pipewire", "x264", "openssl", "icu", "appimage-runtime",
-         "appimage-musl", "appimage-fuse", "appimage-squashfuse", "appimage-zstd", "appimage-zlib"}
+APPIMAGE_STATIC_SOURCES = {"appimage-musl", "appimage-fuse", "appimage-squashfuse", "appimage-zstd",
+                          "appimage-zlib", "appimage-mimalloc"}
+LINUX = {"qtwayland", "libportal", "pipewire", "x264", "openssl", "icu", "appimage-runtime"} | APPIMAGE_STATIC_SOURCES
 
 
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def appimage_static_inputs_present(receipts):
+    return any(any(source["id"] == "appimage-runtime" for source in receipt["sources"]) and
+               APPIMAGE_STATIC_SOURCES <= {item["component"] for item in receipt["staticInputs"]}
+               for receipt in receipts.values())
 
 
 def canonical(value):
@@ -991,10 +998,7 @@ class Collector:
         for identifier in sorted((COMMON | (LINUX if self.platform == "linux" else set())) - set(self.components)):
             self.gap(identifier + ": required source component is missing")
         if self.platform == "linux" and "appimage-runtime" in self.components:
-            runtime_receipts = [receipt for receipt in self.receipts.values()
-                                if any(source["id"] == "appimage-runtime" for source in receipt["sources"])]
-            required = {"appimage-musl", "appimage-fuse", "appimage-squashfuse", "appimage-zstd", "appimage-zlib"}
-            if not any(required <= {item["component"] for item in receipt["staticInputs"]} for receipt in runtime_receipts):
+            if not appimage_static_inputs_present(self.receipts):
                 self.gap("appimage-runtime: matching built runtime/static-input closure receipt is missing")
         # A final comparison detects concurrent tracked source changes after the
         # initial export, without refreshing or changing the caller's Git index.

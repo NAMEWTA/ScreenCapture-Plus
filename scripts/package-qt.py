@@ -115,18 +115,67 @@ def nsi_escape(value):
     return str(value).replace('$', '$$').replace('"', '$\\"')
 
 
-def windows_installer(prefix: Path, output: Path, workspace: Path, version: str, nsis_archive: Path):
+def nsis_distribution(distribution: Path):
+    # Official v311, Examples/makensis.nsi, installs a root launcher AND the
+    # real Bin compiler. Source/build.cpp initializes NSISDIR from Bin's parent.
+    source_commit = '7359413009afd4f0fff472d841fc2f2cc0e0a5f8'
+    required = ('makensis.exe', 'Bin/makensis.exe', 'COPYING',
+                'Include/MUI2.nsh', 'Include/LogicLib.nsh', 'Include/x64.nsh', 'Include/WinVer.nsh',
+                'Stubs/uninst', 'Stubs/lzma_solid-x86-unicode',
+                'Plugins/x86-unicode/nsDialogs.dll', 'Plugins/x86-unicode/System.dll',
+                'Contrib/Modern UI 2/MUI2.nsh', 'Contrib/Language files/English.nsh')
+    meta.require(distribution.is_dir() and not distribution.is_symlink(), 'NSIS extraction must be an owned directory')
+    entries = sorted(distribution.rglob('*'), key=lambda path: path.relative_to(distribution).as_posix())
+    meta.require(not any(path.is_symlink() for path in entries), 'NSIS extraction must not contain symbolic links')
+    candidates = [path for path in entries if path.name.lower() == 'makensis.exe']
+    records = []
+    for path in candidates:
+        meta.require(path.is_file(), 'NSIS compiler candidate is not a regular file: '+path.relative_to(distribution).as_posix())
+        records.append({'path':path.relative_to(distribution).as_posix(),
+                        'size':path.stat().st_size, 'sha256':meta.sha256(path)})
+    layouts = []
+    roots = []
+    for path in candidates:
+        if path.parent.name != 'Bin': continue
+        root = path.parent.parent
+        missing = [name for name in required if not (root/name).is_file() or not (root/name).stat().st_size]
+        layouts.append({'root':root.relative_to(distribution).as_posix(), 'missing':missing})
+        if not missing: roots.append(root)
+    print('NSIS distribution inspection: '+json.dumps({'candidates':records, 'layouts':layouts}, sort_keys=True), flush=True)
+    meta.require(len(roots) == 1, 'The official NSIS archive must contain exactly one complete distribution root')
+    root = roots[0]
+    compiler = root/'Bin/makensis.exe'
+    meta.require(set(candidates) == {root/'makensis.exe', compiler},
+                 'Unexpected compiler candidates outside the official NSIS launcher/Bin pair')
+    selection = {'distributionRoot':root.relative_to(distribution).as_posix(),
+                 'compilerPath':compiler.relative_to(distribution).as_posix(),
+                 'compilerCandidates':records, 'layoutSourceCommit':source_commit}
+    print('NSIS compiler selection: '+json.dumps(selection, sort_keys=True), flush=True)
+    return root, compiler, selection
+
+
+def prepare_nsis(nsis_archive: Path, workspace: Path):
     specification = meta.json_read(ROOT/'build/package/dependencies.lock.json')['windowsTools']['nsis']
     meta.require(nsis_archive is not None and nsis_archive.is_file() and
                  meta.sha256(nsis_archive) == specification['sha256'],
                  'Supply the exact reviewed NSIS distribution; arbitrary PATH compilers are not packaging inputs')
     distribution = workspace/'nsis'; distribution.mkdir()
     run([tool('7z'),'x','-y','-o'+str(distribution),nsis_archive])
-    candidates = list(distribution.rglob('makensis.exe'))
-    meta.require(len(candidates) == 1, 'The official NSIS archive has no unambiguous compiler')
-    compiler = candidates[0]
-    compiler_version = run([compiler, '/VERSION'], capture=True).strip()
+    root, compiler, selection = nsis_distribution(distribution)
+    # Ignore ambient NSIS locations even on Windows, where environment names
+    # are case-insensitive. /NOCONFIG also excludes per-user nsisconf.nsh.
+    environment = {key:value for key, value in os.environ.copy().items()
+                   if key.upper() not in {'NSISDIR', 'NSISCONFDIR'}}
+    environment['NSISDIR'] = str(root.resolve())
+    compiler_version = run([compiler, '/NOCONFIG', '/VERSION'], env=environment, capture=True).strip()
     meta.require(compiler_version == 'v3.11', 'Use the reviewed NSIS 3.11 compiler, not an unspecified PATH version')
+    provenance = {'name':'nsis', 'version':compiler_version, 'sha256':meta.sha256(compiler),
+                  'source':specification['source'], 'distributionSha256':specification['sha256'], **selection}
+    return compiler, environment, provenance
+
+
+def windows_installer(prefix: Path, output: Path, workspace: Path, version: str, nsis_archive: Path):
+    compiler, environment, provenance = prepare_nsis(nsis_archive, workspace)
     records = meta.inventory(prefix)
     install, remove, directories = [], [], set()
     for entry in records:
@@ -145,12 +194,10 @@ def windows_installer(prefix: Path, output: Path, workspace: Path, version: str,
     for key, value in replacements.items(): source = source.replace('@'+key+'@', value)
     meta.require(not re.search(r'@[A-Z_]+@', source), 'Unexpanded installer template token')
     script = workspace/'installer.nsi'; script.write_text(source, encoding='utf-8-sig')
-    run([compiler, '/NOCONFIG', '/INPUTCHARSET', 'UTF8', script])
+    run([compiler, '/NOCONFIG', '/INPUTCHARSET', 'UTF8', script], env=environment)
     meta.verify_inventory(prefix, records)
     meta.require(output.is_file() and output.stat().st_size > 0, 'NSIS did not create the complete installer')
-    return {'name':'nsis','version':compiler_version,'sha256':meta.sha256(compiler),
-            'source':specification['source'], 'distributionSha256':specification['sha256'],
-            'templateSha256':meta.sha256(ROOT/'build/package/user-installer.nsi.in')}
+    return {**provenance, 'templateSha256':meta.sha256(ROOT/'build/package/user-installer.nsi.in')}
 
 
 def linux_environment(qmake: Path):

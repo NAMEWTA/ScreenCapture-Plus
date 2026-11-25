@@ -28,7 +28,11 @@
 python3 scripts/restore-packaging-tools.py --platform linux --output .deps/packaging-tools
 ```
 
-Windows 使用 `--platform windows`。输出目录必须为空。脚本按 `build/package/dependencies.lock.json` 下载固定官方资产，流式计算 SHA256，核对精确字节数，并保留工具的固定提交源码、许可证及来源清单。Windows 下载固定 NSIS 3.11 发行文件，不运行该安装器；真正打包时使用 7-Zip 解开该已验证文件，直接调用其中唯一的 `makensis.exe`。不会从开发机 PATH 中随便找一个 NSIS 编译器。
+Windows 使用 `--platform windows`。输出目录必须为空。脚本按 `build/package/dependencies.lock.json` 下载固定官方资产，流式计算 SHA256，核对精确字节数，并保留工具的固定提交源码、许可证及来源清单。Windows 下载固定 NSIS 3.11 发行文件，不运行该安装器；真正打包时使用 7-Zip 解开已经通过锁定 SHA256 检查的文件。
+
+NSIS 官方 [`v311` 发行脚本](https://github.com/NSIS-Dev/nsis/blob/7359413009afd4f0fff472d841fc2f2cc0e0a5f8/Examples/makensis.nsi) 同时提供根目录 `makensis.exe` 启动器和 `Bin/makensis.exe` 编译器。打包器要求恰好一个包含这两个文件及必需 Include、Stubs、插件、界面和许可文件的完整分发根；多余编译器或不完整布局都会明确失败。它直接调用该根的 `Bin/makensis.exe`，按照同一固定提交中 [`Source/build.cpp`](https://github.com/NSIS-Dev/nsis/blob/7359413009afd4f0fff472d841fc2f2cc0e0a5f8/Source/build.cpp) 的目录解析规则，显式将 `NSISDIR` 绑定到该分发根，并用 `/NOCONFIG` 排除机器或用户配置。实际 `/VERSION` 必须精确返回 `v3.11`。两个候选的相对路径、大小、SHA256 和最终选择同时写入构建日志及包工具记录；不使用 PATH 中的其他 NSIS 编译器。
+
+`tests/package_metadata_tests.py` 在各平台检查双文件布局、缺失 stub、重复分发根、多余编译器和未锁定归档的拒绝边界。在 Windows 已恢复官方归档后，同一测试还实际解包并运行选定编译器的版本入口。目录选择测试不证明安装器已经编译成功；后续真实 NSIS 编译与安装、重装、卸载回归分别承担这些验证。
 
 Linux 使用四项独立锁定的工具：linuxdeploy、它的 Qt 插件、appimagetool 和 type-2 runtime。appimagetool 总是收到 `--runtime-file`，不能临时下载一个浮动 latest runtime。Qt 插件的上游资产原来没有官方 SHA256；专用 `packaging-dependencies.yml` 从固定官方 asset ID 取得实际字节、核对发布身份，并记录了成功作业的产物。当前锁已经保存审核后的实际 SHA256，不再接受 bootstrap-only 工具。该工作流只恢复依赖，不安装或发布产品。
 

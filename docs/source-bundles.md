@@ -169,7 +169,9 @@ gifski 的完整固定 Git 源码也必须提供；vendor 中源文件与该检�
 
 工具原样保留 `buildRecords` 并核对哈希。后续解析和补丁应用读取的是已复制并验证的快照；原始输入之后被改变，不会让判断依据与归档材料变成两套字节。每项 `staticInputs` 需要 `id`、`component`、`sourceTreeSha256`、`size`、`sha256`；对应 `staticFiles` 必须指向真正参与该次链接的文件，实际字节与记录一致。归档不会把静态库本身当作源码。应用记录须包含 LocalSend、gifski、vendor、Rust 工具链源码，并绑定实际单一聚合 Rust 静态库。
 
-Linux AppImage runtime 除自己的固定源码外，必须包括 `appimage-musl`、`appimage-fuse`、`appimage-squashfuse`、`appimage-zstd`、`appimage-zlib`，并在对应 runtime 构建记录中绑定这些真实静态输入。上游 runtime 的 31 KiB 级 Git 源档案并不等于这些嵌入库的完整源码。没有匹配官方 runtime 资产的原始构建及依赖材料时，完整性保持 false；不能从 URL 推导内部版本或声称重新构建结果等于原始发布资产。
+Linux AppImage runtime 除自己的固定源码外，已确认至少使用 `appimage-musl`、`appimage-fuse`、`appimage-squashfuse`、`appimage-zstd`、`appimage-zlib`、`appimage-mimalloc` 六项静态来源；源码必需检查和 runtime receipt 输入检查共用这一集合。固定 runtime 的 [Makefile](https://github.com/AppImage/type2-runtime/blob/dd6cebedcbddde9c82f89b011e8e1d40b6e43868/src/runtime/Makefile)明确以 `-static` / `-static-pie` 链接 `-lmimalloc`，[Dockerfile](https://github.com/AppImage/type2-runtime/blob/dd6cebedcbddde9c82f89b011e8e1d40b6e43868/scripts/docker/Dockerfile)安装 `mimalloc-dev`，不能只依据其 LICENSE 中列出的五项就遗漏它。
+
+这六项是已经证实的最低要求，不是完整静态闭包的证明；最终仍必须逐项匹配真实官方构建和链接记录中的全部输入。上游 runtime 的 31 KiB 级源档案不包含这些嵌入库的完整源码，现有材料也没有给出 mimalloc 的精确版本或源归档。没有匹配官方 runtime 资产的原始构建及依赖材料时，完整性保持 false；不能从 URL、Alpine 基础镜像标签或库名推导内部版本，也不能声称重新构建结果等于原始发布资产。
 
 最终 `deployment.inventory` 必须是 `inventory` 子命令对**实际最终部署目录**产生的全文件清单，并在收集时再次核对。目录不能为空，须有真正的 huhucapture PE/ELF、匹配的嵌入身份和旁置 `build-identity.json`。工具复用 `build/package/metadata.py` 的实际运行目录审计；缺少 Qt、许可证或安装标记等会留下阻塞缺项。默认可执行路径为 Windows 的 `huhucapture.exe` 或 Linux 的 `bin/huhucapture`；完整 AppDir 可显式设置 `deployment.executable: "usr/bin/huhucapture"`，DEB 解包目录可指定其真实 `opt/.../bin/huhucapture` 路径。产品可执行文件必须映射到包含项目源码身份的实际应用构建记录。`deployment.sourceMap` 按相对路径映射每个文件：
 
@@ -217,8 +219,13 @@ python scripts/retain-development-sources.py \
 | Cargo 锁 | `third_party/localsend/Cargo.lock`，核对主锁、实际构建记录及当前源码文件身份 |
 | gifski | 从本次 Cargo metadata 的精确 Git source 和 `manifest_path` 定位实际 checkout |
 | Qt 来源材料 | `--qt-prefix` 下确实存在的 `sbom/` 文件，保留原文件名和字节 |
+| AppImage runtime 自身源码（已有时） | `artifacts/packaging-tools/appimageRuntime/source.tar.gz`，按 `build/package/dependencies.lock.json` 的实际大小及 SHA256 核对 |
 
 原始构建记录以校验后的副本参与后续判断，并作为 `materials` 保存，不改写成严格构建 receipt。脚本核对四个 native 记录的固定提交、补丁和已有配置字段，以及 Rust 构建记录中的锁、源码文件和实际静态库哈希。Qt SBOM 只作为来源材料，不被声明为 Qt 完整源码。
+
+已有打包步骤取得 runtime 原始 tar 时，profile 将其校验后复制到 `materials/appimage-runtime-source/source.tar.gz`，并向现有 `sources` 追加 `appimage-runtime` 的 tar 条目；单一根目录为 `type2-runtime-<锁定完整提交>`。collector 再按导出项目的打包锁核对归档、保留原件并导出源码及许可证。原始路径缺失时只在 coverage 的 `missingMaterials` 中记录原因，继续保留 runtime 必需源码缺项；归档存在但大小或哈希矛盾时立即失败。此过程不下载，也不修改原始 tar 内的源码或版本占位文件。
+
+runtime tar 及其固定哈希证明自身源码输入，不能替代官方构建 receipt 或上述至少六项静态来源。新增这一源码可能触发更具体的构建记录缺项，使 `gaps` 数量增加；脚本不会为了减少缺项计数而省略检查，也不会推测 mimalloc 的版本、来源或实际链接输入。
 
 Cargo 的 metadata、锁、原始档案及 vendor 是四个分别记录的集合。脚本遍历锁中的全部 registry 包，从实际 metadata 路径推导本次 cache 目录，只保留整个 `.crate` SHA256 与 Cargo.lock 一致的公开 registry 档案。找不到的包进入 `missingRegistryArchives`；字节不符直接失败。缺少某个 metadata 条目不意味着该包一定不在缓存中，metadata 里有某个条目也不等于已经提供其原始档案。
 
@@ -255,7 +262,7 @@ fetch 前先从实际提交导出并逐字节核对项目源码，保存 Cargo.l
 | `cargo-coverage.json` | 完整锁与实际 metadata 集合、原始档案及缺项、vendor 真退出码和实际输出包集合；请求 fetch 时另存前后 coverage、真实命令结果和源码/锁不变检查 |
 | `retention-report.json` | 实际 checkout SHA、执行命令、退出码、材料哈希、最终失败原因或未完成归档结果 |
 | `logs/`、`vendor-config.toml` | 实际命令输出；fetch 使用独立的 `cargo-fetch.stdout.log` / `cargo-fetch.stderr.log`；vendor 失败时 stdout 文件可能为空或不构成配置 |
-| `materials/` | 复制并校验后的原始记录及 Qt SBOM |
+| `materials/` | 复制并校验后的原始记录、Qt SBOM，以及已有且通过打包锁校验的 runtime 原始 tar |
 | `inputs/registry-cache/` | 仅发布校验成功的原始 `.crate`，失败的复制不会冒充已验证材料 |
 | `inputs/gifski/` | 核对过的本地干净 checkout，供主收集器导出 |
 
@@ -272,6 +279,6 @@ python3 tests/source_retention_tests.py -v
 
 测试使用真正的临时 Git 仓库、Git 补丁、源码 tar、Cargo registry 形式的原始档案和真实文件，不访问网络，不操作产品工作树。覆盖固定对象与许可证导出、索引/refs 不变、未记录修改/删除/未初始化子模块、篡改 vendor 后重写校验清单、路径及链接链安全、确定性归档、未完成状态与覆盖拒绝，以及 fsmonitor 不执行、保留后原输入被改变、矛盾配置参数和空/错误部署目录。Linux 的输出绑定测试用实际 `cc` 编译带真实嵌入身份的小型元数据探针并验证篡改检测；它不会被认定为完整产品，运行目录审计仍明确失败。缺少编译器会使该测试失败。普通 Windows 环境明确跳过这一 Linux ELF 检查以及需要 Unix 可执行脚本/符号链接权限的构造测试，其余 Git、原始档案和清单检查继续执行。
 
-固定 profile 的窄合同测试另外使用临时 Git 仓库、实际文件与受控 Python 子进程，验证部分结果留存、前后 coverage、继承配置隔离、真实退出码/双日志、锁及其他源码中途变化拒绝，以及显式 fetch 失败后的最终非零语义。测试不会联网或冒充一次真实 Cargo fetch/vendor；这两项必须由已安装固定工具链的实际 CI 保留证据。
+固定 profile 的窄合同测试另外使用临时 Git 仓库、实际文件与受控 Python 子进程，验证部分结果留存、前后 coverage、继承配置隔离、真实退出码/双日志、锁及其他源码中途变化拒绝，以及显式 fetch 失败后的最终非零语义。runtime 的窄回归核对缺失材料、大小/SHA矛盾、快照路径和固定 tar 收集，确认只有自身源码时仍缺 receipt、旧五项静态输入不能满足包含 mimalloc 的最低要求。测试不会联网或冒充一次真实 Cargo fetch/vendor 或官方 runtime 构建；这些执行必须另外保留实际证据。
 
 这些测试证明收集和绑定规则，不是一次产品源码完备性、实际 Cargo 工具链重做或正式许可验收。实际固定 Cargo 重做及完整平台源码包必须另外保留真实执行证据。

@@ -220,6 +220,28 @@ void privateIdentityContracts(const QString& root)
     require(peer.ok() && peer.trustedPeers.size() == 1, "Persist only a user-confirmed public fingerprint");
     const auto trust = read(reopened.trustPath());
     require(!trust.contains("PRIVATE KEY") && !trust.contains("privateKeyPem"), "Trust metadata excludes private keys");
+    auto updated = worker([&] { return reopened.rememberPeer(QStringLiteral("127.0.0.1"), 53318,
+        first.fingerprint, QStringLiteral("Second explicit confirmation")); });
+    require(updated.ok() && updated.trustedPeers.size() == 1 &&
+        HuhuCapture::Platform::isPrivateStorage(files::nativePath(reopened.trustPath()), false, error),
+        "Replacing existing trust preserves its actual current-user owner and private permissions");
+    const auto updatedTrust = read(reopened.trustPath());
+    const auto updatedPeer = updated.trustedPeers.first().toObject();
+    const auto updatedEndpoints = updatedPeer.value(QStringLiteral("endpoints")).toArray();
+    require(updatedTrust != trust &&
+        updatedPeer.value(QStringLiteral("alias")).toString() == QStringLiteral("Second explicit confirmation") &&
+        updatedEndpoints.size() == 2 &&
+        std::any_of(updatedEndpoints.cbegin(), updatedEndpoints.cend(), [](const QJsonValue& value) {
+            const auto endpoint = value.toObject();
+            return endpoint.value(QStringLiteral("address")).toString() == QStringLiteral("127.0.0.1") &&
+                endpoint.value(QStringLiteral("port")).toInt() == 53318;
+        }), "The second trust save actually persists the changed alias and additional confirmed endpoint");
+    transfer::IdentityStore afterTrustReplacement(location);
+    auto restored = worker([&] { return afterTrustReplacement.loadOrCreate(); });
+    require(restored.ok() && !restored.created && restored.fingerprint == first.fingerprint &&
+        restored.trustedPeers == updated.trustedPeers && read(reopened.trustPath()) == updatedTrust &&
+        read(reopened.identityPath()) == original,
+        "Reopening after a second trust save retains exact identity and updated trust bytes");
     replace(reopened.identityPath(), QByteArray("damaged identity\n"));
     auto damaged = worker([&] { transfer::IdentityStore candidate(location); return candidate.loadOrCreate(); });
     require(damaged.error == transfer::IdentityError::InvalidIdentity && read(reopened.identityPath()) == "damaged identity\n",
@@ -463,6 +485,13 @@ int main(int argc, char** argv)
 {
     QApplication app(argc, argv); app.setQuitOnLastWindowClosed(false);
     try {
+        if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--identity-only")) {
+            QTemporaryDir temporary;
+            require(temporary.isValid(), "Create actual standalone identity fixture directory");
+            privateIdentityContracts(temporary.path());
+            std::cout << "PASS actual private identity, repeated trust replacement, reopen and damaged-file retention\n";
+            return 0;
+        }
         const auto pictures = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
         if (!pictures.isEmpty()) require(QDir().mkpath(pictures), "Create actual controller PNG output directory");
         controllerContracts(pictures); configurationConflict(); hostLifetimeContracts();

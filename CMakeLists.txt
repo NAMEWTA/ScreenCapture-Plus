@@ -280,6 +280,9 @@ if(HUHUCAPTURE_QT_VALIDATION)
     if(BUILD_TESTING)
         huhucapture_test(qt_settings_store tests/qt/settings_store_tests.cpp)
         target_link_libraries(qt_settings_store PRIVATE huhucapture_settings)
+        huhucapture_test(qt_private_storage tests/qt/private_storage_tests.cpp)
+        target_link_libraries(qt_private_storage PRIVATE huhucapture_file_committer Qt6::Core)
+        set_tests_properties(qt_private_storage PROPERTIES TIMEOUT 30)
     endif()
     add_library(huhucapture_languages STATIC
         src/services/localization/LanguageCatalog.h
@@ -517,6 +520,9 @@ if(HUHUCAPTURE_QT_VALIDATION)
                 "${PROJECT_BINARY_DIR}/lan-controller-render/$<CONFIG>")
             target_link_libraries(qt_lan_controller PRIVATE huhucapture_lan_controller huhucapture_languages)
             set_tests_properties(qt_lan_controller PROPERTIES TIMEOUT 300
+                ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
+            add_test(NAME qt_identity_store COMMAND qt_lan_controller --identity-only)
+            set_tests_properties(qt_identity_store PROPERTIES TIMEOUT 60
                 ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
             huhucapture_test(qt_rust_bridge tests/qt/rust_bridge_probe.cpp
                 "${PROJECT_BINARY_DIR}/rust-bridge/$<CONFIG>")
