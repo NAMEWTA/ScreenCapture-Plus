@@ -15,6 +15,7 @@ const IO: i32 = -3;
 const CANCELLED: i32 = -4;
 const CHECKSUM_MISMATCH: i32 = -7;
 const CLOSED: i32 = -11;
+const LIMIT_EXCEEDED: i32 = -13;
 
 struct Engine(*mut HuhuTransfer, Value);
 
@@ -121,10 +122,13 @@ impl Drop for Event { fn drop(&mut self) { unsafe { huhu_event_free(self.0); } }
 struct Lease(*mut HuhuMediaLease, std::path::PathBuf);
 impl Lease {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("huhu-abi-{}-{}.png", std::process::id(),
+        Self::from_bytes("png", PNG)
+    }
+    fn from_bytes(extension: &str, bytes: &[u8]) -> Self {
+        let path = std::env::temp_dir().join(format!("huhu-abi-{}-{}.{extension}", std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::File::options().create_new(true).write(true).open(&path).unwrap();
-        std::fs::write(&path, PNG).unwrap();
+        std::fs::write(&path, bytes).unwrap();
         let text = path.to_str().unwrap();
         let mut lease = ptr::null_mut();
         unsafe { assert_eq!(huhu_media_lease_open(text.as_ptr(), text.len(), &mut lease), OK); }
@@ -392,5 +396,83 @@ fn late_failed_receive_cannot_overwrite_a_real_tls_retry_result() {
     let ended = receiver.next(3);
     assert_eq!(ended.view().status, IO);
     assert_eq!(ended.json()["files"], json!({"retry": IO, "last": IO}));
+    receiver.stop();
+}
+
+#[test]
+fn strict_gif_cancel_and_decode_budget_failure_cross_real_tls_without_ack() {
+    let mut encoder = gif::Encoder::new(Vec::new(), 1, 1, &[0, 0, 0, 255, 255, 255]).unwrap();
+    for value in [0, 1] {
+        encoder.write_frame(&gif::Frame { width: 1, height: 1,
+            buffer: std::borrow::Cow::Owned(vec![value]), ..gif::Frame::default() }).unwrap();
+    }
+    let bytes = encoder.into_inner().unwrap();
+    let lease = Lease::from_bytes("gif", &bytes);
+    let limits = HuhuGifLimits { max_input_bytes: 1024 * 1024, max_canvas_pixels: 100,
+        max_total_pixels: 100, max_frames: 1, max_metadata_bytes: 1024 };
+    let receiver = Engine::new();
+    let sender = Engine::new();
+    let source = lease.1.to_str().unwrap();
+
+    let first = sender.send(&receiver, &lease);
+    let offer = receiver.next(1);
+    accept(&receiver, &offer);
+    let event = receiver.next(2);
+    let mut raw = ptr::null_mut();
+    unsafe { assert_eq!(huhu_event_take_receive(event.0, &mut raw), OK); }
+    let cancelled = Receive(raw);
+    let offer = offer.json();
+    let session = offer["sessionId"].as_str().unwrap();
+    let mut info = HuhuGifInfo::default();
+    unsafe {
+        assert_eq!(huhu_transfer_cancel_receive(receiver.0, session.as_ptr(), session.len()), OK);
+        assert_eq!(huhu_gif_validate_file(source.as_ptr(), source.len(), &limits, cancelled.0, ptr::null(), &mut info), CANCELLED);
+    }
+    assert_eq!(receiver.next(3).view().status, CANCELLED);
+    let ended = sender.next(5).view();
+    assert_eq!((ended.operation, ended.status), (first, CANCELLED));
+    drop(cancelled);
+
+    let second = sender.send(&receiver, &lease);
+    let offer = receiver.next(1);
+    accept(&receiver, &offer);
+    let event = receiver.next(2);
+    unsafe { assert_eq!(huhu_event_take_receive(event.0, &mut raw), OK); }
+    let receive = Receive(raw);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut actual = Vec::new();
+    let mut chunk = [0; 17];
+    loop {
+        assert!(Instant::now() < deadline);
+        let mut count = 0;
+        let code = unsafe { huhu_receive_read(raw, chunk.as_mut_ptr(), chunk.len(), &mut count, 100) };
+        if code == TIMEOUT { continue; }
+        if code == END { break; }
+        assert_eq!(code, OK);
+        assert!(count > 0);
+        actual.extend_from_slice(&chunk[..count]);
+    }
+    assert_eq!(actual, bytes);
+    let mut verified = HuhuVerification::default();
+    loop {
+        assert!(Instant::now() < deadline);
+        let code = unsafe { huhu_receive_verify(raw, 100, &mut verified) };
+        if code == TIMEOUT { continue; }
+        assert_eq!(code, OK);
+        break;
+    }
+    unsafe {
+        // The received bytes equal this immutable real file; the official
+        // decoder encounters the second frame beyond the explicit one-frame
+        // receiver budget. No incomplete file is committed or acknowledged.
+        assert_eq!(huhu_gif_validate_file(source.as_ptr(), source.len(), &limits, raw, ptr::null(), &mut info), LIMIT_EXCEEDED);
+        assert_eq!(huhu_receive_complete(raw, LIMIT_EXCEEDED, 2), OK);
+    }
+    assert_eq!(receiver.next(3).view().status, LIMIT_EXCEEDED);
+    let ended = sender.next(5);
+    assert_eq!((ended.view().operation, ended.view().status), (second, LIMIT_EXCEEDED));
+    assert_eq!(ended.json()["httpStatus"], 413);
+    drop(receive);
+    sender.stop();
     receiver.stop();
 }

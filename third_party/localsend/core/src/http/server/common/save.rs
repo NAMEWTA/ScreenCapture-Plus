@@ -111,6 +111,7 @@ pub(crate) enum SaveResult {
     InvalidMedia,
     Cancelled,
     LengthMismatch,
+    LimitExceeded,
 }
 
 /// Forwards the body of `req` to `target`.

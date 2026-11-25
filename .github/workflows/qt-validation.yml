@@ -91,6 +91,7 @@ jobs:
       - name: Build and validate Debug
         shell: bash
         run: |
+          cmake --build artifacts/cmake/qt-validation --config Debug --target qt_editor_components --parallel 2
           cmake --build artifacts/cmake/qt-validation --config Debug --parallel 2
           ctest --test-dir artifacts/cmake/qt-validation -C Debug --output-on-failure --no-tests=error
       - name: Exercise real Wayland parent ownership and GUI responsiveness (Debug)

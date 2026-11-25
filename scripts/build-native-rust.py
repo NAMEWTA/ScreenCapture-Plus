@@ -90,7 +90,14 @@ def main():
     if len(matches) != 1:
         raise SystemExit("Rust did not report one exact native-static-libs list")
     libraries = []
+    link_options = []
     for item in matches[0].split():
+        # The fixed Windows standard library reports its dynamic CRT as an
+        # actual linker directive, not a filename. Preserve this directive;
+        # never suppress a CRT conflict or invent /MDd compatibility.
+        if host.endswith("windows-msvc") and item.lower() == "/defaultlib:msvcrt":
+            link_options.append(item)
+            continue
         value = item[2:] if item.startswith("-l") else item
         if not re.fullmatch(r"[A-Za-z0-9_.+-]+", value):
             raise SystemExit("Unrecognized native link input: " + item)
@@ -98,6 +105,8 @@ def main():
     windows = host.endswith("windows-msvc")
     if windows and any(re.fullmatch(r"libcmt(?:d)?(?:\.lib)?", item, re.IGNORECASE) for item in libraries):
         raise SystemExit("The aggregate reported a static Windows CRT dependency")
+    if windows and not link_options and not any(item.lower() in ("msvcrt", "msvcrt.lib") for item in libraries):
+        raise SystemExit("The fixed Rust standard library did not report its expected dynamic release CRT")
     library = target / "release" / ("huhucapture_native.lib" if windows else "libhuhucapture_native.a")
     if not library.is_file():
         raise SystemExit("Cargo did not produce the aggregate static library")
@@ -106,13 +115,14 @@ def main():
         "crate": native["package"], "library": library.as_posix(),
         "librarySha256": hashlib.sha256(library.read_bytes()).hexdigest(),
         "cargoLockSha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
-        "nativeLibraries": libraries, "codecPackages": pins,
+        "nativeLibraries": libraries, "nativeLinkOptions": link_options, "codecPackages": pins,
         "windowsCrt": "MD" if windows else None,
         "bootstrapResolution": options.bootstrap_lock,
     }
     (evidence / "build-info.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print("Aggregate native library:", library)
     print("Actual native link libraries:", " ".join(libraries))
+    print("Actual native link options:", " ".join(link_options))
     print("Cargo.lock SHA256:", result["cargoLockSha256"])
 
 

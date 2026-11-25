@@ -17,6 +17,7 @@ pub const INVALID_MEDIA: i32 = -9;
 pub const DURABILITY_UNKNOWN: i32 = -10;
 pub const CLOSED: i32 = -11;
 pub const PANIC: i32 = -12;
+pub const LIMIT_EXCEEDED: i32 = -13;
 
 #[derive(Debug)]
 pub struct Error {
@@ -54,6 +55,7 @@ impl From<ClientError> for Error {
             ClientError::StatusCode(value) => (match value.status {
                 403 => CANCELLED,
                 409 | 429 => BUSY,
+                413 => LIMIT_EXCEEDED,
                 415 => INVALID_MEDIA,
                 422 => CHECKSUM_MISMATCH,
                 _ => PROTOCOL,
@@ -85,6 +87,7 @@ pub fn failure_status(failure: UploadFailure) -> i32 {
         UploadFailure::LengthMismatch => LENGTH_MISMATCH,
         UploadFailure::ChecksumMismatch => CHECKSUM_MISMATCH,
         UploadFailure::InvalidMedia => INVALID_MEDIA,
+        UploadFailure::LimitExceeded => LIMIT_EXCEEDED,
         UploadFailure::DurabilityUnknown => DURABILITY_UNKNOWN,
     }
 }
@@ -96,6 +99,7 @@ pub fn status_failure(status: i32) -> Result<UploadFailure> {
         LENGTH_MISMATCH => Ok(UploadFailure::LengthMismatch),
         CHECKSUM_MISMATCH => Ok(UploadFailure::ChecksumMismatch),
         INVALID_MEDIA => Ok(UploadFailure::InvalidMedia),
+        LIMIT_EXCEEDED => Ok(UploadFailure::LimitExceeded),
         DURABILITY_UNKNOWN => Ok(UploadFailure::DurabilityUnknown),
         _ => Err(Error::new(INVALID_ARGUMENT, "Invalid receive completion status")),
     }

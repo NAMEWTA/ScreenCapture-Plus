@@ -102,6 +102,14 @@ void commit(QPlainTextEdit& target, const QString& value)
     QApplication::sendEvent(&target, &event);
     settle();
 }
+void wheel(UIQ::EditorCanvas& canvas, QPointF source)
+{
+    const auto local = canvas.sourceToView(source);
+    QWheelEvent event(local, canvas.mapToGlobal(local.toPoint()), {}, {0, 120},
+        Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(&canvas, &event);
+    settle();
+}
 void save(const QImage& image, const QString& directory, const QString& name)
 {
     if (!directory.isEmpty()) require(image.save(QDir(directory).filePath(name)), "PNG artifact failed: " + name.toStdString());
@@ -252,6 +260,17 @@ void textFocusAndToolbar(const QString& directory)
     press(*canvas, {440, 200}); release(*canvas, {440, 200});
     require(!canvas->textEditing() && canvas->document().activeCount() == count,
         "one outside click only finishes the prior input after an early FocusOut");
+    canvas->setTool(UIQ::EditorTool::Rectangle);
+    auto rectangle = canvas->toolStyle(UIQ::EditorTool::Rectangle); rectangle.value = 2;
+    canvas->setToolStyle(UIQ::EditorTool::Rectangle, rectangle);
+    click(*canvas, {45, 57});
+    require(canvas->textEditing() && shape->textModel()->style().fontSize == 24 * canvas->devicePixelRatioF(),
+        "re-entering text from another tool cannot replace its font size with a 2px outline");
+    auto explicitText = canvas->toolStyle(UIQ::EditorTool::Text); explicitText.value = 30;
+    canvas->setToolStyle(UIQ::EditorTool::Text, explicitText);
+    require(shape->textModel()->style().fontSize == 30 * canvas->devicePixelRatioF(),
+        "explicit Text preferences still apply to the active shared input");
+    canvas->finishTextEditing();
     QImage output; require(!canvas->renderExport(output), "complete ordinary text export");
     save(output, directory, QStringLiteral("text-style-input.png"));
     for (const auto tool : UIQ::editorTools) {
@@ -285,6 +304,24 @@ void notesAndOutput(const QString& directory)
     key(*note, Qt::Key_Z, Qt::ControlModifier);
     require(note->toPlainText() == full && canvas->document().activeCount() == count,
         "note undo belongs to native text document");
+    auto* rectangle = window.findChild<QToolButton*>(QStringLiteral("tool.rect"));
+    require(rectangle, "rectangle tool button exists");
+    sendMouse(*rectangle, QEvent::MouseButtonPress, rectangle->rect().center(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(*rectangle, QEvent::MouseButtonRelease, rectangle->rect().center(), Qt::LeftButton, Qt::NoButton);
+    settle();
+    require(canvas->tool() == UIQ::EditorTool::Rectangle && canvas->hasFocus() && !note->hasFocus(),
+        "a real drawing-tool click finishes note focus and restores canvas shortcuts");
+    require(note->toPlainText() == full &&
+        QString::fromStdWString(canvas->document().findAnnotation(1)->annotationModel()->note()) == full,
+        "tool changes preserve the complete committed note");
+    note->setFocus(); settle();
+    auto* fill = window.findChild<QToolButton*>(QStringLiteral("tool.rectFill"));
+    require(fill, "rectangle style control exists");
+    sendMouse(*fill, QEvent::MouseButtonPress, fill->rect().center(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(*fill, QEvent::MouseButtonRelease, fill->rect().center(), Qt::LeftButton, Qt::NoButton);
+    settle();
+    require(note->hasFocus() && note->toPlainText() == full,
+        "style-only toolbar clicks remain nonactivating while a note is focused");
     QImage complete; require(!canvas->renderExport(complete), "long CJK and URL notes export completely");
     require(complete.width() > canvas->originalImage().width() && complete.height() > canvas->originalImage().height(),
         "full notes expand the output rather than truncate or shrink the source");
@@ -353,6 +390,85 @@ void zoomAndPureImage()
     require(!canvas->pureImageMode(), "right click restores editing chrome");
     std::cout << "PASS pointer-anchored zoom and shared pure-image interaction\n";
 }
+
+void selectionChromeAndWheel()
+{
+    QImage source(300, 220, QImage::Format_RGB32); source.fill(Qt::white);
+    UIQ::EditorCanvas canvas; load(canvas, source); canvas.setTool(UIQ::EditorTool::Annotation);
+    drag(canvas, {70, 50}, {210, 160});
+    QEvent leave(QEvent::Leave); QApplication::sendEvent(&canvas, &leave);
+    canvas.setAnnotationPanelVisible(false);
+    const auto unselected = canvas.grab().toImage();
+    canvas.setAnnotationPanelVisible(true);
+    const auto selected = canvas.grab().toImage();
+    require(!sameBytes(selected, unselected), "selected annotation keeps real handles after the pointer enters the note panel");
+    press(canvas, {140, 50});
+    require(canvas.pointerGestureActive(), "existing annotation begins a captured resize");
+    require(sameBytes(canvas.grab().toImage(), unselected), "hover handles stay out of the active gesture paint");
+    QEvent ungrab(QEvent::UngrabMouse); QApplication::sendEvent(&canvas, &ungrab);
+
+    canvas.setTool(UIQ::EditorTool::Number); click(canvas, {40, 100});
+    const auto* marker = canvas.document().activeItems().back().get();
+    const auto& model = std::get<Editor::NumberModel>(marker->geometry());
+    const auto middle = model.outline().middle;
+    const QPointF handle(middle.x, middle.y);
+    const auto radius = model.radius();
+    sendMouse(canvas, QEvent::MouseMove, canvas.sourceToView(handle), Qt::NoButton, Qt::NoButton);
+    for (int i = 0; i < 6; ++i) wheel(canvas, handle);
+    require(model.radius() == radius + 6, "continuous wheel resizing retains its moving handle target until pointer motion");
+    const auto wheelPreview = canvas.grab().toImage();
+    sendMouse(canvas, QEvent::MouseMove, canvas.sourceToView({40, 100}), Qt::NoButton, Qt::NoButton);
+    require(!sameBytes(canvas.grab().toImage(), wheelPreview), "number handles return on pointer motion after wheel adjustment");
+
+    UIQ::EditorWindow window; load(window, source); window.canvas()->setTool(UIQ::EditorTool::Annotation);
+    drag(*window.canvas(), {70, 50}, {210, 160});
+    auto* collapse = window.findChild<QToolButton*>(QStringLiteral("annotationCollapse"));
+    auto* panel = window.findChild<QWidget*>(QStringLiteral("annotationPanel"));
+    require(collapse && panel && !panel->isHidden(), "shared annotation rail is open");
+    collapse->click(); settle();
+    require(panel->isHidden() && window.canvas()->tool() == UIQ::EditorTool::None &&
+        window.canvas()->document().activeCount() == 1, "collapse returns to pin movement without removing any annotation");
+    std::cout << "PASS selected-region chrome, capture paint, continuous number wheel and annotation collapse\n";
+}
+
+void noteCaptionLayout(const QString& directory)
+{
+    UIQ::EditorWindow window; window.setTranslator(text);
+    require(!window.loadImage(pixels({420, 340})), "caption layout source image");
+    show(window); window.canvas()->setTool(UIQ::EditorTool::Annotation);
+    drag(*window.canvas(), {30, 30}, {180, 150}); settle();
+    auto* panel = window.findChild<QWidget*>(QStringLiteral("annotationPanel"));
+    auto* footer = window.findChild<QLabel*>(QStringLiteral("annotationFooter"));
+    auto* scroll = window.findChild<QScrollArea*>(QStringLiteral("annotationFooterScroll"));
+    auto* input = window.findChild<QPlainTextEdit*>(QStringLiteral("annotationNoteEditor"));
+    auto* heading = window.findChild<QLabel*>(QStringLiteral("annotationHeading"));
+    require(panel && footer && scroll && input && heading, "caption layout controls");
+    require(window.font().pixelSize() == 14 && window.font().weight() == QFont::Normal &&
+        heading->font().pixelSize() == 13 && footer->font().pixelSize() == 12 && input->font().pixelSize() == 15,
+        "editor chrome uses explicit logical-pixel font sizes on both platforms");
+    for (const int width : {240, 340}) {
+        panel->setFixedWidth(width); window.resize(800, 520); settle();
+        require(footer->wordWrap() && footer->height() >= footer->heightForWidth(footer->width()),
+            "normal full footer is laid out at its actual font and width");
+        require(scroll->verticalScrollBar()->maximum() == 0 &&
+            input->geometry().bottom() < scroll->geometry().top() &&
+            panel->rect().contains(scroll->geometry()), "wrapped footer remains visible without overlapping note input");
+        if (!directory.isEmpty()) require(window.grab().save(QDir(directory).filePath(
+            QStringLiteral("annotation-caption-%1.png").arg(width))), "wrapped footer PNG evidence");
+    }
+    const auto full = QStringLiteral("完整快捷键提示，Ctrl+S saves the image and every complete note. ").repeated(80);
+    window.setTranslator([&](QStringView key) { return key == u"annotation.saveHint" ? full : text(key); });
+    panel->setFixedWidth(240); window.resize(800, 520); settle();
+    require(footer->text() == full && footer->height() >= footer->heightForWidth(footer->width()),
+        "long custom translation remains complete in the real QLabel");
+    require(scroll->height() <= 72 && scroll->verticalScrollBar()->maximum() > 0 &&
+        input->geometry().bottom() < scroll->geometry().top() && input->height() >= 72,
+        "exceptionally long footer scrolls within budget while preserving input height");
+    const QFontInfo actual(footer->font());
+    std::cout << "FONT editor caption: " << actual.family().toStdString() << ", pixel="
+              << actual.pixelSize() << ", weight=" << actual.weight() << '\n';
+    std::cout << "PASS actual-width caption wrapping, explicit chrome fonts and bounded long translations\n";
+}
 }
 
 int main(int argc, char** argv)
@@ -366,7 +482,7 @@ int main(int argc, char** argv)
         std::cout << "FONT " << info.family().toStdString() << " / " << info.pixelSize() << " px; QPA "
                   << QGuiApplication::platformName().toStdString() << '\n';
         sourceOwnershipAndScale(); nineToolRendering(directory); historyAndCaptureLoss();
-        textFocusAndToolbar(directory); notesAndOutput(directory); zoomAndPureImage();
+        textFocusAndToolbar(directory); notesAndOutput(directory); zoomAndPureImage(); selectionChromeAndWheel(); noteCaptionLayout(directory);
         std::cout << "PASS real Qt editor component contracts (physical multi-monitor/IME sessions remain separate acceptance)\n";
         return 0;
     } catch (const std::exception& error) {

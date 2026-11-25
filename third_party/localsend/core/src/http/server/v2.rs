@@ -561,6 +561,7 @@ pub(crate) async fn upload(
         SaveResult::Success => Ok(Response::new(empty_body())),
         SaveResult::Failed => Err(AppError::Status(StatusCode::INTERNAL_SERVER_ERROR)),
         SaveResult::InvalidMedia => Err(AppError::Status(StatusCode::UNSUPPORTED_MEDIA_TYPE)),
+        SaveResult::LimitExceeded => Err(AppError::Status(StatusCode::PAYLOAD_TOO_LARGE)),
         SaveResult::Cancelled => Err(AppError::Status(StatusCode::FORBIDDEN)),
         SaveResult::LengthMismatch => Err(AppError::BadRequest("Upload length does not match metadata".into())),
         SaveResult::HashMismatch => Err(AppError::Message(
@@ -793,7 +794,7 @@ fn finalize_file_state(v2: &V2State, session_id: &str, file_id: &str, result: Sa
                         FileStatusV2::Pending
                     }
                     SaveResult::Failed | SaveResult::HashMismatch | SaveResult::InvalidMedia
-                    | SaveResult::Cancelled | SaveResult::LengthMismatch => FileStatusV2::Failed,
+                    | SaveResult::Cancelled | SaveResult::LengthMismatch | SaveResult::LimitExceeded => FileStatusV2::Failed,
                 };
             }
         }

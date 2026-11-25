@@ -19,6 +19,7 @@ extern "C" {
 typedef struct HuhuTransfer HuhuTransfer;
 typedef struct HuhuMediaLease HuhuMediaLease;
 typedef struct HuhuReceive HuhuReceive;
+typedef struct HuhuCancellation HuhuCancellation;
 typedef struct HuhuBuffer HuhuBuffer;
 typedef struct HuhuEvent HuhuEvent;
 
@@ -38,7 +39,8 @@ enum HuhuStatus {
     HUHU_INVALID_MEDIA = -9,
     HUHU_DURABILITY_UNKNOWN = -10,
     HUHU_CLOSED = -11,
-    HUHU_PANIC = -12
+    HUHU_PANIC = -12,
+    HUHU_LIMIT_EXCEEDED = -13
 };
 
 enum HuhuEventKind {
@@ -79,6 +81,51 @@ typedef struct HuhuVerification {
 } HuhuVerification;
 
 uint32_t huhu_native_abi_version(void);
+
+/* Independent, monotonic cancellation for synchronous media inspection.
+ * Request is nonblocking and may run concurrently with validation or other
+ * requests; it invokes no callback. The caller must keep the handle live and
+ * join all validators/requesters before free. There is no reset/reuse after a
+ * request. For C++ stop_token, keep a stop_callback that calls request alive
+ * during validation; destroy that callback before freeing this handle.
+ */
+int32_t huhu_cancellation_create(HuhuCancellation** result);
+int32_t huhu_cancellation_request(const HuhuCancellation* cancellation);
+void huhu_cancellation_free(HuhuCancellation* cancellation);
+
+typedef struct HuhuGifLimits {
+    uint64_t max_input_bytes;
+    uint64_t max_canvas_pixels;
+    uint64_t max_total_pixels;
+    uint32_t max_frames;
+    uint32_t max_metadata_bytes;
+} HuhuGifLimits;
+
+typedef struct HuhuGifInfo {
+    uint32_t width;
+    uint32_t height;
+    uint32_t frames;
+    uint32_t reserved;
+    uint64_t decoded_pixels;
+    uint64_t duration_ms;
+} HuhuGifInfo;
+
+/* Strictly decodes every frame of one ordinary GIF file with the pinned gif
+ * decoder. Requires complete pixel data, LZW end codes, a GIF trailer and
+ * physical EOF; checks dimensions, frame bounds, palette indices and budgets.
+ * All limits are nonzero; input <=32 GiB, canvas <=65535*65535 pixels,
+ * metadata <=16 MiB. Cumulative pixels counts decoded frame rectangles.
+ * Uses a fixed 64 KiB pixel buffer, never all frames at once. Does no Qt call.
+ * Call only on a worker after closing the staging writer. Keep that file
+ * immutable until validation/commit complete. receive may be NULL or a live
+ * receive owned by this same worker. cancellation may be NULL or an independent
+ * cancellation handle. Either requested cancellation stops reads/decoding;
+ * the independent handle also supports local imports without a LAN session.
+ * Info is zero on any failure. This validates media; it does not commit or ACK.
+ */
+int32_t huhu_gif_validate_file(const uint8_t* path, size_t length,
+    const HuhuGifLimits* limits, const HuhuReceive* receive,
+    const HuhuCancellation* cancellation, HuhuGifInfo* result);
 
 /* Generates an official LocalSend RSA identity. The JSON contains certPem,
  * privateKeyPem and fingerprint. Persist it with the user's configuration;
@@ -133,6 +180,20 @@ int32_t huhu_transfer_cancel_receive(HuhuTransfer* transfer,
  * a send is allowed: the admitted operation retains its own reference.
  */
 int32_t huhu_media_lease_open(const uint8_t* path, size_t length, HuhuMediaLease** result);
+typedef struct HuhuMediaLeaseInfo {
+    uint64_t volume;
+    uint64_t file;
+    uint64_t bytes;
+    uint32_t media_kind;
+    uint32_t reserved;
+} HuhuMediaLeaseInfo;
+/* Reads the same open OS file, never its pathname. Linux returns st_dev/st_ino;
+ * Windows returns dwVolumeSerialNumber and nFileIndexHigh/Low. Compare these
+ * exact integers and bytes with the selected history lease before sending.
+ * No integer identity is encoded through JSON/floating point. Failure zeroes
+ * the output. This proves object identity, not content immutability on Linux.
+ */
+int32_t huhu_media_lease_info(const HuhuMediaLease* lease, HuhuMediaLeaseInfo* result);
 void huhu_media_lease_free(HuhuMediaLease* lease);
 
 /* peer JSON: {"address":"127.0.0.1","port":53317,
@@ -164,8 +225,8 @@ int32_t huhu_receive_is_cancelled(const HuhuReceive* receive);
 /* After verify returns OK: decode/probe the COMPLETE staging file with the
  * application codec, recheck is_cancelled, then perform the shared durable
  * FileCommitter no-replace commit. Only its actual durable success permits
- * status=OK with the matching media_kind. IO, CANCELLED, INVALID_MEDIA and
- * DURABILITY_UNKNOWN may be sent on failure. A published destination with
+ * status=OK with the matching media_kind. IO, CANCELLED, INVALID_MEDIA,
+ * LIMIT_EXCEEDED and DURABILITY_UNKNOWN may be sent on failure. A published destination with
  * uncertain durability remains the caller's real file and must be preserved.
  * Each receive is completed exactly once; early success is rejected.
  */

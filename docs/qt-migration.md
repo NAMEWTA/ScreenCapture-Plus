@@ -16,13 +16,14 @@
 | --- | --- | --- |
 | `src/core/` | 无 Qt / Win32 的像素、批注排版、活动历史、归档命名、录制结果和时间合同 | 会话、能力与跨屏坐标的完整产品合同 |
 | `src/editor/` 的模型与 `EditorDocument.h` | 共用几何、拖动、文字、编号、批注、工具参数与唯一活动历史；原 Windows 工具直接复用 | 采集会话及完整产品入口接入 |
-| `src/ui/qt/Editor*` | 共用九工具画布、单一文字输入、完整批注面板、原图马赛克及带令牌的异步输出请求 | 组件实际编译与交互验证、归档 / 剪贴板 / 贴图服务接线、真实 IME 与混合 DPI |
+| `src/ui/qt/Editor*` | 共用九工具画布、单一文字输入、完整批注面板、原图马赛克及带令牌的异步输出请求；双平台组件构建与受控交互测试 | 归档 / 剪贴板 / 贴图服务接线、真实 IME 与混合 DPI |
 | `src/services/rendering/` | Qt 字体测量、完整备注排版和离屏合图，保留原图像素与失败时旧输出 | 正式编辑器导出接入及真实桌面字体 / IME 验收 |
 | `src/services/config/` | UTF-8 / UTF-16 JSON 读取、未知字段保留、首次迁移备份、路径选择与原子替换 | 设置页面、运行时效果、系统自启与快捷键接入 |
 | `src/services/localization/` | 六份原语言、同一 BOM 解析器、英语回退、目录优先级和缓存刷新 | 正式窗口语言切换、长译文与 IME 验收 |
+| `src/services/media/` | 共用受管文件命名、PNG 编码 / 完整解码、流式导入、身份租约与持久化结果 | 服务实际验证、完整 GIF / MP4 接入、缩略图缓存、回收及历史 UI 装配 |
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
-| `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；复用 KWindowSystem 的异步 Wayland 父窗导出 | 异步导出的真实合成器验证、PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
+| `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；KWindowSystem 异步父窗导出已通过指定 Sway 生命周期测试 | PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
 | `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭 | 双平台同进程 ABI 与依赖锁验证、Qt 设备和任务服务、完整媒体解码及两端互传 |
 
 同一工具的交互规则不能因为平台迁移而被“统一”成不同语义。例如普通矩形越过对边时可以翻转，批注范围则限制在原图内；普通序号按活动最大值加一，批注高水位编号永不复用。移动、文字与样式修改仍遵循现有历史语义，不借模型抽取改变撤销行为。

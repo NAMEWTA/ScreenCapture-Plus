@@ -1024,17 +1024,18 @@
      /// The application consumes the binary chunks itself.
      ///
      /// The server forwards chunks into `binary_tx` and closes it at end of file.
-@@ -100,6 +108,9 @@
+@@ -100,6 +108,10 @@
  
      /// The received bytes do not match the expected SHA-256 checksum.
      HashMismatch,
 +    InvalidMedia,
 +    Cancelled,
 +    LengthMismatch,
++    LimitExceeded,
  }
  
  /// Forwards the body of `req` to `target`.
-@@ -109,14 +120,33 @@
+@@ -109,14 +121,33 @@
      file_size: u64,
      expected_sha256: Option<&str>,
      timestamps: FileTimestamps,
@@ -1099,7 +1100,7 @@
  impl UploadSessionV2 {
 --- /dev/null
 +++ b/core/src/http/server/common/verified_upload.rs
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,248 @@
 +//! Receive/verify/commit handshake used by the native archive adapter.
 +//! EOF is not permission to publish. Only a successful `verification` followed
 +//! by complete-media validation and a durable, no-replace archive commit may
@@ -1150,6 +1151,8 @@
 +    LengthMismatch,
 +    ChecksumMismatch,
 +    InvalidMedia,
++    /// Complete decoding would exceed the application's explicit media budget.
++    LimitExceeded,
 +    /// A final file exists, but its persistence could not be confirmed. Keep
 +    /// it and report uncertainty; never acknowledge durable success or retry
 +    /// the commit into another archive entry.
@@ -1319,6 +1322,7 @@
 +        UploadFailure::ChecksumMismatch => SaveResult::HashMismatch,
 +        UploadFailure::LengthMismatch => SaveResult::LengthMismatch,
 +        UploadFailure::InvalidMedia => SaveResult::InvalidMedia,
++        UploadFailure::LimitExceeded => SaveResult::LimitExceeded,
 +        UploadFailure::Cancelled => SaveResult::Cancelled,
 +        _ => SaveResult::Failed,
 +    }
@@ -2059,17 +2063,18 @@
      )
      .await;
  
-@@ -478,6 +560,9 @@
+@@ -478,6 +560,10 @@
      match result {
          SaveResult::Success => Ok(Response::new(empty_body())),
          SaveResult::Failed => Err(AppError::Status(StatusCode::INTERNAL_SERVER_ERROR)),
 +        SaveResult::InvalidMedia => Err(AppError::Status(StatusCode::UNSUPPORTED_MEDIA_TYPE)),
++        SaveResult::LimitExceeded => Err(AppError::Status(StatusCode::PAYLOAD_TOO_LARGE)),
 +        SaveResult::Cancelled => Err(AppError::Status(StatusCode::FORBIDDEN)),
 +        SaveResult::LengthMismatch => Err(AppError::BadRequest("Upload length does not match metadata".into())),
          SaveResult::HashMismatch => Err(AppError::Message(
              StatusCode::UNPROCESSABLE_ENTITY,
              "Checksum mismatch".to_string(),
-@@ -493,12 +578,16 @@
+@@ -493,12 +579,16 @@
      let v2 = require_v2(&state)?;
      let query = parse_query(req.uri().query());
      let session_id = query.get("sessionId");
@@ -2087,7 +2092,7 @@
          match slot.as_ref() {
              Some(SessionStateV2::Pending(pending))
                  if pending.sender_ip == client_info.ip
-@@ -523,37 +612,36 @@
+@@ -523,37 +613,36 @@
  
      if let Some(session_id) = session_id {
          let cancelled = {
@@ -2139,7 +2144,7 @@
          }
      }
  
-@@ -602,7 +690,7 @@
+@@ -602,7 +691,7 @@
      /// Frees the pending slot immediately.
      async fn clear(&mut self) {
          self.armed = false;
@@ -2148,7 +2153,7 @@
      }
  }
  
-@@ -611,25 +699,19 @@
+@@ -611,25 +700,19 @@
          if !self.armed {
              return;
          }
@@ -2187,7 +2192,7 @@
  }
  
  /// Sets the final status of a file after an upload attempt.
-@@ -641,20 +723,23 @@
+@@ -641,20 +724,23 @@
      session_id: String,
      file_id: String,
      armed: bool,
@@ -2212,7 +2217,7 @@
          finalize_file(&self.v2, &self.session_id, &self.file_id, result).await;
      }
  }
-@@ -664,12 +749,11 @@
+@@ -664,12 +750,11 @@
          if !self.armed {
              return;
          }
@@ -2230,7 +2235,7 @@
      }
  }
  
-@@ -684,13 +768,22 @@
+@@ -684,13 +769,22 @@
  /// [MAX_UPLOAD_ATTEMPTS] is not exhausted) so the sender can retry the upload
  /// with the same token; the session stays active in that case.
  async fn finalize_file(v2: &V2State, session_id: &str, file_id: &str, result: SaveResult) {
@@ -2257,13 +2262,13 @@
          }
          if let Some(file) = session.files.get_mut(file_id) {
              if file.status == FileStatusV2::InProgress {
-@@ -699,27 +792,35 @@
+@@ -699,27 +793,35 @@
                      SaveResult::HashMismatch if file.attempts < MAX_UPLOAD_ATTEMPTS => {
                          FileStatusV2::Pending
                      }
 -                    SaveResult::Failed | SaveResult::HashMismatch => FileStatusV2::Failed,
 +                    SaveResult::Failed | SaveResult::HashMismatch | SaveResult::InvalidMedia
-+                    | SaveResult::Cancelled | SaveResult::LengthMismatch => FileStatusV2::Failed,
++                    | SaveResult::Cancelled | SaveResult::LengthMismatch | SaveResult::LimitExceeded => FileStatusV2::Failed,
                  };
              }
          }

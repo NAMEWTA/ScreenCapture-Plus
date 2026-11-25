@@ -15,6 +15,10 @@ staticlib；不另外链接 `gifski.lib` 或另一个 LocalSend staticlib。
 `upstream-cargo.lock` 是固定上游的原始锁文件，用于检查编码依赖版本，并不是
 另一套生产构建。网络实现复用 [LocalSend core](localsend-core.md) 的官方
 client/server/discovery、TLS 身份、证书 pinning、报文和受控流接缝。
+严格 GIF 接收验证直接复用这棵编码依赖树已有的 `gif =0.13.3`，不另外引入
+运行时；其精确源码、MIT/Apache-2.0 许可与 image-rs/nwin 归属记录在
+`third_party/gif/upstream.json`。TLS 保持 core 实际已验证的 `rustls =0.23.46`，
+不能把 core 清单的最低兼容版本误锁为低于既有 lock 的版本。
 
 从 `third_party/localsend` 目录执行，以便 rustup 读取固定的 Rust 1.97.1：
 
@@ -95,6 +99,14 @@ reparse point。Windows lease 允许重命名/删除共享，拒绝同时写入�
 使用 `O_NOFOLLOW` 并在打开后验证普通文件。该接缝不声称能防止同一用户修改
 Linux 文件内容，应用必须让用户媒体在 lease 期间保持不可变，并保留自己的历史
 删除租约。哈希和发送都使用同一打开对象，不在后台重新打开可能已被替换的路径。
+`huhu_media_lease_info` 从该打开对象返回完整整数的 volume / file / bytes；Qt
+PreparedMedia 在 worker 上将它与历史租约的 FileIdentity 和大小比较，拒绝
+选择之后已经被替换的源，不通过 JSON double 传递文件身份。Linux 直接使用
+File::metadata 的 dev / ino；Windows 的 Rust 1.97.1 MetadataExt 对应方法仍
+[未稳定](https://github.com/rust-lang/rust/blob/1.97.1/library/std/src/os/windows/fs.rs)，
+所以复用已在依赖锁中的 Microsoft windows-sys 0.52.0 的
+[GetFileInformationByHandle 绑定](https://github.com/microsoft/windows-rs/blob/3a605cba064b26f2a198ac58085f8c8836f47c38/crates/libs/sys/src/Windows/Win32/Storage/FileSystem/mod.rs)，
+只开启 Foundation / Storage_FileSystem features，直接查询租约的同一 HANDLE。
 长度变化、短读、超长、读取错误和取消有不同结果；队列最多四块、每块 512 KiB。
 
 peer 参数必须带真实 TLS 发现得到的 fingerprint，alias 不参与认证。传输请求
@@ -118,6 +130,37 @@ peer 参数必须带真实 TLS 发现得到的 fingerprint，alias 不参与认�
 官方协议允许相同 fileId/token 在 SHA 错误后重新上传。每次文件交接都有自己的
 内部代次；旧 receive 延迟释放或完成时不能覆盖新尝试的状态。`RECEIVE_END.files`
 反映每个文件最后一次被接纳的尝试；还未完成的尝试不会因前一次失败而伪装完成。
+
+## 严格 GIF 媒体验证
+
+`huhu_gif_validate_file` 在调用方的接收 worker 上同步工作，输入为已关闭写入者
+的私有暂存文件、显式资源预算和可选 receive / 独立取消许可；不返回图片到 C++，只
+返回完整成功后的尺寸、帧数、累计像素和持续时间。失败时输出清零，不提交媒体
+也不发送 ACK。PNG/MP4 由共享媒体服务调用对应的严格解码路径。
+
+不能以 Qt GIF handler 能展示图像作为完整性证据。这里实际使用固定的
+[gif reader](https://github.com/image-rs/image-gif/blob/acf2f6f7e6195962a9f455dab50a278b7dabc884/src/reader/mod.rs)
+和 [decoder](https://github.com/image-rs/image-gif/blob/acf2f6f7e6195962a9f455dab50a278b7dabc884/src/reader/decoder.rs)：
+启用帧范围检查和 LZW END 检查；使用 Indexed 输出，逐块检查恰好等于帧矩形的
+像素数和有效调色板索引。每帧读完规定像素后继续以一个像素的非空缓冲读到
+DataEnd，拒绝额外有效像素。不能此时直接调用 next_frame_info，因为该调用的
+OutputBuffer::None 路径可能跳过尚未处理的压缩字节。
+
+继续读取所有帧直到上游识别 Trailer，再检查底层 BufReader 的物理 EOF；缺
+Trailer 的文件由官方 reader 报 UnexpectedEof，Trailer 后的额外数据也被拒绝。
+LZW END 由已锁的 [weezl decoder](https://github.com/image-rs/weezl/blob/fd444602c54a17ed3a557b455906efd8c90a5c98/src/decode.rs)
+实际消费，不自行实现 GIF 或 LZW parser。分块验证不需要反交错或保留所有帧，
+因为每个索引与每帧完整像素数均被检查；严格通过后才允许 Qt 生成显示封面。
+
+预算包含输入字节、逻辑画布像素、累计解码像素、帧数和 metadata 内存。像素
+缓冲固定为 64 KiB；所有累计值检查溢出，取消在读取和分块解码时检查。
+`HuhuCancellation` 是只向取消状态转换的 Rust 原子句柄，用于历史导入等没有
+receive 的调用。C++ worker 将 `std::stop_token` 连接到调用 request 的
+`std::stop_callback`；验证结束并销毁 callback、加入所有 request 调用者后，
+才通过同侧 free 释放句柄。两种取消按 OR 生效，不能以独立句柄绕过接收许可。
+`LIMIT_EXCEEDED` 区别于 `INVALID_MEDIA`，并可传给 receive_complete；core 返回
+标准 HTTP 413，发送/接收终态保留限额原因，不能把它显示为对方主动拒绝或磁盘错。
+具体预算由共享媒体政策提供，不在桥里按某个样例尺寸降低产品的录制能力。
 
 ## 事件数据
 
@@ -154,6 +197,12 @@ gifski 编码/逐帧解码、TLS、SHA、FileCommitter 与错误/退出验证。
 保留旧 receive 到新尝试归档报错之后再释放；第二个文件保持会话打开，最后逐项
 检查新状态没有被旧句柄覆盖。core 另运行真实 Tokio task panic/abort、并发和
 重复 join、取消等待后重新 join，以及通知满队列时的发现 worker 回收测试。
+
+`tests/gif_validation.rs` 使用官方 Encoder 产生普通文件，检查每个严格前缀截断、
+无 Trailer、尾随数据、缺 LZW END、额外/不足的有效像素、零尺寸、调色板错误、
+interlaced 局部帧范围和资源预算。ABI 的实际 TLS 测试另验证取消许可及两帧 GIF
+触发单帧接收预算后返回 HTTP 413；没有伪造成功归档。新增这些源码后仍须执行
+真实双平台 CI，不能把既有 Qt 逐帧显示测试当作该严格验收已完成。
 
 这些源码存在不表示用例已运行。实际执行结果由对应 CI 记录；本地编写环境没有
 Rust/Cargo。当前聚合新增代码等待真实 CI 编译和运行，不能拿已通过的 core 测试

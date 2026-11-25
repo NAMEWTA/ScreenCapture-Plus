@@ -118,6 +118,9 @@ checked join 的新增测试使用实际 Tokio worker 的 panic/abort，检查�
 HTTP worker 回归先使实际会话锁中毒，再由真实 TLS prepare-upload 请求触发
 连接 task 的 unwind，检查监听故障、重复 checked join 的错误及原端口重新绑定。
 测试明确注入内部故障，没有给生产路径安装 panic 开关或替换 HTTP/TLS 服务。
+完整媒体验证超过显式解码预算时，接收消费者返回 `LimitExceeded`，映射标准
+HTTP 413；格式非法仍为 415，持久提交失败仍不能返回 200。严格 GIF 验证复用
+聚合依赖树中的官方 gif decoder，具体边界及真实失败测试见 [聚合库说明](rust-bridge.md)。
 WebRTC signaling 的连接、回调和辅助发送函数只在原有 feature 启用时编译，
 保留其 DTO 测试；不压制整个 crate 的警告，也不为消除警告启用无关运行时。
 真实双机、官方桌面互通、全格式验证、吞吐/资源基线、统一 gifski staticlib、

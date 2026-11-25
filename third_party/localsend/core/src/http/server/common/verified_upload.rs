@@ -48,6 +48,8 @@ pub enum UploadFailure {
     LengthMismatch,
     ChecksumMismatch,
     InvalidMedia,
+    /// Complete decoding would exceed the application's explicit media budget.
+    LimitExceeded,
     /// A final file exists, but its persistence could not be confirmed. Keep
     /// it and report uncertainty; never acknowledge durable success or retry
     /// the commit into another archive entry.
@@ -217,6 +219,7 @@ fn save_result(failure: UploadFailure) -> SaveResult {
         UploadFailure::ChecksumMismatch => SaveResult::HashMismatch,
         UploadFailure::LengthMismatch => SaveResult::LengthMismatch,
         UploadFailure::InvalidMedia => SaveResult::InvalidMedia,
+        UploadFailure::LimitExceeded => SaveResult::LimitExceeded,
         UploadFailure::Cancelled => SaveResult::Cancelled,
         _ => SaveResult::Failed,
     }

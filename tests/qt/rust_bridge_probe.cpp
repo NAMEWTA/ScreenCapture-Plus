@@ -1,4 +1,4 @@
-#include "platform/FileCommitter.h"
+#include "services/media/GifInspection.h"
 #include "huhucapture_native.h"
 #include "gifski.h"
 
@@ -18,7 +18,6 @@
 
 #include <array>
 #include <cstdint>
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -40,24 +39,6 @@ void checked(int status, const char* operation)
 const std::uint8_t* bytes(const QByteArray& value)
 {
     return reinterpret_cast<const std::uint8_t*>(value.constData());
-}
-
-std::filesystem::path nativePath(const QString& value)
-{
-#ifdef _WIN32
-    return std::filesystem::path(value.toStdWString());
-#else
-    return std::filesystem::path(value.toUtf8().constData());
-#endif
-}
-
-QString qtPath(const std::filesystem::path& value)
-{
-#ifdef _WIN32
-    return QString::fromStdWString(value.wstring());
-#else
-    return QString::fromUtf8(value.string().c_str());
-#endif
 }
 
 using Buffer = std::unique_ptr<HuhuBuffer, decltype(&huhu_buffer_free)>;
@@ -94,6 +75,9 @@ QByteArray fileHash(const QString& path)
 
 void validateGif(const QString& path)
 {
+    const auto complete = HuhuCapture::Media::inspectGif(path);
+    require(!complete.failure && complete.dimensions == QSize(32, 24) && complete.frames == 3,
+        "Strict aggregated GIF decoder must validate the complete three-frame stream");
     QImageReader reader(path, "gif");
     require(reader.supportsAnimation() && reader.imageCount() == 3, "GIF must contain all three generated frames");
     const std::array<QColor, 3> expected{Qt::red, Qt::green, Qt::blue};
@@ -204,17 +188,22 @@ HuhuEventView eventView(const Event& event)
     return view;
 }
 
-void receiveAndCommit(Event& event, const QString& directory, const QByteArray& expectedHash)
+QString receiveAndCommit(Event& event, const QString& directory, const QByteArray& expectedHash)
 {
     HuhuReceive* raw{};
     checked(huhu_event_take_receive(event.get(), &raw), "Take exclusive receive ownership");
     Receive receive(raw, &huhu_receive_free);
     require(huhu_receive_complete(receive.get(), HUHU_OK, HUHU_GIF) != HUHU_OK,
         "Native bridge acknowledged an unverified receive");
-    std::error_code error;
-    const auto staging = HuhuCapture::Platform::createExclusiveTemporaryFile(nativePath(directory), error);
-    require(!error && !staging.empty(), "Claim private receive staging file");
-    QFile output(qtPath(staging));
+    namespace media = HuhuCapture::Media;
+    media::MediaArchiveService archive(directory + QStringLiteral("/archive"),
+        [&receive](const QString& path, media::Kind kind, std::stop_token stop) {
+            require(kind == media::Kind::Gif, "Unexpected received media kind");
+            return media::inspectGif(path, {}, stop, receive.get());
+        });
+    auto staging = archive.createStaging();
+    require(!staging.failure && staging.file, "Claim private receive staging file");
+    QFile output(staging.file.path());
     require(output.open(QIODevice::WriteOnly), "Open owned receive file");
     std::array<std::uint8_t, 64 * 1024> buffer{};
     QDeadlineTimer deadline(20000);
@@ -244,22 +233,26 @@ void receiveAndCommit(Event& event, const QString& directory, const QByteArray& 
     require(verification.received_bytes == total && verification.sender_checksum_matched == 1
         && verification.media_kind == HUHU_GIF, "Verification result lost length, checksum or kind");
     require(QByteArray(reinterpret_cast<const char*>(verification.sha256), 32) == expectedHash
-        && fileHash(qtPath(staging)) == expectedHash, "Complete TLS media differs from leased source");
-    validateGif(qtPath(staging));
+        && fileHash(staging.file.path()) == expectedHash, "Complete TLS media differs from leased source");
     require(huhu_receive_is_cancelled(receive.get()) == 0, "Receive was cancelled before publication");
-    const auto destination = nativePath(directory + QStringLiteral("/received.gif"));
-    const auto committed = HuhuCapture::Platform::commitFileNoReplace(staging, destination);
+    const auto committed = archive.commitStaged(staging.file, media::Kind::Gif, {},
+        [&receive] { return huhu_receive_is_cancelled(receive.get()) != 0; });
     if (!committed.durable()) {
-        (void)huhu_receive_complete(receive.get(), committed.committed()
+        (void)huhu_receive_complete(receive.get(), committed.state != HuhuCapture::Platform::CommitState::NotCommitted
             ? HUHU_DURABILITY_UNKNOWN : HUHU_IO, HUHU_GIF);
         throw std::runtime_error("Receive could not be committed durably; published media retained");
     }
+    validateGif(committed.path);
+    const auto history = archive.list();
+    require(!history.failure && history.entries.size() == 1 && history.entries.front().path == committed.path,
+        "Durable receive is the actual shared archive's completed history entry");
     checked(huhu_receive_complete(receive.get(), HUHU_OK, HUHU_GIF), "Acknowledge actual durable archive");
+    return committed.path;
 }
 
 enum class Scenario { Commit, Decline, Cancel, WrongFingerprint };
 
-void transfer(Engine& sender, Engine& receiver, const Lease& lease, Scenario scenario,
+QString transfer(Engine& sender, Engine& receiver, const Lease& lease, Scenario scenario,
               const QString& destination, const QByteArray& expectedHash)
 {
     auto peer = receiver.peer();
@@ -277,6 +270,7 @@ void transfer(Engine& sender, Engine& receiver, const Lease& lease, Scenario sce
     require(operation != 0, "Transfer operation identity is missing");
     QDeadlineTimer deadline(30000);
     bool offered = false, committed = false, senderEnded = false, receiverEnded = false;
+    QString committedPath;
     while (!deadline.hasExpired()) {
         if (auto event = receiver.poll()) {
             const auto view = eventView(event);
@@ -300,7 +294,7 @@ void transfer(Engine& sender, Engine& receiver, const Lease& lease, Scenario sce
                 }
             } else if (view.kind == HUHU_RECEIVE_FILE) {
                 require(scenario == Scenario::Commit && offered && !committed, "Unexpected media body admission");
-                receiveAndCommit(event, destination, expectedHash);
+                committedPath = receiveAndCommit(event, destination, expectedHash);
                 committed = true;
             } else if (view.kind == HUHU_RECEIVE_END) {
                 require(!receiverEnded, "Receive produced duplicate terminal events");
@@ -326,7 +320,7 @@ void transfer(Engine& sender, Engine& receiver, const Lease& lease, Scenario sce
         if (senderEnded && (scenario == Scenario::WrongFingerprint || receiverEnded)) {
             require((scenario == Scenario::WrongFingerprint) != offered, "Unexpected offer state at completion");
             std::cout << "PASS TLS scenario " << static_cast<int>(scenario) << '\n';
-            return;
+            return committedPath;
         }
         QCoreApplication::processEvents();
     }
@@ -354,13 +348,13 @@ int main(int argc, char** argv)
         const auto encodedPath = gif.toUtf8();
         checked(huhu_media_lease_open(bytes(encodedPath), static_cast<size_t>(encodedPath.size()), &raw), "Lease finalized GIF");
         Lease lease(raw, &huhu_media_lease_free);
-        transfer(sender, receiver, lease, Scenario::Commit, evidence.path(), hash);
+        const auto received = transfer(sender, receiver, lease, Scenario::Commit, evidence.path(), hash);
         transfer(sender, receiver, lease, Scenario::WrongFingerprint, evidence.path(), hash);
         transfer(sender, receiver, lease, Scenario::Decline, evidence.path(), hash);
         transfer(sender, receiver, lease, Scenario::Cancel, evidence.path(), hash);
         sender.stopAndDrain();
         receiver.stopAndDrain();
-        require(fileHash(evidence.path() + QStringLiteral("/received.gif")) == hash,
+        require(!received.isEmpty() && fileHash(received) == hash,
             "Shutdown changed the durable received archive");
         std::cout << "PASS same Qt process: one Rust static library, original gifski, real TLS, "
                      "full GIF decode, SHA-256, durable archive, refusal, cancellation and joined shutdown\n"

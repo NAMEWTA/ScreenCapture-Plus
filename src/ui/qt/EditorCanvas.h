@@ -114,7 +114,7 @@ private:
     QPlainTextEdit* textEditor_{};
     EditorShape *hovered_{}, *pressed_{}, *editing_{}, *previousClickCreated_{};
     int hoverHandle_{-1};
-    bool newlyCreated_{}, dragged_{}, interactionEnabled_{true}, pureImage_{}, panelVisible_{};
+    bool newlyCreated_{}, dragged_{}, interactionEnabled_{true}, pureImage_{}, panelVisible_{}, numberWheelPreview_{};
     bool movingWindow_{}, nativeWindowMove_{};
     QPointF pressPosition_;
     QPoint pressGlobal_, windowPosition_;

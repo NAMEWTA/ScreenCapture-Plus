@@ -3,18 +3,22 @@
 //! into Qt, Rust allocation, exception, or borrowed input crosses ownership.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod cancellation;
 mod config;
 mod engine;
 mod event;
+mod gif_validation;
 mod lease;
 mod outbound;
 mod receive;
 mod status;
 
+pub use cancellation::HuhuCancellation;
 pub use engine::HuhuTransfer;
 pub use event::{HuhuBuffer, HuhuEvent};
-pub use lease::HuhuMediaLease;
+pub use lease::{HuhuMediaLease, HuhuMediaLeaseInfo};
 pub use receive::{HuhuReceive, HuhuVerification};
+pub use gif_validation::{HuhuGifInfo, HuhuGifLimits};
 pub use gifski::c_api;
 
 use status::{Error, Result};
@@ -78,6 +82,46 @@ unsafe fn output<'a, T>(pointer: *mut *mut T) -> Result<&'a mut *mut T> {
 
 #[no_mangle]
 pub extern "C" fn huhu_native_abi_version() -> u32 { 1 }
+
+#[no_mangle]
+pub unsafe extern "C" fn huhu_cancellation_create(result: *mut *mut HuhuCancellation) -> i32 {
+    boundary(|| {
+        let result = unsafe { output(result) }?;
+        *result = Box::into_raw(Box::new(HuhuCancellation::default()));
+        Ok(())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn huhu_cancellation_request(cancellation: *const HuhuCancellation) -> i32 {
+    boundary(|| {
+        unsafe { reference(cancellation) }?.request();
+        Ok(())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn huhu_cancellation_free(cancellation: *mut HuhuCancellation) {
+    if !cancellation.is_null() {
+        let _ = catch_unwind(AssertUnwindSafe(|| drop(unsafe { Box::from_raw(cancellation) })));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn huhu_gif_validate_file(path: *const u8, length: usize,
+    limits: *const HuhuGifLimits, receive: *const HuhuReceive,
+    cancellation: *const HuhuCancellation, result: *mut HuhuGifInfo) -> i32 {
+    boundary(|| {
+        let result = unsafe { mutable(result) }?;
+        *result = HuhuGifInfo::default();
+        let path = unsafe { text(path, length, 32768) }?;
+        let limits = unsafe { reference(limits) }?;
+        let receive = if receive.is_null() { None } else { Some(unsafe { reference(receive) }?) };
+        let cancellation = if cancellation.is_null() { None } else { Some(unsafe { reference(cancellation) }?) };
+        *result = gif_validation::validate_file(path, limits, receive, cancellation)?;
+        Ok(())
+    })
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn huhu_identity_generate(result: *mut *mut HuhuBuffer) -> i32 {
@@ -189,6 +233,16 @@ pub unsafe extern "C" fn huhu_media_lease_open(path: *const u8, length: usize, r
         let result = unsafe { output(result) }?;
         let lease = lease::Lease::open(unsafe { text(path, length, 32768) }?)?;
         *result = Box::into_raw(Box::new(HuhuMediaLease(lease)));
+        Ok(())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn huhu_media_lease_info(lease: *const HuhuMediaLease, result: *mut HuhuMediaLeaseInfo) -> i32 {
+    boundary(|| {
+        let result = unsafe { mutable(result) }?;
+        *result = HuhuMediaLeaseInfo::default();
+        *result = unsafe { reference(lease) }?.0.info()?;
         Ok(())
     })
 }

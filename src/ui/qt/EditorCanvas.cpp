@@ -103,6 +103,7 @@ void EditorCanvas::setTool(EditorTool tool)
     tool_ = tool;
     hovered_ = nullptr;
     hoverHandle_ = -1;
+    numberWheelPreview_ = false;
     setCursor(tool == EditorTool::None ? ::Qt::ArrowCursor : ::Qt::CrossCursor);
     update();
     emit toolChanged(tool_);
@@ -143,7 +144,7 @@ void EditorCanvas::setPureImageMode(bool pure)
     emit pureImageModeChanged(pure);
 }
 
-void EditorCanvas::setAnnotationPanelVisible(bool visible) { panelVisible_ = visible; }
+void EditorCanvas::setAnnotationPanelVisible(bool visible) { panelVisible_ = visible; update(); }
 qreal EditorCanvas::sourceToViewScale() const noexcept { return zoom_ / devicePixelRatioF(); }
 QPointF EditorCanvas::sourceToView(QPointF point) const noexcept { return point * sourceToViewScale(); }
 QPointF EditorCanvas::viewToSource(QPointF point) const noexcept { return point / sourceToViewScale(); }
@@ -200,7 +201,7 @@ void EditorCanvas::releaseBorrow(EditorShape* shape)
 {
     // Called during HistoryStack mutation: no recursive erase/undo here.
     if (shape == editing_) detachTextEditor();
-    if (shape == hovered_) { hovered_ = nullptr; hoverHandle_ = -1; }
+    if (shape == hovered_) { hovered_ = nullptr; hoverHandle_ = -1; numberWheelPreview_ = false; }
     if (shape == pressed_) pressed_ = nullptr;
     if (shape == previousClickCreated_) previousClickCreated_ = nullptr;
 }
@@ -410,8 +411,17 @@ void EditorCanvas::paintEvent(QPaintEvent*)
     painter.setClipRect(QRect(0, 0, original_.width(), original_.height()));
     painter.drawImage(QPoint(0, 0), original_);
     for (const auto& shape : document_->activeItems()) shape->paint(painter, original_);
-    if (!pureImage_ && hovered_ && interactionEnabled_)
-        hovered_->paintHandles(painter, static_cast<float>(devicePixelRatioF()), static_cast<float>(zoom_));
+    if (!pureImage_ && interactionEnabled_) {
+        const auto dpi = static_cast<float>(devicePixelRatioF());
+        const auto zoom = static_cast<float>(zoom_);
+        // The shared note editor keeps its selected region visible even when
+        // the pointer has left the image. Hover handles pause during a drag.
+        if (panelVisible_)
+            if (auto* selected = document_->findAnnotation(document_->selectedAnnotation()); selected && selected != hovered_)
+                selected->paintHandles(painter, dpi, zoom);
+        if (!pointerGestureActive() && hovered_ && !(numberWheelPreview_ && hovered_->tool() == EditorTool::Number))
+            hovered_->paintHandles(painter, dpi, zoom);
+    }
 }
 
 void EditorCanvas::mousePressEvent(QMouseEvent* event)
@@ -466,6 +476,12 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
         grabMouse();
         emit pointerGestureChanged(true);
         if (newlyCreated_) notifyStructure();
+        if (const auto* annotation = pressed_ ? pressed_->annotationModel() : nullptr) {
+            document_->selectAnnotation(annotation->number());
+            // Select on press, but never transfer focus or fit the viewport
+            // until the captured gesture has ended.
+            emit annotationSelected(annotation->number(), false);
+        }
         update();
     } catch (const std::bad_alloc&) {
         cancelPointerGesture();
@@ -476,6 +492,7 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
 void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
 {
     if (!interactionEnabled_) return;
+    numberWheelPreview_ = false;
     if (movingWindow_) {
         if (!event->buttons().testFlag(::Qt::LeftButton)) { finishPointer(true); return; }
         if (!nativeWindowMove_) window()->move(windowPosition_ + event->globalPosition().toPoint() - pressGlobal_);
@@ -554,14 +571,17 @@ void EditorCanvas::wheelEvent(QWheelEvent* event)
         event->accept();
         return;
     }
-    resolveHover(event->position());
-    if (!hovered_) { event->ignore(); return; }
+    // Keep the current wheel target until pointer motion. A marker's resize
+    // handle moves as its radius changes; re-hitting after each wheel event
+    // would unexpectedly stop a continuous resize after only a few steps.
+    if (!insideImage(event->position()) || !hovered_) { event->ignore(); return; }
     const auto tool = hovered_->tool();
     if ((tool != EditorTool::Rectangle && tool != EditorTool::Ellipse && tool != EditorTool::Arrow && tool != EditorTool::Number) ||
         ((tool == EditorTool::Rectangle || tool == EditorTool::Ellipse) && hovered_->pixelStyle().filled)) {
         event->ignore(); return;
     }
     const auto dpi = static_cast<float>(devicePixelRatioF());
+    if (tool == EditorTool::Number) numberWheelPreview_ = true;
     const float step = tool == EditorTool::Number ? 1.f : dpi;
     auto style = toolStyle(tool);
     style.value = (hovered_->pixelStyle().value + (delta > 0 ? step : -step)) / dpi;

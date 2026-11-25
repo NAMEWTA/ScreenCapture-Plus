@@ -13,6 +13,7 @@ crate-type = ["rlib", "staticlib"]
 [dependencies]
 localsend = { path = "../../../third_party/localsend/core", features = ["discovery"] }
 gifski = { git = "https://github.com/ImageOptim/gifski.git", rev = "1060eab4500a20f27e2fa3ab7e85473d0e921cbd", default-features = false, features = ["gifsicle"] }
+gif = { version = "=0.13.3", default-features = false, features = ["std"] }
 bytes = "=1.12.1"
 futures-util = "=0.3.33"
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
@@ -23,3 +24,6 @@ tokio-util = { version = "=0.7.19", features = ["rt"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.52.0", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

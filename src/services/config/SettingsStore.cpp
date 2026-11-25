@@ -2,6 +2,7 @@
 
 #include "platform/FileCommitter.h"
 #include "services/config/JsonText.h"
+#include "services/files/QtPaths.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -18,23 +19,8 @@ namespace {
 constexpr auto metadataKey = "_huhucapture";
 constexpr int schemaVersion = 1;
 
-std::filesystem::path nativePath(const QString& path)
-{
-#ifdef _WIN32
-    return std::filesystem::path(path.toStdWString());
-#else
-    return std::filesystem::path(path.toUtf8().toStdString());
-#endif
-}
-
-QString qtPath(const std::filesystem::path& path)
-{
-#ifdef _WIN32
-    return QString::fromStdWString(path.native());
-#else
-    return QString::fromUtf8(path.native().data(), static_cast<qsizetype>(path.native().size()));
-#endif
-}
+using Files::nativePath;
+using Files::qtPath;
 
 bool existsIncludingLink(const QString& path)
 {

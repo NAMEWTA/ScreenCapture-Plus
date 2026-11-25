@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <optional>
 #include <vector>
 
 // Q_INIT_RESOURCE must be outside the application namespace. Referencing the
@@ -321,7 +322,21 @@ public:
         setMinimumHeight(240); setFixedWidth(340);
         setStyleSheet(QStringLiteral("QWidget#annotationPanel { background: #f8fafc; } QPlainTextEdit { background: white; color: #172033; border: 1px solid #cbd5e1; border-radius: 7px; padding: 8px; selection-background-color: #bfdbfe; } QPlainTextEdit:focus { border-color: #2563eb; } QToolButton { border: 0; color: #475569; padding: 4px; } QToolButton:hover { background: #e6f4ff; }"));
         title = new QLabel(this); heading = new QLabel(this); footer = new QLabel(this);
+        title->setObjectName(QStringLiteral("annotationTitle"));
+        heading->setObjectName(QStringLiteral("annotationHeading"));
+        footer->setObjectName(QStringLiteral("annotationFooter"));
+        title->setTextFormat(::Qt::PlainText); heading->setTextFormat(::Qt::PlainText);
+        footer->setTextFormat(::Qt::PlainText); footer->setWordWrap(true);
+        footer->setAlignment(::Qt::AlignLeft | ::Qt::AlignTop);
+        footerScroll = new QScrollArea(this);
+        footerScroll->setObjectName(QStringLiteral("annotationFooterScroll"));
+        footerScroll->setFrameShape(QFrame::NoFrame); footerScroll->setWidgetResizable(true);
+        footerScroll->setHorizontalScrollBarPolicy(::Qt::ScrollBarAlwaysOff);
+        footerScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: none; }"));
+        footerScroll->setWidget(footer);
         collapse = new QToolButton(this); remove = new QToolButton(this);
+        collapse->setObjectName(QStringLiteral("annotationCollapse"));
+        remove->setObjectName(QStringLiteral("annotationDelete"));
         collapse->setFocusPolicy(::Qt::NoFocus); remove->setFocusPolicy(::Qt::NoFocus);
         list = new QListView(this); list->setObjectName(QStringLiteral("annotationList"));
         list->setFrameShape(QFrame::NoFrame); list->setHorizontalScrollBarPolicy(::Qt::ScrollBarAlwaysOff);
@@ -332,13 +347,16 @@ public:
         editor->setTabChangesFocus(false);
         auto textFont = font(); textFont.setPixelSize(15); editor->setFont(textFont);
         auto titleFont = font(); titleFont.setPixelSize(16); titleFont.setWeight(QFont::DemiBold); title->setFont(titleFont);
+        auto headingFont = font(); headingFont.setPixelSize(13); heading->setFont(headingFont);
         auto small = font(); small.setPixelSize(12); footer->setFont(small);
+        collapse->setFont(small); remove->setFont(small);
         footer->setStyleSheet(QStringLiteral("color: #64748b;"));
     }
     QLabel *title{}, *heading{}, *footer{};
     QToolButton *collapse{}, *remove{};
     QListView* list{};
     QPlainTextEdit* editor{};
+    QScrollArea* footerScroll{};
     void relayout()
     {
         arrange(); updateGeometry(); update();
@@ -348,7 +366,19 @@ protected:
 private:
     void arrange()
     {
-        const auto g = UI::annotationPanelGeometry(static_cast<float>(height()), 1.f);
+        const int footerWidth = (std::max)(1, width() - 28);
+        int textHeight = (std::max)(22, footer->heightForWidth(footerWidth));
+        // Normal translated hints expand the rail. Exceptionally long custom
+        // translations remain readable in a bounded scroll area instead of
+        // taking space from the minimum list or native note input.
+        constexpr int maximumFooterHeight = 72;
+        if (textHeight > maximumFooterHeight)
+            textHeight = (std::max)(textHeight, footer->heightForWidth((std::max)(1,
+                footerWidth - style()->pixelMetric(QStyle::PM_ScrollBarExtent))));
+        const int footerHeight = (std::min)(maximumFooterHeight, textHeight);
+        setMinimumHeight(240 + footerHeight - 22);
+        const auto g = UI::annotationPanelGeometry(static_cast<float>(height()), 1.f,
+            static_cast<float>(footerHeight));
         const int actionWidth = (std::max)({54, collapse->sizeHint().width(), remove->sizeHint().width()});
         title->setGeometry(14, 6, (std::max)(1, width() - actionWidth - 28), 42);
         collapse->setGeometry(width() - actionWidth - 8, 6, actionWidth, 42);
@@ -356,7 +386,8 @@ private:
         heading->setGeometry(14, qRound(g.editorHeadingTop), (std::max)(1, width() - actionWidth - 30), 34);
         remove->setGeometry(width() - actionWidth - 10, qRound(g.editorHeadingTop), actionWidth, 34);
         editor->setGeometry(14, qRound(g.editorTop), width() - 28, qRound(g.editorHeight));
-        footer->setGeometry(14, qRound(g.footerTop), width() - 28, 22);
+        footer->setMinimumHeight(textHeight);
+        footerScroll->setGeometry(14, qRound(g.footerTop), footerWidth, footerHeight);
     }
 };
 }
@@ -379,6 +410,7 @@ struct EditorWindow::State {
     quint64 nextToken{1}, pendingToken{}, selectedNote{};
     OutputIntent pendingIntent{OutputIntent::Clipboard};
     QPointer<QWidget> previousFocus;
+    std::optional<bool> deferredNotesVisibility;
     bool closeAfterOutput{true}, changingNote{}, deferredNotes{}, notesCollapsed{};
 };
 
@@ -386,6 +418,9 @@ EditorWindow::EditorWindow(QWidget* parent)
     : QWidget(parent, ::Qt::Tool | ::Qt::FramelessWindowHint | ::Qt::WindowStaysOnTopHint), state_(std::make_unique<State>())
 {
     setObjectName(QStringLiteral("editorWindow"));
+    auto chromeFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+    chromeFont.setPixelSize(14); chromeFont.setWeight(QFont::Normal); chromeFont.setItalic(false);
+    setFont(chromeFont);
     state_->iconFamily = iconFontFamily();
     auto* outer = new QVBoxLayout(this); outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(2);
     auto* content = new QWidget(this);
@@ -415,6 +450,13 @@ EditorWindow::EditorWindow(QWidget* parent)
     makeMainToolbar();
     setFocusProxy(state_->canvas);
     connect(state_->canvas, &EditorCanvas::toolChanged, this, [this](EditorTool tool) {
+        // A real tool change finishes note input just as WinPin does. Toolbar
+        // style controls remain NoFocus and never enter this path, so changing
+        // a color or font still preserves the native input cursor/selection.
+        if (state_->notes->editor->hasFocus()) {
+            QGuiApplication::inputMethod()->commit();
+            state_->canvas->setFocus(::Qt::OtherFocusReason);
+        }
         for (auto* button : state_->mainButtons) {
             if (!button->isCheckable()) continue;
             button->setChecked(button->property("tool").toInt() == static_cast<int>(tool));
@@ -425,12 +467,21 @@ EditorWindow::EditorWindow(QWidget* parent)
     connect(state_->canvas, &EditorCanvas::toolStyleChanged, this, [this](EditorTool, EditorToolStyle) { updateStyleToolbar(); });
     connect(state_->canvas, &EditorCanvas::historyChanged, this, &EditorWindow::updateActions);
     connect(state_->canvas, &EditorCanvas::annotationsChanged, this, &EditorWindow::syncAnnotations);
-    connect(state_->canvas, &EditorCanvas::annotationSelected, this, &EditorWindow::selectNote);
+    connect(state_->canvas, &EditorCanvas::annotationSelected, this, [this](quint64 number, bool focus) {
+        state_->notesCollapsed = false;
+        setNotesVisible(true);
+        selectNote(number, focus);
+    });
     connect(state_->canvas, &EditorCanvas::annotationNoteChanged, this, [this](quint64 number) {
         if (const auto* shape = state_->canvas->document().findAnnotation(number))
             state_->notesModel->updateNote(number, QString::fromStdWString(shape->annotationModel()->note()));
     });
     connect(state_->canvas, &EditorCanvas::pointerGestureChanged, this, [this](bool active) {
+        if (!active && state_->deferredNotesVisibility) {
+            const bool visible = *state_->deferredNotesVisibility;
+            state_->deferredNotesVisibility.reset();
+            setNotesVisible(visible);
+        }
         if (!active && state_->deferredNotes) { state_->deferredNotes = false; syncAnnotations(); }
     });
     connect(state_->canvas, &EditorCanvas::pureImageModeChanged, this, [this](bool pure) {
@@ -676,10 +727,11 @@ void EditorWindow::selectNote(quint64 number, bool focus)
 
 void EditorWindow::setNotesVisible(bool visible)
 {
-    if (state_->canvas->pointerGestureActive()) { state_->deferredNotes = true; return; }
+    if (state_->canvas->pointerGestureActive()) { state_->deferredNotesVisibility = visible; return; }
     if (visible == !state_->notes->isHidden()) return;
     if (!visible) QGuiApplication::inputMethod()->commit();
     state_->notes->setVisible(visible); state_->canvas->setAnnotationPanelVisible(visible);
+    if (!visible && state_->canvas->tool() == EditorTool::Annotation) state_->canvas->setTool(EditorTool::None);
     if (visible) fitToWorkArea(true);
 }
 
