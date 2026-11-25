@@ -13,6 +13,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
+#include <QException>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -33,6 +34,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -64,7 +66,13 @@ template<class Work> auto worker(Work work)
 {
     auto result = QtConcurrent::run(std::move(work));
     waitFor([&] { return result.isFinished(); }, "Real recording inspection worker timed out");
-    return result.takeResult();
+    try { return result.takeResult(); }
+    catch (const QUnhandledException& error) {
+        // QtConcurrent 6.12.1 wraps non-QException failures with their original
+        // exception_ptr. Preserve the real decoder/assertion message in evidence.
+        if (error.exception()) std::rethrow_exception(error.exception());
+        throw;
+    }
 }
 
 // This window is painted by the real Windows desktop. The only pixels passed

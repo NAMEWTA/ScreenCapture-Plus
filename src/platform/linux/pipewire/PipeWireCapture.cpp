@@ -5,6 +5,7 @@
  * Fixed source and adaptation boundaries: docs/linux-pipewire.md.
  */
 #include "platform/linux/pipewire/PipeWireCapture.h"
+#include "platform/linux/pipewire/PipeWireMemFdMappings.h"
 #include "core/PixelBuffer.h"
 
 #include <pipewire/pipewire.h>
@@ -36,6 +37,7 @@ struct Capture {
     PipeWireCaptureOptions options;
     PipeWireCaptureCallbacks callbacks;
     FramePool pool;
+    Detail::PipeWireMemFdMappings memFdMappings;
     PipeWireCaptureResult result;
     pw_main_loop* mainLoop{};
     pw_loop* loop{};
@@ -54,12 +56,16 @@ struct Capture {
     bool finished{};
 
     Capture(PipeWireCaptureOptions values, PipeWireCaptureCallbacks handlers)
-        : options(std::move(values)), callbacks(std::move(handlers)), pool(options.pool) {}
+        : options(std::move(values)), callbacks(std::move(handlers)), pool(options.pool),
+          memFdMappings(options.pool.slotCount == 0 ? 0 : (std::min)(
+              options.pool.maximumBytes / options.pool.slotCount,
+              static_cast<std::size_t>((std::numeric_limits<std::int32_t>::max)()))) {}
 
     ~Capture()
     {
         // All callbacks and this teardown execute on the caller's worker. No PW
         // buffer has escaped process(), so remove_buffer cannot revoke a lease.
+        clearMappings();
         if (stream) {
             spa_hook_remove(&streamListener);
             pw_stream_destroy(stream);
@@ -84,6 +90,20 @@ struct Capture {
             catch (const std::bad_alloc&) {} // The code itself remains observable.
         }
         finished = true;
+    }
+
+    bool clearMappings() noexcept
+    {
+        const int error = memFdMappings.clear();
+        if (error < 0) fail(Code::Stream, error, "Cannot release PipeWire MemFd mappings");
+        return error >= 0;
+    }
+
+    static void removeBuffer(void* value, pw_buffer* buffer) noexcept
+    {
+        auto& self = *static_cast<Capture*>(value);
+        const int error = self.memFdMappings.remove(buffer);
+        if (error < 0) self.fail(Code::Stream, error, "Cannot release a removed PipeWire buffer mapping");
     }
 
     bool armFirstFrame() noexcept
@@ -163,6 +183,7 @@ struct Capture {
     void changeFormat(const spa_pod* parameter)
     {
         if (!parameter) {
+            if (!clearMappings()) return;
             format.reset();
             pool.clear();
             firstInFormat = true;
@@ -216,6 +237,7 @@ struct Capture {
         // Repeated identical Format notifications do not retire a live pool or
         // create an artificial second-generation budget/first-frame deadline.
         if (!format || *format != *next) {
+            if (!clearMappings()) return;
             format.reset();
             pool.clear();
             firstInFormat = true;
@@ -293,12 +315,13 @@ struct Capture {
         return value;
     }
 
-    FrameLease copyFrame(const spa_buffer* buffer)
+    FrameLease copyFrame(const pw_buffer* nativeBuffer)
     {
         if (!format) {
             fail(Code::InvalidBuffer, -EINVAL, "Received a frame without a negotiated format");
             return {};
         }
+        const auto* buffer = nativeBuffer ? nativeBuffer->buffer : nullptr;
         if (!buffer || buffer->n_datas != 1 || !buffer->datas ||
             (buffer->n_metas != 0 && !buffer->metas)) {
             fail(Code::InvalidBuffer, -EINVAL, "The RGB frame has an invalid plane/metadata array");
@@ -327,7 +350,8 @@ struct Capture {
             ++result.stats.emptyDrops;
             return {};
         }
-        if (!data.data || data.maxsize == 0 || data.maxsize > options.pool.maximumBytes / options.pool.slotCount) {
+        if ((!data.data && data.type != SPA_DATA_MemFd) || data.maxsize == 0 ||
+            data.maxsize > options.pool.maximumBytes / options.pool.slotCount) {
             // Record only bounded scalar descriptors, never pixels, addresses or
             // the FD number. Preserve the strict failure while diagnosing the
             // actual producer/daemon/client mapping contract on a real desktop.
@@ -395,7 +419,23 @@ struct Capture {
             ++result.stats.poolDrops;
             return {};
         }
-        const auto* pixels = static_cast<const std::uint8_t*>(data.data) + offset;
+        const auto* cpuData = static_cast<const std::uint8_t*>(data.data);
+        if (!cpuData) {
+            // Some older producer/daemon combinations deliver valid MemFd with
+            // no SPA MAPPABLE/READABLE flags. Use the authorized core's existing
+            // block and PipeWire's bounded read-only mapping implementation.
+            // Keep this pointer local; only the owned FrameLease leaves process.
+            const auto mapped = memFdMappings.read(pw_core_get_mempool(core), nativeBuffer, data);
+            if (!mapped) {
+                const auto code = mapped.error == -ENOBUFS ? Code::Budget :
+                    mapped.error == -ENOTSUP ? Code::UnsupportedMemory :
+                    mapped.error == -ENOMEM ? Code::Allocation : Code::InvalidBuffer;
+                fail(code, mapped.error, mapped.message);
+                return {};
+            }
+            cpuData = mapped.pixels;
+        }
+        const auto* pixels = cpuData + offset;
         for (std::uint32_t y = 0; y < source.rows; ++y) {
             auto destination = writable->row(0, y);
             std::memcpy(destination.data(), pixels + static_cast<std::size_t>(stride) * y, source.rowBytes);
@@ -432,7 +472,7 @@ struct Capture {
             FrameLease frame;
             {
                 ReturnBuffer giveBack{*this, buffer};
-                frame = copyFrame(buffer->buffer);
+                frame = copyFrame(buffer);
             }
             if (!frame || finished) continue;
             ++result.stats.framesDelivered;
@@ -464,6 +504,7 @@ const pw_stream_events streamEvents = [] {
     events.version = PW_VERSION_STREAM_EVENTS;
     events.state_changed = Capture::stateChanged;
     events.param_changed = Capture::paramChanged;
+    events.remove_buffer = Capture::removeBuffer;
     events.process = Capture::process;
     return events;
 }();
@@ -599,6 +640,7 @@ PipeWireCaptureResult runPipeWireCapture(UniqueFd remote, PipeWireTarget target,
             }
             pw_loop_leave(capture.loop);
         }
+        capture.clearMappings();
         return std::move(capture.result);
     } catch (const std::bad_alloc&) {
         PipeWireCaptureResult result;

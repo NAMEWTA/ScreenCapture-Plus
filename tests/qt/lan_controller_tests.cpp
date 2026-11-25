@@ -184,6 +184,28 @@ void privateIdentityContracts(const QString& root)
     const auto location = QDir(root).filePath(QStringLiteral("private identity"));
     transfer::IdentityStore store(location);
     auto first = worker([&] { return store.loadOrCreate(); });
+    if (!first.ok() || !first.created || first.fingerprint.size() != 64) {
+        // Keep real persistence failures actionable without printing any key,
+        // certificate, fingerprint, user path or account/security identifier.
+        const auto storage = [](const QString& path, bool directory) {
+            std::error_code error;
+            const bool privateStorage = HuhuCapture::Platform::isPrivateStorage(
+                files::nativePath(path), directory, error);
+            return QJsonObject{{QStringLiteral("exists"), QFileInfo::exists(path)},
+                {QStringLiteral("privateStorage"), privateStorage},
+                {QStringLiteral("error"), error.value()},
+                {QStringLiteral("errorCategory"), QString::fromLatin1(error.category().name())}};
+        };
+        const QJsonObject diagnostic{{QStringLiteral("identityError"), static_cast<int>(first.error)},
+            {QStringLiteral("nativeStatus"), first.nativeStatus},
+            {QStringLiteral("created"), first.created},
+            {QStringLiteral("fingerprintLength"), first.fingerprint.size()},
+            {QStringLiteral("directory"), storage(QFileInfo(store.identityPath()).absolutePath(), true)},
+            {QStringLiteral("identity"), storage(store.identityPath(), false)},
+            {QStringLiteral("trust"), storage(store.trustPath(), false)}};
+        std::cerr << "Private identity persistence diagnostic: " <<
+            QJsonDocument(diagnostic).toJson(QJsonDocument::Compact).constData() << '\n';
+    }
     require(first.ok() && first.created && first.fingerprint.size() == 64, "Persist official native RSA identity");
     std::error_code error;
     require(HuhuCapture::Platform::isPrivateStorage(files::nativePath(store.identityPath()), false, error),
