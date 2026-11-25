@@ -134,14 +134,19 @@ jobs:
           shutil.copytree(common,destination/'system/common-licenses',symlinks=False)
           PY
       - name: Configure and link the complete application with real platform services
+        id: application-build
         run: |
           cmake --preset qt-application-linux -DHUHUCAPTURE_RUNTIME_LICENSES="$GITHUB_WORKSPACE/artifacts/runtime-licenses" -DHUHUCAPTURE_OPENSSL_RUNTIME_DIR=/usr/lib/x86_64-linux-gnu
           cmake --build --preset qt-application-linux --parallel 2
       - name: Run real application, X11, IPC, media, TLS, Portal-failure and shutdown checks
         run: ctest --preset qt-application-linux
       - name: Verify production configuration without test daemons
+        if: ${{ !cancelled() && steps.application-build.outcome == 'success' }}
         run: cmake -S . -B artifacts/cmake/application-runtime -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DHUHUCAPTURE_BUILD_APP=ON -DBUILD_TESTING=OFF -DHUHUCAPTURE_RUNTIME_LICENSES="$GITHUB_WORKSPACE/artifacts/runtime-licenses"
       - name: Deploy the linked runtime and verify actual development packages
+        # Keep independent packaging evidence even when CTest fails; the job
+        # still fails and these development artifacts are never release-ready.
+        if: ${{ !cancelled() && steps.application-build.outcome == 'success' }}
         run: |
           cmake --install artifacts/cmake/application-linux --config RelWithDebInfo --prefix "$GITHUB_WORKSPACE/artifacts/install/linux"
           python scripts/test-qt-package-runtime.py --prefix artifacts/install/linux --probe artifacts/cmake/application-linux/qt_package_runtime_probe --certificate tests/fixtures/qt-tls/localhost-test-cert.pem --private-key tests/fixtures/qt-tls/localhost-test-key.pem --report artifacts/cmake/application-linux/package-runtime.json
@@ -214,6 +219,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           "$env:GITHUB_WORKSPACE/.deps/video-inspection-windows/install/Release/bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: Configure and link the complete Windows application
+        id: application-build
         shell: pwsh
         run: |
           cmake --preset qt-application-windows "-DHUHUCAPTURE_RUNTIME_LICENSES=$env:GITHUB_WORKSPACE/.deps/video-inspection-windows/install/Release/licenses" "-DHUHUCAPTURE_LEGACY_MP3_FIXTURES=$env:GITHUB_WORKSPACE/artifacts/legacy-mp3-fixtures"
@@ -237,6 +243,9 @@ jobs:
         shell: pwsh
         run: ctest --preset qt-application-windows
       - name: Install and verify complete portable and per-user setup packages
+        id: package
+        # CTest failures remain job failures while deployment is checked too.
+        if: ${{ !cancelled() && steps.application-build.outcome == 'success' }}
         shell: pwsh
         run: |
           cmake --install artifacts/cmake/application-windows --config RelWithDebInfo --prefix "$env:GITHUB_WORKSPACE/artifacts/install/windows"
@@ -252,6 +261,7 @@ jobs:
           python scripts/package-qt.py package --installed artifacts/install/windows --output artifacts/packages/windows --minimum-system 'Windows 10 1809 x64; desktop acceptance pending' --symbols artifacts/install/windows-symbols/symbols --nsis-installer artifacts/packaging-tools/nsis/nsis-3.11-setup.exe --development
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Exercise the actual per-user installer, upgrade and uninstall ownership
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem artifacts/packages/windows -File -Filter '*-setup.exe')

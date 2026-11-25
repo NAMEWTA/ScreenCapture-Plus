@@ -158,7 +158,7 @@ if(WIN32)
         huhucapture_test(qt_native_recording_probe tests/qt/native_recording_probe.cpp
             "${PROJECT_BINARY_DIR}/native-recording/$<CONFIG>")
         target_link_libraries(qt_native_recording_probe PRIVATE huhucapture_recording
-            huhucapture_native_media huhucapture_video_inspection Qt6::Concurrent Qt6::Widgets)
+            huhucapture_native_media huhucapture_video_inspection huhucapture_video_ffmpeg Qt6::Concurrent Qt6::Widgets)
         set_tests_properties(qt_native_recording_probe PROPERTIES TIMEOUT 180
             ENVIRONMENT "QT_QPA_PLATFORM=windows")
     endif()

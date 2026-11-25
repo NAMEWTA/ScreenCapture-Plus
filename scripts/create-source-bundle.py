@@ -182,7 +182,8 @@ def git_files(directory, commit):
 def export_git_objects(directory, commit, destination):
     require(HEX40.fullmatch(commit or ""), "An exact Git commit is required")
     directory = Path(directory).resolve()
-    require(git(directory, "rev-parse", "--show-toplevel").decode().strip() == str(directory),
+    top_level = Path(git(directory, "rev-parse", "--show-toplevel").decode().strip()).resolve()
+    require(top_level.samefile(directory),
             f"Source must be its own Git checkout: {directory}")
     require(git(directory, "rev-parse", "HEAD").decode().strip() == commit, "Source HEAD differs from its pin")
     require(git(directory, "cat-file", "-t", commit).strip() == b"commit", "Source pin is not a commit")

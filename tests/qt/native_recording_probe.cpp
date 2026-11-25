@@ -1,9 +1,12 @@
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <Windows.h>
 
 #include "platform/windows/NativeMp4Recording.h"
 #include "recording/RecordingSession.h"
 #include "services/media/VideoInspection.h"
+#include "recording_timeline.h"
 
 #include <QApplication>
 #include <QColor>
@@ -123,6 +126,21 @@ QJsonObject resultJson(const recording::SessionResult& result)
     item[QStringLiteral("state")] = static_cast<int>(result.state);
     item[QStringLiteral("intent")] = static_cast<int>(result.intent);
     item[QStringLiteral("framesSubmitted")] = static_cast<qint64>(result.backend.media.framesWritten);
+    if (result.backend.media.sinkStatistics) {
+        const auto& statistics = *result.backend.media.sinkStatistics;
+        QJsonObject sink;
+        sink[QStringLiteral("queryStatus")] = static_cast<qint64>(statistics.queryStatus);
+        sink[QStringLiteral("samplesReceived")] = static_cast<qint64>(statistics.received);
+        sink[QStringLiteral("samplesEncoded")] = static_cast<qint64>(statistics.encoded);
+        sink[QStringLiteral("samplesProcessed")] = static_cast<qint64>(statistics.processed);
+        sink[QStringLiteral("lastReceived100ns")] = static_cast<qint64>(statistics.lastReceived);
+        sink[QStringLiteral("lastEncoded100ns")] = static_cast<qint64>(statistics.lastEncoded);
+        sink[QStringLiteral("lastProcessed100ns")] = static_cast<qint64>(statistics.lastProcessed);
+        sink[QStringLiteral("lastSubmitted100ns")] = static_cast<qint64>(statistics.lastSubmitted);
+        sink[QStringLiteral("lastSubmittedDuration100ns")] = static_cast<qint64>(statistics.lastSubmittedDuration);
+        sink[QStringLiteral("queuedBytes")] = static_cast<qint64>(statistics.queuedBytes);
+        item[QStringLiteral("sinkStatistics")] = sink;
+    }
     item[QStringLiteral("finalized")] = result.backend.media.finalized;
     item[QStringLiteral("stopRequested")] = result.backend.stopRequested;
     item[QStringLiteral("durationLimitReached")] = result.backend.durationLimitReached;
@@ -183,8 +201,15 @@ void inspectRecording(const QString& path, const recording::BackendResult& recor
     evidence[QStringLiteral("sha256")] = digest(path);
     require(!inspection.failure && recorded.prepared &&
         inspection.dimensions == QSize(recorded.prepared->region.width, recorded.prepared->region.height) &&
-        inspection.frames == recorded.media.framesWritten && inspection.frames >= 2,
-        "Every frame accepted by the real MF writer must survive finalization and strict all-track inspection");
+        inspection.frames >= 2,
+        "The actual MF recording must retain complete geometry and pass strict all-track inspection");
+    const auto timeline = worker([path, recorded] {
+        return HuhuCapture::Tests::verifyNativeRecordingTimeline(path, recorded.media, 30,
+            QSize(recorded.prepared->region.width, recorded.prepared->region.height));
+    });
+    evidence[QStringLiteral("timeline")] = timeline;
+    require(timeline.value(QStringLiteral("framesDecoded")).toInteger() == static_cast<qint64>(inspection.frames),
+        "The independent complete timeline decoder and archive inspector must agree on every output frame");
     const auto cover = worker([path] { return media::videoThumbnail(path, 256); });
     evidence[QStringLiteral("coverFailure")] = cover.failure.detail;
     evidence[QStringLiteral("coverWidth")] = cover.image.width();

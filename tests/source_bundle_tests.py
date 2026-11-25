@@ -73,6 +73,9 @@ class SourceBundleTests(unittest.TestCase):
         write(source / "build/ignored.o", b"not a source input")
         before = {name: (source / ".git" / name).read_bytes() for name in ("HEAD", "index", "refs/heads/master")
                   if (source / ".git" / name).exists()}
+        with self.assertRaisesRegex(ValueError, "Source must be its own Git checkout"):
+            bundle.export_git(source / "build", commit, self.root / "subdirectory-export")
+        self.assertFalse((self.root / "subdirectory-export").exists())
         output = self.root / "export"
         provenance, files = bundle.export_git(source, commit, output, [patch])
         self.assertEqual((output / "source.c").read_text(), "int value = 2;\n")

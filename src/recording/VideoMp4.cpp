@@ -1978,8 +1978,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
     const LONG cbWidth = multi * wi;
     DWORD VideoBufferSize = cbWidth * he;
-    CComPtr<IMFMediaBuffer> pVideoBuffer = NULL;
-    CComPtr<IMFSample> pVideoSampleS = NULL;
+    LONGLONG lastSubmittedVideoTime = 0;
+    LONGLONG lastSubmittedVideoDuration = 0;
 
     unsigned long long rtA = 0;
     unsigned long long rtV = 0;
@@ -2347,12 +2347,12 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
 
 
-            if (!pVideoBuffer)
-            {
-                hr = MFCreateMemoryBuffer(VideoBufferSize, &pVideoBuffer);
-                if (FAILED(hr))
-                    break;
-            }
+            // The sink may retain this sample after WriteSample returns. Each
+            // submission owns immutable pixels and timing until every downstream
+            // reference is released; the next frame must not rewrite them.
+            CComPtr<IMFMediaBuffer> pVideoBuffer;
+            hr = MFCreateMemoryBuffer(VideoBufferSize, &pVideoBuffer);
+            if (FAILED(hr)) break;
 
             hr = pVideoBuffer->Lock(&pData, NULL, NULL);
             if (FAILED(hr))
@@ -2387,17 +2387,9 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             hr = pVideoBuffer->SetCurrentLength(VideoBufferSize);
             if (FAILED(hr)) break;
 
-            CComPtr<IMFSample> pVideoSample = NULL;
-
-            if (!pVideoSampleS)
-            {
-                hr = MFCreateSample(&pVideoSampleS);
-                if (FAILED(hr)) break;
-            }
-            pVideoSample = pVideoSampleS;
-
-
-            pVideoSample->RemoveAllBuffers();
+            CComPtr<IMFSample> pVideoSample;
+            hr = MFCreateSample(&pVideoSample);
+            if (FAILED(hr)) break;
             hr = pVideoSample->AddBuffer(pVideoBuffer);
             if (FAILED(hr)) break;
 
@@ -2434,6 +2426,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 if (FAILED(hr))
                     break;
                 dp.result.framesWritten++;
+                lastSubmittedVideoTime = static_cast<LONGLONG>(rtV);
+                lastSubmittedVideoDuration = static_cast<LONGLONG>(ThisDurV);
             }
         }
 
@@ -2516,6 +2510,20 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
         }
         const auto finalizeResult = pSinkWriter->Finalize();
         dp.result.finish(SUCCEEDED(finalizeResult), static_cast<std::int64_t>(finalizeResult));
+        if (dp.HasVideo && !dp.Framer) {
+            MF_SINK_WRITER_STATISTICS statistics{};
+            statistics.cb = sizeof(statistics);
+            const auto status = pSinkWriter->GetStatistics(OutVideoStreamIndex, &statistics);
+            // Keep the actual HRESULT, including an unsupported query. This
+            // diagnostic cannot erase a capture/finalization error or substitute
+            // for the complete inspection before a recording is archived.
+            dp.result.sinkStatistics = HuhuCapture::Core::RecordingSinkStatistics{
+                static_cast<std::int64_t>(status), statistics.qwNumSamplesReceived,
+                statistics.qwNumSamplesEncoded, statistics.qwNumSamplesProcessed,
+                statistics.llLastTimestampReceived, statistics.llLastTimestampEncoded,
+                statistics.llLastTimestampProcessed, lastSubmittedVideoTime,
+                lastSubmittedVideoDuration, statistics.dwByteCountQueued};
+        }
     }
     if (dp.result.firstError)
         return dp.result.firstError->stage == RecordingStage::Finalize ? -14 : -16;
