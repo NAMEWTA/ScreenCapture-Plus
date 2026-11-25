@@ -49,7 +49,9 @@ struct DESKTOPCAPTUREPARAMS
     HuhuCapture::Core::RecordingResult result;
 };
 
-void setAudio(DESKTOPCAPTUREPARAMS* params, bool useSpeaker, bool useMic);
+// Call on the recording worker after initializing its COM apartment. Selecting
+// a missing/failed endpoint is an explicit preparation failure, never mute.
+bool setAudio(DESKTOPCAPTUREPARAMS* params, bool useSpeaker, bool useMic);
 int DesktopCapture(DESKTOPCAPTUREPARAMS& params);
 
 } // namespace VideoMp4

@@ -36,6 +36,8 @@ int main(int argc, char** argv)
     HuhuCapture::Platform::GdiCapture capture;
     require(capture.pixels().empty(), "an idle capture owns no pixel buffer");
     VideoMp4::DESKTOPCAPTUREPARAMS recording;
+    require(VideoMp4::setAudio(&recording, false, false) && !recording.HasAudio && recording.AudioFrom.empty(),
+        "explicit no-audio recording must not initialize or silently select a device");
     recording.fps = 0;
     require(VideoMp4::DesktopCapture(recording) != 0 && recording.result.firstError &&
         !recording.result.canArchive(), "native preparation failure must survive the Qt/CRT boundary");

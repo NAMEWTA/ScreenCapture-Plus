@@ -1,10 +1,12 @@
 #include "recording/VideoMp4.h"
 #include "core/MediaClock.h"
 #include "core/PixelBuffer.h"
+#include "platform/windows/AudioFormat.h"
 #include "platform/windows/ComApartment.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <new>
 #include <wrl/client.h>
@@ -415,6 +417,7 @@ struct VISTAMIXER
     bool CanCapture = 0;
     bool CanPlay = 0;
     int Mode = 0; // 0 none, 1 shared, 2 exclusive
+    HRESULT preparationResult = S_OK;
 
     std::map<AUDCLNT_SHAREMODE, std::map<int, WAVEFORMATEXTENSIBLE>> maps;
 
@@ -427,43 +430,44 @@ struct VISTAMIXER
             return 0;
         return mo->second.begin()->second.Format.nChannels;
     }
-    void test(CComPtr<IAudioClient> ac, bool AllShared)
+    HRESULT test(CComPtr<IAudioClient> ac, bool AllShared)
     {
         if (ac == 0)
         {
             CComPtr<IMMDeviceEnumerator> deviceEnumerator = 0;
             auto hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator);
-            if (!deviceEnumerator)
-                return;
+            if (FAILED(hr)) return hr;
+            if (!deviceEnumerator) return E_UNEXPECTED;
 
             CComPtr<IMMDevice> d;
-            deviceEnumerator->GetDevice(id.c_str(), &d);
-            if (!d)
-                return;
+            hr = deviceEnumerator->GetDevice(id.c_str(), &d);
+            if (FAILED(hr)) return hr;
+            if (!d) return E_UNEXPECTED;
             hr = d->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, NULL, (LPVOID*)&ac);
-            if (!ac)
-                return;
+            if (FAILED(hr)) return hr;
+            if (!ac) return E_UNEXPECTED;
         }
 
         // Mix format
-        WAVEFORMATEXTENSIBLE* ext = 0;
-        ac->GetMixFormat((WAVEFORMATEX**)&ext);
-        if (!ext)
-            return;
+        WAVEFORMATEX* rawFormat = nullptr;
+        const auto mixResult = ac->GetMixFormat(&rawFormat);
+        const std::unique_ptr<WAVEFORMATEX, decltype(&CoTaskMemFree)> format(rawFormat, &CoTaskMemFree);
+        WAVEFORMATEXTENSIBLE wfx{};
+        if (FAILED(mixResult)) return mixResult;
+        const auto copyResult = HuhuCapture::Platform::copyWaveFormat(format.get(), wfx);
+        if (FAILED(copyResult)) return copyResult;
 
-        maps[AUDCLNT_SHAREMODE_SHARED][ext->Format.nSamplesPerSec] = *ext;
-        WAVEFORMATEXTENSIBLE wfx = *ext;
-        CoTaskMemFree(ext);
+        maps[AUDCLNT_SHAREMODE_SHARED][wfx.Format.nSamplesPerSec] = wfx;
 
         if (AllShared)
         {
             for (DWORD sr : { 22050, 44100, 48000, 88200, 96000, 192000 })
             {
-                if (ext->Format.nSamplesPerSec != sr)
+                if (wfx.Format.nSamplesPerSec != sr)
                 {
-                    auto wfx2 = *ext;
+                    auto wfx2 = wfx;
                     wfx2.Format.nSamplesPerSec = sr;
-                    wfx2.Format.nAvgBytesPerSec = wfx.Format.nSamplesPerSec * wfx.Format.nBlockAlign;
+                    wfx2.Format.nAvgBytesPerSec = sr * wfx2.Format.nBlockAlign;
                     maps[AUDCLNT_SHAREMODE_SHARED][sr] = wfx2;
                 }
             }
@@ -482,6 +486,7 @@ struct VISTAMIXER
             if (hr == S_OK)
                 maps[AUDCLNT_SHAREMODE_EXCLUSIVE][wfx.Format.nSamplesPerSec] = wfx;
         }
+        return S_OK;
     }
 
     bool CanSR(AUDCLNT_SHAREMODE sm, std::vector<std::tuple<int, bool, int>>& sampleRates)
@@ -564,14 +569,11 @@ inline void EnumVistaMixers(std::vector<VISTAMIXER>& vistamixers)
                     vm.CanCapture = true;
                     vm.CanPlay = false;
                     CComPtr<IAudioClient> ac = 0;
-                    d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&ac);
-                    if (ac)
-                    {
-                        vm.test(ac, 0);
-                        ac.Release();
-                        vm.Mode = 0;
-                        vistamixers.push_back(vm);
-                    }
+                    const auto activateResult = d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&ac);
+                    vm.preparationResult = FAILED(activateResult) ? activateResult
+                        : (ac ? vm.test(ac, 0) : E_UNEXPECTED);
+                    ac.Release();
+                    vistamixers.push_back(vm);
                 }
             }
         }
@@ -616,14 +618,11 @@ inline void EnumVistaMixers(std::vector<VISTAMIXER>& vistamixers)
                     vm.CanCapture = false;
                     vm.CanPlay = true;
                     CComPtr<IAudioClient> ac = 0;
-                    d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&ac);
-                    if (ac)
-                    {
-                        vm.test(ac, 0);
-                        ac.Release();
-                        vm.Mode = 0;
-                        vistamixers.push_back(vm);
-                    }
+                    const auto activateResult = d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&ac);
+                    vm.preparationResult = FAILED(activateResult) ? activateResult
+                        : (ac ? vm.test(ac, 0) : E_UNEXPECTED);
+                    ac.Release();
+                    vistamixers.push_back(vm);
                     d.Release();
                 }
             }
@@ -1247,55 +1246,59 @@ struct VectorStreamX2 : public IMFByteStream
 // 通道映射得按设备实际声道数来：单声道设备只有 0 号声道，
 // 硬写 {0,1} 会让混音时的 s[ch] 按第 1 声道越界读到缓冲区外面。
 // 拿的是混音格式(GetMixFormat)，与录制端 Initialize 用的格式同源，声道数一致。
-inline std::vector<int> getChannelMap(IMMDevice* dev)
+inline HRESULT getChannelMap(IMMDevice* dev, std::vector<int>& chm)
 {
-    std::vector<int> chm{ 0 };
-    if (!dev) return chm;
+    if (!dev) return E_POINTER;
     ComPtr<IAudioClient> ac = nullptr;
-    if (FAILED(dev->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, NULL, (LPVOID*)ac.GetAddressOf())) || !ac)
-        return chm;
+    auto hr = dev->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, NULL, (LPVOID*)ac.GetAddressOf());
+    if (FAILED(hr)) return hr;
+    if (!ac) return E_UNEXPECTED;
     WAVEFORMATEX* mix = nullptr;
-    if (SUCCEEDED(ac->GetMixFormat(&mix)) && mix)
-    {
-        if (mix->nChannels >= 2)
-            chm.push_back(1);
-        CoTaskMemFree(mix);
-    }
-    return chm;
+    hr = ac->GetMixFormat(&mix);
+    const std::unique_ptr<WAVEFORMATEX, decltype(&CoTaskMemFree)> format(mix, &CoTaskMemFree);
+    if (FAILED(hr)) return hr;
+    if (!format || format->nChannels == 0) return AUDCLNT_E_UNSUPPORTED_FORMAT;
+    chm = { 0 };
+    if (format->nChannels >= 2) chm.push_back(1);
+    return S_OK;
 }
-void setAudio(DESKTOPCAPTUREPARAMS* dp,bool useSpeaker, bool useMic)
+bool setAudio(DESKTOPCAPTUREPARAMS* dp, bool useSpeaker, bool useMic)
 {
-    if (!useMic && !useSpeaker) return;
+    if (!dp) return false;
     dp->AudioFrom.clear();
+    dp->HasAudio = useMic || useSpeaker;
+    if (!dp->HasAudio) return true;
+    const auto fail = [dp](HRESULT error) {
+        dp->result.fail(HuhuCapture::Core::RecordingStage::Prepare,
+                       FAILED(error) ? error : E_UNEXPECTED);
+        return false;
+    };
+
     ComPtr<IMMDeviceEnumerator> deviceEnumerator = nullptr;
-    HRESULT hrAudio = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator);
-    if (SUCCEEDED(hrAudio) && deviceEnumerator)
+    auto hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER,
+                               __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator);
+    if (FAILED(hr) || !deviceEnumerator) return fail(hr);
+
+    decltype(dp->AudioFrom) selected;
+    for (const auto flow : { eCapture, eRender })
     {
-        if (useMic) {
-            ComPtr<IMMDevice> defaultCapture = nullptr;
-            if (SUCCEEDED(deviceEnumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &defaultCapture)) && defaultCapture)
-            {
-                LPWSTR capId = nullptr;
-                if (SUCCEEDED(defaultCapture->GetId(&capId)) && capId)
-                {
-                    dp->AudioFrom.push_back({ capId, getChannelMap(defaultCapture.Get()) });
-                    CoTaskMemFree(capId);
-                }
-            }
-        }
-        if (useSpeaker) {
-            ComPtr<IMMDevice> defaultRender = nullptr;
-            if (SUCCEEDED(deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultRender)) && defaultRender)
-            {
-                LPWSTR renId = nullptr;
-                if (SUCCEEDED(defaultRender->GetId(&renId)) && renId)
-                {
-                    dp->AudioFrom.push_back({ renId, getChannelMap(defaultRender.Get()) });
-                    CoTaskMemFree(renId);
-                }
-            }
-        }
+        if ((flow == eCapture && !useMic) || (flow == eRender && !useSpeaker)) continue;
+        ComPtr<IMMDevice> device;
+        hr = deviceEnumerator->GetDefaultAudioEndpoint(flow, eConsole, &device);
+        if (FAILED(hr) || !device) return fail(hr);
+
+        LPWSTR rawId = nullptr;
+        hr = device->GetId(&rawId);
+        const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> id(rawId, &CoTaskMemFree);
+        if (FAILED(hr) || !id) return fail(hr);
+
+        std::vector<int> channels;
+        hr = getChannelMap(device.Get(), channels);
+        if (FAILED(hr)) return fail(hr);
+        selected.emplace_back(id.get(), std::move(channels));
     }
+    dp->AudioFrom = std::move(selected);
+    return true;
 }
 
 static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
@@ -1305,11 +1308,6 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     HRESULT hr = S_OK;
     struct AUDIOIN
     {
-    private:
-        BYTE* pData = 0;
-        UINT32 framesAvailable = 0;
-        DWORD  flags = 0;
-
     public:
         std::wstring id;
         CComPtr<IMMDevice> d;
@@ -1331,8 +1329,21 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
         std::thread silenceThread;
         std::shared_ptr<REBUFFER> AudioDataX;
         std::vector<char> PopBuffer;
+        std::atomic<HRESULT>* firstError = nullptr;
 
         ~AUDIOIN() { Stop(); }
+
+        // Only this atomic crosses audio-worker boundaries. RecordingResult is
+        // written by the owning recording worker after these threads join.
+        void Fail(HRESULT error) noexcept
+        {
+            if (SUCCEEDED(error)) error = E_UNEXPECTED;
+            HRESULT expected = S_OK;
+            if (firstError) firstError->compare_exchange_strong(expected, error);
+            Capturing = false;
+            if (hEv) SetEvent(hEv);
+            if (AudioDataX) SetEvent(AudioDataX->Has);
+        }
 
         void Stop()
         {
@@ -1346,9 +1357,6 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             hEv = nullptr;
         }
 
-#define REFTIMES_PER_SEC  10000000
-#define REFTIMES_PER_MILLISEC  10000
-
         size_t AvFrames()
         {
             auto avs = AudioDataX->Av();
@@ -1360,80 +1368,92 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
         void PlaySilence(REFERENCE_TIME rt)
         {
             HuhuCapture::Platform::ComApartment apartment(COINIT_MULTITHREADED);
-            if (FAILED(apartment.result())) return;
-            // ns
-            rt /= 10000;
-            // in SR , 1000 ms
-            //  ?    , rt ms
-            auto ns = (wfx.Format.nSamplesPerSec * rt);
-            ns /= 1000;
-            while (Capturing)
-            {
-                if (!ren)
-                    break;
+            if (FAILED(apartment.result())) { Fail(apartment.result()); return; }
+            try {
+                if (!ac2 || !ren) { Fail(E_POINTER); return; }
+                UINT32 bufferFrames = 0;
+                auto status = ac2->GetBufferSize(&bufferFrames);
+                if (FAILED(status)) { Fail(status); return; }
+                if (!bufferFrames) { Fail(AUDCLNT_E_BUFFER_ERROR); return; }
 
-                Sleep((DWORD)(rt / 2));
+                rt /= 10000;
+                while (Capturing) {
+                    Sleep(static_cast<DWORD>(rt / 2));
+                    if (!Capturing) break;
 
-                if (!Capturing)
-                    break;
+                    UINT32 padding = 0;
+                    status = ac2->GetCurrentPadding(&padding);
+                    if (FAILED(status)) { Fail(status); return; }
+                    if (padding > bufferFrames) { Fail(AUDCLNT_E_BUFFER_ERROR); return; }
+                    const auto available = bufferFrames - padding;
+                    if (!available) continue;
 
-                // See how much buffer space is available.
-                UINT32 numFramesPadding = 0;
-                auto hr = ac2->GetCurrentPadding(&numFramesPadding);
-                if (FAILED(hr))
-                    break;
-
-
-                auto numFramesAvailable = ns - numFramesPadding;
-                if (!numFramesAvailable)
-                    continue;
-
-                BYTE* db = 0;
-                hr = ren->GetBuffer((UINT32)numFramesAvailable, &db);
-                if (FAILED(hr))
-                    break;
-                auto bs = numFramesAvailable * wfx.Format.nChannels * wfx.Format.wBitsPerSample / 8;
-                memset(db, 0,(size_t) bs);
-                ren->ReleaseBuffer((UINT32)numFramesAvailable, 0); //AUDCLNT_BUFFERFLAGS_SILENT
+                    BYTE* data = nullptr;
+                    status = ren->GetBuffer(available, &data);
+                    if (FAILED(status)) { Fail(status); return; }
+                    status = ren->ReleaseBuffer(available, AUDCLNT_BUFFERFLAGS_SILENT);
+                    if (FAILED(status)) { Fail(status); return; }
+                }
             }
+            catch (const std::bad_alloc&) { Fail(E_OUTOFMEMORY); }
+            catch (...) { Fail(E_FAIL); }
         }
 
         void ThreadLoopCapture()
         {
             HuhuCapture::Platform::ComApartment apartment(COINIT_MULTITHREADED);
-            if (FAILED(apartment.result())) return;
-            UINT64 up, uq;
-            while (Capturing)
-            {
-                if (hEv) {
-                    const auto status = WaitForSingleObject(hEv, 100);
-                    if (status == WAIT_TIMEOUT) continue;
-                    if (status != WAIT_OBJECT_0) break;
+            if (FAILED(apartment.result())) { Fail(apartment.result()); return; }
+            try {
+                if (!cap || !AudioDataX) { Fail(E_POINTER); return; }
+                while (Capturing) {
+                    if (hEv) {
+                        const auto status = WaitForSingleObject(hEv, 100);
+                        if (status == WAIT_TIMEOUT) continue;
+                        if (status != WAIT_OBJECT_0) {
+                            Fail(status == WAIT_FAILED ? HRESULT_FROM_WIN32(GetLastError()) : E_UNEXPECTED);
+                            return;
+                        }
+                    }
+
+                    if (!Capturing) break;
+                    BYTE* data = nullptr;
+                    UINT32 frames = 0;
+                    DWORD flags = 0;
+                    auto status = cap->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
+                    if (FAILED(status)) { Fail(status); return; }
+                    if (!frames) {
+                        // Loopback has no event handle; avoid a busy loop while
+                        // the device has no packet. Empty packets need no release.
+                        if (!hEv) Sleep(1);
+                        continue;
+                    }
+
+                    HRESULT packetError = S_OK;
+                    try {
+                        if (!data && !(flags & AUDCLNT_BUFFERFLAGS_SILENT))
+                            packetError = E_POINTER;
+                        else
+                            AudioDataX->PushX((flags & AUDCLNT_BUFFERFLAGS_SILENT)
+                                ? nullptr : reinterpret_cast<const char*>(data),
+                                static_cast<size_t>(frames) * wfx.Format.nBlockAlign);
+                    }
+                    catch (const std::bad_alloc&) { packetError = E_OUTOFMEMORY; }
+                    catch (...) { packetError = E_FAIL; }
+                    // Preserve a queue/allocation failure before any secondary
+                    // release error, and return the packet on this same thread.
+                    if (FAILED(packetError)) Fail(packetError);
+                    status = cap->ReleaseBuffer(frames);
+                    if (FAILED(status)) Fail(status);
+                    if (FAILED(packetError) || FAILED(status)) return;
                 }
-
-                if (!Capturing)
-                    break;
-                auto hr = cap->GetBuffer(&pData, &framesAvailable, &flags, &up, &uq);
-                if (FAILED(hr))
-                    break;
-                if (framesAvailable == 0) {
-                    // Loopback has no event handle; avoid spinning at 100% of a
-                    // CPU core while the audio device has no packet to deliver.
-                    if (!hEv) Sleep(1);
-                    continue;
-                }
-
-                auto ThisAudioBytes = framesAvailable * wfx.Format.nChannels * wfx.Format.wBitsPerSample/8 ;
-
-                AudioDataX->PushX((flags & AUDCLNT_BUFFERFLAGS_SILENT)
-                    ? nullptr : reinterpret_cast<const char*>(pData), ThisAudioBytes);
-                cap->ReleaseBuffer(framesAvailable);
             }
+            catch (const std::bad_alloc&) { Fail(E_OUTOFMEMORY); }
+            catch (...) { Fail(E_FAIL); }
         }
     };
 #ifndef TURBO_PLAY_SC
     std::vector<VISTAMIXER> vistamixers;
-    EnumVistaMixers(vistamixers);
+    if (dp.HasAudio) EnumVistaMixers(vistamixers);
 #else
     EnumVistaMixers();
 #endif
@@ -1449,13 +1469,18 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     }
 */
     // ----------------------
+    std::atomic<HRESULT> firstAudioError{ S_OK };
     std::vector<std::shared_ptr<AUDIOIN>> ains;
 
     class AINRELEASE
     {
         std::vector<std::shared_ptr<AUDIOIN>>* ains = 0;
+        std::atomic<HRESULT>& firstError;
+        HuhuCapture::Core::RecordingResult& result;
     public:
-        AINRELEASE(std::vector<std::shared_ptr<AUDIOIN>>& x)
+        AINRELEASE(std::vector<std::shared_ptr<AUDIOIN>>& x,
+                   std::atomic<HRESULT>& error, HuhuCapture::Core::RecordingResult& completion)
+            : firstError(error), result(completion)
         {
             ains = &x;
         }
@@ -1464,10 +1489,16 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
             if (!ains)
                 return;
             for (auto& audio : *ains) audio->Stop();
+            const auto error = firstError.load();
+            if (FAILED(error)) result.fail(HuhuCapture::Core::RecordingStage::Capture, error);
         }
 
     };
-    AINRELEASE arx(ains);
+    AINRELEASE arx(ains, firstAudioError, dp.result);
+    const auto failAudioPreparation = [&dp](HRESULT error) {
+        dp.result.fail(RecordingStage::Prepare, FAILED(error) ? error : E_UNEXPECTED);
+        return -18;
+    };
 
     REFERENCE_TIME rt;
     unsigned long long a = dp.SR/ dp.fps; // Samples per frame
@@ -1484,8 +1515,12 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     }
 
     CComPtr<IMMDeviceEnumerator> deviceEnumerator = 0;
-    if(dp.HasAudio)
+    if (dp.HasAudio) {
+        if (dp.AudioFrom.empty() || dp.AudioFrom.size() > MAXIMUM_WAIT_OBJECTS)
+            return failAudioPreparation(E_INVALIDARG);
         hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator);
+        if (FAILED(hr) || !deviceEnumerator) return failAudioPreparation(hr);
+    }
 
     CAPTURE cap;
     int wi = 0, he = 0;
@@ -1588,14 +1623,17 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 auto& x = std::get<0>(xy);
                 if (x == vm.id)
                 {
+                    if (FAILED(vm.preparationResult)) return failAudioPreparation(vm.preparationResult);
                     std::shared_ptr<AUDIOIN> ain = std::make_shared<AUDIOIN>();
+                    ain->firstError = &firstAudioError;
                     ain->AudioDataX = std::make_shared<REBUFFER>();
+                    if (!static_cast<HANDLE>(ain->AudioDataX->Has))
+                        return failAudioPreparation(HRESULT_FROM_WIN32(GetLastError()));
                     ain->id = x;
 
                     CComPtr<IMMDevice> d;
-                    deviceEnumerator->GetDevice(x.c_str(), &d);
-                    if (!d)
-                        continue;
+                    hr = deviceEnumerator->GetDevice(x.c_str(), &d);
+                    if (FAILED(hr) || !d) return failAudioPreparation(hr);
 
                     DWORD flg = AUDCLNT_STREAMFLAGS_NOPERSIST;
                     flg |= AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
@@ -1612,8 +1650,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                     ain->d = d;
 
                     hr = d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, NULL, (LPVOID*)&ain->ac);
-                    if (!ain->ac)
-                        continue;
+                    if (FAILED(hr) || !ain->ac) return failAudioPreparation(hr);
 
 
                     auto ww = vm.maps[AUDCLNT_SHAREMODE::AUDCLNT_SHAREMODE_SHARED][dp.SR];
@@ -1623,29 +1660,45 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                         if (ww.Format.nSamplesPerSec == 0 && dp.SR == 48000)
                             ww = vm.maps[AUDCLNT_SHAREMODE::AUDCLNT_SHAREMODE_SHARED][44100];
 
+                    // The existing mixer consumes signed PCM16 or float32.
+                    // Reject other layouts rather than divide by zero, index an
+                    // absent channel, or interpret integer samples as floats.
+                    const bool pcm = ww.Format.wFormatTag == WAVE_FORMAT_PCM
+                        || (ww.Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE && ww.SubFormat == MFAudioFormat_PCM);
+                    const bool floating = ww.Format.wFormatTag == WAVE_FORMAT_IEEE_FLOAT
+                        || (ww.Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE && ww.SubFormat == MFAudioFormat_Float);
+                    if (!ww.Format.nSamplesPerSec || !ww.Format.nChannels
+                        || !((pcm && ww.Format.wBitsPerSample == 16) || (floating && ww.Format.wBitsPerSample == 32))
+                        || ww.Format.nBlockAlign != ww.Format.nChannels * ww.Format.wBitsPerSample / 8)
+                        return failAudioPreparation(AUDCLNT_E_UNSUPPORTED_FORMAT);
+                    ain->chm = std::get<1>(xy);
+                    if (ain->chm.empty() || std::any_of(ain->chm.begin(), ain->chm.end(), [&](int channel) {
+                        return channel < 0 || channel >= ww.Format.nChannels;
+                    })) return failAudioPreparation(AUDCLNT_E_UNSUPPORTED_FORMAT);
+                    const auto bytesPerSecond = static_cast<std::uint64_t>(dp.SR) * ww.Format.nBlockAlign;
+                    if (bytesPerSecond > (std::numeric_limits<DWORD>::max)())
+                        return failAudioPreparation(E_INVALIDARG);
                     ww.Format.nSamplesPerSec = dp.SR;
-                    ww.Format.nAvgBytesPerSec = dp.SR * ww.Format.nBlockAlign;
+                    ww.Format.nAvgBytesPerSec = static_cast<DWORD>(bytesPerSecond);
                     hr = ain->ac->Initialize(AUDCLNT_SHAREMODE::AUDCLNT_SHAREMODE_SHARED, flg, rt, 0, (WAVEFORMATEX*)&ww, 0);
-                    if (FAILED(hr))
-                        continue;
+                    if (FAILED(hr)) return failAudioPreparation(hr);
 
                     hr = ain->ac->GetService(__uuidof(IAudioCaptureClient), (void**)&ain->cap);
-                    if (!ain->cap)
-                        continue;
+                    if (FAILED(hr) || !ain->cap) return failAudioPreparation(hr);
 
 
                     if (vm.CanCapture)
                     {
                         ain->hEv = CreateEvent(0, 0, 0, 0);
-                        if (!ain->hEv || FAILED(ain->ac->SetEventHandle(ain->hEv)))
-                            continue;
+                        if (!ain->hEv) return failAudioPreparation(HRESULT_FROM_WIN32(GetLastError()));
+                        hr = ain->ac->SetEventHandle(ain->hEv);
+                        if (FAILED(hr)) return failAudioPreparation(hr);
                     }
 
                     if (vm.CanPlay)
                     {
                         hr = d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, NULL, (LPVOID*)&ain->ac2);
-                        if (!ain->ac2)
-                            continue;
+                        if (FAILED(hr) || !ain->ac2) return failAudioPreparation(hr);
 
 
                         DWORD flg2 = AUDCLNT_STREAMFLAGS_NOPERSIST;
@@ -1653,30 +1706,16 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 //                        flg2 |= AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
 
                         hr = ain->ac2->Initialize(AUDCLNT_SHAREMODE::AUDCLNT_SHAREMODE_SHARED, flg2, rt, 0, (WAVEFORMATEX*)&ww, 0);
-                        if (FAILED(hr))
-                            continue;
+                        if (FAILED(hr)) return failAudioPreparation(hr);
 
                         hr = ain->ac2->GetService(__uuidof(IAudioRenderClient), (void**)&ain->ren);
-                        if (!ain->ren)
-                            continue;
+                        if (FAILED(hr) || !ain->ren) return failAudioPreparation(hr);
                     }
-
-                    hr = ain->ac->Start();
-                    if (FAILED(hr))
-                        continue;
 
                     ain->wfx = ww;
-                    ain->chm = std::get<1>(xy);
-                    if (vm.CanPlay)
-                    {
-                        hr = ain->ac2->Start();
-                        if (FAILED(hr))
-                            continue;
-                        ain->silenceThread = std::thread(&AUDIOIN::PlaySilence, ain.get(), rt);
-                    }
-                    ain->captureThread = std::thread(&AUDIOIN::ThreadLoopCapture, ain.get());
                     ains.push_back(ain);
-                    // Only successfully started inputs belong to the wait set.
+                    // Start only after every selected input and the sink are
+                    // prepared, so an encoder retry cannot keep sampling audio.
                     AudioEvents.push_back(ain->AudioDataX->Has);
                 }
             }
@@ -1684,8 +1723,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
     }
 
-    if (ains.empty())
-        dp.HasAudio = 0;
+    if (dp.HasAudio && ains.size() != dp.AudioFrom.size())
+        return failAudioPreparation(AUDCLNT_E_DEVICE_INVALIDATED);
 
     CComPtr<IMFMediaType> pMediaTypeOutAudio;
     DWORD OutAudioStreamIndex = 0;
@@ -1898,6 +1937,19 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
         if (FAILED(hr)) return -13;
     }
 
+    for (auto& audio : ains) {
+        hr = audio->ac->Start();
+        if (FAILED(hr)) return failAudioPreparation(hr);
+        if (audio->ac2) {
+            hr = audio->ac2->Start();
+            if (FAILED(hr)) return failAudioPreparation(hr);
+        }
+    }
+    for (auto& audio : ains) {
+        if (audio->ren) audio->silenceThread = std::thread(&AUDIOIN::PlaySilence, audio.get(), rt);
+        audio->captureThread = std::thread(&AUDIOIN::ThreadLoopCapture, audio.get());
+    }
+
     const LONG cbWidth = multi * wi;
     DWORD VideoBufferSize = cbWidth * he;
     CComPtr<IMFMediaBuffer> pVideoBuffer = NULL;
@@ -1923,6 +1975,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     for (;;)
     {
         failureStage = RecordingStage::Capture;
+        const auto audioError = firstAudioError.load();
+        if (FAILED(audioError)) { hr = audioError; break; }
         if (!dp.HasAudio && !dp.Framer)
             Sleep((DWORD)msloop);
         if (dp.MustEnd)
@@ -1944,13 +1998,16 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 do {
                     waitResult = WaitForMultipleObjects(static_cast<DWORD>(AudioEvents.size()),
                                                         AudioEvents.data(), TRUE, 100);
-                } while (waitResult == WAIT_TIMEOUT && !dp.MustEnd);
+                } while (waitResult == WAIT_TIMEOUT && !dp.MustEnd && SUCCEEDED(firstAudioError.load()));
+                const auto waitAudioError = firstAudioError.load();
+                if (FAILED(waitAudioError)) { hr = waitAudioError; break; }
                 if (dp.MustEnd) break;
                 if (waitResult == WAIT_FAILED) {
                     hr = HRESULT_FROM_WIN32(GetLastError());
                     if (SUCCEEDED(hr)) hr = E_FAIL;
                     break;
                 }
+                if (waitResult != WAIT_OBJECT_0) { hr = E_UNEXPECTED; break; }
             }
             if (DirectAudioCopy)
             {
@@ -2385,6 +2442,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     for (auto& audio : ains) audio->Stop();
 
     if (FAILED(hr)) dp.result.fail(failureStage, static_cast<std::int64_t>(hr));
+    const auto audioError = firstAudioError.load();
+    if (FAILED(audioError)) dp.result.fail(RecordingStage::Capture, audioError);
     if (pSinkWriter) {
         const auto finalizeResult = pSinkWriter->Finalize();
         dp.result.finish(SUCCEEDED(finalizeResult), static_cast<std::int64_t>(finalizeResult));

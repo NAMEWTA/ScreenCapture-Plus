@@ -78,7 +78,15 @@ if(HUHUCAPTURE_QT_VALIDATION)
         "${PROJECT_BINARY_DIR}/annotation-render/$<CONFIG>")
     target_link_libraries(qt_annotation_render PRIVATE huhucapture_annotation_renderer)
     set_tests_properties(qt_annotation_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_library(huhucapture_settings STATIC
+        src/services/config/JsonText.cpp
+        src/services/config/SettingsStore.cpp)
+    target_link_libraries(huhucapture_settings PUBLIC huhucapture_core Qt6::Core
+        PRIVATE huhucapture_file_committer)
+    huhucapture_test(qt_settings_store tests/qt/settings_store_tests.cpp)
+    target_link_libraries(qt_settings_store PRIVATE huhucapture_settings)
     if(WIN32)
+        huhucapture_test(windows_audio_format tests/platform/windows_audio_format_tests.cpp)
         # Compile the retained native backends without Ling, its PCH, or /MT.
         # This verifies the Qt/native link boundary, not hardware capture.
         add_library(huhucapture_native_media STATIC

@@ -189,6 +189,7 @@
     <ClInclude Include="..\..\src\editor\shapes\ShapeText.h" />
     <ClInclude Include="..\..\src\pch.h" />
     <ClInclude Include="..\..\src\platform\windows\ComApartment.h" />
+    <ClInclude Include="..\..\src\platform\windows\AudioFormat.h" />
     <ClInclude Include="..\..\src\platform\FileCommitter.h" />
     <ClInclude Include="..\..\src\platform\windows\GdiCapture.h" />
     <ClInclude Include="..\..\src\recording\CapVideo.h" />

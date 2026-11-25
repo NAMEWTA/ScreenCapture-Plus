@@ -296,6 +296,9 @@
     <ClInclude Include="..\..\src\platform\windows\ComApartment.h">
       <Filter>src\platform\windows</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\platform\windows\AudioFormat.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\platform\FileCommitter.h">
       <Filter>src\platform</Filter>
     </ClInclude>

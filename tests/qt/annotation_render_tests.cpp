@@ -2,9 +2,13 @@
 
 #include <QColorSpace>
 #include <QDir>
+#include <QFontInfo>
+#include <QGlyphRun>
 #include <QGuiApplication>
 #include <QImageReader>
 #include <QPainter>
+#include <QRawFont>
+#include <QStringList>
 #include <QTemporaryDir>
 
 #include <algorithm>
@@ -74,6 +78,38 @@ void verifySourcePreserved(const QImage& original, const QImage& composed)
         require(std::memcmp(original.constScanLine(y), composed.constScanLine(y),
             static_cast<std::size_t>(original.width()) * 4) == 0,
             "Composition changed original pixels or alpha");
+}
+
+void verifyRequiredCjkFonts(const Renderer::PreparedText& text)
+{
+    // A missing-glyph box has ink too: pixel counts alone cannot establish that
+    // Chinese text was rendered. This fixture contains ordinary visible CJK and
+    // punctuation, so glyph zero is a missing required font, not a control char.
+    bool sawGlyph = false;
+    QStringList fallbackFonts;
+    for (const auto& paragraph : text.paragraphs) {
+        const QFontInfo requested(paragraph.layout->font());
+        std::cout << "FONT QFontInfo: " << requested.family().toStdString() << " / "
+            << requested.styleName().toStdString() << ", point=" << requested.pointSizeF()
+            << ", pixel=" << requested.pixelSize() << ", exact=" << requested.exactMatch() << '\n';
+        for (const auto& run : paragraph.layout->glyphRuns()) {
+            const auto font = run.rawFont();
+            require(font.isValid(), "CJK text has no usable raw font");
+            const auto description = font.familyName() + QStringLiteral(" / ") + font.styleName() +
+                QStringLiteral(" / ") + QString::number(font.pixelSize()) + QStringLiteral(" px");
+            if (!fallbackFonts.contains(description)) {
+                fallbackFonts.push_back(description);
+                std::cout << "FONT actual CJK/ASCII run: " << description.toStdString() << '\n';
+            }
+            for (const auto glyph : run.glyphIndexes()) {
+                require(glyph != 0,
+                    "Required CJK font missing: glyph zero is not complete Chinese rendering; install fonts-noto-cjk on Linux");
+                sawGlyph = true;
+            }
+        }
+    }
+    require(sawGlyph, "CJK fixture had no shaped glyphs");
+    std::cout << "PASS required Chinese font coverage (no missing-glyph boxes)\n";
 }
 
 QImage makeSource()
@@ -360,11 +396,13 @@ int main(int argc, char** argv)
         options.emptyNoteText = QString::fromUtf8("（尚未填写备注）");
         options.maximumDimension = 4096;
         options.maximumBytes = 64u * 1024u * 1024u;
+        std::cout << "Qt runtime " << qVersion() << ", platform " << QGuiApplication::platformName().toStdString() << '\n';
 
         runCase(directory, QStringLiteral("01-no-annotations"), {}, options);
-        runCase(directory, QStringLiteral("02-cjk-and-empty-note"), {
+        const auto cjk = runCase(directory, QStringLiteral("02-cjk-and-empty-note"), {
             {1, L"中文备注：点击这里查看完整截图。"},
             {2, L"English note with natural wrapping and preserved numbering."}, {5, L""}}, options);
+        verifyRequiredCjkFonts(cjk.notes()[0].body);
 
         std::wstring longText;
         for (int index = 0; index < 12; ++index)

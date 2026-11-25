@@ -162,12 +162,12 @@ void CapVideo::startMp4(bool useSpeaker, bool useMic)
     mp4Param->vbrq = 50;
     mp4Param->Qu = 50;
     mp4Param->MustEnd = false;
-    VideoMp4::setAudio(mp4Param.get(), useSpeaker, useMic);
     // 文案在这里先取出来按值带进线程：langObj 是 WinRT 对象，不往采集线程里带
     auto errText = Lang::get(L"video.recordFailed");
     auto errTitle = Lang::get(L"about.sysTip");
-    captureThread = std::jthread([this, errText, errTitle](std::stop_token) {
+    captureThread = std::jthread([this, errText, errTitle, useSpeaker, useMic](std::stop_token) {
         try {
+            if (mp4Param->MustEnd) return;
             HuhuCapture::Platform::ComApartment apartment(COINIT_APARTMENTTHREADED);
             if (FAILED(apartment.result())) {
                 mp4Param->result.fail(HuhuCapture::Core::RecordingStage::Prepare, apartment.result());
@@ -178,6 +178,11 @@ void CapVideo::startMp4(bool useSpeaker, bool useMic)
             if (FAILED(media.result())) {
                 mp4Param->result.fail(HuhuCapture::Core::RecordingStage::Prepare, media.result());
                 showRecordError(errText, errTitle);
+                return;
+            }
+            if (mp4Param->MustEnd) return;
+            if (!VideoMp4::setAudio(mp4Param.get(), useSpeaker, useMic)) {
+                showRecordError(errText + L"\n\n" + mp4Param->f, errTitle);
                 return;
             }
             // 逐个候选试到桌面复制能成立为止。Prepare 挂得很早（缓存文件都还没建），
