@@ -41,9 +41,11 @@ public:
     explicit ScrollCaptureSession(QObject* parent = nullptr);
     ~ScrollCaptureSession() override;
     Failure prepareNative(const ActionRequest& request, const Snapshot& source, ScreenCaptureService& owner);
-    // A successful call adopts claim. On rejection the caller retains it and
-    // remains responsible for releasing the source's consumer handshake.
-    Failure prepareLive(const ActionRequest& request, LiveCaptureSource& owner, Core::LiveSourceConsumer& claim);
+    // Keep only the same authorized selection during setup. start() is called
+    // after the actual controls unmap; it refreshes that source and claims its
+    // replacement first frame only after captureReady. No preview lease is
+    // retained while the user is deciding whether to start.
+    Failure prepareLive(const ActionRequest& request, LiveCaptureSource& owner);
     const ScrollSelection& selection() const noexcept;
     ScrollPhase phase() const noexcept;
     ScrollProgress progress() const;

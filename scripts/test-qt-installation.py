@@ -9,6 +9,7 @@ artifact is deliberately not described as a cross-version upgrade.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import importlib.util
 import json
 import os
@@ -89,6 +90,27 @@ def registry_uninstall():
                     ('DisplayName', 'DisplayVersion', 'InstallLocation', 'UninstallString')}
         except FileNotFoundError as error:
             raise ValueError('An existing uninstall key is incomplete; it must be retained') from error
+
+
+@contextmanager
+def windows_read_lock(path):
+    """Hold a real existing payload file open without write/delete sharing."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.CreateFileW(str(path), 0x80000000, 0x1, None, 3, 0x80, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        yield
+    finally:
+        if not kernel.CloseHandle(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
 
 
 class Validation:
@@ -330,6 +352,21 @@ class Validation:
         meta.require(not any(c in str(root) for c in ('"', '\r', '\n', '\0')), 'NSIS installation directory contains a command delimiter')
         command = subprocess.list2cmdline([str(setup), '/S']) + ' /D=' + str(root)
         self.native_started = True
+        # A regular user file occupying a required payload directory exercises
+        # the real SetOutPath/File failure, including the silent default path.
+        nested = next((entry['path'] for entry in self.payload('installer') if '/' in entry['path']), None)
+        meta.require(nested is not None, 'The real installer has no nested payload for its write-failure check')
+        collision = root / nested.split('/')[0]
+        with collision.open('xb') as outgoing:
+            outgoing.write(b'This pre-existing user file must not become an installation directory.\n')
+        collision_record = preserve_record(collision)
+        code, _ = self.run(command, tag='nsis-directory-conflict', native_command_line=True, check=False, timeout=60)
+        meta.require(code != 0 and registry_location() is None and registry_uninstall() is None,
+                     'A real payload directory conflict must fail without registering a partial installation')
+        self.checkpoint(case, 'directory-conflict-retained', protected + [collision_record])
+        case['nativeFailures'] = [{'kind': 'payload-directory-conflict', 'returnCode': code,
+                                   'registrationAbsent': True, 'userFileUnchanged': collision_record}]
+        verify_preserved([collision_record]); collision.unlink()
         for stage in ('installed', 'same-package-reinstalled'):
             self.run(command, tag='nsis-' + stage, native_command_line=True)
             meta.require(registry_location() is not None and Path(registry_location()).resolve() == root,
@@ -350,6 +387,8 @@ class Validation:
             self.checkpoint(case, stage, protected)
             case['gui'].append(self.open_product('installer', root / 'huhucapture.exe', root, stage))
             self.checkpoint(case, stage + '-after-normal-close', protected)
+            if stage == 'installed':
+                self.windows_locked_payload(case, command, protected)
         self.remove_windows_installation()
         self.assert_removed(root, 'installer')
         meta.require(not os.path.lexists(root / 'uninstall.exe') and registry_location() is None and registry_uninstall() is None,
@@ -357,24 +396,62 @@ class Validation:
         meta.require(not os.path.lexists(self.programs / 'huhucapture.lnk') and not os.path.lexists(self.programs / 'Uninstall.lnk'),
                      'The actual uninstaller retained its registered Start Menu shortcuts')
         self.checkpoint(case, 'native-uninstalled', protected)
+        meta.require(len(case['nativeFailures']) == 3, 'All real silent installer/uninstaller failures must be observed')
         case['passed'] = True
+
+    def windows_locked_payload(self, case, install_command, protected):
+        root = self.native_root
+        dll = next((entry['path'] for entry in self.payload('installer') if entry['path'].lower().endswith('.dll')), None)
+        meta.require(dll is not None, 'The actual installed DLL inventory is required for a native sharing violation')
+        locked = preserve_record(root / dll)
+        uninstaller = preserve_record(root / 'uninstall.exe')
+        registered = registry_uninstall()
+        with windows_read_lock(root / dll):
+            for kind in ('reinstall-locked-dll', 'uninstall-locked-dll'):
+                if kind.startswith('reinstall'):
+                    code, _ = self.run(install_command, tag='nsis-' + kind, native_command_line=True,
+                                       check=False, timeout=60)
+                else:
+                    code = self.run_windows_uninstaller(tag='nsis-' + kind, check=False)
+                meta.require(code != 0 and registry_location() is not None and Path(registry_location()).resolve() == root and
+                             registry_uninstall() == registered,
+                             'A real sharing violation must fail and retain the registered retry path')
+                self.checkpoint(case, kind, protected + [locked, uninstaller])
+                case['nativeFailures'].append({'kind': kind, 'returnCode': code,
+                    'lockedFileUnchanged': locked, 'uninstallerUnchanged': uninstaller,
+                    'registrationUnchanged': registered, 'programFilesMayBePartiallyRemoved': True})
+        # The next normal same-package installation must repair any explicitly
+        # listed files removed before the locked file, and run the real GUI.
+
+    def run_windows_uninstaller(self, *, tag, check=True):
+        root = self.native_root
+        current = registry_location()
+        meta.require(current and Path(current).resolve() == root and regular(root / 'uninstall.exe'),
+                     'Only the just-created registered uninstaller may be executed')
+        original = preserve_record(root / 'uninstall.exe')
+        directory = self.output / ('uninstaller-process-' + uuid.uuid4().hex)
+        directory.mkdir()
+        executable = directory / 'uninstall.exe'
+        with (root / 'uninstall.exe').open('rb') as incoming, executable.open('xb') as outgoing:
+            shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
+        verify_preserved([original])
+        meta.require(meta.descriptor(executable) == original['bytes'], 'The actual uninstaller copy differs from its registered bytes')
+        meta.require(not any(c in str(root) for c in ('"', '\r', '\n', '\0')), 'NSIS removal directory contains a command delimiter')
+        # _?= is unquoted and last, as required by NSIS. Running the byte-exact
+        # copy outside INSTDIR allows removal of the installed uninstaller and
+        # makes this the real removal process, not a temporary-copy launcher.
+        command = subprocess.list2cmdline([str(executable), '/S']) + ' _?=' + str(root)
+        code, _ = self.run(command, tag=tag, native_command_line=True, check=check, timeout=60)
+        return code
 
     def remove_windows_installation(self):
         if self.native_removed or not self.native_root:
             return
         root = self.native_root
-        current = registry_location()
-        meta.require(current and Path(current).resolve() == root and regular(root / 'uninstall.exe'),
-                     'Only the just-created registered uninstaller may be executed')
-        self.run([root / 'uninstall.exe', '/S'], tag='nsis-uninstall')
-        # Without _?= NSIS intentionally launches its temporary copy. Observe
-        # the real completion, not only the original launcher's exit status.
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if registry_location() is None and not os.path.lexists(root / 'uninstall.exe'):
-                self.native_removed = True; return
-            time.sleep(0.05)
-        raise RuntimeError('The actual NSIS uninstall did not complete within its bounded deadline')
+        self.run_windows_uninstaller(tag='nsis-uninstall')
+        meta.require(registry_location() is None and registry_uninstall() is None and
+                     not os.path.lexists(root / 'uninstall.exe'), 'The real NSIS removal process retained its registration or executable')
+        self.native_removed = True
 
     def extract_zip(self, archive, root):
         expected = {value['path']: value for value in self.payload('portable-zip')}

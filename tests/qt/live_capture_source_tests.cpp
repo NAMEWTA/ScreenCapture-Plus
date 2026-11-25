@@ -1,4 +1,7 @@
 #include "services/capture/LiveCaptureSource.h"
+#ifdef Q_OS_LINUX
+#include "platform/linux/portal/WaylandRequestBarrier.h"
+#endif
 
 #include <QElapsedTimer>
 #include <QGuiApplication>
@@ -82,10 +85,61 @@ void reentrantShutdownAndDeletion()
     waitFor([&] { return !alive; });
     std::cout << "PASS reentrant shutdown and source deletion from real terminal signals\n";
 }
+void refreshAdmission()
+{
+    LiveCaptureSource source;
+    quint64 expected{};
+    unsigned completions{};
+    bool drained{};
+    QObject::connect(&source, &LiveCaptureSource::captureReady, &source,
+        [&](quint64 request, quint64 id, quint64 generation, const Failure& failure) {
+            require(request == expected && id == 73 && generation == 5 && ++completions == 1,
+                "refresh preserves the requested source and has exactly one terminal");
+            require(failure.code == Failure::Code::SourceChanged && !source.claim(id, generation, {0, 0, 1, 1}),
+                "refresh cannot fabricate authorization or a replacement frame");
+            source.cancelRefresh(request); // a completed rejection is harmless
+            source.shutdown();
+        });
+    QObject::connect(&source, &LiveCaptureSource::shutdownFinished, &source, [&] { drained = true; });
+    expected = source.refreshForCapture(73, 5);
+    require(expected != 0 && !completions, "invalid refresh admission still reports asynchronously");
+    waitFor([&] { return drained; });
+    require(source.refreshForCapture(73, 5) == 0 && completions == 1,
+        "shutdown closes refresh admission before reporting its drain");
+    std::cout << "PASS actual unauthorized refresh rejection, no stale claim, terminal reentry and closed admission\n";
+}
+#ifdef Q_OS_LINUX
+void requestBarrierWithoutWayland()
+{
+    using HuhuCapture::Platform::Linux::WaylandRequestBarrier;
+    using HuhuCapture::Platform::Linux::PortalFailure;
+    for (const bool cancel : {false, true}) {
+        auto* barrier = new WaylandRequestBarrier;
+        QPointer<WaylandRequestBarrier> alive(barrier);
+        unsigned terminals{};
+        QObject::connect(barrier, &WaylandRequestBarrier::finished, barrier, [&](const PortalFailure& failure) {
+            require(++terminals == 1 && failure.code == (cancel ? PortalFailure::Code::Cancelled : PortalFailure::Code::Unsupported),
+                "The actual unsupported Qt display or prior cancellation has one truthful asynchronous terminal");
+            delete barrier;
+        });
+        if (cancel) barrier->cancel();
+        barrier->start();
+        require(terminals == 0 && alive, "No Wayland completion runs inside start/cancel");
+        waitFor([&] { return !alive; });
+        require(terminals == 1, "The terminal may destroy its request barrier without a late callback");
+    }
+    std::cout << "PASS actual non-Wayland request ordering failure, prior cancellation and terminal destruction\n";
+}
+#endif
 }
 int main(int argc, char** argv)
 {
     QGuiApplication app(argc, argv);
-    try { noNativeBackend(); reentrantShutdownAndDeletion(); }
+    try {
+        noNativeBackend(); reentrantShutdownAndDeletion(); refreshAdmission();
+#ifdef Q_OS_LINUX
+        requestBarrierWithoutWayland();
+#endif
+    }
     catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

@@ -66,13 +66,18 @@ GlobalShortcut::GlobalShortcut(QObject* parent) : QObject(parent), backend_(Plat
 {
     connect(this, &GlobalShortcut::bindingFinished, this, [this](quint64 request) {
         if (request == pendingRequest_) { pendingRequest_ = 0; pendingCancelled_ = false; }
+        checkShutdown();
     });
 }
 GlobalShortcut::~GlobalShortcut() { shutdown(); }
 void GlobalShortcut::initialize()
 {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (!stopped_) backend_->initialize();
+    if (stopped_) return;
+    ++deliveries_;
+    const QPointer<GlobalShortcut> alive(this);
+    backend_->initialize();
+    if (alive) { --deliveries_; checkShutdown(); }
 }
 void GlobalShortcut::setActionDescription(const QString& description)
 {
@@ -88,10 +93,15 @@ ShortcutSnapshot GlobalShortcut::snapshot() const
 quint64 GlobalShortcut::bind(const QStringList& source, QWindow* parent, Persist persist, bool allowUnparented)
 {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (!nextRequest_) return 0;
+    if (stopped_ || !nextRequest_) return 0;
     const auto request = nextRequest_++;
+    ++deliveries_;
     if (pendingRequest_) {
-        QTimer::singleShot(0, this, [this, request] { Q_EMIT bindingFinished(request, {ShortcutError::Busy}); });
+        QTimer::singleShot(0, this, [this, request] {
+            const QPointer<GlobalShortcut> alive(this);
+            Q_EMIT bindingFinished(request, {stopped_ ? ShortcutError::Cancelled : ShortcutError::Busy});
+            if (alive) { --deliveries_; checkShutdown(); }
+        });
         return request;
     }
     pendingRequest_ = request; pendingCancelled_ = false;
@@ -100,10 +110,12 @@ quint64 GlobalShortcut::bind(const QStringList& source, QWindow* parent, Persist
     const bool hadParent = parent != nullptr;
     QTimer::singleShot(0, this, [this, request, keys, parentLife, hadParent,
                                persist = std::move(persist), allowUnparented]() mutable {
-        if (stopped_ || pendingCancelled_) { Q_EMIT bindingFinished(request, {ShortcutError::Cancelled}); return; }
-        if (keys.isEmpty()) { Q_EMIT bindingFinished(request, {ShortcutError::InvalidShortcut}); return; }
-        if (hadParent && !parentLife) { Q_EMIT bindingFinished(request, {ShortcutError::Cancelled}); return; }
-        backend_->bind(request, keys, parentLife, std::move(persist), allowUnparented);
+        const QPointer<GlobalShortcut> alive(this);
+        if (stopped_ || pendingCancelled_) Q_EMIT bindingFinished(request, {ShortcutError::Cancelled});
+        else if (keys.isEmpty()) Q_EMIT bindingFinished(request, {ShortcutError::InvalidShortcut});
+        else if (hadParent && !parentLife) Q_EMIT bindingFinished(request, {ShortcutError::Cancelled});
+        else backend_->bind(request, keys, parentLife, std::move(persist), allowUnparented);
+        if (alive) { --deliveries_; checkShutdown(); }
     });
     return request;
 }
@@ -122,7 +134,22 @@ void GlobalShortcut::shutdown()
 {
     Q_ASSERT(QThread::currentThread() == thread());
     if (std::exchange(stopped_, true)) return;
-    backend_->shutdown();
+    backend_->shutdown([alive = QPointer<GlobalShortcut>(this)] {
+        if (!alive) return;
+        alive->backendStopped_ = true;
+        alive->checkShutdown();
+    });
+}
+void GlobalShortcut::checkShutdown()
+{
+    if (!stopped_ || !backendStopped_ || pendingRequest_ || deliveries_ || shutdownQueued_ || shutdownReported_) return;
+    shutdownQueued_ = true;
+    QTimer::singleShot(0, this, [this] {
+        shutdownQueued_ = false;
+        if (!stopped_ || !backendStopped_ || pendingRequest_ || deliveries_ || shutdownReported_) return;
+        shutdownReported_ = true;
+        Q_EMIT shutdownFinished();
+    });
 }
 
 } // namespace HuhuCapture::Desktop

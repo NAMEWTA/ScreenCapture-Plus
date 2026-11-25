@@ -61,12 +61,12 @@ struct SettingsController::State {
     std::vector<QPointer<UI::SettingsWindow>> views;
     quint64 shortcutRequest{}, viewToken{};
     bool ready{}, initialized{}, initializingShortcut{}, canOpenArchive{}, canOpenLinks{}, lanAvailable{};
-    bool stopping{}, shutdownNotified{}, captureActive{};
+    bool stopping{}, shortcutStopped{}, shutdownNotified{}, captureActive{};
     bool standardDialogLanguageAvailable{true};
 
     State(Config::SettingsStore& settings, Localization::LanguageCatalog& language, QString launch)
         : store(settings), catalog(language), autoStart(launch), executable(std::move(launch)) {}
-    bool busy() const { return initializingShortcut || shortcutRequest != 0; }
+    bool busy() const { return initializingShortcut || shortcutRequest != 0 || (stopping && !shortcutStopped); }
     QStringList requestedKeys() const
     { return Desktop::parseShortcut(store.value({QStringLiteral("shortcutKey"), QStringLiteral("cap")}).toString()); }
     bool portalConfigured() const
@@ -90,6 +90,12 @@ SettingsController::SettingsController(Config::SettingsStore& store, Localizatio
     });
     connect(&state_->shortcut, &Desktop::GlobalShortcut::changed, this, [this] {
         if (!state_->stopping) refreshViews();
+    });
+    connect(&state_->shortcut, &Desktop::GlobalShortcut::shutdownFinished, this, [this] {
+        state_->shortcutStopped = true;
+        const QPointer<SettingsController> alive(this);
+        Q_EMIT busyChanged(busy());
+        if (alive) finishShutdown();
     });
     connect(&state_->shortcut, &Desktop::GlobalShortcut::initialized, this, [this] {
         state_->initializingShortcut = false;
@@ -130,6 +136,7 @@ SettingsController::SettingsController(Config::SettingsStore& store, Localizatio
 SettingsController::~SettingsController()
 {
     state_->stopping = true;
+    disconnect(&state_->shortcut, nullptr, this, nullptr);
     state_->shortcut.shutdown();
     for (const auto& pointer : state_->views) if (pointer) {
         auto* window = pointer.data(); disconnect(window, nullptr, this, nullptr); delete window;
@@ -341,7 +348,7 @@ bool SettingsController::captureShortcutAvailable() const
 }
 void SettingsController::finishShutdown()
 {
-    if (!state_->stopping || busy() || state_->shutdownNotified) return;
+    if (!state_->stopping || !state_->shortcutStopped || busy() || state_->shutdownNotified) return;
     state_->shutdownNotified = true; Q_EMIT shutdownFinished();
 }
 void SettingsController::shutdown()

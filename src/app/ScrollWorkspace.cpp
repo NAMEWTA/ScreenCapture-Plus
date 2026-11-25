@@ -23,7 +23,7 @@ struct ScrollWorkspace::State {
     QPointer<cap::ScrollCaptureSession> session;
     QPointer<ui::ScrollWindow> view;
     quint64 captureToken{};
-    bool stopping{}, shutdownReported{};
+    bool stopping{}, shutdownReported{}, externalStopAvailable{};
 
     State(ScrollWorkspace* parent, MediaWorkspace& workspace, CaptureWorkspace& source)
         : owner(parent), media(workspace), capture(source) {}
@@ -76,28 +76,11 @@ struct ScrollWorkspace::State {
             cap::Failure error;
             if (request.coordinates == cap::CoordinateSpace::DesktopPixels)
                 error = controller->prepareNative(request, capture.session().snapshot(), capture.nativeSource());
-            else {
-                const auto& selected = request.sourceRect;
-                if (selected.x() < 0 || selected.y() < 0 || selected.isEmpty()) {
-                    capture.completeLiveAction(request.token, cap::ActionResult::Failed,
-                        QStringLiteral("The authorized scrolling selection is invalid")); return;
-                }
-                auto claim = capture.liveSource().claim(request.sourceId, request.generation,
-                    {static_cast<unsigned>(selected.x()), static_cast<unsigned>(selected.y()),
-                        static_cast<unsigned>(selected.width()), static_cast<unsigned>(selected.height())});
-                if (!claim) {
-                    capture.completeLiveAction(request.token, cap::ActionResult::Failed,
-                        QStringLiteral("The authorized scrolling source is no longer available")); return;
-                }
-                error = controller->prepareLive(request, capture.liveSource(), *claim);
-                if (error) {
-                    claim->firstFrame = {}; claim->stop.request_stop(); claim.reset();
-                    capture.liveSource().consumerFinished(request.sourceId, request.generation);
-                }
-            }
+            else error = controller->prepareLive(request, capture.liveSource());
             if (error) { capture.completeLiveAction(request.token, cap::ActionResult::Failed, error.detail); return; }
             auto controls = std::make_unique<ui::ScrollWindow>(*controller);
             controls->setTranslator(translator);
+            controls->setExternalStopAvailable(externalStopAvailable);
             error = controls->open();
             if (!alive) return;
             if (error) { capture.completeLiveAction(request.token, cap::ActionResult::Failed, error.detail); return; }
@@ -105,6 +88,8 @@ struct ScrollWorkspace::State {
             session = controller.release(); view = controls.release(); captureToken = token;
             const QPointer<ui::ScrollWindow> guarded(view);
             const QPointer<cap::ScrollCaptureSession> origin(session);
+            QObject::connect(view, &ui::ScrollWindow::captureStateChanged, owner, [this] { changed(); });
+            QObject::connect(session, &cap::ScrollCaptureSession::changed, owner, [this] { changed(); });
             QObject::connect(view, &ui::ScrollWindow::outputRequested, owner,
                 [this, guarded, origin](quint64 token, ui::OutputIntent intent, const QImage& image) {
                     if (!guarded || !origin || stopping) return;
@@ -167,6 +152,19 @@ ScrollWorkspace::~ScrollWorkspace()
 void ScrollWorkspace::setTranslator(ui::DesktopTranslator translator)
 { state_->translator = std::move(translator); if (state_->view) state_->view->setTranslator(state_->translator); }
 bool ScrollWorkspace::busy() const noexcept { return state_->busy(); }
+void ScrollWorkspace::setExternalStopAvailable(bool available)
+{
+    if (state_->externalStopAvailable == available) return;
+    state_->externalStopAvailable = available;
+    if (state_->view) state_->view->setExternalStopAvailable(available);
+    state_->changed();
+}
+bool ScrollWorkspace::canStop() const noexcept
+{ return !state_->stopping && state_->view && state_->view->canStop(); }
+bool ScrollWorkspace::stopActive()
+{ return canStop() && state_->view->stopCapture(); }
+bool ScrollWorkspace::controlsHiddenForCapture() const noexcept
+{ return state_->view && state_->view->hiddenForCapture(); }
 void ScrollWorkspace::shutdown()
 {
     if (state_->stopping) return;

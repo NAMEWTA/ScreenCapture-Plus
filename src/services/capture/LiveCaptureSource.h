@@ -34,10 +34,21 @@ public:
     bool busy() const noexcept;
     quint64 request(QWindow* parent, LiveCaptureOptions options = {});
     bool isCurrent(quint64 sourceId, quint64 generation) const;
-    // GUI-thread, once per source. Queue frames retain their original native
+    // After the caller unmaps its selection/control windows, replace the
+    // preview data connection while retaining this authorization and source.
+    // Every old native worker and lease is drained before a new remote opens.
+    // The next actual frame must preserve the selected format/crop/transform.
+    // Request acknowledgement and a new connection are not a universal proof
+    // of compositor presentation; see docs/recording-controls.md and the real
+    // compositor pixel probe. No fixed delay or source-clock inference is used.
+    quint64 refreshForCapture(quint64 sourceId, quint64 generation);
+    void cancelRefresh(quint64 refreshId);
+    // GUI-thread, once per source, only after captureReady succeeds. Queue
+    // frames retain their original native
     // crop/transform/color/timing. FrameNormalizer applies those plus the user
     // selection on the consumer worker; no per-frame GUI signals are used.
-    // Transfers the actual first native frame once, so a static source stays
+    // Transfers the replacement connection's actual first native frame once,
+    // so a static source stays
     // usable without manufacturing new frames from its QImage preview.
     std::optional<Core::LiveSourceConsumer> claim(quint64 sourceId, quint64 generation,
         Core::FrameCrop selection);
@@ -61,6 +72,8 @@ Q_SIGNALS:
     void activityChanged(quint64 sourceId, quint64 generation,
         HuhuCapture::Core::LiveSourceActivity activity);
     void sourceClosed(quint64 sourceId, quint64 generation,
+        const HuhuCapture::Capture::Failure& failure);
+    void captureReady(quint64 refreshId, quint64 sourceId, quint64 generation,
         const HuhuCapture::Capture::Failure& failure);
     // Real producer, preview, consumer and Portal callbacks have drained.
     void stopped(quint64 token, const HuhuCapture::Capture::Failure& failure);

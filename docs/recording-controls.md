@@ -30,11 +30,13 @@ If neither actual exclusion nor verified outside placement is available, startin
 
 Restoring hidden controls is delayed until the backend reports finalization, after its actual frame source stopped. Shutdown never treats a write/finalization error as a clean cancellation: the workspace reports the concrete failure and any durable archive or recovery path before the application finishes draining.
 
-## Wayland boundary under implementation
+## Wayland refresh and remaining presentation gate
 
 A Screenshot rectangle is not reused as a ScreenCast rectangle. The same authorized source is selected through its actual first-frame preview. That preview and its queue can contain selection or recording controls. Unmapping the controls and receiving `wl_display.sync` alone does **not** establish that a later PipeWire buffer contains a newly composed scene. Creating another PipeWire remote alone also does not establish that the producer has discarded an older frame.
 
-The separate live-source refresh work must drain the old producer/preview/leases, retain the same Portal authorization and node identity, validate unchanged format/crop/transform and obtain actual fresh pixels. Its acceptance probe must first show a conspicuous control and then verify that the first admitted pixels after hiding contain none of it. GNOME/Mutter and Plasma/KWin require their own actual desktop evidence. This document does not mark that boundary complete or reinterpret an arrival timestamp as capture time.
+The [shared live-source refresh](wayland-capture-refresh.md) now drains the old producer/preview/leases, retains the same Portal authorization and node identity, and validates unchanged format/crop/transform before announcing the replacement first frame. Both recording and scrolling callers wait for actual Qt unexposure, request this refresh and claim only after its terminal. Recording preparation remains externally stoppable before a recording worker or staging output exists; cancellation and shutdown await refresh drain. It does not create a second authorization owner.
+
+The independent `live_capture_refresh_probe` first captures a conspicuous real control, hides it, and checks every pixel of the exact replacement first lease against the displayed background. It also verifies old native socket identities are gone before claim and no producer socket survives shutdown. It never substitutes a later frame to hide a dirty first one. GNOME/Mutter and Plasma/KWin require their own actual desktop evidence; the new Sway test has not run in this local workspace. Neither this implementation nor a new FD is described as a universal presentation guarantee.
 
 ## Reuse and evidence
 

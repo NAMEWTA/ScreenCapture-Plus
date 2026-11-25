@@ -7,6 +7,7 @@
 #include "ui/qt/DesktopTheme.h"
 #include "ui/qt/ToolbarControls.h"
 #include <QCloseEvent>
+#include <QApplication>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
@@ -14,6 +15,7 @@
 #include <QPointer>
 #include <QRegion>
 #include <QScreen>
+#include <QShowEvent>
 #include <QScrollArea>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -120,6 +122,7 @@ struct ScrollWindow::State {
     std::optional<OutputIntent> afterStop;
     QString outputFailure;
     bool opened{}, closing{}, reportedClosed{}, pending{}, excluded{}, hiddenForCapture{};
+    bool externalStopAvailable{}, pendingLiveStart{};
 
     QString text(QStringView key, const char* fallback) const
     {
@@ -163,6 +166,11 @@ ScrollWindow::ScrollWindow(Capture::ScrollCaptureSession& session, QWidget* pare
     state_->notice->setObjectName(QStringLiteral("scrollCaptureNotice")); body->addWidget(state_->notice);
     state_->frameDeadline.setSingleShot(true); state_->frameDeadline.setInterval(1900);
     connect(&state_->frameDeadline, &QTimer::timeout, this, [this] {
+        if (state_->pendingLiveStart) {
+            state_->pendingLiveStart = false; state_->hiddenForCapture = false;
+            state_->outputFailure = state_->text(u"long.hideFailed", "The capture controls did not unmap before the deadline. No scrolling capture was started.");
+            show(); refresh(); return;
+        }
         if (state_->session && state_->sample) state_->session->acknowledgeNativeCapture(state_->captureToken, state_->sample, false);
         state_->sample = 0;
     });
@@ -180,6 +188,7 @@ ScrollWindow::ScrollWindow(Capture::ScrollCaptureSession& session, QWidget* pare
         state_->capturingSample = 0;
         if (!state_->hiddenForCapture || state_->closing) return;
         state_->hiddenForCapture = false; setAttribute(::Qt::WA_ShowWithoutActivating); show();
+        QTimer::singleShot(0, this, [this] { Q_EMIT captureStateChanged(); });
     });
     connect(&session, &Capture::ScrollCaptureSession::finished, this, [this] {
         state_->frameDeadline.stop(); state_->sample = 0; state_->capturingSample = 0;
@@ -255,6 +264,29 @@ void ScrollWindow::activate(const QString& token)
     if (state_->closing) return;
     if (!state_->hiddenForCapture) { show(); raise(); if (windowHandle()) state_->activation.request(windowHandle(), token); }
 }
+void ScrollWindow::setExternalStopAvailable(bool available)
+{
+    if (state_->externalStopAvailable == available) return;
+    state_->externalStopAvailable = available;
+    if (!available && state_->hiddenForCapture && state_->manual()) stopCapture();
+    refresh();
+}
+bool ScrollWindow::canStop() const noexcept
+{
+    if (state_->closing || !state_->session) return false;
+    const auto phase = state_->session->phase();
+    return state_->pendingLiveStart || phase == ScrollPhase::Starting || phase == ScrollPhase::Capturing;
+}
+bool ScrollWindow::stopCapture()
+{
+    if (!canStop()) return false;
+    if (state_->pendingLiveStart) {
+        state_->pendingLiveStart = false; state_->frameDeadline.stop();
+        state_->hiddenForCapture = false; show(); refresh();
+    } else state_->session->stop();
+    return true;
+}
+bool ScrollWindow::hiddenForCapture() const noexcept { return state_->hiddenForCapture; }
 void ScrollWindow::refresh()
 {
     const auto phase = state_->session ? state_->session->phase() : ScrollPhase::Closed;
@@ -270,7 +302,8 @@ void ScrollWindow::refresh()
     setLabel(state_->save, u"tool.save", "Save as"); setLabel(state_->copy, u"tool.clipboard", "Copy");
     for (const auto& surface : state_->surfaces) { surface->label = state_->text(u"long.start", "Start"); surface->update(); }
     state_->start->setVisible(state_->manual());
-    state_->start->setEnabled(phase == ScrollPhase::Ready && !state_->pending && !state_->closing);
+    state_->start->setEnabled(phase == ScrollPhase::Ready && !state_->pending && !state_->closing &&
+        !state_->pendingLiveStart && (!state_->manual() || state_->externalStopAvailable));
     state_->stop->setEnabled((phase == ScrollPhase::Starting || phase == ScrollPhase::Capturing) && !state_->closing);
     const bool canOutput = state_->session && !state_->pending && !state_->closing &&
         (state_->session->hasCompleteImage() || (!progress.imageSize.isEmpty() && working(phase)));
@@ -293,17 +326,32 @@ void ScrollWindow::refresh()
     else if (progress.notice == ScrollNotice::SourcePaused) status = state_->text(u"long.sourcePaused", "Screen sharing is paused; waiting for the source to resume.");
     else if (state_->manual()) status = state_->text(u"long.manualCapturing", "Scroll the authorized source manually; stop when finished.");
     state_->status->setText(status); state_->status->setVisible(!status.isEmpty());
-    state_->notice->setText(state_->text(u"long.controlsOutside", "Keep the controls outside the authorized source region."));
+    state_->notice->setText(state_->externalStopAvailable ?
+        state_->text(u"long.controlsHidden", "Controls hide during capture. Use the tray or registered global shortcut to stop.") :
+        state_->text(u"long.stopUnavailable", "A working tray or global stop action is required before these controls can be hidden for capture."));
     state_->notice->setVisible(state_->manual());
     state_->setup->refreshTextWidths(); state_->actions->refreshTextWidths();
     if (phase != ScrollPhase::Ready) for (const auto& surface : state_->surfaces)
         if (!working(phase) || !surface->outline) surface->hide();
     state_->layout->activate();
+    QTimer::singleShot(0, this, [this] { Q_EMIT captureStateChanged(); });
 }
 void ScrollWindow::start()
 {
-    if (!state_->session || state_->session->phase() != ScrollPhase::Ready || state_->closing) return;
+    if (!state_->session || state_->session->phase() != ScrollPhase::Ready || state_->closing || state_->pendingLiveStart) return;
     for (const auto& surface : state_->surfaces) surface->hide();
+    if (state_->manual()) {
+        if (!state_->externalStopAvailable) { refresh(); return; }
+        for (auto* tooltip : QApplication::topLevelWidgets())
+            if (tooltip->windowType() == ::Qt::ToolTip) {
+                tooltip->hide();
+                if (tooltip->windowHandle()) tooltip->windowHandle()->installEventFilter(this);
+            }
+        state_->outputFailure.clear(); state_->pendingLiveStart = true; state_->hiddenForCapture = true;
+        hide(); state_->frameDeadline.start(); refresh();
+        QTimer::singleShot(0, this, &ScrollWindow::acknowledgeHidden);
+        return;
+    }
     const QPointer<ScrollWindow> alive(this);
     const auto accepted = state_->session->start(); if (!alive) return;
     if (accepted) {
@@ -349,6 +397,22 @@ void ScrollWindow::prepareNativeFrame(quint64 token, quint64 sample)
 }
 void ScrollWindow::acknowledgeHidden()
 {
+    if (state_->pendingLiveStart) {
+        if (!state_->session || state_->closing || !state_->externalStopAvailable) return;
+        if (isVisible() || (windowHandle() && windowHandle()->isExposed())) return;
+        for (auto* tooltip : QApplication::topLevelWidgets())
+            if (tooltip->windowType() == ::Qt::ToolTip && (tooltip->isVisible() ||
+                (tooltip->windowHandle() && tooltip->windowHandle()->isExposed()))) return;
+        state_->pendingLiveStart = false; state_->frameDeadline.stop();
+        const QPointer<ScrollWindow> alive(this);
+        const auto accepted = state_->session->start();
+        if (!alive) return;
+        if (!accepted) {
+            state_->hiddenForCapture = false; show();
+            state_->outputFailure = state_->text(u"long.refreshRejected", "The authorized source could not begin a capture refresh.");
+        }
+        refresh(); return;
+    }
     if (!state_->sample || !state_->session || state_->closing) return;
     if (state_->hiddenForCapture && windowHandle() && windowHandle()->isExposed()) return;
     for (const auto& surface : state_->surfaces)
@@ -361,7 +425,7 @@ void ScrollWindow::closeEvent(QCloseEvent* event)
 {
     event->ignore();
     if (state_->closing) return;
-    state_->closing = true; state_->afterStop.reset(); state_->frameDeadline.stop();
+    state_->closing = true; state_->pendingLiveStart = false; state_->afterStop.reset(); state_->frameDeadline.stop();
     for (const auto& surface : state_->surfaces) surface->hide();
     hide();
     const QPointer<ScrollWindow> alive(this);
@@ -380,9 +444,25 @@ void ScrollWindow::keyPressEvent(QKeyEvent* event)
     QWidget::keyPressEvent(event);
 }
 void ScrollWindow::resizeEvent(QResizeEvent* event) { QWidget::resizeEvent(event); }
+void ScrollWindow::showEvent(QShowEvent* event)
+{
+    if (state_->hiddenForCapture) {
+        // Reuse the recording toolbar's hidden-window rule: activation or a
+        // stray show cannot map a surface over an ongoing source capture.
+        hide();
+        if (state_->manual() && !state_->pendingLiveStart && state_->session) state_->session->stop();
+        return;
+    }
+    QWidget::showEvent(event);
+}
 bool ScrollWindow::eventFilter(QObject* watched, QEvent* event)
 {
-    if (event->type() == QEvent::Expose) QTimer::singleShot(0, this, &ScrollWindow::acknowledgeHidden);
+    if (event->type() == QEvent::Expose) {
+        if (watched == windowHandle() && state_->manual() && state_->hiddenForCapture && isVisible()) {
+            hide(); if (state_->session) state_->session->stop();
+        }
+        QTimer::singleShot(0, this, &ScrollWindow::acknowledgeHidden);
+    }
     if (watched == state_->grip && event->type() == QEvent::MouseButtonPress) {
         const auto* mouse = static_cast<QMouseEvent*>(event);
         if (mouse->button() == ::Qt::LeftButton && windowHandle()) { windowHandle()->startSystemMove(); return true; }

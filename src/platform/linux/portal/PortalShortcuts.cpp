@@ -64,14 +64,21 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
             g_clear_object(&cancellable);
         }
     };
-    struct Call {
+    struct Callback {
         std::shared_ptr<Private> state;
-        std::shared_ptr<Operation> operation;
+        explicit Callback(std::shared_ptr<Private> value) : state(std::move(value)) { ++state->callbacks; }
+        ~Callback() { --state->callbacks; state->checkDrained(); }
     };
-    struct Refresh {
-        std::shared_ptr<Private> state;
+    struct Call : Callback {
+        std::shared_ptr<Operation> operation;
+        Call(std::shared_ptr<Private> state, std::shared_ptr<Operation> pending)
+            : Callback(std::move(state)), operation(std::move(pending)) {}
+    };
+    struct Refresh : Callback {
         XdpGlobalShortcutsSession* session{};
         quint64 generation{};
+        Refresh(std::shared_ptr<Private> state, XdpGlobalShortcutsSession* value, quint64 epoch)
+            : Callback(std::move(state)), session(static_cast<XdpGlobalShortcutsSession*>(g_object_ref(value))), generation(epoch) {}
         ~Refresh() { g_object_unref(session); }
     };
 
@@ -97,6 +104,8 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
     bool initializing{};
     bool ready{};
     bool stopped{};
+    bool draining{}, shutdownQueued{};
+    unsigned callbacks{}, deliveries{};
 
     explicit Private(PortalShortcuts* value) : owner(value) {
         busName = qgetenv("LIBPORTAL_PORTAL_BUS_NAME");
@@ -139,7 +148,52 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         if (notify && owner && !stopped) Q_EMIT owner->bindingsClosed(reason);
     }
 
-    void shutdown() {
+    void checkDrained() {
+        if (!draining || stopped || !owner || shutdownQueued || callbacks || deliveries || operation || active || initializing) return;
+        if (nameWatch) g_bus_unwatch_name(std::exchange(nameWatch, 0));
+        if (bus) g_clear_signal_handler(&busClosedHandler, bus);
+        g_clear_object(&refreshCancellation);
+        if (portal) {
+            // libportal's ParentBind can return cancellation before its inner
+            // callback drops the outer GTask/session references. This portal
+            // is private to this controller; its real weak-finalize notification
+            // proves those native references have also been released. The
+            // shared session-bus object is deliberately not a global gate.
+            auto* completion = new Callback(shared_from_this());
+            auto* released = std::exchange(portal, nullptr);
+            g_object_weak_ref(G_OBJECT(released), +[](gpointer data, GObject*) {
+                const std::unique_ptr<Callback> completion(static_cast<Callback*>(data));
+                Q_ASSERT(!completion->state->owner || completion->state->onOwnerThread());
+            }, completion);
+            g_object_unref(released);
+            return;
+        }
+        shutdownQueued = true;
+        g_clear_object(&bus);
+        const auto state = shared_from_this();
+        // Run after the native callback returned, including its GAsyncResult
+        // and derived Call/Refresh resources. No new work is admitted now.
+        QTimer::singleShot(0, owner, [state] {
+            if (!state->owner || state->stopped) return;
+            if (state->callbacks || state->deliveries || state->operation || state->active || state->initializing) {
+                state->shutdownQueued = false; state->checkDrained(); return;
+            }
+            Q_EMIT state->owner->shutdownFinished();
+        });
+    }
+
+    void requestShutdown() {
+        if (draining || stopped) return;
+        draining = true; ready = false;
+        g_cancellable_cancel(initialization);
+        cancel(operation, failure(Code::Cancelled, QStringLiteral("Portal shortcuts are shutting down")));
+        closeActive({}, false);
+        if (nameWatch) g_bus_unwatch_name(std::exchange(nameWatch, 0));
+        if (bus) g_clear_signal_handler(&busClosedHandler, bus);
+        checkDrained();
+    }
+
+    void destroy() {
         stopped = true;
         g_cancellable_cancel(initialization);
         cancel(operation, failure(Code::Cancelled, QStringLiteral("Portal shortcut owner destroyed")));
@@ -162,21 +216,30 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
             g_clear_object(&pending->candidate);
         }
         if (operation == pending) operation.reset();
-        if (owner && !stopped) Q_EMIT owner->bindingFinished(pending->id, pending->assigned, error);
+        if (owner && !stopped) {
+            ++deliveries;
+            Q_EMIT owner->bindingFinished(pending->id, pending->assigned, error);
+            --deliveries;
+        }
+        checkDrained();
     }
 
     quint64 reject(PortalFailure error) {
+        if (draining || stopped || !nextId) return 0;
         const auto id = nextId++;
         const auto state = shared_from_this();
+        ++deliveries;
         QTimer::singleShot(0, owner, [state, id, error = std::move(error)] {
             if (state->owner && !state->stopped) Q_EMIT state->owner->bindingFinished(id, {}, error);
+            --state->deliveries;
+            state->checkDrained();
         });
         return id;
     }
 
     PortalFailure canBind(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts, bool unparented) {
         if (auto error = checkContext()) return error;
-        if (!ready || stopped) return failure(Code::Unavailable, QStringLiteral("GlobalShortcuts initialization has not succeeded"));
+        if (!ready || stopped || draining) return failure(Code::Unavailable, QStringLiteral("GlobalShortcuts initialization has not succeeded or is shutting down"));
         if (operation) return failure(Code::Busy, QStringLiteral("A shortcut binding request is already active"));
         if ((!parent && !unparented) || (parent && parent->thread() != owner->thread()))
             return failure(Code::ParentDestroyed, QStringLiteral("A live parent window on the GUI thread is required"));
@@ -198,11 +261,17 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
     }
 
     static void initializedPortal(GObject*, GAsyncResult* result, gpointer data) {
-        const std::unique_ptr<std::shared_ptr<Private>> holder(static_cast<std::shared_ptr<Private>*>(data));
-        const auto state = *holder;
+        const std::unique_ptr<Callback> holder(static_cast<Callback*>(data));
+        const auto state = holder->state;
         g_autoptr(GError) error = nullptr;
         std::unique_ptr<InitializedPortal> initialized(static_cast<InitializedPortal*>(g_task_propagate_pointer(G_TASK(result), &error)));
         if (state->stopped) return;
+        if (state->draining) {
+            state->initializing = false;
+            if (state->owner) Q_EMIT state->owner->initialized(state->capabilities,
+                failure(Code::Cancelled, QStringLiteral("Portal shortcut initialization was cancelled during shutdown")));
+            return;
+        }
         if (!initialized) {
             state->initializing = false;
             auto failure = fromError(error);
@@ -216,15 +285,21 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         g_dbus_connection_call(state->bus, state->busName.constData(), "/org/freedesktop/portal/desktop",
             "org.freedesktop.DBus.Properties", "GetAll", g_variant_new("(s)", "org.freedesktop.portal.GlobalShortcuts"),
             G_VARIANT_TYPE("(a{sv})"), G_DBUS_CALL_FLAGS_NONE, 5000, state->initialization,
-            propertiesReady, new std::shared_ptr<Private>(state));
+            propertiesReady, new Callback(state));
     }
 
     static void propertiesReady(GObject* source, GAsyncResult* result, gpointer data) {
-        const std::unique_ptr<std::shared_ptr<Private>> holder(static_cast<std::shared_ptr<Private>*>(data));
-        const auto state = *holder;
+        const std::unique_ptr<Callback> holder(static_cast<Callback*>(data));
+        const auto state = holder->state;
         g_autoptr(GError) error = nullptr;
         g_autoptr(GVariant) returned = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), result, &error);
         if (state->stopped) return;
+        if (state->draining) {
+            state->initializing = false;
+            if (state->owner) Q_EMIT state->owner->initialized(state->capabilities,
+                failure(Code::Cancelled, QStringLiteral("Portal shortcut initialization was cancelled during shutdown")));
+            return;
+        }
         auto& feature = state->capabilities.globalShortcuts;
         if (!returned) feature.failure = fromError(error);
         else {
@@ -249,13 +324,15 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         closeActive(std::move(reason));
     }
     static void portalVanished(GDBusConnection*, const gchar*, gpointer data) {
-        const auto state = static_cast<Private*>(data)->shared_from_this();
-        if (!state->stopped)
+        const Callback callback(static_cast<Private*>(data)->shared_from_this());
+        const auto& state = callback.state;
+        if (!state->stopped && !state->draining)
             state->unavailable(failure(Code::Unavailable, QStringLiteral("The desktop Portal service disappeared")));
     }
     static void busClosed(GDBusConnection*, gboolean, GError* error, gpointer data) {
-        const auto state = static_cast<Private*>(data)->shared_from_this();
-        if (state->stopped) return;
+        const Callback callback(static_cast<Private*>(data)->shared_from_this());
+        const auto& state = callback.state;
+        if (state->stopped || state->draining) return;
         Q_ASSERT(state->onOwnerThread());
         auto reason = error ? fromError(error) : failure(Code::Unavailable, QStringLiteral("The session bus disconnected"));
         reason.code = Code::Unavailable;
@@ -276,7 +353,7 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         g_autoptr(GError) error = nullptr;
         pending->candidate = xdp_portal_create_global_shortcuts_session_finish(XDP_PORTAL(source), result, &error);
         if (!pending->candidate) { state->finish(pending, fromError(error)); return; }
-        if (state->stopped || pending->cancellation || (!pending->parent && !pending->unparented)) {
+        if (state->stopped || state->draining || pending->cancellation || (!pending->parent && !pending->unparented)) {
             state->finish(pending, failure(Code::ParentDestroyed, QStringLiteral("Shortcut parent is no longer available")));
             return;
         }
@@ -299,7 +376,7 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
                 const auto state = weakState.lock();
                 const auto operation = weakPending.lock();
                 if (!state || !operation || operation->finished) return;
-                if (error || operation->cancellation || state->stopped) { state->finish(operation, error); return; }
+                if (error || operation->cancellation || state->stopped || state->draining) { state->finish(operation, error); return; }
                 if (!operation->portalParent->nativeParent()) {
                     state->finish(operation, failure(Code::ParentDestroyed, QStringLiteral("The exported shortcut parent is no longer valid")));
                     return;
@@ -338,7 +415,7 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         g_autoptr(GError) error = nullptr;
         g_autoptr(GPtrArray) values = xdp_global_shortcuts_session_bind_shortcuts_finish(XDP_GLOBAL_SHORTCUTS_SESSION(source), result, &error);
         if (!values) { state->finish(pending, fromError(error)); return; }
-        if (state->stopped || pending->cancellation) { state->finish(pending, {}); return; }
+        if (state->stopped || state->draining || pending->cancellation) { state->finish(pending, {}); return; }
         if (auto invalid = readAssignments(values, pending->assigned)) { state->finish(pending, invalid); return; }
         QSet<QString> requested;
         for (const auto& shortcut : pending->requested) requested.insert(shortcut.id);
@@ -364,7 +441,7 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         auto commit = std::move(pending->commit);
         try { if (commit) accepted = commit(); } catch (...) { accepted = false; }
         if (pending->finished) return;
-        if (state->stopped || !state->owner || pending->cancellation ||
+        if (state->stopped || state->draining || !state->owner || pending->cancellation ||
             (!pending->unparented && !pending->parent)) {
             state->finish(pending, failure(Code::Cancelled, QStringLiteral("Shortcut binding canceled during commit")));
             return;
@@ -388,18 +465,19 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         state->deactivatedHandler = g_signal_connect(state->active, "deactivated", G_CALLBACK(shortcutDeactivated), state.get());
         state->changedHandler = g_signal_connect(state->active, "shortcuts-changed", G_CALLBACK(shortcutsChanged), state.get());
         state->finish(pending, {});
-        if (state->owner && !state->stopped && state->active) {
+        if (state->owner && !state->stopped && !state->draining && state->active) {
             const auto snapshot = state->assigned;
             Q_EMIT state->owner->bindingsChanged(snapshot);
         }
     }
 
     static void activeClosed(XdpSession*, gpointer data) {
-        const auto state = static_cast<Private*>(data)->shared_from_this();
+        const Callback callback(static_cast<Private*>(data)->shared_from_this());
+        const auto& state = callback.state;
         state->closeActive(failure(Code::Unavailable, QStringLiteral("The active shortcut session closed")));
     }
     void activation(XdpGlobalShortcutsSession* session, const char* id, guint64 timestamp, GVariant* options, bool pressed) {
-        if (session != active || stopped || !owner) return;
+        if (session != active || stopped || draining || !owner) return;
         const auto shortcutId = QString::fromUtf8(id);
         bool known = false;
         for (const auto& shortcut : assigned) if (shortcut.id == shortcutId) { known = true; break; }
@@ -411,30 +489,33 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
         else Q_EMIT owner->deactivated(shortcutId, timestamp, token);
     }
     static void shortcutActivated(XdpGlobalShortcutsSession* session, const char* id, guint64 time, GVariant* options, gpointer data) {
-        const auto state = static_cast<Private*>(data)->shared_from_this();
+        const Callback callback(static_cast<Private*>(data)->shared_from_this());
+        const auto& state = callback.state;
         state->activation(session, id, time, options, true);
     }
     static void shortcutDeactivated(XdpGlobalShortcutsSession* session, const char* id, guint64 time, GVariant* options, gpointer data) {
-        const auto state = static_cast<Private*>(data)->shared_from_this();
+        const Callback callback(static_cast<Private*>(data)->shared_from_this());
+        const auto& state = callback.state;
         state->activation(session, id, time, options, false);
     }
     static void shortcutsChanged(XdpGlobalShortcutsSession* session, GPtrArray*, gpointer data) {
-        const auto state = static_cast<Private*>(data)->shared_from_this();
-        if (session == state->active && !state->stopped) state->refreshAssignments();
+        const Callback callback(static_cast<Private*>(data)->shared_from_this());
+        const auto& state = callback.state;
+        if (session == state->active && !state->stopped && !state->draining) state->refreshAssignments();
     }
     void refreshAssignments() {
-        if (!active || stopped) return;
+        if (!active || stopped || draining) return;
         if (refreshCancellation) { refreshAgain = true; return; }
         refreshCancellation = g_cancellable_new();
         xdp_global_shortcuts_session_list_shortcuts(active, refreshCancellation, assignmentsListed,
-            new Refresh{shared_from_this(), static_cast<XdpGlobalShortcutsSession*>(g_object_ref(active)), generation});
+            new Refresh{shared_from_this(), active, generation});
     }
     static void assignmentsListed(GObject* source, GAsyncResult* result, gpointer data) {
         const std::unique_ptr<Refresh> call(static_cast<Refresh*>(data));
         const auto& state = call->state;
         g_autoptr(GError) error = nullptr;
         g_autoptr(GPtrArray) values = xdp_global_shortcuts_session_list_shortcuts_finish(XDP_GLOBAL_SHORTCUTS_SESSION(source), result, &error);
-        if (state->stopped || call->session != state->active || call->generation != state->generation) return;
+        if (state->stopped || state->draining || call->session != state->active || call->generation != state->generation) return;
         g_clear_object(&state->refreshCancellation);
         const bool again = std::exchange(state->refreshAgain, false);
         QVector<PortalShortcutBinding> assignments;
@@ -446,17 +527,19 @@ struct PortalShortcuts::Private : std::enable_shared_from_this<Private> {
             const auto snapshot = state->assigned;
             if (state->owner) Q_EMIT state->owner->bindingsChanged(snapshot);
         }
-        if (again && !state->stopped && call->session == state->active && call->generation == state->generation)
+        if (again && !state->stopped && !state->draining && call->session == state->active && call->generation == state->generation)
             state->refreshAssignments();
     }
 };
 
 PortalShortcuts::PortalShortcuts(QObject* parent) : QObject(parent), d(std::make_shared<Private>(this)) {}
-PortalShortcuts::~PortalShortcuts() { Q_ASSERT(d->onOwnerThread()); d->shutdown(); }
+PortalShortcuts::~PortalShortcuts() { Q_ASSERT(d->onOwnerThread()); d->destroy(); }
 
 void PortalShortcuts::initialize()
 {
     Q_ASSERT(d->onOwnerThread());
+    if (d->draining || d->stopped) return;
+    const Private::Callback delivery(d);
     if (auto error = d->checkContext()) { Q_EMIT initialized(d->capabilities, error); return; }
     if (d->initializing || d->ready || d->operation || d->active) {
         Q_EMIT initialized(d->capabilities, failure(Code::InvalidState, QStringLiteral("Shortcut initialization was already requested")));
@@ -469,7 +552,7 @@ void PortalShortcuts::initialize()
     d->capabilities.globalShortcuts = {};
     d->initializing = true;
     g_cancellable_reset(d->initialization);
-    auto* task = g_task_new(nullptr, d->initialization, Private::initializedPortal, new std::shared_ptr<Private>(d));
+    auto* task = g_task_new(nullptr, d->initialization, Private::initializedPortal, new Private::Callback(d));
     g_task_run_in_thread(task, initializeInWorker);
     g_object_unref(task);
 }
@@ -489,6 +572,7 @@ quint64 PortalShortcuts::restoreShortcuts(const QVector<PortalShortcutRequest>& 
 quint64 PortalShortcuts::beginBinding(QWindow* parent, const QVector<PortalShortcutRequest>& shortcuts, Commit commit, bool unparented)
 {
     Q_ASSERT(d->onOwnerThread());
+    if (d->draining || d->stopped || !d->nextId) return 0;
     if (auto error = d->canBind(parent, shortcuts, unparented)) return d->reject(error);
     auto pending = std::make_shared<Private::Operation>();
     pending->id = d->nextId++;
@@ -520,12 +604,23 @@ void PortalShortcuts::cancelRequest(quint64 id)
 void PortalShortcuts::closeBindings()
 {
     Q_ASSERT(d->onOwnerThread());
-    d->cancel(d->operation, failure(Code::Cancelled, QStringLiteral("Shortcut bindings closed by caller")));
-    d->closeActive();
+    const Private::Callback delivery(d);
+    const auto& state = delivery.state;
+    state->cancel(state->operation, failure(Code::Cancelled, QStringLiteral("Shortcut bindings closed by caller")));
+    state->closeActive();
+}
+
+void PortalShortcuts::shutdown()
+{
+    Q_ASSERT(d->onOwnerThread());
+    // Parent cancellation may synchronously deliver a binding result whose
+    // host destroys the public QObject. Keep state and this delivery alive.
+    const Private::Callback delivery(d);
+    delivery.state->requestShutdown();
 }
 
 bool PortalShortcuts::hasActiveBindings() const { Q_ASSERT(d->onOwnerThread()); return d->active != nullptr; }
-bool PortalShortcuts::available() const { Q_ASSERT(d->onOwnerThread()); return d->ready && !d->stopped && d->capabilities.globalShortcuts.available(); }
+bool PortalShortcuts::available() const { Q_ASSERT(d->onOwnerThread()); return d->ready && !d->stopped && !d->draining && d->capabilities.globalShortcuts.available(); }
 QVector<PortalShortcutBinding> PortalShortcuts::bindings() const { Q_ASSERT(d->onOwnerThread()); return d->assigned; }
 
 } // namespace HuhuCapture::Platform::Linux

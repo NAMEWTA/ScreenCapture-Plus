@@ -156,10 +156,11 @@ public:
         }
         clearQueued(); state_.failure = result; Q_EMIT owner_.changed(); return result;
     }
-    void shutdown() override
+    void shutdown(std::function<void()> completed = {}) override
     {
         if (std::exchange(stopped_, true)) return;
         releaseNative();
+        if (completed) completed();
     }
     bool nativeEventFilter(const QByteArray&, void* message, qintptr* result) override
     {

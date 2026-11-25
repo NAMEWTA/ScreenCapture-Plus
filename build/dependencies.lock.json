@@ -25,7 +25,46 @@
       "linuxArch": "linux_gcc_64",
       "windowsToolset": "v143",
       "windowsCrt": "MD/MDd",
-      "qtbaseLicense": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+      "qtbaseLicense": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "sourceModules": {
+        "qtbase": {
+          "usesQtbaseRevision": true,
+          "platforms": ["windows", "linux"],
+          "evidence": {
+            "type": "sdk-spdx-download-location",
+            "observedPlatform": "linux"
+          }
+        },
+        "qtsvg": {
+          "repository": "https://github.com/qt/qtsvg.git",
+          "commit": "ce2d9787bf7c6e4d9ab79b33b99ebbcfec7aef00",
+          "platforms": ["windows", "linux"],
+          "evidence": {
+            "type": "sdk-spdx-download-location",
+            "observedPlatform": "linux"
+          }
+        },
+        "qtwayland": {
+          "repository": "https://github.com/qt/qtwayland.git",
+          "commit": "966a42a19fcde2ff0cee3e0cd692237eef9bfb3d",
+          "platforms": ["linux"],
+          "evidence": {
+            "type": "sdk-source-spdx-dot-tag-sha1",
+            "observedPlatform": "linux",
+            "sha1": "fd13bb8f2c5e4b94db45debd3a143d6ffbe59ebf"
+          }
+        },
+        "qttranslations": {
+          "repository": "https://github.com/qt/qttranslations.git",
+          "commit": "201bdab42f65751f1392b38a5f64ecccc9a0657d",
+          "platforms": ["windows", "linux"],
+          "evidence": {
+            "type": "official-release-tag",
+            "tag": "v6.12.1",
+            "sdkSourceBinding": "unproven"
+          }
+        }
+      }
     },
     "aqtinstall": {
       "repository": "https://github.com/miurahr/aqtinstall.git",

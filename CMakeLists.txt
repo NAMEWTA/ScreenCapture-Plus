@@ -397,6 +397,8 @@ if(HUHUCAPTURE_QT_VALIDATION)
             src/platform/linux/portal/PortalParent.cpp
             src/platform/linux/portal/PortalCapture.h
             src/platform/linux/portal/PortalCapture.cpp
+            src/platform/linux/portal/WaylandRequestBarrier.h
+            src/platform/linux/portal/WaylandRequestBarrier.cpp
             src/platform/linux/portal/PortalShortcuts.h
             src/platform/linux/portal/PortalShortcuts.cpp
             third_party/kwayland-parent/WaylandForeign.h

@@ -149,12 +149,53 @@ jobs:
         run: |
           cmake -S . -B artifacts/cmake/application-runtime -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DHUHUCAPTURE_BUILD_APP=ON -DBUILD_TESTING=OFF -DCMAKE_DISABLE_FIND_PACKAGE_Python3=ON -DHUHUCAPTURE_RUNTIME_LICENSES="$GITHUB_WORKSPACE/artifacts/runtime-licenses" -DHUHUCAPTURE_OPENSSL_RUNTIME_DIR=/usr/lib/x86_64-linux-gnu
           cmake --build artifacts/cmake/application-runtime --parallel 2
-      - name: Deploy the linked runtime and verify actual development packages
-        id: packages
+      - name: Install the linked runtime and verify its actual TLS backend
+        id: runtime_install
         if: ${{ !cancelled() && steps.application_build.outcome == 'success' }}
         run: |
           cmake --install artifacts/cmake/application-linux --config RelWithDebInfo --prefix "$GITHUB_WORKSPACE/artifacts/install/linux"
           python scripts/test-qt-package-runtime.py --prefix artifacts/install/linux --probe artifacts/cmake/application-linux/package_runtime_probe --certificate tests/fixtures/qt-tls/localhost-test-cert.pem --private-key tests/fixtures/qt-tls/localhost-test-key.pem --report artifacts/cmake/application-linux/package-runtime.json
+      - name: Collect actual deployed library origins and original notices
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        run: |
+          python tests/runtime_materials_tests.py --cargo-metadata artifacts/native-rust/cargo-metadata.json
+          python scripts/collect-runtime-materials.py system --installed artifacts/install/linux --original-prefix "qt=$QT_ROOT_DIR" --original-prefix "portal=$GITHUB_WORKSPACE/.deps/portal-validation/install" --original-prefix "pipewire=$GITHUB_WORKSPACE/.deps/pipewire-validation/install" --original-prefix "media=$GITHUB_WORKSPACE/.deps/media-validation/install" --output artifacts/runtime-materials-linux
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          shutil.copytree(Path('artifacts/runtime-materials-linux'), Path('artifacts/install/linux/share/huhucapture/licenses/collected-runtime'))
+          PY
+      - name: Restore the fixed original Qt module sources
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        run: python scripts/restore-qt-module-sources.py --platform linux --workspace artifacts/qt-module-sources
+      - name: Bind actual Qt runtime bytes to original SDK SPDX and official deployment
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        run: |
+          python scripts/collect-runtime-materials.py qt --installed artifacts/install/linux --qt-prefix "$QT_ROOT_DIR" --build-directory artifacts/cmake/application-linux --configuration RelWithDebInfo --output artifacts/runtime-materials-qt-linux --module-source qtbase=artifacts/qt-module-sources/qtbase --module-source qtsvg=artifacts/qt-module-sources/qtsvg --module-source qtwayland=artifacts/qt-module-sources/qtwayland --module-source qttranslations=artifacts/qt-module-sources/qttranslations --source-output artifacts/corresponding-sources-qt-linux
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          source = Path('artifacts/runtime-materials-qt-linux')
+          target = Path('artifacts/install/linux/share/huhucapture/licenses/collected-qt')
+          shutil.copytree(source/'notices', target)
+          shutil.copyfile(source/'qt-materials.json', target/'qt-materials.json')
+          PY
+      - name: Retain the actual Rust dependency sources and original notices
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        run: |
+          python scripts/collect-runtime-materials.py rust --native-receipt artifacts/native-rust/build-info.json --cargo-metadata artifacts/native-rust/cargo-metadata.json --output artifacts/runtime-materials-rust-linux --source-output artifacts/corresponding-sources-rust-linux
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          source = Path('artifacts/runtime-materials-rust-linux')
+          target = Path('artifacts/install/linux/share/huhucapture/licenses/collected-rust')
+          shutil.copytree(source/'notices', target)
+          shutil.copyfile(source/'rust-materials.json', target/'rust-materials.json')
+          PY
+      - name: Verify actual development packages from the installed runtime
+        id: packages
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        run: |
           python scripts/restore-packaging-tools.py --platform linux --output artifacts/packaging-tools
           python tests/package_metadata_tests.py
           python scripts/package-qt.py package --installed artifacts/install/linux --output artifacts/packages/linux --minimum-system 'Ubuntu 24.04 amd64; desktop acceptance pending' --tools artifacts/packaging-tools --qmake "$QT_ROOT_DIR/bin/qmake" --development
@@ -190,6 +231,13 @@ jobs:
             artifacts/cmake/application-linux/package/
             artifacts/cmake/application-linux/package-runtime.json
             artifacts/cmake/application-linux/installation/
+            artifacts/runtime-materials-linux/
+            artifacts/runtime-materials-qt-linux/
+            artifacts/runtime-materials-rust-linux/
+            artifacts/qt-module-sources/restore-info.json
+            artifacts/qt-module-sources/*.git.log
+            artifacts/corresponding-sources-qt-linux/
+            artifacts/corresponding-sources-rust-linux/
             artifacts/native-rust/build-info.json
             .deps/portal-validation/build-info.json
             .deps/pipewire-validation/build-info.json
@@ -273,8 +321,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build artifacts/cmake/application-runtime --config RelWithDebInfo --parallel 2
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Install and verify complete portable and per-user setup packages
-        id: packages
+      - name: Install the actual runtime and verify its native TLS backend
+        id: runtime_install
         if: ${{ !cancelled() && steps.application_build.outcome == 'success' }}
         shell: pwsh
         run: |
@@ -284,6 +332,53 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python scripts/test-qt-package-runtime.py --prefix artifacts/install/windows --probe artifacts/cmake/application-windows/RelWithDebInfo/package_runtime_probe.exe --certificate tests/fixtures/qt-tls/localhost-test-cert.pem --private-key tests/fixtures/qt-tls/localhost-test-key.pem --report artifacts/cmake/application-windows/package-runtime.json
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Check original Windows notices, SDK bytes and the actual Rust graph
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python tests/runtime_materials_tests.py --cargo-metadata artifacts/native-rust/cargo-metadata.json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Restore the fixed original Qt module sources
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python scripts/restore-qt-module-sources.py --platform windows --workspace artifacts/qt-module-sources
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Bind actual Qt runtime bytes to original SDK SPDX and official deployment
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python scripts/collect-runtime-materials.py qt --installed artifacts/install/windows --qt-prefix "$env:QT_ROOT_DIR" --build-directory artifacts/cmake/application-windows --configuration RelWithDebInfo --output artifacts/runtime-materials-qt-windows --module-source qtbase=artifacts/qt-module-sources/qtbase --module-source qtsvg=artifacts/qt-module-sources/qtsvg --module-source qttranslations=artifacts/qt-module-sources/qttranslations --source-output artifacts/corresponding-sources-qt-windows
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          @'
+          from pathlib import Path
+          import shutil
+          source = Path('artifacts/runtime-materials-qt-windows')
+          target = Path('artifacts/install/windows/licenses/collected-qt')
+          shutil.copytree(source/'notices', target)
+          shutil.copyfile(source/'qt-materials.json', target/'qt-materials.json')
+          '@ | python
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Retain the actual Rust dependency sources and original notices
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python scripts/collect-runtime-materials.py rust --native-receipt artifacts/native-rust/build-info.json --cargo-metadata artifacts/native-rust/cargo-metadata.json --output artifacts/runtime-materials-rust-windows --source-output artifacts/corresponding-sources-rust-windows
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          @'
+          from pathlib import Path
+          import shutil
+          source = Path('artifacts/runtime-materials-rust-windows')
+          target = Path('artifacts/install/windows/licenses/collected-rust')
+          shutil.copytree(source/'notices', target)
+          shutil.copyfile(source/'rust-materials.json', target/'rust-materials.json')
+          '@ | python
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Verify complete portable and per-user development setup packages
+        id: packages
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        shell: pwsh
+        run: |
           python scripts/restore-packaging-tools.py --platform windows --output artifacts/packaging-tools
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/package_metadata_tests.py
@@ -303,6 +398,12 @@ jobs:
           name: qt-application-windows
           path: |
             artifacts/packages/windows/
+            artifacts/runtime-materials-qt-windows/
+            artifacts/runtime-materials-rust-windows/
+            artifacts/qt-module-sources/restore-info.json
+            artifacts/qt-module-sources/*.git.log
+            artifacts/corresponding-sources-qt-windows/
+            artifacts/corresponding-sources-rust-windows/
             artifacts/cmake/application-windows/CMakeCache.txt
             artifacts/cmake/application-windows/Testing/Temporary/
             artifacts/cmake/application-windows/editor-render/

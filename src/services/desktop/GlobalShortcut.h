@@ -54,6 +54,8 @@ public:
                  bool allowUnparentedPortal = false);
     void cancel(quint64 request);
     ShortcutFailure setCaptureActive(bool active);
+    // Closes admission immediately; keep the dispatcher alive until the one
+    // asynchronous completion, including canceled queued binding requests.
     void shutdown();
 
 Q_SIGNALS:
@@ -61,6 +63,7 @@ Q_SIGNALS:
     void changed();
     void bindingFinished(quint64 request, const ShortcutFailure& failure);
     void activated(const QString& activationToken);
+    void shutdownFinished();
 
 private:
     std::unique_ptr<Platform::GlobalShortcutBackend> backend_;
@@ -68,6 +71,9 @@ private:
     quint64 pendingRequest_{};
     bool pendingCancelled_{};
     bool stopped_{};
+    bool backendStopped_{}, shutdownQueued_{}, shutdownReported_{};
+    unsigned deliveries_{};
+    void checkShutdown();
 };
 
 } // namespace HuhuCapture::Desktop

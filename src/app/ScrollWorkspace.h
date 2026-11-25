@@ -17,6 +17,10 @@ public:
     ScrollWorkspace(MediaWorkspace& media, CaptureWorkspace& capture, QObject* parent = nullptr);
     ~ScrollWorkspace() override;
     void setTranslator(UI::Qt::DesktopTranslator translator);
+    void setExternalStopAvailable(bool available);
+    bool canStop() const noexcept;
+    bool stopActive();
+    bool controlsHiddenForCapture() const noexcept;
     bool busy() const noexcept;
     void shutdown();
 

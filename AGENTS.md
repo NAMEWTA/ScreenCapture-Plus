@@ -27,6 +27,12 @@ worker claims that source once and returns every frame lease before reporting
 consumer completion. Do not reopen a second Portal session, infer global pixels
 from a Wayland screenshot, invent silent PCM, or let GUI teardown precede worker
 drain. Qt views and application ownership remain shared across both platforms.
+Before a live recording or scrolling claim, hide controls, observe actual window
+unexposure, and refresh the same authorized data connection. Wait for the real
+old producer/preview/lease drain and captureReady; never promote a queued preview
+seed, a fixed frame drop, a new FD, or Wayland request acknowledgement into proof
+of compositor presentation. Keep the dedicated first-frame pixel probe separate
+from ordinary live-source validation.
 
 The application's loaded SettingsStore is also the editor preference owner.
 Bind it to MediaWorkspace before opening any editor; preserve the existing

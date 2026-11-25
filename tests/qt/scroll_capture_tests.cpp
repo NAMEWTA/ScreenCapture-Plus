@@ -69,16 +69,19 @@ void unavailableAndLifetime()
     cap::ActionRequest request;
     request.action = cap::Action::Scroll;
     cap::Snapshot snapshot;
-    core::LiveSourceConsumer absent;
     require(session.prepareNative(request, snapshot, native).code == cap::Failure::Code::SourceChanged,
         "An absent native frame cannot admit scrolling or invent desktop coordinates");
-    require(session.prepareLive(request, live, absent).code == cap::Failure::Code::SourceChanged &&
-        !absent.firstFrame && !absent.frames, "An absent authorized first frame cannot become a live consumer");
+    require(session.prepareLive(request, live).code == cap::Failure::Code::SourceChanged,
+        "An absent authorized first frame cannot prepare a live selection or become a live consumer");
     require(session.start() == 0 && !session.hasCompleteImage() && session.image().isNull(),
         "No placeholder image or worker is produced for a rejected source");
 
     auto* window = new ui::ScrollWindow(session);
     QPointer<ui::ScrollWindow> guarded(window);
+    window->setExternalStopAvailable(true);
+    require(!window->canStop() && !window->stopCapture() && !window->hiddenForCapture(),
+        "An actual stop-route capability cannot invent an active or hidden capture");
+    window->setExternalStopAvailable(false);
     unsigned outputs{}, terminals{};
     bool shutdown{};
     QObject::connect(window, &ui::ScrollWindow::outputRequested, &session, [&](quint64, ui::OutputIntent, const QImage&) { ++outputs; });

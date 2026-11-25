@@ -228,11 +228,12 @@ struct ScrollCaptureSession::State {
     QPointer<LiveCaptureSource> liveOwner;
     QMetaObject::Connection invalidated;
     QMetaObject::Connection sourceDestroyed;
+    QMetaObject::Connection refreshCompleted;
     std::optional<Core::LiveSourceConsumer> claim;
     std::shared_ptr<WorkerData> data;
     QThreadPool pool;
     QTimer progressTimer;
-    quint64 sequence{}, token{};
+    quint64 sequence{}, token{}, refreshToken{};
     bool worker{}, claimed{}, notifying{}, shuttingDown{}, shutdownReported{};
     explicit State(ScrollCaptureSession* value) : owner(value)
     {
@@ -241,7 +242,7 @@ struct ScrollCaptureSession::State {
         QObject::connect(&progressTimer, &QTimer::timeout, owner, [this] { deliverProgress(); });
     }
     bool ownerThread() const { return qGuiApp && owner->thread() == qGuiApp->thread() && QThread::currentThread() == owner->thread(); }
-    bool admissible() const { return ownerThread() && !shuttingDown && !worker && !claimed && !notifying && phase != ScrollPhase::Ready; }
+    bool admissible() const { return ownerThread() && !shuttingDown && !worker && !claimed && !refreshToken && !notifying && phase != ScrollPhase::Ready; }
     void deliverProgress()
     {
         if (!data) return;
@@ -254,12 +255,19 @@ struct ScrollCaptureSession::State {
     }
     void closed()
     {
-        if (!shuttingDown || worker || claimed || notifying || shutdownReported) return;
+        if (!shuttingDown || worker || claimed || refreshToken || notifying || shutdownReported) return;
         phase = ScrollPhase::Closed; shutdownReported = true;
         QTimer::singleShot(0, owner, [target = owner] { Q_EMIT target->shutdownFinished(); });
     }
     void sourceChanged(const Failure& error)
     {
+        if (refreshToken) {
+            if (!completion.failure) completion.failure = error;
+            phase = ScrollPhase::Stopping;
+            if (liveOwner) liveOwner->cancelRefresh(refreshToken);
+            else completeWithoutWorker(error);
+            return;
+        }
         if (data) {
             { std::lock_guard lock(data->mutex); if (!data->interruption) data->interruption = error; }
             data->stop.request_stop();
@@ -289,9 +297,56 @@ struct ScrollCaptureSession::State {
         releaseConsumer();
         if (alive) { notifying = false; closed(); }
     }
-    quint64 launch()
+    void completeWithoutWorker(Failure error)
     {
-        if (worker || notifying || phase != ScrollPhase::Ready) return 0;
+        refreshToken = 0;
+        if (!completion.failure) completion.failure = std::move(error);
+        phase = ScrollPhase::Finished; notifying = true;
+        const QPointer<ScrollCaptureSession> alive(owner);
+        if (claim) { claim->firstFrame = {}; claim->stop.request_stop(); claim.reset(); }
+        releaseConsumer(); if (!alive) return;
+        Q_EMIT owner->finished(token, completion); if (!alive) return;
+        Q_EMIT owner->changed(); if (!alive) return;
+        notifying = false; closed();
+    }
+    void liveRefreshed(quint64 refreshed, quint64 id, quint64 generation, const Failure& failure)
+    {
+        if (!refreshToken || refreshed != refreshToken || id != selection.sourceId || generation != selection.generation) return;
+        refreshToken = 0;
+        if (failure || shuttingDown || phase == ScrollPhase::Stopping) {
+            completeWithoutWorker(failure ? failure : failed(Failure::Code::Cancelled,
+                QStringLiteral("Scrolling capture was stopped before its first capture frame"))); return;
+        }
+        const auto& rectangle = selection.sourceRect;
+        if (liveOwner) claim = liveOwner->claim(id, generation,
+            {static_cast<std::uint32_t>(rectangle.x()), static_cast<std::uint32_t>(rectangle.y()),
+                static_cast<std::uint32_t>(rectangle.width()), static_cast<std::uint32_t>(rectangle.height())});
+        if (!claim) {
+            completeWithoutWorker(failed(Failure::Code::SourceChanged,
+                QStringLiteral("The refreshed scrolling source could not be claimed"))); return;
+        }
+        claimed = true;
+        const QPointer<ScrollCaptureSession> alive(owner);
+        if (!launch(token) && alive) completeWithoutWorker(completion.failure ? completion.failure :
+            failed(Failure::Code::Platform, QStringLiteral("The refreshed scrolling worker could not start")));
+    }
+    quint64 start()
+    {
+        if (worker || claimed || refreshToken || notifying || phase != ScrollPhase::Ready) return 0;
+        if (selection.coordinates != CoordinateSpace::AuthorizedSourcePixels) return launch();
+        if (!liveOwner || !liveOwner->isCurrent(selection.sourceId, selection.generation)) {
+            sourceChanged(failed(Failure::Code::SourceChanged, QStringLiteral("The authorized scrolling source is no longer current"))); return 0;
+        }
+        auto current = ++sequence; if (!current) current = ++sequence;
+        token = current; completion = {}; phase = ScrollPhase::Starting;
+        refreshToken = liveOwner->refreshForCapture(selection.sourceId, selection.generation);
+        if (!refreshToken) { phase = ScrollPhase::Ready; return 0; }
+        Q_EMIT owner->changed(); return current;
+    }
+    quint64 launch(quint64 preparedToken = 0)
+    {
+        if (worker || notifying || refreshToken ||
+            (preparedToken ? phase != ScrollPhase::Starting : phase != ScrollPhase::Ready)) return 0;
         if (selection.coordinates == CoordinateSpace::DesktopPixels &&
             (!nativeOwner || !nativeOwner->isCurrent(selection.sourceId, selection.generation))) {
             sourceChanged(failed(Failure::Code::SourceChanged, QStringLiteral("The selected desktop source is no longer current"))); return 0;
@@ -303,7 +358,8 @@ struct ScrollCaptureSession::State {
         try {
             auto nextData = std::make_shared<WorkerData>();
             auto watcher = std::make_unique<QFutureWatcher<WorkerResult>>(owner);
-            auto current = ++sequence; if (!current) current = ++sequence;
+            auto current = preparedToken;
+            if (!current) { current = ++sequence; if (!current) current = ++sequence; }
             QObject::connect(watcher.get(), &QFutureWatcher<WorkerResult>::finished, owner, [this, watcher = watcher.get(), current] {
                 WorkerResult result;
                 try { result = watcher->result(); }
@@ -355,6 +411,8 @@ ScrollCaptureSession::ScrollCaptureSession(QObject* parent) : QObject(parent), s
 ScrollCaptureSession::~ScrollCaptureSession()
 {
     state_->progressTimer.stop(); QObject::disconnect(state_->invalidated); QObject::disconnect(state_->sourceDestroyed);
+    QObject::disconnect(state_->refreshCompleted);
+    if (state_->refreshToken && state_->liveOwner) state_->liveOwner->cancelRefresh(state_->refreshToken);
     if (state_->data) state_->data->stop.request_stop();
     if (state_->claim) {
         state_->claim->firstFrame = {}; state_->claim->stop.request_stop();
@@ -375,6 +433,7 @@ Failure ScrollCaptureSession::prepareNative(const ActionRequest& request, const 
         return failed(Failure::Code::SourceChanged, QStringLiteral("The scrolling rectangle is not bound to the current native desktop"));
     QObject::disconnect(state_->invalidated);
     QObject::disconnect(state_->sourceDestroyed);
+    QObject::disconnect(state_->refreshCompleted);
     state_->selection = {request.sourceId, request.generation, request.coordinates, request.sourceRect, request.desktopRect, source.screens, request.image};
     state_->nativeOwner = &owner; state_->liveOwner.clear(); state_->data.reset(); state_->completion = {};
     state_->preview = {request.image, {}, ScrollNotice::Ready}; state_->phase = ScrollPhase::Ready;
@@ -387,19 +446,18 @@ Failure ScrollCaptureSession::prepareNative(const ActionRequest& request, const 
     });
     Q_EMIT changed(); return {};
 }
-Failure ScrollCaptureSession::prepareLive(const ActionRequest& request, LiveCaptureSource& owner, Core::LiveSourceConsumer& claim)
+Failure ScrollCaptureSession::prepareLive(const ActionRequest& request, LiveCaptureSource& owner)
 {
     if (!state_->admissible()) return failed(Failure::Code::Busy, QStringLiteral("Another scrolling capture is still active"));
-    const auto& selected = claim.selection;
     if (request.action != Action::Scroll || request.coordinates != CoordinateSpace::AuthorizedSourcePixels || request.desktopRect ||
-        request.sourceId != claim.sourceId || request.generation != claim.generation || !claim.firstFrame || !claim.frames || !claim.activity ||
-        request.sourceRect != QRect(static_cast<int>(selected.x), static_cast<int>(selected.y), static_cast<int>(selected.width), static_cast<int>(selected.height)) ||
-        request.image.isNull() || request.image.size() != request.sourceRect.size() || !owner.isCurrent(claim.sourceId, claim.generation))
+        request.sourceRect.x() < 0 || request.sourceRect.y() < 0 || request.sourceRect.isEmpty() ||
+        request.image.isNull() || request.image.size() != request.sourceRect.size() || !owner.isCurrent(request.sourceId, request.generation))
         return failed(Failure::Code::SourceChanged, QStringLiteral("The scrolling selection does not belong to the current authorized source"));
     QObject::disconnect(state_->invalidated);
     QObject::disconnect(state_->sourceDestroyed);
+    QObject::disconnect(state_->refreshCompleted);
     state_->selection = {request.sourceId, request.generation, request.coordinates, request.sourceRect, {}, {}, request.image};
-    state_->liveOwner = &owner; state_->nativeOwner.clear(); state_->claim.emplace(std::move(claim)); state_->claimed = true;
+    state_->liveOwner = &owner; state_->nativeOwner.clear();
     state_->data.reset(); state_->completion = {}; state_->preview = {request.image, {}, ScrollNotice::ManualReady}; state_->phase = ScrollPhase::Ready;
     state_->invalidated = connect(&owner, &LiveCaptureSource::sourceClosed, this, [this](quint64 id, quint64 generation, const Failure& error) {
         if (id == state_->selection.sourceId && generation == state_->selection.generation && error) state_->sourceChanged(error);
@@ -407,13 +465,17 @@ Failure ScrollCaptureSession::prepareLive(const ActionRequest& request, LiveCapt
     state_->sourceDestroyed = connect(&owner, &QObject::destroyed, this, [this] {
         state_->sourceChanged(failed(Failure::Code::SourceChanged, QStringLiteral("The authorized capture source was closed")));
     });
+    state_->refreshCompleted = connect(&owner, &LiveCaptureSource::captureReady, this,
+        [this](quint64 refreshed, quint64 id, quint64 generation, const Failure& error) {
+            state_->liveRefreshed(refreshed, id, generation, error);
+        });
     Q_EMIT changed(); return {};
 }
 const ScrollSelection& ScrollCaptureSession::selection() const noexcept { return state_->selection; }
 ScrollPhase ScrollCaptureSession::phase() const noexcept { return state_->phase; }
 ScrollProgress ScrollCaptureSession::progress() const { return state_->preview; }
 ScrollCompletion ScrollCaptureSession::completion() const { return state_->completion; }
-bool ScrollCaptureSession::busy() const noexcept { return state_->worker || state_->claimed; }
+bool ScrollCaptureSession::busy() const noexcept { return state_->worker || state_->claimed || state_->refreshToken; }
 bool ScrollCaptureSession::hasCompleteImage() const noexcept
 { return state_->data && !state_->worker && state_->data->model->hasImage(); }
 QImage ScrollCaptureSession::image() const
@@ -431,10 +493,16 @@ QImage ScrollCaptureSession::image() const
     } catch (const std::bad_alloc&) { return {}; }
 }
 quint64 ScrollCaptureSession::start()
-{ return state_->ownerThread() && !state_->shuttingDown ? state_->launch() : 0; }
+{ return state_->ownerThread() && !state_->shuttingDown ? state_->start() : 0; }
 void ScrollCaptureSession::stop()
 {
-    if (!state_->ownerThread() || !state_->worker || !state_->data) return;
+    if (!state_->ownerThread()) return;
+    if (state_->refreshToken) {
+        state_->phase = ScrollPhase::Stopping;
+        if (state_->liveOwner) state_->liveOwner->cancelRefresh(state_->refreshToken);
+        Q_EMIT changed(); return;
+    }
+    if (!state_->worker || !state_->data) return;
     state_->phase = ScrollPhase::Stopping; state_->data->stop.request_stop(); Q_EMIT changed();
 }
 void ScrollCaptureSession::acknowledgeNativeCapture(quint64 token, quint64 sample, bool ready)
@@ -448,7 +516,7 @@ void ScrollCaptureSession::shutdown()
 {
     if (!state_->ownerThread() || state_->shuttingDown) return;
     state_->shuttingDown = true;
-    if (state_->worker) { stop(); return; }
+    if (state_->worker || state_->refreshToken) { stop(); return; }
     if (state_->claimed) { state_->releaseIdleConsumer(); return; }
     state_->closed();
 }

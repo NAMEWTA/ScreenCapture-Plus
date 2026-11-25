@@ -19,6 +19,10 @@ public:
     void refreshLanguage();
     Capture::Failure open();
     void activate(const QString& activationToken = {});
+    void setExternalStopAvailable(bool available);
+    bool canStop() const noexcept;
+    bool stopCapture();
+    bool hiddenForCapture() const noexcept;
     void completeOutput(quint64 token, OutputResult result, const QString& detail = {});
     Capture::ScrollCaptureSession* session() const noexcept;
 
@@ -27,11 +31,13 @@ Q_SIGNALS:
     void outputCancelRequested(quint64 token);
     void closed();
     void activationFinished(const HuhuCapture::Desktop::WindowActivationResult& result);
+    void captureStateChanged();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:

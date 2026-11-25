@@ -51,11 +51,15 @@ public:
     quint64 restoreShortcuts(const QVector<PortalShortcutRequest>& shortcuts, Commit commit = {});
     void cancelRequest(quint64 requestId);
     void closeBindings();
+    // Closes admission and cancels all owned work. Keep the Qt/GLib dispatcher
+    // alive until shutdownFinished: cancellation alone is not callback cleanup.
+    void shutdown();
     bool hasActiveBindings() const;
     bool available() const;
     QVector<PortalShortcutBinding> bindings() const;
 
 Q_SIGNALS:
+    void shutdownFinished();
     void initialized(const PortalShortcutCapabilities& capabilities, const PortalFailure& failure);
     void bindingFinished(quint64 requestId, const QVector<PortalShortcutBinding>& assigned,
                          const PortalFailure& failure);

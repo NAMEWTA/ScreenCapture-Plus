@@ -2,6 +2,7 @@
 // Native readback reuses ScreenCaptureBackend. Module inspection follows
 // package_runtime_probe.cpp, with an actual child process instead of self.
 #include "platform/ScreenCaptureBackend.h"
+#include "app/Brand.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -89,7 +90,7 @@ struct NativeWindow {
 };
 #ifdef Q_OS_WIN
 bool belongs(qint64 pid, qint64 root) { return pid == root; }
-class Windows final {
+class DesktopWindows final {
 public:
     std::vector<NativeWindow> visible(qint64 root)
     {
@@ -212,9 +213,9 @@ bool belongs(qint64 pid, qint64 root)
 }
 template<class T> struct Free { void operator()(T* pointer) const { std::free(pointer); } };
 template<class T> using CPointer = std::unique_ptr<T, Free<T>>;
-class Windows final {
+class DesktopWindows final {
 public:
-    Windows()
+    DesktopWindows()
     {
         int number{}; connectionOwner_.reset(xcb_connect(nullptr, &number)); connection_ = connectionOwner_.get();
         require(connection_ && !xcb_connection_has_error(connection_), "Connect to the actual X11 desktop");
@@ -224,9 +225,9 @@ public:
         pid_ = atom("_NET_WM_PID"); name_ = atom("_NET_WM_NAME"); utf8_ = atom("UTF8_STRING");
         protocols_ = atom("WM_PROTOCOLS"); close_ = atom("WM_DELETE_WINDOW");
     }
-    ~Windows() = default;
-    Windows(const Windows&) = delete;
-    Windows& operator=(const Windows&) = delete;
+    ~DesktopWindows() = default;
+    DesktopWindows(const DesktopWindows&) = delete;
+    DesktopWindows& operator=(const DesktopWindows&) = delete;
     std::vector<NativeWindow> visible(qint64 root)
     {
         std::vector<NativeWindow> result;
@@ -407,6 +408,20 @@ struct RestoreCursor {
 };
 QJsonArray windowList(const std::vector<NativeWindow>& windows)
 { QJsonArray values; for (const auto& window : windows) values.append(window.json()); return values; }
+QString nativeCaptureTitle()
+{
+    // qt_main explicitly sets applicationDisplayName. Qt 6.12.1's native
+    // QPA window title appends it with a platform separator, while QWidget's
+    // logical windowTitle remains "Screen capture". Inspect the actual native
+    // caption here; never accept an arbitrary product/error window by prefix.
+    const auto brand = QString::fromWCharArray(HuhuCapture::Brand::name.data(),
+        static_cast<qsizetype>(HuhuCapture::Brand::name.size()));
+#ifdef Q_OS_WIN
+    return QStringLiteral("Screen capture - ") + brand;
+#else
+    return QStringLiteral("Screen capture \u2014 ") + brand;
+#endif
+}
 }
 
 int main(int argc, char** argv)
@@ -457,7 +472,7 @@ int main(int argc, char** argv)
                 "The probe receives a real package executable, profile, evidence directory and exact executable hash");
             const auto temporary = QDir(artifacts).filePath(QStringLiteral("runtime-temp"));
             require(QDir().mkpath(temporary), "Create the owned AppImage/Qt temporary directory");
-            Windows windows;
+            DesktopWindows windows;
             HuhuCapture::Platform::ScreenCaptureBackend backend;
             const auto initialized = backend.initialize(); require(!initialized && !backend.requiresPortal(), "Initialize the actual native readback backend");
             Pattern pattern;
@@ -482,17 +497,19 @@ int main(int argc, char** argv)
             product.start();
             require(product.waitForStarted(15000), "Start the real packaged product using its normal one-shot CLI");
             const auto root = product.processId(); evidence.insert(QStringLiteral("launcherPid"), root);
+            const auto captureTitle = nativeCaptureTitle();
+            evidence.insert(QStringLiteral("expectedNativeTitle"), captureTitle);
             std::vector<NativeWindow> visible;
             NativeWindow capture;
             const bool opened = observe([&] {
                 visible = windows.visible(root);
-                for (const auto& window : visible) if (window.title == QStringLiteral("Screen capture") && !window.rectangle.isEmpty()) { capture = window; return true; }
+                for (const auto& window : visible) if (window.title == captureTitle && !window.rectangle.isEmpty()) { capture = window; return true; }
                 return product.state() == QProcess::NotRunning;
             }, 45000);
             evidence.insert(QStringLiteral("visibleWindows"), windowList(visible));
             require(opened && capture.id && product.state() != QProcess::NotRunning, "The actual installed product opens its visible native screenshot-selection UI");
-            require(std::none_of(visible.begin(), visible.end(), [](const auto& window) {
-                return !window.title.isEmpty() && window.title != QStringLiteral("Screen capture");
+            require(std::none_of(visible.begin(), visible.end(), [&](const auto& window) {
+                return !window.title.isEmpty() && window.title != captureTitle;
             }), "Normal one-shot startup must not open an error dialog or another product window");
             const auto actualExecutable = executablePath(capture.pid);
             require(!actualExecutable.isEmpty() && digest(actualExecutable) == expected, "The visible GUI is the exact packaged product executable");
@@ -521,8 +538,8 @@ int main(int argc, char** argv)
             require(adjusted && product.state() != QProcess::NotRunning, "The real native drag produces an undimmed selected source and a masked outside source");
             const auto afterSelection = windows.visible(root);
             evidence.insert(QStringLiteral("windowsAfterSelection"), windowList(afterSelection));
-            require(std::none_of(afterSelection.begin(), afterSelection.end(), [](const auto& window) {
-                return !window.title.isEmpty() && window.title != QStringLiteral("Screen capture");
+            require(std::none_of(afterSelection.begin(), afterSelection.end(), [&](const auto& window) {
+                return !window.title.isEmpty() && window.title != captureTitle;
             }), "The actual native selection must not open a product error dialog");
             evidence.insert(QStringLiteral("nativeSelectionObserved"), true);
             require(windows.close(capture, root), "Submit the native window-close protocol to this owned application window");

@@ -26,8 +26,8 @@
 | `src/services/transfer/`、`LanController` 与 `src/ui/qt/Transfer*` / `ReceivePrompt` | 有界 Qt actor、真实持久身份和网卡装配、独立接收 worker、完整校验与归档、设备 / 证书确认 / 进度 UI及窗口重开快照 | 物理双端、完整产品操作旅程与性能门槛 |
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
-| `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；KWindowSystem 异步父窗导出已通过指定 Sway 生命周期测试 | PipeWire 实际帧和真实 GNOME / Plasma 授权验收 |
-| `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease 与 CPU / MemFd 数据面，固定客户端和受控失败路径补丁，授权源与实际录制消费者已接线 | Wayland 刷新像素时序、实际采流 CI、GNOME / Plasma 和物理音源验收 |
+| `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；指定 Sway 父窗生命周期和实际授权采流已验证；同一会话的数据连接刷新已接入 | 新刷新首帧、快捷键活动会话排空及真实 GNOME / Plasma 授权验收 |
+| `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease 与 CPU / MemFd 数据面，固定客户端和受控失败路径补丁；真实 Sway 采流、尺寸变化和服务断开已通过 Debug / Release 探针 | 新 Wayland 刷新像素时序、GNOME / Plasma 和物理音源验收 |
 | `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭；共享 Qt 设备 / 任务服务及完整媒体检查已装配 | 聚合 ABI、真实取消和同进程 Qt 控制层已通过指定双平台 CI；物理双端和完整产品旅程尚未验收 |
 
 同一工具的交互规则不能因为平台迁移而被“统一”成不同语义。例如普通矩形越过对边时可以翻转，批注范围则限制在原图内；普通序号按活动最大值加一，批注高水位编号永不复用。移动、文字与样式修改仍遵循现有历史语义，不借模型抽取改变撤销行为。
@@ -70,7 +70,11 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 
 应用所有权、启动和退出屏障见 [共享 Qt 宿主](qt-application.md)。截图与录屏的接线见 [共享工作区](capture-workspaces.md)，来源与坐标约束见 [采集服务](screen-capture.md) 和 [授权实时源](live-capture-source.md)，长截图的保留规则见 [共享长截图模型](scroll-capture.md)，软件编码和 AAC 尾样本合同见 [Linux 录制](linux-recording.md)。[完整包更新](qt-updates.md)、[同源打包](qt-packaging.md) 和 [实际安装生命周期](installation-validation.md) 分别记录下载、部署与运行验证边界。这些实现尚不代表整个工作包已经验收。
 
-提交 `adcf6972575c9c5d91380b13417a446d0761a7aa` 的 [Windows / Linux 聚合运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45624686198)、[旧 Windows 回归](https://github.com/NAMEWTA/huhucapture/actions/runs/45624686136) 与 [严格视频检查](https://github.com/NAMEWTA/huhucapture/actions/runs/45624686305) 已通过。相同提交的 [Qt 验证](https://github.com/NAMEWTA/huhucapture/actions/runs/45624687125) 中，Windows Debug / Release 各 66 项通过；Linux Debug 的 75 项组件检查通过，但后续真实 Sway / Portal / PipeWire 首帧因未映射 MemFd 失败，Release 阶段没有执行。该失败促成了 CPU FD 映射修复，修复后的真实桌面结果须由后续 CI 裁决。聚合、组件和桥接受控流检查仍不能替代完整产品或跨版本安装升级验收。
+提交 `11c6033e51a26cd8dda5a403da239ccd5953fe72` 的 [Qt 验证](https://github.com/NAMEWTA/huhucapture/actions/runs/45629021964) 已完成：Windows Debug / Release 各 66 项、Linux 各 75 项通过。真实锁定 Sway / Portal / PipeWire 的两个配置均收到并逐像素核对实际 MemFd 帧，完成尺寸变化、服务断开、缓冲归还和共享来源排空。[Windows / Linux 聚合运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45629019877) 也通过。这些结果确认已有采流与释放路径，不代替新加入的隐藏控件后首帧刷新探针，也不覆盖 GNOME / Plasma 或物理桌面。
+
+相同提交的 [完整应用运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45629019826) 中，Linux 89 项集成检查和六种真实 PipeWire 音频图全部通过。系统、麦克风、混音和限幅混音各处理 144,000 个样本帧；服务/来源断开均按故障合同退出，六种场景的 FD 增量与清理错误均为零。这是实际隔离音频图的短程验证，`physicalDevices` 与 `longRunningAvDrift` 均未验证。
+
+该轮也实际生成、安装 DEB 并打开产品截图界面，但安装探针仍因错误匹配未附品牌的窗口标题在拖选前失败；Windows 完整构建仍被探针内部名称与 WRL 命名空间冲突阻塞，后续安装链没有执行。代码已修正这两处探针问题，新的完整包安装结果仍须重新取得；不得把组件成功或已出现窗口记为安装、升级、卸载全通过。
 
 ## 平台支持与验证口径
 

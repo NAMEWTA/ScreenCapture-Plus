@@ -120,10 +120,13 @@ struct RecordingWorkspace::State {
     QPointer<ui::RecordingWindow> window;
     std::vector<std::unique_ptr<RecordingOutline>> outlines;
     QTimer timer;
+    QTimer controlsTimer;
+    Core::MediaClock::time_point controlsDeadline;
+    std::optional<rec::BackendRequest> pendingRequest;
     std::optional<Media::Entry> archived;
     rec::StopIntent intent{rec::StopIntent::Save};
     QRect region;
-    quint64 captureToken{}, recordingToken{}, sourceId{}, generation{}, outputToken{}, nextOutputToken{1};
+    quint64 captureToken{}, recordingToken{}, sourceId{}, generation{}, outputToken{}, nextOutputToken{1}, refreshToken{};
     QString sourceFailure;
     std::stop_source producerStop{std::nostopstate};
     std::shared_ptr<Core::CaptureControls> controls;
@@ -132,6 +135,7 @@ struct RecordingWorkspace::State {
     bool hasBackend{}, fromLive{}, consumerClaimed{}, stopping{}, sessionStopped{}, shutdownReported{}, cancelled{};
     bool externalStopAvailable{};
     bool guardingControls{};
+    bool preparationStopped{};
 
     State(RecordingWorkspace* q, std::shared_ptr<Media::MediaArchiveService> archive,
         MediaWorkspace& mediaWorkspace, CaptureWorkspace& captureWorkspace, rec::Backend backend,
@@ -143,6 +147,8 @@ struct RecordingWorkspace::State {
         QObject::connect(&timer, &QTimer::timeout, owner, [this] {
             if (window) window->setElapsed(session.elapsed());
         });
+        controlsTimer.setInterval(20);
+        QObject::connect(&controlsTimer, &QTimer::timeout, owner, [this] { beginLiveRefresh(); });
     }
     bool busy() const noexcept { return captureToken || session.busy() || outputToken || window; }
     void changed()
@@ -238,6 +244,7 @@ struct RecordingWorkspace::State {
     {
         const auto completed = std::exchange(captureToken, 0);
         recordingToken = 0; archived.reset(); sourceFailure.clear();
+        pendingRequest.reset(); controlsTimer.stop(); preparationStopped = false;
         timer.stop(); outlines.clear();
         guardingControls = false; controls.reset(); screens.clear(); sourceRegion = {};
         if (window) {
@@ -253,7 +260,7 @@ struct RecordingWorkspace::State {
     }
     void finishShutdown()
     {
-        if (!stopping || !sessionStopped || outputToken || shutdownReported) return;
+        if (!stopping || !sessionStopped || outputToken || refreshToken || pendingRequest || shutdownReported) return;
         const QPointer<RecordingWorkspace> alive(owner);
         finishJourney();
         if (!alive) return;
@@ -296,9 +303,69 @@ struct RecordingWorkspace::State {
         }
         changed();
     }
+    void stopPreparation()
+    {
+        if (!pendingRequest && !refreshToken) return;
+        preparationStopped = true; controlsTimer.stop();
+        if (refreshToken) {
+            capture.liveSource().cancelRefresh(refreshToken);
+            changed(); return; // wait for actual native/Portal drain
+        }
+        pendingRequest.reset();
+        const QPointer<RecordingWorkspace> alive(owner);
+        finishJourney(); if (alive) finishShutdown();
+    }
+    void beginLiveRefresh()
+    {
+        if (!pendingRequest || refreshToken || preparationStopped || stopping) return;
+        bool hidden = window && window->hiddenForCapture() && !window->isVisible() &&
+            window->windowHandle() && !window->windowHandle()->isExposed();
+        for (auto* tooltip : QApplication::topLevelWidgets())
+            if (tooltip->windowType() == Qt::ToolTip && (tooltip->isVisible() ||
+                (tooltip->windowHandle() && tooltip->windowHandle()->isExposed()))) hidden = false;
+        if (!hidden) {
+            if (Core::MediaClock::now() < controlsDeadline) return;
+            controlsTimer.stop(); pendingRequest.reset();
+            showFailure(QStringLiteral("The recording controls did not unmap before the capture deadline. No recording was started."));
+            return;
+        }
+        // This gate observes actual Qt unexposure, rather than treating a
+        // fixed delay as capture freshness. LiveCaptureSource orders unmap
+        // requests and rebuilds only the data connection of this same session.
+        controlsTimer.stop();
+        refreshToken = capture.liveSource().refreshForCapture(sourceId, generation);
+        if (!refreshToken) {
+            pendingRequest.reset(); showFailure(QStringLiteral("The authorized recording source could not begin its capture refresh"));
+        }
+        changed();
+    }
+    void refreshed(quint64 token, quint64 id, quint64 version, const cap::Failure& failure)
+    {
+        if (!refreshToken || token != refreshToken || id != sourceId || version != generation) return;
+        refreshToken = 0; controlsTimer.stop();
+        auto request = std::move(pendingRequest); pendingRequest.reset();
+        const QPointer<RecordingWorkspace> alive(owner);
+        if (preparationStopped || stopping || cancelled) {
+            const auto error = !sourceFailure.isEmpty() ? sourceFailure :
+                failure && failure.code != cap::Failure::Code::Cancelled ? failure.detail : QString();
+            if (!error.isEmpty() && !stopping && !cancelled) {
+                showFailure(error); if (alive) changed(); return;
+            }
+            if (!error.isEmpty()) { Q_EMIT owner->operationFailed(error); if (!alive) return; }
+            finishJourney(); if (alive) finishShutdown(); return;
+        }
+        if (failure || !request || !window || !externalStopAvailable ||
+            !window->hiddenForCapture() || window->isVisible() ||
+            !window->windowHandle() || window->windowHandle()->isExposed()) {
+            showFailure(failure ? failure.detail : QStringLiteral("The recording controls or stop action changed during capture preparation"));
+            if (alive) changed();
+            return;
+        }
+        admit(std::move(*request));
+    }
     void start(const ui::RecordingOptions& options)
     {
-        if (stopping || !captureToken || session.busy() || recordingToken || !window) return;
+        if (stopping || !captureToken || session.busy() || recordingToken || pendingRequest || refreshToken || !window) return;
         if (!capture.sourceIsCurrent(sourceId, generation)) {
             showFailure(QStringLiteral("The selected desktop changed before recording started. Capture a new region.")); return;
         }
@@ -317,11 +384,20 @@ struct RecordingWorkspace::State {
         request.microphone = options.format == rec::Format::Mp4 && options.microphone;
         if (!prepareControls()) return;
         request.controls = controls;
-        quint64 token{};
-        const QPointer<RecordingWorkspace> alive(owner);
         if (fromLive) {
             request.coordinates = rec::CoordinateSpace::AuthorizedSourcePixels;
             request.sourceId = sourceId; request.generation = generation;
+            preparationStopped = false; pendingRequest = std::move(request);
+            controlsDeadline = Core::MediaClock::now() + std::chrono::seconds(2);
+            controlsTimer.start(); beginLiveRefresh(); changed(); return;
+        }
+        admit(std::move(request));
+    }
+    void admit(rec::BackendRequest request)
+    {
+        quint64 token{};
+        const QPointer<RecordingWorkspace> alive(owner);
+        if (fromLive) {
             auto consumer = capture.liveSource().claim(sourceId, generation,
                 {static_cast<std::uint32_t>(region.x()), static_cast<std::uint32_t>(region.y()),
                  static_cast<std::uint32_t>(region.width()), static_cast<std::uint32_t>(region.height())});
@@ -403,13 +479,15 @@ struct RecordingWorkspace::State {
         });
         QObject::connect(window, &ui::RecordingWindow::retryOutputRequested, owner, [this] { output(); });
         QObject::connect(window, &ui::RecordingWindow::cancelRequested, owner, [this] {
-            if (!session.busy() && !outputToken) finishJourney();
+            if (pendingRequest || refreshToken) stopPreparation();
+            else if (!session.busy() && !outputToken) finishJourney();
         });
         QObject::connect(window, &QObject::destroyed, owner, [this] {
             if (!captureToken || stopping) return;
             // Unexpected owner loss requests safe finalization/recovery, not an
             // implicit discard. It cannot destroy a running native encoder.
-            if (session.busy()) session.requestStop(rec::StopIntent::Save);
+            if (pendingRequest || refreshToken) stopPreparation();
+            else if (session.busy()) session.requestStop(rec::StopIntent::Save);
             else if (outputToken) media.cancelOutput(owner, outputToken);
             else finishJourney();
         });
@@ -431,6 +509,10 @@ RecordingWorkspace::RecordingWorkspace(std::shared_ptr<Media::MediaArchiveServic
         [this](const auto&, const auto&) { state_->updateCapability(); });
     connect(&capture.liveSource(), &cap::LiveCaptureSource::capabilityChanged, this,
         [this](const auto&) { state_->updateCapability(); });
+    connect(&capture.liveSource(), &cap::LiveCaptureSource::captureReady, this,
+        [this](quint64 token, quint64 source, quint64 generation, const cap::Failure& error) {
+            state_->refreshed(token, source, generation, error);
+        });
     connect(&capture, &CaptureWorkspace::liveActionRequested, this,
         [this](const cap::ActionRequest& request, QWidget*) { state_->open(request); });
     connect(&capture, &CaptureWorkspace::liveActionActivationRequested, this, [this](quint64 token, const QString& activationToken) {
@@ -440,18 +522,21 @@ RecordingWorkspace::RecordingWorkspace(std::shared_ptr<Media::MediaArchiveServic
     connect(&capture, &CaptureWorkspace::liveActionCancelled, this, [this](quint64 token) {
         if (state_->stopping || token != state_->captureToken) return;
         state_->cancelled = true;
-        if (state_->session.busy()) state_->session.requestStop(rec::StopIntent::Discard);
+        if (state_->pendingRequest || state_->refreshToken) state_->stopPreparation();
+        else if (state_->session.busy()) state_->session.requestStop(rec::StopIntent::Discard);
         else if (state_->outputToken) state_->media.cancelOutput(this, state_->outputToken);
         else state_->finishJourney();
     });
     connect(&capture, &CaptureWorkspace::sourceInvalidated, this, [this](quint64 source, quint64 generation, const auto& failure) {
         if (state_->stopping || !state_->captureToken || source != state_->sourceId || generation != state_->generation) return;
+        if (state_->preparationStopped && failure.code == cap::Failure::Code::Cancelled) return;
         const auto phase = state_->session.state();
         if (state_->recordingToken && phase != rec::SessionState::Preparing &&
             phase != rec::SessionState::Recording && phase != rec::SessionState::Stopping) return;
         state_->sourceFailure = failure.detail.isEmpty() ? QStringLiteral("The recording source changed") : failure.detail;
         state_->hideOutlines();
-        if (state_->session.busy()) state_->session.requestStop(rec::StopIntent::Save);
+        if (state_->pendingRequest || state_->refreshToken) state_->stopPreparation();
+        else if (state_->session.busy()) state_->session.requestStop(rec::StopIntent::Save);
         else if (!state_->outputToken) state_->showFailure(state_->sourceFailure, state_->archived ? state_->archived->path : QString(), bool(state_->archived));
     });
     connect(&state_->session, &rec::RecordingSession::stateChanged, this, [this](quint64, rec::SessionState state) {
@@ -538,19 +623,23 @@ void RecordingWorkspace::setExternalStopAvailable(bool available)
 {
     if (state_->externalStopAvailable == available) return;
     state_->externalStopAvailable = available;
-    if (!available && controlsHiddenForCapture() && state_->session.busy())
+    if (!available && controlsHiddenForCapture() && canStop())
         stopActive(rec::StopIntent::Save);
     state_->changed();
 }
 bool RecordingWorkspace::canStop() const noexcept
 {
     const auto phase = state_->session.state();
-    return !state_->stopping && state_->session.busy() &&
-        (phase == rec::SessionState::Preparing || phase == rec::SessionState::Recording);
+    return !state_->stopping && ((!state_->preparationStopped && (state_->pendingRequest || state_->refreshToken)) ||
+        (state_->session.busy() && (phase == rec::SessionState::Preparing || phase == rec::SessionState::Recording)));
 }
 bool RecordingWorkspace::stopActive(rec::StopIntent intent)
 {
-    if (!canStop() || !state_->session.requestStop(intent)) return false;
+    if (!canStop()) return false;
+    if (state_->pendingRequest || state_->refreshToken) {
+        state_->intent = intent; state_->stopPreparation(); return true;
+    }
+    if (!state_->session.requestStop(intent)) return false;
     state_->intent = intent; state_->hideOutlines(); state_->changed(); return true;
 }
 bool RecordingWorkspace::controlsHiddenForCapture() const noexcept
@@ -561,6 +650,8 @@ void RecordingWorkspace::shutdown()
     state_->stopping = true; state_->timer.stop(); state_->hideOutlines();
     const QPointer<RecordingWorkspace> alive(this);
     state_->updateCapability();
+    if (!alive) return;
+    if (state_->pendingRequest || state_->refreshToken) state_->stopPreparation();
     if (!alive) return;
     if (state_->outputToken) state_->media.cancelOutput(this, state_->outputToken);
     if (!alive) return;

@@ -69,7 +69,8 @@ public:
     QThreadPool pool;
     QFutureWatcher<ConsumerResult> consumer;
     QString mode, path, failure;
-    quint64 token{}, sourceId{}, generation{};
+    quint64 token{}, refresh{}, sourceId{}, generation{};
+    unsigned preparations{}, refreshCompletions{};
     QSize originalSize;
     std::atomic<quint64> frames{};
     std::atomic<unsigned> phases{};
@@ -102,6 +103,13 @@ public:
         });
         connect(&source, &Capture::LiveCaptureSource::prepared, this,
             [this](quint64 request, const Capture::Snapshot& snapshot, const Capture::Failure& error) { prepared(request, snapshot, error); });
+        connect(&source, &Capture::LiveCaptureSource::captureReady, this,
+            [this](quint64 request, quint64 id, quint64 version, const Capture::Failure& error) {
+                if (request != refresh || id != sourceId || version != generation || ++refreshCompletions != 1 || error) {
+                    fail(error.detail); return;
+                }
+                claim();
+            });
         connect(&consumer, &QFutureWatcher<ConsumerResult>::finished, this, [this] {
             consumed = true;
             try { result = consumer.result(); }
@@ -123,12 +131,21 @@ public:
     }
     void prepared(quint64 request, const Capture::Snapshot& snapshot, const Capture::Failure& error)
     {
-        if (request != token || error || snapshot.image.isNull()) { fail(error.detail); return; }
+        if (request != token || ++preparations != 1 || error || snapshot.image.isNull()) { fail(error.detail); return; }
         if (snapshot.coordinates != Capture::CoordinateSpace::AuthorizedSourcePixels || snapshot.desktopOrigin ||
             !snapshot.screens.isEmpty() || !snapshot.windows.isEmpty() || inspect(snapshot.image) < 0) {
             fail(QStringLiteral("The first actual stream image or its source-local identity is invalid")); return;
         }
         sourceId = snapshot.sourceId; generation = snapshot.generation; originalSize = snapshot.image.size();
+        record({{"event", "prepared"}, {"sourceId", QString::number(sourceId)}, {"generation", QString::number(generation)},
+            {"width", originalSize.width()}, {"height", originalSize.height()}, {"globalCoordinates", false}});
+        // This generic stream probe exercises the shared refresh handoff; the
+        // separate controls probe checks exact before/after native pixels.
+        refresh = source.refreshForCapture(sourceId, generation);
+        if (!refresh) fail(QStringLiteral("The exact authorized source did not accept its asynchronous refresh"));
+    }
+    void claim()
+    {
         const Core::FrameCrop selected{0, 0, static_cast<unsigned>(originalSize.width()), static_cast<unsigned>(originalSize.height())};
         auto claim = source.claim(sourceId, generation, selected);
         if (!claim || !claim->firstFrame || claim->firstFrame.metadata().sourceId != sourceId ||
@@ -136,8 +153,6 @@ public:
             !source.isCurrent(sourceId, generation)) {
             fail(QStringLiteral("One exact authorized source cannot be claimed once")); return;
         }
-        record({{"event", "prepared"}, {"sourceId", QString::number(sourceId)}, {"generation", QString::number(generation)},
-            {"width", originalSize.width()}, {"height", originalSize.height()}, {"globalCoordinates", false}});
         consumer.setFuture(QtConcurrent::run(&pool, [this, handle = std::move(*claim), scenario = mode]() mutable {
             return consume(std::move(handle), scenario);
         }));
@@ -188,6 +203,7 @@ public:
     void fail(QString message)
     {
         if (failure.isEmpty()) failure = message.isEmpty() ? QStringLiteral("The actual live source did not prepare") : std::move(message);
+        if (refresh) source.cancelRefresh(refresh);
         if (token) source.cancel(token);
         source.shutdown();
     }
@@ -198,7 +214,8 @@ public:
             mode == QStringLiteral("resize") ? result.terminal.reason == Core::FrameSourceEnd::SourceClosed &&
                 sourceFailure.code == Capture::Failure::Code::SourceChanged :
                 result.terminal.reason != Core::FrameSourceEnd::Stopped && static_cast<bool>(sourceFailure);
-        const bool passed = failure.isEmpty() && !expired && announced && consumed && stopped && sourceClosed &&
+        const bool passed = failure.isEmpty() && !expired && preparations == 1 && refreshCompletions == 1 &&
+            announced && consumed && stopped && sourceClosed &&
             beats > 10 && result.matched >= 6 && result.phases && (result.phases & (result.phases - 1)) &&
             result.timestamp && result.streaming && result.identity && saved && expectedEnd &&
             inspect(result.last) >= 0 && result.last.size() == originalSize && !source.isCurrent(sourceId, generation) &&
@@ -208,6 +225,7 @@ public:
             {"sourceFailure", sourceFailure.detail}, {"queueTerminal", QString::fromStdString(result.terminal.detail)},
             {"matchedFrames", static_cast<qint64>(result.matched)}, {"queueHighWater", static_cast<qint64>(result.queue.highWater)},
             {"sourceTimestampSeen", result.timestamp}, {"actualStreamingObserved", result.streaming},
+            {"preparations", int(preparations)}, {"refreshTerminals", int(refreshCompletions)},
             {"singleConsumer", consumed}, {"allSourceOwnersDrained", stopped}, {"qtHeartbeat", beats},
             {"pngSaved", saved}, {"physicalDisplay", false}, {"userSelectionUiTested", false}});
         QCoreApplication::exit(passed ? 0 : 1);

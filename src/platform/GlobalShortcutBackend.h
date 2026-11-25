@@ -18,7 +18,9 @@ public:
                       Desktop::GlobalShortcut::Persist persist, bool allowUnparented) = 0;
     virtual void cancel(quint64 request) = 0;
     virtual Desktop::ShortcutFailure setCaptureActive(bool active) = 0;
-    virtual void shutdown() = 0;
+    // Complete only after native resources and outstanding async callbacks
+    // have been released. The facade also drains its own queued admissions.
+    virtual void shutdown(std::function<void()> completed = {}) = 0;
     void setActionDescription(const QString& description) { description_ = description; }
 protected:
     Desktop::GlobalShortcut& owner_;

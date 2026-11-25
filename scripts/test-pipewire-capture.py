@@ -295,6 +295,8 @@ def main() -> int:
     args.add_argument("--portal-backend", required=True, type=Path)
     args.add_argument("--backend-build-info", required=True, type=Path)
     args.add_argument("--artifacts", type=Path, default=Path("artifacts/tests/pipewire"))
+    args.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES),
+        help="Actual native scenarios to run; default preserves all original capture, resize and daemon-loss checks")
     parsed = args.parse_args()
     probe = parsed.probe.resolve(strict=True)
     prefix = parsed.pipewire_prefix.resolve(strict=True)
@@ -342,7 +344,7 @@ def main() -> int:
         "sway", "pipewire", "wireplumber", "xdg-desktop-portal", "xdg-desktop-portal-wlr"],
         check=True, text=True, capture_output=True).stdout.splitlines()
     (artifacts / "environment.json").write_text(json.dumps({"systemPackages": versions,
-        "clientPrefix": str(prefix), "desktopPrefix": str(desktop), "modes": MODES, "backend": "headless", "renderer": "pixman",
+        "clientPrefix": str(prefix), "desktopPrefix": str(desktop), "modes": parsed.modes, "backend": "headless", "renderer": "pixman",
         "portalBackendBuild": build_info,
         "portalSelection": "owned output_name=HEADLESS-1, chooser_type=none",
         "physicalDisplay": False, "gnomeAuthorization": False, "plasmaAuthorization": False,
@@ -358,9 +360,9 @@ def main() -> int:
         raise SystemExit(128 + signum)
 
     signal.signal(signal.SIGTERM, interrupted)
-    for mode in MODES:
+    for mode in parsed.modes:
         run_case(probe, prefix, desktop, mode, artifacts / mode, programs, child_guard)
-    print("Real Portal-wlr/PipeWire MemFd frames, format changes and owned-daemon loss passed", flush=True)
+    print("Real Portal-wlr/PipeWire probe passed: " + ", ".join(parsed.modes), flush=True)
     return 0
 
 

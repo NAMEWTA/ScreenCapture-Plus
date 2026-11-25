@@ -145,10 +145,19 @@ def windows_installer(prefix: Path, output: Path, workspace: Path, version: str,
         meta.require('linkTarget' not in entry, 'Installer input cannot contain links')
         parent = str(relative.parent).replace('/', '\\')
         output_dir = '$INSTDIR' if parent == '.' else '$INSTDIR\\'+nsi_escape(parent)
-        install.extend(['    SetOutPath "'+output_dir+'"', '    File /oname="'+nsi_escape(relative.name)+'" "'+nsi_escape(prefix/relative)+'"'])
-        remove.append('    Delete "$INSTDIR\\'+nsi_escape(str(relative).replace('/', '\\'))+'"')
+        target = '$INSTDIR\\'+nsi_escape(str(relative).replace('/', '\\'))
+        install.extend(['    StrCpy $OperationTarget "'+output_dir+'"', '    ClearErrors',
+                        '    SetOutPath "'+output_dir+'"', '    IfErrors install_failed',
+                        '    StrCpy $OperationTarget "'+target+'"',
+                        '    File /oname="'+nsi_escape(relative.name)+'" "'+nsi_escape(prefix/relative)+'"',
+                        '    IfErrors install_failed'])
+        remove.extend(['    StrCpy $OperationTarget "'+target+'"', '    ClearErrors',
+                       '    Delete "$OperationTarget"', '    IfErrors uninstall_failed',
+                       '    IfFileExists "$OperationTarget" uninstall_failed'])
         for ancestor in relative.parents:
             if ancestor != Path('.'): directories.add(str(ancestor).replace('/', '\\'))
+    # A nonempty directory may contain user data. Failure to remove it is not a
+    # failed payload deletion and never authorizes recursive removal.
     remove += ['    RMDir "$INSTDIR\\'+nsi_escape(value)+'"' for value in sorted(directories, key=lambda x:(x.count('\\'),x), reverse=True)]
     replacements = {'OUTPUT':nsi_escape(output), 'VERSION':version, 'ICON':nsi_escape(ROOT/'resources/logo.ico'),
                     'LICENSE':nsi_escape(ROOT/'LICENSE'), 'INSTALL_FILES':'\n'.join(install), 'REMOVE_FILES':'\n'.join(remove)}

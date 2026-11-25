@@ -105,8 +105,11 @@ long-image copy or a cast that pretends callers may mutate its bytes.
 
 `ScrollCaptureSession` confines capture, normalization and matching to one
 worker. Native capture uses the original timing table above. Manual Wayland
-capture adopts one already-claimed `LiveSourceConsumer`, including its actual
-first-frame lease, and uses the same `FrameNormalizer` as recording. It does not
+capture stores the same authorized selection during setup, without claiming a
+preview lease. Start hides the real controls, waits for native unexposure and
+requests the shared source refresh; only `captureReady` can transfer one
+`LiveSourceConsumer` and its replacement first-frame lease. The worker uses the
+same `FrameNormalizer` as recording. It does not
 authorize another stream or reinterpret a Screenshot rectangle. Source identity
 changes stop sampling and retain the last complete result.
 
@@ -130,20 +133,39 @@ complete image stays available after canceled or failed output. The separate
 `Application::ScrollWorkspace` subscribes to the existing capture action flow,
 uses its `nativeSource()` / `liveSource()` owners, and sends actual images to
 the same `MediaWorkspace` output/editor pipeline. Closing the view cancels only
-its own pending output and scrolling session. A live consumer that never started
-can release its lease immediately; a started consumer drains the producer queue
+its own pending output and scrolling session. Closing while a refresh is pending
+cancels that token and waits for its actual native/Portal terminal. A live
+consumer admitted after refresh but rejected before worker submission releases
+its lease immediately; a started consumer drains the producer queue
 and returns before `consumerFinished`. The live owner still separately awaits
 the actual producer and Portal cleanup.
 
 Before each native readback the controls acknowledge actual hidden/exposed
 state or a real Windows capture-exclusion result, within a bounded wait. An old
 start surface must be unexposed before its interior mask changes to an outside
-outline. This widget-level boundary is not yet proof of compositor freshness:
-in particular, the current Wayland seed/queue does **not** prove that pixels were
-captured after authorization, selection and toolbar surfaces were hidden.
-`receivedAt`, an arbitrary delay, or discarding a fixed number of frames cannot
-establish that guarantee. A shared native presentation/capture fence with the
-recording pipeline and its positive compositor tests remain a P08/P09 gate.
+outline. Wayland manual capture hides the complete controls and requires a
+currently reachable tray or actually registered global stop action. The host
+uses the same `setExternalStopAvailable` / `canStop` / `stopActive` contract as
+recording; losing the last entry requests stop and retains any complete image.
+The view returns only after the consumer or canceled refresh has ended. The
+former instruction to move controls outside the source is not an admission
+check and is no longer presented as a solution.
+
+The [shared refresh contract](wayland-capture-refresh.md) drains old preview
+leases and data-plane resources before taking a replacement first frame.
+Native unexposure, `wl_display.sync` and opening a new FD do **not** independently
+prove compositor presentation. Its real pixel probe must first capture visible
+controls and then inspect the exact first replacement lease. `receivedAt`, an
+arbitrary delay, or discarding a fixed number of frames cannot establish that
+guarantee. GNOME/Plasma and physical-desktop evidence remain a P08/P09 gate.
+
+When no real tray/global stop action exists, Start remains disabled with an
+explicit reason; the application must not hide the only completion control.
+This includes affected GNOME sessions without a tray or GlobalShortcuts portal.
+That environment does not yet meet Issue #5 §8.4's complete manual-scrolling
+workflow. A future desktop-action/IPC alternative must demonstrate a reachable
+installed entry and an acknowledged host stop; saving a command string is not
+registration or acceptance evidence.
 
 ## Actual validation and remaining gates
 

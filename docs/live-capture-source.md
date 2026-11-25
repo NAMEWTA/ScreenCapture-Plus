@@ -14,11 +14,21 @@ and delivered as an `AuthorizedSourcePixels` snapshot. The existing
 `CaptureSession`/`CaptureWindow` must select that actual image. It has no invented
 desktop origin, monitor bindings or global window positions.
 
+Preparing a scrolling or recording view retains the confirmed selection, not
+a claimed preview lease. When Start actually hides its controls, the view waits
+for native unexposure and calls `refreshForCapture` on this owner. The old
+producer, preview and queued/seed leases drain; the owner orders pending
+Wayland requests and opens a new data connection to the **same** authorized
+session/node. `captureReady` admits only an actual replacement first frame with
+unchanged format/crop/transform. See [the refresh contract and evidence
+boundaries](wayland-capture-refresh.md); a new connection is not a universal
+compositor presentation fence.
+
 `claim(sourceId, generation, selection)` runs on the GUI thread and succeeds
-once for a current source and a nonempty in-bounds selection. It transfers the
-original native first-frame lease as well as the queue. This is necessary for
-a quiet, still-streaming compositor that produces no additional damage after
-the user sees the selection preview. A consumer prefers a newer queued frame;
+once for a current source, a completed successful refresh and a nonempty
+in-bounds selection. It transfers the replacement connection's actual native
+first-frame lease as well as the queue. This remains necessary for a quiet,
+still-streaming compositor that produces no further damage. A consumer prefers a newer queued frame;
 when the queue is open and empty it can use `firstFrame`. The owner releases
 its own reference to that slot at claim. `claimedAt` records the time of this
 admission without rewriting the frame's original source timestamp.
@@ -43,6 +53,13 @@ after shutdown return zero and cannot add callbacks behind `shutdownFinished`.
 `stop` preserves queued complete frames for drain. `cancel` abandons queued
 work and still waits for the native producer to return. The first actual queue
 error is never replaced by a later cancellation.
+
+A nonzero refresh token similarly has one queued `captureReady` terminal.
+`cancelRefresh` closes that operation's admission and waits for native/preview
+and Portal cleanup before reporting cancellation. A queued successful result
+cannot leave a claimable interval after cancellation or shutdown has won.
+Refresh does not emit another `prepared`, change the public source identity or
+retain the old first-frame slot. An active claimed consumer cannot be refreshed.
 
 The consumer calls `consumerFinished` on the GUI thread only after its worker
 has returned and released all source leases. `stopped` waits for this handshake,
@@ -96,6 +113,14 @@ offscreen test actually executes unavailable-capability handling, no fabricated
 snapshot/claim, queued preparation and terminal ordering, closed admission,
 reentrant shutdown, and destruction from completion signals.
 
+The updated local tests also execute invalid refresh admission and the actual
+non-Wayland request-ordering failure, including cancellation before start and
+immediate deletion from its queued terminal. These are real unavailable/failure
+paths, not a successful capture substitute. The shared recording workspace,
+scrolling session/window/workspace and both compositor probes compile with the
+same fixed Qt SDK and strict warnings; the offscreen scrolling test still
+passes closed admission, empty output controls and asynchronous shutdown.
+
 `tests/qt/live_capture_source_probe.cpp` is a real compositor probe for the
 existing `scripts/test-pipewire-capture.py` harness. It paints a real Qt surface,
 requests the actual Portal source, checks source-local first-frame pixels,
@@ -105,7 +130,10 @@ loss modes require the wrapper to change its owned Sway output or stop its own
 PipeWire process. The probe saves an actual final frame as PNG and never
 substitutes generated frames for received pixels.
 
-At this batch's freeze, that positive compositor probe is compiled but **has
-not run locally**: this workspace has no Xvfb/Sway session. Physical Windows,
+The existing owner/probe at commit `11c6033e` passed capture, resize and owned
+daemon loss in both Debug/Release in [Qt CI 45629021964](https://github.com/NAMEWTA/huhucapture/actions/runs/45629021964),
+including actual owner drain. The subsequent refresh/claim-gating changes and
+the independent first-replacement-pixel probe still require their own CI run.
+Positive compositor execution has **not run locally**: this workspace has no Xvfb/Sway session. Physical Windows,
 GNOME and Plasma/Wayland selection, rotation, mixed DPI and pause recovery
 remain required environment checks. The offscreen tests do not satisfy them.

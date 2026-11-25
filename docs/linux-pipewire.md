@@ -26,7 +26,9 @@ Portal 会话必须活到 worker 返回。正常停止先请求 worker 的 stop 
 
 [CpuPlaneMapping](../src/platform/linux/pipewire/CpuPlaneMapping.h) 对该实际 CPU FD 使用上游 `pw_map_range_init` 和 `mmap(PROT_READ, MAP_SHARED)`。先对同一个借用 FD 做 `fstat`，验证 regular SHM 存储、`mapoffset + maxsize` 实际长度、每帧预算及页对齐溢出；不通过路径重新打开文件，不改变原生 flags/data/fd，也不接管或关闭生产者描述符。已有 PipeWire 映射仍直接借用。临时映射只活到按行复制结束，在归还 `pw_buffer` 前解除；发布的 FrameLease 仅引用应用自有帧池。DMA-BUF 和无地址 MemPtr 仍明确失败。
 
-Portal-wlr 的 `screencast_common.c` 使用 `shm_open`、立即 `shm_unlink`、`ftruncate` 创建这类共享存储，并没有 memfd seals。因此本接缝不把 seal 作为合法 SHM 的前置条件；它依赖 PipeWire dequeue 所有权期间生产者保持 buffer 存储稳定，不能宣称抵御违反协议的并发截断。2026-11-25 的本地固定 1.6.11 测试已真实创建 MemFd 和 POSIX SHM，验证非页对齐 offset、逐字节内容、只读/不可执行映射、真实过短 FD 拒绝、预算、DMA 拒绝、原生 FD 保留、借用映射保留及作用域结束后的 `mincore(ENOMEM)`。同轮原有 socket/epoll/取消/截止检查通过；修复后的 compositor 正向采流仍须由新 CI 裁决。
+Portal-wlr 的 `screencast_common.c` 使用 `shm_open`、立即 `shm_unlink`、`ftruncate` 创建这类共享存储，并没有 memfd seals。因此本接缝不把 seal 作为合法 SHM 的前置条件；它依赖 PipeWire dequeue 所有权期间生产者保持 buffer 存储稳定，不能宣称抵御违反协议的并发截断。2026-11-25 的本地固定 1.6.11 测试已真实创建 MemFd 和 POSIX SHM，验证非页对齐 offset、逐字节内容、只读/不可执行映射、真实过短 FD 拒绝、预算、DMA 拒绝、原生 FD 保留、借用映射保留及作用域结束后的 `mincore(ENOMEM)`。同轮原有 socket/epoll/取消/截止检查通过。
+
+修复后的真实 [Qt CI 45629021964](https://github.com/NAMEWTA/huhucapture/actions/runs/45629021964) 对应提交 `11c6033e51a26cd8dda5a403da239ccd5953fe72`。Linux job `139256887537` 在 Debug/Release 两种配置下均通过 capture（16/16 帧）、resize（18/18 帧）和 daemon-loss（6/6 帧）；实际帧均为 MemFd，取出/归还数一致，接收 PNG、不同图案、GUI heartbeat 与 teardown 后保留 lease 检查通过。同配置既有 LiveCaptureSource 的三模式也完整 drain。Linux artifact `15030821434` 的 SHA256 是 `534aad4ce0940c618bd8de81089ad23f0e0990cc479012a68e0b5041dae90603`。该证据仅覆盖锁定的受控 Sway 软件桌面和该提交；之后新增的同授权刷新/隐藏控件首帧探针、GNOME/Plasma、物理显示器、HDR/DMA-BUF 和长时间性能仍单独验收。
 
 ## 共用帧合同与预算
 

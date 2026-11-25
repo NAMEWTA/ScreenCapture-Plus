@@ -218,14 +218,21 @@ public:
         }
         state_.failure = failure; Q_EMIT owner_.changed(); return failure;
     }
-    void shutdown() override
+    void shutdown(std::function<void()> completed = {}) override
     {
         if (std::exchange(stopped_, true)) return;
-        if (portal_) { portal_->cancelInitialization(); portal_->closeBindings(); }
+        shutdownCompleted_ = std::move(completed);
         closeX11();
         state_.registered = false; state_.editing = ShortcutEditing::Unavailable;
+        if (portal_) portal_->shutdown();
+        else completeShutdown();
     }
 private:
+    void completeShutdown()
+    {
+        auto completed = std::move(shutdownCompleted_);
+        if (completed) completed();
+    }
     void completeInitialization(ShortcutFailure failure)
     {
         initializing_ = false; state_.initialized = true; state_.failure = failure;
@@ -236,6 +243,7 @@ private:
     void initializePortal()
     {
         state_.portal = true; portal_ = std::make_unique<Linux::PortalShortcuts>();
+        connect(portal_.get(), &Linux::PortalShortcuts::shutdownFinished, this, [this] { completeShutdown(); });
         connect(portal_.get(), &Linux::PortalShortcuts::initialized, this,
             [this](const Linux::PortalShortcutCapabilities& capabilities, const PortalFailure& failure) {
                 if (stopped_) {
@@ -486,6 +494,7 @@ private:
     xcb_timestamp_t lastReleaseTime_{};
     xcb_keycode_t heldKey_{}, lastReleaseKey_{};
     bool stopped_{}, initializing_{}, cancelled_{}, commitRejected_{}, remapQueued_{};
+    std::function<void()> shutdownCompleted_;
 };
 }
 

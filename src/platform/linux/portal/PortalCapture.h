@@ -62,6 +62,10 @@ public:
     // Both request methods return zero after shutdown closes admission.
     quint64 requestScreenshot(QWindow* parent, bool interactive = true);
     quint64 requestScreenCast(QWindow* parent, const ScreenCastOptions& options = {});
+    // Open another restricted connection to the already-authorized session.
+    // The previous FD must have been taken and its consumer fully stopped.
+    // This performs no new selection/permission request and transfers no frame.
+    quint64 openPipeWireRemote();
     void cancelRequest(quint64 requestId);
     // Cancel work and release native requests on the shared GUI/GLib dispatcher.
     // Keep that dispatcher alive until shutdownFinished; destruction alone is
@@ -81,6 +85,7 @@ Q_SIGNALS:
     void screenCastFinished(quint64 requestId, const QVector<PortalStream>& streams,
                             const QString& restoreToken, const PortalFailure& failure);
     void screenCastClosed(const PortalFailure& failure);
+    void pipeWireRemoteOpened(quint64 requestId, const PortalFailure& failure);
     void shutdownFinished();
 
 private:

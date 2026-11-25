@@ -13,6 +13,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 #ifdef Q_OS_LINUX
 #include "platform/linux/portal/PortalCapture.h"
+#include "platform/linux/portal/WaylandRequestBarrier.h"
 #include "platform/linux/pipewire/PipeWireCapture.h"
 #endif
 #include <exception>
@@ -112,6 +113,7 @@ struct LiveCaptureSource::State {
         std::optional<Core::FrameFormat> format;
         quint64 formatGeneration{};
         std::optional<Identity> identity;
+        std::optional<Identity> expected;
         std::optional<Terminal> terminal;
         Core::FrameLease firstFrame;
 
@@ -135,7 +137,8 @@ struct LiveCaptureSource::State {
             bool changed;
             {
                 std::lock_guard lock(mutex);
-                changed = format && (*format != value || formatGeneration != generation);
+                changed = (expected && expected->format != value) ||
+                    (format && (*format != value || formatGeneration != generation));
                 if (!format) { format = value; formatGeneration = generation; }
             }
             if (changed) {
@@ -154,7 +157,11 @@ struct LiveCaptureSource::State {
             bool changed;
             {
                 std::lock_guard lock(mutex);
-                changed = identity && *identity != next;
+                // The producer's pool generation is local to its connection.
+                // Preserve the public source generation across a rebuild;
+                // compare all actual selected pixel metadata independently.
+                changed = (identity && *identity != next) || (expected &&
+                    (expected->format != next.format || expected->crop != next.crop || expected->transform != next.transform));
                 if (!identity) identity = next;
             }
             if (changed) {
@@ -166,12 +173,19 @@ struct LiveCaptureSource::State {
     };
     struct Operation {
         quint64 token{}, sourceId{}, generation{1}, portalRequest{};
+        quint64 refreshId{}, remoteRequest{};
         LiveCaptureOptions options;
         QPointer<QWindow> parent;
         std::shared_ptr<Data> data;
         QSize extent;
         bool producerActive{}, previewActive{}, consumer{}, claimed{};
         bool preparationSent{}, sourceReady{}, closureSent{}, ending{}, abandon{};
+        bool refreshDraining{}, refreshPrepared{}, refreshCompletionQueued{};
+        std::optional<Identity> selectedIdentity;
+#ifdef Q_OS_LINUX
+        Platform::Linux::PortalStream stream;
+        std::unique_ptr<Platform::Linux::WaylandRequestBarrier> barrier;
+#endif
         Failure failure;
         Activity observed{Activity::Starting};
     };
@@ -197,7 +211,7 @@ struct LiveCaptureSource::State {
         monitor.setInterval(50);
         QObject::connect(&monitor, &QTimer::timeout, owner, [this] {
             const auto pending = operation;
-            if (!pending || !pending->data || !pending->sourceReady) return;
+            if (!pending || !pending->data || !pending->sourceReady || pending->refreshId) return;
             const auto activity = pending->data->activity->load(std::memory_order_acquire);
             if (pending->observed == activity) return;
             pending->observed = activity;
@@ -241,11 +255,74 @@ struct LiveCaptureSource::State {
             Q_EMIT target->prepared(token, snapshot, error);
         });
     }
+    void reportRefresh(const std::shared_ptr<Operation>& pending, Failure error)
+    {
+        const auto id = pending->refreshId;
+        if (!id || pending->refreshCompletionQueued) return;
+        pending->refreshCompletionQueued = true;
+        post([pending, id, error](LiveCaptureSource* target) mutable {
+            pending->refreshCompletionQueued = false;
+            if (pending->refreshId != id) return;
+            // A native failure or shutdown can win before this queued result.
+            // Keep the token cancellable and claim admission closed until the
+            // actual delivery. If cancellation won, report only after this
+            // same source's producer/preview/Portal drain completed.
+            if (pending->ending || target->state_->shuttingDown) {
+                if (target->state_->operation == pending) return;
+                if (!error) error = pending->failure ? pending->failure : cancelled();
+            }
+            if (!error && (!pending->data || !pending->data->valid.load(std::memory_order_acquire)))
+                error = pending->failure ? pending->failure : cancelled();
+            pending->refreshId = 0;
+            pending->refreshDraining = false;
+            pending->refreshPrepared = !error;
+            Q_EMIT target->captureReady(id, pending->sourceId, pending->generation, error);
+        });
+    }
+    void checkRefresh(const std::shared_ptr<Operation>& pending)
+    {
+        if (!pending->refreshId || !pending->refreshDraining || pending->ending || shuttingDown ||
+            pending->producerActive || pending->previewActive || pending->consumer) return;
+        if (pending->data) {
+            if (auto error = fromTerminal(pending->data->outcome())) {
+                stopOperation(pending, true, error); return;
+            }
+            pending->data->queue->close({}, true);
+            {
+                std::lock_guard lock(pending->data->mutex);
+                pending->data->firstFrame = {};
+            }
+            pending->data.reset();
+        }
+        pending->refreshDraining = false;
+#ifdef Q_OS_LINUX
+        try {
+            pending->barrier = std::make_unique<Platform::Linux::WaylandRequestBarrier>();
+            auto* barrier = pending->barrier.get();
+            QObject::connect(barrier, &Platform::Linux::WaylandRequestBarrier::finished, owner,
+                [this, pending, barrier](const Platform::Linux::PortalFailure& error) {
+                    if (pending->barrier.get() != barrier) return;
+                    pending->barrier.release()->deleteLater();
+                    if (pending->ending || shuttingDown) { checkDone(); return; }
+                    if (error) { stopOperation(pending, true, fromPortal(error)); return; }
+                    if (!portal || portalClosing || !portal->hasActiveScreenCast()) {
+                        stopOperation(pending, true, fail(Failure::Code::SourceChanged,
+                            QStringLiteral("The original ScreenCast authorization ended during refresh"))); return;
+                    }
+                    pending->remoteRequest = portal->openPipeWireRemote();
+                    if (!pending->remoteRequest) stopOperation(pending, true, unavailable());
+                });
+            barrier->start();
+        } catch (const std::bad_alloc&) { stopOperation(pending, true, allocation()); }
+#else
+        stopOperation(pending, true, unavailable());
+#endif
+    }
     void checkDone()
     {
         const auto pending = operation;
         if (!pending && !shuttingDown) return;
-        if (pending && !pending->ending) return;
+        if (pending && !pending->ending) { checkRefresh(pending); return; }
         if (pending && (pending->producerActive || pending->previewActive || pending->consumer)) return;
         if (pending && !pending->preparationSent) prepared(pending, {}, pending->failure ? pending->failure : cancelled());
 #ifdef Q_OS_LINUX
@@ -255,7 +332,12 @@ struct LiveCaptureSource::State {
         }
 #endif
         if (pending) {
-            if (pending->data) pending->data->queue->close(pending->data->outcome(), true);
+            if (pending->data) {
+                pending->data->queue->close(pending->data->outcome(), true);
+                std::lock_guard lock(pending->data->mutex);
+                pending->data->firstFrame = {};
+            }
+            reportRefresh(pending, pending->failure ? pending->failure : cancelled());
             monitor.stop();
             operation.reset();
             post([token = pending->token, error = pending->failure](LiveCaptureSource* target) {
@@ -277,7 +359,9 @@ struct LiveCaptureSource::State {
             pending->data->stop.request_stop();
         }
 #ifdef Q_OS_LINUX
+        if (pending->barrier) { pending->barrier->cancel(); pending->barrier.reset(); }
         if (portal && pending->portalRequest) portal->cancelRequest(pending->portalRequest);
+        if (portal && pending->remoteRequest) portal->cancelRequest(pending->remoteRequest);
 #endif
         checkDone();
     }
@@ -350,10 +434,29 @@ struct LiveCaptureSource::State {
                     prepared(pending, {}, fail(Failure::Code::Platform, QStringLiteral("The authorized source has no PipeWire remote")));
                     checkDone(); return;
                 }
-                try { startProducer(pending, std::move(remote), streams.front()); }
+                pending->stream = streams.front();
+                try { startProducer(pending, std::move(remote), pending->stream); }
                 catch (const std::bad_alloc&) { stopOperation(pending, true, allocation()); }
                 catch (const std::exception&) {
                     stopOperation(pending, true, fail(Failure::Code::Platform, QStringLiteral("The authorized source worker could not start")));
+                }
+            });
+        QObject::connect(portal.get(), &Platform::Linux::PortalCapture::pipeWireRemoteOpened, owner,
+            [this](quint64 request, const Platform::Linux::PortalFailure& error) {
+                const auto pending = operation;
+                if (!pending || pending->remoteRequest != request) return;
+                pending->remoteRequest = 0;
+                Platform::Linux::UniqueFd remote(error ? -1 : portal->takePipeWireFd());
+                if (pending->ending || shuttingDown) { checkDone(); return; }
+                if (error || !remote) {
+                    stopOperation(pending, true, error ? fromPortal(error) : fail(Failure::Code::Platform,
+                        QStringLiteral("The authorized source did not return a new PipeWire remote"))); return;
+                }
+                try { startProducer(pending, std::move(remote), pending->stream); }
+                catch (const std::bad_alloc&) { stopOperation(pending, true, allocation()); }
+                catch (const std::exception&) {
+                    stopOperation(pending, true, fail(Failure::Code::Platform,
+                        QStringLiteral("The authorized source could not start its replacement data connection")));
                 }
             });
         QObject::connect(portal.get(), &Platform::Linux::PortalCapture::screenCastClosed, owner,
@@ -382,7 +485,8 @@ struct LiveCaptureSource::State {
     void begin()
     {
         const auto pending = operation;
-        if (!pending || pending->ending || pending->portalRequest || shuttingDown) return;
+        if (!pending || pending->ending || pending->portalRequest || pending->sourceReady || pending->producerActive ||
+            pending->remoteRequest || pending->refreshId || shuttingDown) return;
         if (!available.canRequest()) { prepared(pending, {}, unavailable()); checkDone(); return; }
 #ifdef Q_OS_LINUX
         if (!portal || portalClosing || !ready) return;
@@ -410,18 +514,25 @@ struct LiveCaptureSource::State {
         const Platform::Linux::PortalStream& stream)
     {
         pending->data = std::make_shared<Data>();
+        pending->data->expected = pending->selectedIdentity;
+        const auto data = pending->data;
         auto watcher = std::make_unique<QFutureWatcher<Terminal>>(owner);
         QObject::connect(watcher.get(), &QFutureWatcher<Terminal>::finished, owner,
-            [this, pending, watcher = watcher.get()] {
+            [this, pending, data, watcher = watcher.get()] {
                 watcher->deleteLater(); pending->producerActive = false;
                 Terminal terminal;
                 try { terminal = watcher->result(); }
                 catch (const std::bad_alloc&) { terminal = {End::BudgetExceeded, 0, "The authorized source worker ran out of memory"}; }
                 catch (const std::exception&) { terminal = {End::PlatformFailure, 0, "The authorized source worker could not complete"}; }
-                pending->data->activity->store(Activity::Closed, std::memory_order_release);
-                pending->data->close(terminal, pending->abandon);
+                data->activity->store(Activity::Closed, std::memory_order_release);
+                data->close(terminal, pending->abandon || pending->refreshDraining);
+                if (pending->refreshDraining && !pending->ending && !shuttingDown) {
+                    if (auto error = fromTerminal(data->outcome())) stopOperation(pending, true, error);
+                    else checkRefresh(pending);
+                    return;
+                }
                 pending->ending = true;
-                if (!pending->failure) pending->failure = fromTerminal(pending->data->outcome());
+                if (!pending->failure) pending->failure = fromTerminal(data->outcome());
                 if (pending->sourceReady && !pending->closureSent) {
                     pending->closureSent = true;
                     post([id = pending->sourceId, generation = pending->generation, error = pending->failure](LiveCaptureSource* target) {
@@ -460,9 +571,10 @@ struct LiveCaptureSource::State {
 #endif
     void startPreview(const std::shared_ptr<Operation>& pending)
     {
+        const auto data = pending->data;
         auto watcher = std::make_unique<QFutureWatcher<Preview>>(owner);
         QObject::connect(watcher.get(), &QFutureWatcher<Preview>::finished, owner,
-            [this, pending, watcher = watcher.get()] {
+            [this, pending, data, watcher = watcher.get()] {
                 watcher->deleteLater(); pending->previewActive = false;
                 Preview preview;
                 try { preview = watcher->result(); }
@@ -470,10 +582,18 @@ struct LiveCaptureSource::State {
                 catch (const std::exception&) {
                     preview.failure = fail(Failure::Code::Platform, QStringLiteral("The first authorized frame could not be prepared"));
                 }
-                if (!pending->data->valid.load(std::memory_order_acquire) && !preview.failure)
-                    preview.failure = pending->failure ? pending->failure : fromTerminal(pending->data->outcome());
+                if (pending->refreshDraining && !pending->ending && !shuttingDown) {
+                    checkRefresh(pending); return;
+                }
+                if (!data->valid.load(std::memory_order_acquire) && !preview.failure)
+                    preview.failure = pending->failure ? pending->failure : fromTerminal(data->outcome());
                 if (!preview.failure && (preview.image.isNull() || pending->ending || shuttingDown)) preview.failure = cancelled();
-                prepared(pending, std::move(preview.image), preview.failure);
+                if (pending->refreshId) {
+                    if (!preview.failure && preview.image.size() != pending->extent)
+                        preview.failure = fail(Failure::Code::SourceChanged,
+                            QStringLiteral("The authorized source changed its selected extent while refreshing"));
+                    if (!preview.failure) reportRefresh(pending, {});
+                } else prepared(pending, std::move(preview.image), preview.failure);
                 if (preview.failure) stopOperation(pending, false, preview.failure);
                 checkDone();
             });
@@ -570,15 +690,60 @@ quint64 LiveCaptureSource::request(QWindow* parent, LiveCaptureOptions options)
 bool LiveCaptureSource::isCurrent(quint64 sourceId, quint64 generation) const
 {
     const auto pending = state_->operation;
-    return state_->ownerThread() && !state_->shuttingDown && pending && pending->sourceReady && !pending->ending &&
-        pending->data && pending->sourceId == sourceId && pending->generation == generation &&
-        pending->data->valid.load(std::memory_order_acquire) &&
-        pending->data->activity->load(std::memory_order_acquire) != Activity::Closed;
+    if (!state_->ownerThread() || state_->shuttingDown || !pending || !pending->sourceReady || pending->ending ||
+        pending->sourceId != sourceId || pending->generation != generation) return false;
+    // Quiescing an unclaimed preview closes its data connection, not its
+    // authorization or selection identity. claim() has its own refresh gate.
+    return pending->refreshId || (pending->data && pending->data->valid.load(std::memory_order_acquire) &&
+        pending->data->activity->load(std::memory_order_acquire) != Activity::Closed);
+}
+quint64 LiveCaptureSource::refreshForCapture(quint64 sourceId, quint64 generation)
+{
+    if (!state_->ownerThread() || state_->shuttingDown) return 0;
+    auto id = ++state_->sequence; if (!id) id = ++state_->sequence;
+    const auto pending = state_->operation;
+    const auto reject = [this, id, sourceId, generation](Failure error) {
+        state_->post([id, sourceId, generation, error](LiveCaptureSource* target) {
+            Q_EMIT target->captureReady(id, sourceId, generation, error);
+        });
+    };
+    if (!isCurrent(sourceId, generation)) {
+        reject(fail(Failure::Code::SourceChanged, QStringLiteral("The selected live source is no longer authorized"))); return id;
+    }
+    if (pending->claimed || pending->consumer || pending->refreshId || pending->previewActive || !pending->data) {
+        reject(fail(Failure::Code::Busy, QStringLiteral("The live source cannot replace an active or pending consumer"))); return id;
+    }
+    try {
+        {
+            std::lock_guard lock(pending->data->mutex);
+            if (!pending->data->identity || !pending->data->firstFrame) {
+                reject(fail(Failure::Code::SourceChanged, QStringLiteral("The actual selection frame is no longer available"))); return id;
+            }
+            pending->selectedIdentity = pending->data->identity;
+        }
+        pending->refreshId = id; pending->refreshDraining = true; pending->refreshPrepared = false;
+        pending->data->stop.request_stop();
+        // Wake the unclaimed preview wait and discard queued old leases. Do
+        // not overwrite Data::terminal: a real native error during teardown
+        // must still win over this requested quiescence.
+        pending->data->queue->close({}, true);
+        state_->checkRefresh(pending);
+    } catch (const std::bad_alloc&) {
+        if (pending->refreshId == id) state_->stopOperation(pending, true, allocation());
+        else reject(allocation());
+    }
+    return id;
+}
+void LiveCaptureSource::cancelRefresh(quint64 refreshId)
+{
+    if (!state_->ownerThread() || !refreshId) return;
+    const auto pending = state_->operation;
+    if (pending && pending->refreshId == refreshId) state_->stopOperation(pending, true, cancelled());
 }
 std::optional<Core::LiveSourceConsumer> LiveCaptureSource::claim(quint64 sourceId, quint64 generation, Core::FrameCrop selection)
 {
     const auto pending = state_->operation;
-    if (!isCurrent(sourceId, generation) || pending->claimed || !selection.width || !selection.height ||
+    if (!isCurrent(sourceId, generation) || pending->refreshId || !pending->refreshPrepared || pending->claimed || !selection.width || !selection.height ||
         selection.x > static_cast<unsigned>(pending->extent.width()) ||
         selection.width > static_cast<unsigned>(pending->extent.width()) - selection.x ||
         selection.y > static_cast<unsigned>(pending->extent.height()) ||

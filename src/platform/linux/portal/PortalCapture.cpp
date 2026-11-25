@@ -24,7 +24,7 @@ using namespace PortalSupport;
 
 struct PortalCapture::Private : std::enable_shared_from_this<Private> {
     struct Operation {
-        enum class Kind { Screenshot, ScreenCast };
+        enum class Kind { Screenshot, ScreenCast, PipeWireRemote };
         quint64 id{};
         Kind kind{};
         QPointer<QWindow> parent;
@@ -113,6 +113,8 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
     void closeActive(PortalFailure reason = {}) {
         auto* session = std::exchange(activeSession, nullptr);
         if (!session) return;
+        if (operation && operation->kind == Operation::Kind::PipeWireRemote)
+            cancel(operation, reason ? reason : failure(Code::Unavailable, QStringLiteral("The ScreenCast session was closed")));
         g_clear_signal_handler(&activeClosedHandler, session);
         if (pipeWireFd >= 0) ::close(std::exchange(pipeWireFd, -1));
         xdp_session_close(session);
@@ -120,14 +122,33 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         if (owner && !stopped) Q_EMIT owner->screenCastClosed(reason);
     }
 
+    void releasePortal() {
+        if (!portal) return;
+        // Screenshot/Create/Start cancellation can complete its public GTask
+        // before a late D-Bus method reply drops native task/session references.
+        // Also retain this gate when initialization replaces an earlier portal;
+        // shutdown must drain its late replies as well as the current instance.
+        // Every adopted portal operation runs on the owner's GLib context.
+        auto* completion = new Callback(shared_from_this());
+        auto* released = std::exchange(portal, nullptr);
+        g_object_weak_ref(G_OBJECT(released), +[](gpointer data, GObject*) {
+            const std::unique_ptr<Callback> completion(static_cast<Callback*>(data));
+            Q_ASSERT(!completion->state->owner || completion->state->onOwnerThread());
+        }, completion);
+        g_object_unref(released);
+    }
+
     void checkDrained() {
         if (!draining || stopped || !owner || shutdownQueued || callbacks || deliveries || operation || activeSession || initializing) return;
-        shutdownQueued = true;
         if (nameWatch) g_bus_unwatch_name(std::exchange(nameWatch, 0));
         if (bus) g_clear_signal_handler(&busClosedHandler, bus);
-        g_clear_object(&portal);
+        if (portal) { releasePortal(); return; }
+        shutdownQueued = true;
         g_clear_object(&bus);
         const auto state = shared_from_this();
+        // GObject weak notification precedes finalize. Queue the acknowledgement
+        // so it runs after that native destruction/callback stack has returned;
+        // the shared session-bus connection is deliberately not a global gate.
         QTimer::singleShot(0, owner, [state] {
             if (!state->owner || state->stopped) return;
             if (state->callbacks || state->deliveries || state->operation || state->activeSession || state->initializing) {
@@ -176,8 +197,10 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         ++deliveries;
         if (pending->kind == Operation::Kind::Screenshot)
             Q_EMIT owner->screenshotFinished(pending->id, uri, error);
-        else
+        else if (pending->kind == Operation::Kind::ScreenCast)
             Q_EMIT owner->screenCastFinished(pending->id, pending->streams, pending->restoreToken, error);
+        else
+            Q_EMIT owner->pipeWireRemoteOpened(pending->id, error);
         --deliveries;
         checkDrained();
     }
@@ -191,8 +214,10 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
             if (state->owner && !state->stopped) {
                 if (kind == Operation::Kind::Screenshot)
                     Q_EMIT state->owner->screenshotFinished(id, {}, error);
-                else
+                else if (kind == Operation::Kind::ScreenCast)
                     Q_EMIT state->owner->screenCastFinished(id, {}, {}, error);
+                else
+                    Q_EMIT state->owner->pipeWireRemoteOpened(id, error);
             }
             --state->deliveries;
             state->checkDrained();
@@ -222,8 +247,10 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         std::weak_ptr<Private> weakState = shared_from_this();
         std::weak_ptr<Operation> weakOperation = pending;
         if (parent) pending->parentDestroyed = QObject::connect(parent, &QObject::destroyed, owner, [weakState, weakOperation] {
-            if (auto state = weakState.lock())
+            if (auto state = weakState.lock()) {
+                const Callback delivery(state);
                 state->cancel(weakOperation.lock(), failure(Code::ParentDestroyed, QStringLiteral("Portal parent window was destroyed")));
+            }
         });
         operation = pending;
         return pending;
@@ -236,8 +263,10 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         QObject::connect(pending->portalParent.get(), &PortalParent::prepared, pending->portalParent.get(),
             [weakState, weakPending](const PortalFailure& error) {
                 const auto state = weakState.lock();
+                if (!state) return;
+                const Callback delivery(state);
                 const auto operation = weakPending.lock();
-                if (!state || !operation || operation->finished) return;
+                if (!operation || operation->finished) return;
                 if (error || operation->cancellation || state->stopped) { state->finish(operation, error); return; }
                 auto* parent = operation->portalParent->nativeParent();
                 if (!parent) {
@@ -254,7 +283,10 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
             });
         QObject::connect(pending->portalParent.get(), &PortalParent::invalidated, pending->portalParent.get(),
             [weakState, weakPending](const PortalFailure& error) {
-                if (const auto state = weakState.lock()) state->cancel(weakPending.lock(), error);
+                if (const auto state = weakState.lock()) {
+                    const Callback delivery(state);
+                    state->cancel(weakPending.lock(), error);
+                }
             });
         pending->portalParent->prepare(pending->parent, pending->cancellable);
     }
@@ -346,12 +378,14 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
         if (owner && !stopped) Q_EMIT owner->capabilitiesChanged(capabilities);
     }
     static void portalVanished(GDBusConnection*, const gchar*, gpointer data) {
-        const auto state = static_cast<Private*>(data)->shared_from_this();
+        const Callback delivery(static_cast<Private*>(data)->shared_from_this());
+        const auto& state = delivery.state;
         if (!state->stopped)
             state->unavailable(failure(Code::Unavailable, QStringLiteral("The desktop Portal service disappeared")));
     }
     static void busClosed(GDBusConnection*, gboolean, GError* error, gpointer data) {
-        const auto state = static_cast<Private*>(data)->shared_from_this();
+        const Callback delivery(static_cast<Private*>(data)->shared_from_this());
+        const auto& state = delivery.state;
         if (state->stopped) return;
         Q_ASSERT(state->onOwnerThread());
         auto reason = error ? fromError(error) : failure(Code::Unavailable, QStringLiteral("The session bus disconnected"));
@@ -494,9 +528,38 @@ struct PortalCapture::Private : std::enable_shared_from_this<Private> {
     }
 
     static void activeSessionClosed(XdpSession*, gpointer data) {
-        auto* raw = static_cast<Private*>(data);
-        const auto state = raw->shared_from_this();
+        const Callback delivery(static_cast<Private*>(data)->shared_from_this());
+        const auto& state = delivery.state;
         state->closeActive(failure(Code::Unavailable, QStringLiteral("The compositor closed the ScreenCast session")));
+    }
+
+    static void remoteReopened(GObject* source, GAsyncResult* result, gpointer data) {
+        const std::unique_ptr<Call> call(static_cast<Call*>(data));
+        const auto& state = call->state;
+        const auto& pending = call->operation;
+        g_autoptr(GError) error = nullptr;
+        const auto fd = xdp_session_open_pipewire_remote_finish(XDP_SESSION(source), result, &error);
+        if (fd < 0) { state->finish(pending, fromError(error)); return; }
+        if (state->stopped || state->draining || pending->cancellation ||
+            state->activeSession != XDP_SESSION(source) ||
+            xdp_session_get_session_state(XDP_SESSION(source)) != XDP_SESSION_ACTIVE) {
+            ::close(fd);
+            state->finish(pending, failure(Code::Unavailable, QStringLiteral("The ScreenCast session closed while opening its new remote")));
+            return;
+        }
+        if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
+            const auto nativeCode = errno;
+            ::close(fd);
+            auto failed = failure(Code::Failed, QStringLiteral("Could not set close-on-exec on the new PipeWire remote"));
+            failed.domain = QStringLiteral("errno"); failed.nativeCode = nativeCode;
+            state->finish(pending, failed);
+            return;
+        }
+        // The active session remains owned by this controller. A successful
+        // callback transfers only the new connection, never authorization or
+        // the prior connection's buffers. GTask holds source through finish.
+        state->pipeWireFd = fd;
+        state->finish(pending, {});
     }
 };
 
@@ -513,7 +576,7 @@ void PortalCapture::initialize()
     }
     if (d->nameWatch) g_bus_unwatch_name(std::exchange(d->nameWatch, 0));
     if (d->bus) g_clear_signal_handler(&d->busClosedHandler, d->bus);
-    g_clear_object(&d->portal);
+    d->releasePortal();
     g_clear_object(&d->bus);
     d->capabilities.screenshot = {};
     d->capabilities.screenCast = {};
@@ -573,18 +636,44 @@ quint64 PortalCapture::requestScreenCast(QWindow* parent, const ScreenCastOption
 void PortalCapture::cancelRequest(quint64 id)
 {
     Q_ASSERT(d->onOwnerThread());
-    if (d->operation && d->operation->id == id)
-        d->cancel(d->operation, failure(Code::Cancelled, QStringLiteral("Portal request canceled by caller")));
+    const Private::Callback delivery(d);
+    const auto& state = delivery.state;
+    if (state->operation && state->operation->id == id)
+        state->cancel(state->operation, failure(Code::Cancelled, QStringLiteral("Portal request canceled by caller")));
+}
+
+quint64 PortalCapture::openPipeWireRemote()
+{
+    Q_ASSERT(d->onOwnerThread());
+    constexpr auto kind = Private::Operation::Kind::PipeWireRemote;
+    if (d->draining || d->stopped) return 0;
+    if (auto error = d->checkContext()) return d->reject(kind, error);
+    if (!d->ready || !d->activeSession || xdp_session_get_session_state(d->activeSession) != XDP_SESSION_ACTIVE)
+        return d->reject(kind, failure(Code::InvalidState, QStringLiteral("An active authorized ScreenCast session is required")));
+    if (d->operation || d->pipeWireFd >= 0)
+        return d->reject(kind, failure(Code::Busy, QStringLiteral("A Portal request or unclaimed PipeWire remote is already pending")));
+    auto pending = d->begin(kind, nullptr);
+    xdp_session_open_pipewire_remote_async(d->activeSession, pending->cancellable,
+        Private::remoteReopened, new Private::Call{d, pending});
+    return pending->id;
 }
 
 void PortalCapture::shutdown()
 {
     Q_ASSERT(d->onOwnerThread());
-    const auto state = d;
-    state->requestShutdown();
+    // Parent cancellation may synchronously deliver a terminal signal whose
+    // host destroys this QObject or dispatches another event loop. Keep both
+    // state and this invocation in the drain gate until that stack returns.
+    const Private::Callback delivery(d);
+    delivery.state->requestShutdown();
 }
 
-void PortalCapture::closeScreenCast() { Q_ASSERT(d->onOwnerThread()); d->closeActive(); }
+void PortalCapture::closeScreenCast()
+{
+    Q_ASSERT(d->onOwnerThread());
+    const Private::Callback delivery(d);
+    delivery.state->closeActive();
+}
 bool PortalCapture::hasActiveScreenCast() const { Q_ASSERT(d->onOwnerThread()); return d->activeSession != nullptr; }
 int PortalCapture::takePipeWireFd() { Q_ASSERT(d->onOwnerThread()); return std::exchange(d->pipeWireFd, -1); }
 

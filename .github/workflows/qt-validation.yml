@@ -119,6 +119,9 @@ jobs:
       - name: Validate the shared authorized live source owner (Debug)
         if: runner.os == 'Linux'
         run: python3 scripts/test-pipewire-capture.py artifacts/cmake/qt-validation/live_capture_source_probe --pipewire-prefix .deps/pipewire-validation/install --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr --backend-build-info .deps/validation-desktop/build-info.json --artifacts artifacts/cmake/qt-validation/live-source/Debug
+      - name: Verify the first replacement frame after hiding controls (Debug)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-pipewire-capture.py artifacts/cmake/qt-validation/live_capture_refresh_probe --pipewire-prefix .deps/pipewire-validation/install --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr --backend-build-info .deps/validation-desktop/build-info.json --modes capture --artifacts artifacts/cmake/qt-validation/live-refresh/Debug
       - name: Configure Linux Release
         if: runner.os == 'Linux'
         run: cmake --preset qt-validation -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON -DHUHUCAPTURE_DESKTOP_VALIDATION=ON
@@ -139,6 +142,9 @@ jobs:
       - name: Validate the shared authorized live source owner (Release)
         if: runner.os == 'Linux'
         run: python3 scripts/test-pipewire-capture.py artifacts/cmake/qt-validation/live_capture_source_probe --pipewire-prefix .deps/pipewire-validation/install --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr --backend-build-info .deps/validation-desktop/build-info.json --artifacts artifacts/cmake/qt-validation/live-source/Release
+      - name: Verify the first replacement frame after hiding controls (Release)
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-pipewire-capture.py artifacts/cmake/qt-validation/live_capture_refresh_probe --pipewire-prefix .deps/pipewire-validation/install --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr --backend-build-info .deps/validation-desktop/build-info.json --modes capture --artifacts artifacts/cmake/qt-validation/live-refresh/Release
       - name: Retain real configure and test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -161,6 +167,7 @@ jobs:
             artifacts/cmake/qt-validation/wayland-clipboard/
             artifacts/cmake/qt-validation/pipewire/
             artifacts/cmake/qt-validation/live-source/
+            artifacts/cmake/qt-validation/live-refresh/
             artifacts/cmake/qt-validation/update-render/
             .deps/pipewire-validation/build-info.json
             .deps/pipewire-validation/build/meson-logs/

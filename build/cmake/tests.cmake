@@ -245,9 +245,11 @@ if(HUHUCAPTURE_QT_VALIDATION)
             COMMAND portal_fault_tests --no-bus --shutdown-initializing)
         add_test(NAME portal_shutdown_closed_admission
             COMMAND portal_fault_tests --shutdown-with-late-request)
+        add_test(NAME portal_remote_without_session
+            COMMAND portal_fault_tests --remote-without-session)
         set_tests_properties(portal_missing_service portal_missing_session_bus
             portal_shutdown_initializing portal_shutdown_initializing_no_bus
-            portal_shutdown_closed_admission PROPERTIES
+            portal_shutdown_closed_admission portal_remote_without_session PROPERTIES
             TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         add_executable(portal_shortcuts_fault_tests tests/platform/portal_shortcuts_fault_tests.cpp)
         target_compile_definitions(portal_shortcuts_fault_tests PRIVATE QT_NO_KEYWORDS)
@@ -256,8 +258,14 @@ if(HUHUCAPTURE_QT_VALIDATION)
             COMMAND "${DBUS_RUN_SESSION}" -- $<TARGET_FILE:portal_shortcuts_fault_tests>)
         add_test(NAME portal_shortcuts_missing_session_bus COMMAND portal_shortcuts_fault_tests --no-bus)
         add_test(NAME portal_session_bus_disconnection COMMAND portal_shortcuts_fault_tests --disconnect-bus)
+        add_test(NAME portal_shortcuts_shutdown
+            COMMAND "${DBUS_RUN_SESSION}" -- $<TARGET_FILE:portal_shortcuts_fault_tests> --shutdown)
+        add_test(NAME portal_shortcuts_shutdown_no_bus
+            COMMAND portal_shortcuts_fault_tests --shutdown --no-bus)
         set_tests_properties(portal_shortcuts_missing_service portal_shortcuts_missing_session_bus
             portal_session_bus_disconnection PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        set_tests_properties(portal_shortcuts_shutdown portal_shortcuts_shutdown_no_bus
+            PROPERTIES TIMEOUT 25 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         add_executable(portal_capture_probe tests/platform/portal_capture_probe.cpp)
         target_compile_definitions(portal_capture_probe PRIVATE QT_NO_KEYWORDS)
         target_link_libraries(portal_capture_probe PRIVATE huhucapture_portal)
@@ -349,6 +357,10 @@ if(HUHUCAPTURE_QT_VALIDATION)
             endif()
             set_tests_properties(capture_workspace_native PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
         endif()
+        huhucapture_test(qt_shortcut_shutdown tests/qt/shortcut_shutdown_tests.cpp)
+        target_link_libraries(qt_shortcut_shutdown PRIVATE huhucapture_settings_controller)
+        set_tests_properties(qt_shortcut_shutdown PROPERTIES TIMEOUT 60
+            ENVIRONMENT "QT_QPA_PLATFORM=${HUHUCAPTURE_TEST_QPA}")
         if(HUHUCAPTURE_NATIVE_INPUT_VALIDATION)
             add_executable(qt_settings_controller tests/qt/settings_controller_tests.cpp)
             target_link_libraries(qt_settings_controller PRIVATE huhucapture_settings_controller)
@@ -460,7 +472,9 @@ if(HUHUCAPTURE_QT_VALIDATION)
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             add_executable(live_capture_source_probe tests/qt/live_capture_source_probe.cpp)
             target_link_libraries(live_capture_source_probe PRIVATE huhucapture_live_capture Qt6::Widgets)
-            set_target_properties(live_capture_source_probe PROPERTIES CXX_EXTENSIONS OFF)
+            add_executable(live_capture_refresh_probe tests/qt/live_capture_refresh_probe.cpp)
+            target_link_libraries(live_capture_refresh_probe PRIVATE huhucapture_live_capture Qt6::Widgets)
+            set_target_properties(live_capture_source_probe live_capture_refresh_probe PROPERTIES CXX_EXTENSIONS OFF)
         endif()
     endif()
     if(TARGET huhucapture_x11_recording AND TARGET huhucapture_video_inspection)

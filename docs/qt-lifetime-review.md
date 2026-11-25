@@ -74,11 +74,47 @@ widgets, workers, file operations and callback lifetimes. It does not validate
 native clipboard ownership, desktop presentation, Windows shell behavior or
 physical display interaction.
 
-## Separate remaining shortcut drain finding
+## Shortcut callback drain
 
-The reviewed GlobalShortcut/SettingsController shutdown path did not yet wait
-for PortalShortcuts' already-running `list_shortcuts` refresh callback. Its
-shared owner and session references protect the callback's objects, but issuing
-cancellation alone does not prove that GLib completion and resource cleanup
-finished before the event dispatcher stops. This is a separate follow-up; the
-review does not mark that asynchronous drain branch as verified.
+The reviewed GlobalShortcut/SettingsController shutdown path did not wait for
+PortalShortcuts' already-running `list_shortcuts` refresh callback. Cancellation
+retained safe shared references, but the host could stop its dispatcher before
+the completion released them. PortalShortcuts now closes admission and waits for
+its initialization, binding, refresh and queued-rejection callbacks. A derived
+Call/Refresh releases its operation/session before decrementing the shared
+callback count. The final acknowledgement is queued after native callback
+return, and counters are checked again before emission.
+
+The pinned libportal ParentBind wrapper may return cancellation before its inner
+callback drops the outer GTask/session references. After its own callbacks drain,
+the controller therefore releases its private XdpPortal and waits for that
+object's real GObject weak-finalize notification, followed by the queued final
+check. This reuses the existing native missing-service tests' release proof.
+It does not wait for destruction of the shared session-bus connection or infer
+cleanup from a cleared public QObject pointer.
+
+Parent cancellation can synchronously deliver a binding result. Public shutdown
+and closeBindings therefore also retain their shared State and count their
+active delivery; a recipient deleting the public QObject cannot invalidate the
+remainder of the cancellation/close call. This same call chain was independently
+identified during the second source review.
+
+The platform backend acknowledges real release to GlobalShortcut, which also
+waits for its own queued admissions and rejections. SettingsController's existing
+shutdownFinished signal waits for that acknowledgement. The application host
+needs no second shortcut owner or additional shutdown protocol. Windows and X11
+retain their existing native unregister/connection release implementations.
+
+The fixed Qt 6.12.1/GCC 14 build passed strict C++20 compilation, MOC and linking
+for the changed Linux Portal and settings targets. Actual offscreen Qt tests
+passed for queued binding cancellation, initialization, nested event dispatch,
+SettingsController drain and deletion in the shutdown callback. The Portal
+`--shutdown --no-bus` test passed actual canceled and unavailable GTask
+initialization, queued rejection, closed admission, and callback-return order.
+
+A real local dbus-daemon could not open its socket in the execution environment
+(`Operation not permitted`), so the real-session variant is pending CI. The
+updated desktop probe offers `--shutdown-after-bind` and `--shutdown-on-refresh`
+to verify actual granted sessions and ListShortcuts callbacks on GNOME/Plasma.
+These probes compiled but were not run against an authorized desktop locally;
+negative tests and static counting do not establish active-session acceptance.
