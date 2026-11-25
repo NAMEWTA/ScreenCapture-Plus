@@ -50,7 +50,9 @@ public:
     ScrollCaptureModel(const ScrollCaptureModel&) = delete;
     ScrollCaptureModel& operator=(const ScrollCaptureModel&) = delete;
     ScrollStartError begin(std::span<const std::uint8_t> pixels, int width, int height) noexcept;
-    ScrollUpdate accept(std::span<const std::uint8_t> pixels) noexcept;
+    // Manual streams may stay still while the user reads. Only automatic
+    // wheel attempts establish the retained reached-bottom retry threshold.
+    ScrollUpdate accept(std::span<const std::uint8_t> pixels, bool automatic = true) noexcept;
     ScrollUpdate captureFailed() noexcept;
     void stop(ScrollStopReason reason = ScrollStopReason::Requested) noexcept;
 
@@ -64,7 +66,7 @@ public:
     std::size_t allocatedBytes() const noexcept;
 
 private:
-    ScrollUpdate dismissed(ScrollStopReason reason) noexcept;
+    ScrollUpdate dismissed(ScrollStopReason reason, bool automatic = true) noexcept;
     ScrollUpdate stopped() const noexcept;
     bool reserveAppend(int rows);
 

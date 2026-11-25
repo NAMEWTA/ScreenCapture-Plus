@@ -1,6 +1,8 @@
 #pragma once
 
 #include "core/MediaClock.h"
+#include "core/FrameQueue.h"
+#include "core/LiveSource.h"
 #include "core/PixelBuffer.h"
 #include "core/RecordingResult.h"
 #include "platform/FileIdentity.h"
@@ -11,11 +13,14 @@
 #include <limits>
 #include <optional>
 #include <stop_token>
+#include <string>
 
 namespace HuhuCapture::Recording {
 
-// Desktop coordinates are physical pixels, including negative monitor origins.
-// Qt logical coordinates and screen DPR must be resolved before this boundary.
+// The request's explicit coordinate domain determines the meaning of pixels.
+// Desktop pixels may have negative monitor origins. Authorized source pixels
+// refer to the normalized first frame of the same live source, never to an
+// earlier screenshot or an inferred desktop DPR.
 struct PixelRegion {
     std::int32_t x{}, y{}, width{}, height{};
     bool operator==(const PixelRegion&) const = default;
@@ -23,7 +28,8 @@ struct PixelRegion {
 
 enum class Format { Mp4, Gif };
 enum class Codec { H264, Hevc, Gif };
-enum class CaptureSource { DesktopDuplication, Gdi, PipeWire };
+enum class CaptureSource { DesktopDuplication, Gdi, PipeWire, X11 };
+enum class CoordinateSpace { DesktopPixels, AuthorizedSourcePixels };
 enum class StopIntent { Save, Copy, Discard };
 
 struct BackendRequest {
@@ -39,6 +45,8 @@ struct BackendRequest {
     // Combined raw PCM pending in all selected input queues. This is not a
     // promise about the codec's private working set or every mixer allocation.
     std::uint64_t maximumQueuedAudioBytes{16ull * 1024 * 1024};
+    CoordinateSpace coordinates{CoordinateSpace::DesktopPixels};
+    std::uint64_t sourceId{}, generation{};
 };
 
 struct PreparedRecording {
@@ -47,6 +55,8 @@ struct PreparedRecording {
     CaptureSource source{CaptureSource::DesktopDuplication};
     Core::MediaClock::time_point started;
     bool systemAudio{}, microphone{};
+    CoordinateSpace coordinates{CoordinateSpace::DesktopPixels};
+    std::uint64_t sourceId{}, generation{};
 };
 
 struct BackendEvents {
@@ -62,6 +72,9 @@ struct BackendResult {
     Core::MediaTime elapsed{};
     bool stopRequested{};
     bool durationLimitReached{};
+    std::optional<Core::FrameSourceTerminal> sourceTerminal;
+    // First failure detail, separate from diagnostic terminal metadata.
+    std::string detail;
 };
 
 // The writer is an already claimed empty regular file. The worker consumes it,
@@ -70,6 +83,9 @@ struct BackendResult {
 // RecordingSession. A backend cannot declare a file durably archived.
 using Backend = std::function<BackendResult(const BackendRequest&, Platform::FileHandle,
     const BackendEvents&, std::stop_token)>;
+// Application composition supplies the platform factory; shared UI/session
+// code only transfers a once-claimed source into its task-specific provider.
+using LiveBackendFactory = std::function<Backend(Core::LiveSourceConsumer)>;
 
 // Preserve the native MP4 alignment without extending a small/out-of-bounds
 // selection. The returned right/bottom never pass the requested rectangle.

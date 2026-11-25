@@ -19,7 +19,8 @@ class RecordingWorkspace final : public QObject {
 public:
     RecordingWorkspace(std::shared_ptr<Media::MediaArchiveService> archive,
         MediaWorkspace& media, CaptureWorkspace& capture, Recording::Backend backend,
-        UI::Qt::RecordingCapabilities capabilities, QObject* parent = nullptr);
+        UI::Qt::RecordingCapabilities capabilities,
+        Recording::LiveBackendFactory liveBackend = {}, QObject* parent = nullptr);
     ~RecordingWorkspace() override;
     void setTranslator(UI::Qt::DesktopTranslator translator);
     bool busy() const noexcept;

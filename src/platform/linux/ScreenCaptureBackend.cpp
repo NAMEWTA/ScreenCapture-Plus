@@ -53,6 +53,7 @@ ScreenCaptureBackend::~ScreenCaptureBackend() = default;
 Capture::Failure ScreenCaptureBackend::initialize()
 { return state_->capture.initialize() ? Failure{} : failed(state_->capture); }
 bool ScreenCaptureBackend::requiresPortal() const noexcept { return state_->capture.isXWayland(); }
+bool ScreenCaptureBackend::supportsAutomaticScroll() const noexcept { return state_->capture.supportsAutomaticScroll(); }
 NativeScreenshot ScreenCaptureBackend::capture(std::stop_token stop)
 {
     NativeScreenshot result;

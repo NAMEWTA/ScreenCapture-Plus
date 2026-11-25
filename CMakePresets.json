@@ -15,14 +15,36 @@
       "inherits": "core",
       "binaryDir": "${sourceDir}/artifacts/cmake/qt-validation",
       "cacheVariables": { "HUHUCAPTURE_QT_VALIDATION": "ON" }
+    },
+    {
+      "name": "qt-application-linux",
+      "displayName": "Unified Linux amd64 Qt application",
+      "inherits": "core",
+      "binaryDir": "${sourceDir}/artifacts/cmake/application-linux",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "HUHUCAPTURE_BUILD_APP": "ON" }
+    },
+    {
+      "name": "qt-application-windows",
+      "displayName": "Unified Windows x64 Qt application",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "toolset": "v143",
+      "binaryDir": "${sourceDir}/artifacts/cmake/application-windows",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "BUILD_TESTING": "ON", "HUHUCAPTURE_BUILD_APP": "ON" }
     }
   ],
   "buildPresets": [
     { "name": "core", "configurePreset": "core" },
-    { "name": "qt-validation", "configurePreset": "qt-validation" }
+    { "name": "qt-validation", "configurePreset": "qt-validation" },
+    { "name": "qt-application-linux", "configurePreset": "qt-application-linux" },
+    { "name": "qt-application-windows", "configurePreset": "qt-application-windows", "configuration": "RelWithDebInfo" }
   ],
   "testPresets": [
     { "name": "core", "configurePreset": "core", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
-    { "name": "qt-validation", "configurePreset": "qt-validation", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
+    { "name": "qt-validation", "configurePreset": "qt-validation", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "qt-application-linux", "configurePreset": "qt-application-linux", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "qt-application-windows", "configurePreset": "qt-application-windows", "configuration": "RelWithDebInfo", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
   ]
 }

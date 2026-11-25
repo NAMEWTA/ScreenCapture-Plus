@@ -27,6 +27,7 @@ public:
     void setArchiveDirectory(const QString& path, bool canOpen = true);
     void setLanAvailable(bool available);
     void setLinksAvailable(bool available);
+    void setStandardDialogLanguageAvailable(bool available);
     void setApplicationVersion(const QString& version);
     void setUpdateSnapshot(const UI::Qt::AboutUpdateSnapshot& update);
     bool busy() const;

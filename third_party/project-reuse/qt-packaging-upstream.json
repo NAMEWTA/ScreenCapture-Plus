@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/NAMEWTA/huhucapture",
+  "commit": "251bc0071278c6b711c840bf5188d16870bc7349",
+  "pullRequest": "https://github.com/NAMEWTA/huhucapture/pull/7",
+  "author": "Anner (NAMEWTA)",
+  "license": "MIT",
+  "licenseFile": "LICENSE",
+  "reuse": "Review and adapt the existing independent Qt packaging implementation; keep its branch and unmerged work intact.",
+  "files": [
+    {
+      "path": "build/package/dependencies.lock.json",
+      "upstreamGitBlob": "8627efb2b9cf650103dff248c323722690a4ab31",
+      "upstreamSha256": "b4eb961e890d43d8f62abb23108d6d1b40185c39e0965a268a75d6b993b674c4"
+    },
+    {
+      "path": "build/package/io.github.NAMEWTA.huhucapture.desktop",
+      "upstreamGitBlob": "84c2f93ff2708e44824a56ca067dafac6cdade6d",
+      "upstreamSha256": "a53e35a1efa5e3107d59d9600587186a5bcfcb62817faf73276e0731d46b650f"
+    },
+    {
+      "path": "build/package/build-identity.json.in",
+      "upstreamGitBlob": "bd759161e7ffaa7709167c7f8f09b3d163d1f17b",
+      "upstreamSha256": "aea926fe3db4fd9ee6f83e9e677fc3b47f9887f091c0bb8a2182b8033fe9e852"
+    },
+    {
+      "path": "build/package/AppRun",
+      "upstreamGitBlob": "70170f85daef3a1d80a2c0a3478d23a39a26621d",
+      "upstreamSha256": "07abd0a32e74cf7ead19545f778800adfd857ce3b486636a1edb9c13385cc14d"
+    },
+    {
+      "path": "build/package/build-identity.cpp.in",
+      "upstreamGitBlob": "cc6a31e69d56e966724ecd101a241023d28593c2",
+      "upstreamSha256": "763c675123d7a23efa5670eecec604d348902c084bd64578256932e664876272"
+    },
+    {
+      "path": "build/package/metadata.py",
+      "upstreamGitBlob": "91a6e08b9dc34c4247e842e017d6a12f17dd2212",
+      "upstreamSha256": "513c739ec1364b37eb927b0fa8cde0a9f314b298f5893da5f4c4fd7ff6bcea2e"
+    },
+    {
+      "path": "build/package/deb-launcher",
+      "upstreamGitBlob": "373020ff09abdeeae281b827d9f76b6ec5ac10ed",
+      "upstreamSha256": "87772c21770cfe527c58fe9757b9d4f71c01a683231ff9312a226d7da2dd7db5"
+    },
+    {
+      "path": "build/package/user-installer.nsi.in",
+      "upstreamGitBlob": "8e72da39395c519a2ccf0a1f1eeb8326b9f488f7",
+      "upstreamSha256": "42b49032bd33bb6b81c48f6ff8cd01d0c650831166e4eca46df6b6b4e35e4997"
+    },
+    {
+      "path": "build/package/windows-symbols.cmake.in",
+      "upstreamGitBlob": "dfd7f96c2fa88099f39c72e4b100f49134461317",
+      "upstreamSha256": "1e7f3997a28ab21a5eae3fd4c70c90d7c580859945174d0b3194666da3557c9b"
+    },
+    {
+      "path": "build/cmake/qt-install.cmake",
+      "upstreamGitBlob": "5c3df64b4954a56cb23d36cb1b7e5c29ee91c062",
+      "upstreamSha256": "297d1bf3db5eebdbb4f6396929de5e96199f7271df9201ba5a50143ad1ef7769"
+    },
+    {
+      "path": "scripts/package-qt.py",
+      "upstreamGitBlob": "065d9df3d49f9269449a4585ca59ae9cbe9f74b2",
+      "upstreamSha256": "7717bb6526945e3356b223a70acf77b90111664248b8c17220f450ac75ce5808"
+    },
+    {
+      "path": "scripts/restore-packaging-tools.py",
+      "upstreamGitBlob": "1e27d9950123a1e3d8e9eb77be6bc463a516065e",
+      "upstreamSha256": "9c360fc6c9a919f90dcfaaaacb49249a176b55df2c4c124e11c6fd9c8ecf9f09"
+    },
+    {
+      "path": "scripts/test-qt-package-runtime.py",
+      "upstreamGitBlob": "b348eaae24ec3dad43386117c2aca9fc175d1de2",
+      "upstreamSha256": "e8b144148a0a7a338a6c5b6b8e2706a7032d010683a3f3a3a419ae79829ac195"
+    },
+    {
+      "path": "scripts/version_source.py",
+      "upstreamGitBlob": "d3f2456a56648e9b65a0e81f3546571797edc8bb",
+      "upstreamSha256": "2f470205a8a08fdfdb5a7cc20524f655965f38b92c9a36038846ba085ef5f6a1"
+    },
+    {
+      "path": "tests/package_metadata_tests.py",
+      "upstreamGitBlob": "d8ddcb3decadf94bdeb8a71e4c3c7ea632b70f46",
+      "upstreamSha256": "19ae6b97dfca0f4131b3176d67e203138807f0e20edf4e3589d46875153b5725"
+    },
+    {
+      "path": "tests/qt/package_runtime_probe.cpp",
+      "upstreamGitBlob": "daa196fbcd721211e08c4fa3f65bacf48f4432e9",
+      "upstreamSha256": "d1e87c1287edf39205efda916b1662119a2d1226d9331e7559420e5edd2f7f7b"
+    },
+    {
+      "path": "docs/qt-packaging.md",
+      "upstreamGitBlob": "bf1e31920e63f5c4a72972f3bcbc2d10e8efc215",
+      "upstreamSha256": "a28f9241c0ea95a4d59df1f8d30a8ea3e6ba27d53c151bc4ae9c82c9148d4cdf"
+    },
+    {
+      "path": "tests/fixtures/qt-tls/readme.md",
+      "upstreamGitBlob": "f634538e987bef8366615b95e731494c3c2f736d",
+      "upstreamSha256": "dbe37e5d5aa34838f2468a30adf824f1ac40855dc21cfae83a6ef7a05c0729bb"
+    },
+    {
+      "path": "tests/fixtures/qt-tls/localhost-test-cert.pem",
+      "upstreamGitBlob": "27b512a63ca6b78d458a56334ebeafc5bb3e6f39",
+      "upstreamSha256": "7afe918361acb60e82e4a6e130a7629303e35f198ca0c112733830a9c485ba20"
+    },
+    {
+      "path": "tests/fixtures/qt-tls/localhost-test-key.pem",
+      "upstreamGitBlob": "8aa7be945d16273644148fe834160704b808f8ef",
+      "upstreamSha256": "6e13dd4cade02125ec5b9c1641af3e8b69ec7270f1a5c91c558be378689211bf"
+    },
+    {
+      "path": "build/dependencies.lock.json",
+      "upstreamGitBlob": "a6b70dc9cfadff5d7d8d71676ff8be97d3789435",
+      "upstreamSha256": "8c1a8660e0b0874e793c735664916f8b4adcbd8d77824624ac781ea380454c66",
+      "reuse": "Adapt the relevant dependency/translation/runtime changes while retaining existing stronger SONAME verification and build version contracts."
+    },
+    {
+      "path": "scripts/build-software-media.py",
+      "upstreamGitBlob": "6d310c95a31dac7ffbe78ba38ab9bee42a46e2c4",
+      "upstreamSha256": "43f2ba330e24a05607817a1edeaafeebb5c1628c4812eff0cf79a4efdd1b4642",
+      "reuse": "Adapt the relevant dependency/translation/runtime changes while retaining existing stronger SONAME verification and build version contracts."
+    },
+    {
+      "path": "scripts/build-windows-video-inspection.py",
+      "upstreamGitBlob": "8a12660baf208602d662765b8fd8c71a4794781a",
+      "upstreamSha256": "9f9a4c529ff0febcb8d9ac4e4c4a12d138bf5e4ae0e3ba8d3da8fd9837dcf623",
+      "reuse": "Adapt the relevant dependency/translation/runtime changes while retaining existing stronger SONAME verification and build version contracts."
+    },
+    {
+      "path": "scripts/bundle-development-dependencies.py",
+      "upstreamGitBlob": "3e686fe84e1aab02bd01f2fededa7834342e90bd",
+      "upstreamSha256": "b080cd1115fcba7cc1c7f3d9eaf1a7342d8b0d4d31e97f579a51762be3bdd7d0",
+      "reuse": "Adapt the relevant dependency/translation/runtime changes while retaining existing stronger SONAME verification and build version contracts."
+    },
+    {
+      "path": ".github/workflows/development-dependencies.yml",
+      "upstreamGitBlob": "bd4b7ac7042555ab936ba9d41277ef9e0b129661",
+      "upstreamSha256": "2ed66eaff22258dd512cedf6cee827e3c7d359e23ba6581dae138f2db45b7dce",
+      "reuse": "Adapt the relevant dependency/translation/runtime changes while retaining existing stronger SONAME verification and build version contracts."
+    },
+    {
+      "path": ".github/workflows/qt-application.yml",
+      "upstreamGitBlob": "c91bf91e4c3d7f243495c3fdabf27468a41bd0e1",
+      "upstreamSha256": "9ea5169dcd2d699a9eebdda6c54254b2d881388586b6cdb404fe2a62c04a4911",
+      "reuse": "Keep the single same-source Qt application/package workflow; adapt target names, actual live capture/audio/clipboard gates, production-only build and the existing canonical version contract."
+    }
+  ],
+  "adaptations": [
+    "Use the current QtApplication target and the one existing Windows version-resource fragment.",
+    "Read only build/version.json; do not restore a second generated VERSION input.",
+    "Bind package identities and inventory checks to the actual installation layout and current product version.",
+    "Keep all development artifacts separate from release aggregation until source and acceptance gates pass."
+  ]
+}

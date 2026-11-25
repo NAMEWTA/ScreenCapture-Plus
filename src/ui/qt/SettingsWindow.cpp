@@ -252,7 +252,7 @@ struct SettingsWindow::State {
     LanguageChoice* language{};
     ShortcutRecorder* recorder{};
     Theme::ElidingLabel* archivePath{};
-    QLabel *footer{}, *archiveDescription{}, *shortcutDescription{}, *shortcutHint{}, *status{};
+    QLabel *footer{}, *archiveDescription{}, *shortcutDescription{}, *shortcutHint{}, *status{}, *standardLanguageNote{};
     QLineEdit* shortcutCommand{};
 };
 
@@ -321,7 +321,11 @@ void SettingsWindow::makeGeneral()
     row->addWidget(state_->autoStart); contents->addWidget(startup); contents->addWidget(Theme::divider(preferences));
     auto* language = new QWidget(preferences); language->setMinimumHeight(48); auto* languageRow = new QHBoxLayout(language);
     languageRow->setContentsMargins(0, 0, 0, 0); languageRow->setSpacing(12);
-    languageRow->addWidget(localizedLabel(language, u"setting.language"), 1);
+    auto* languageDescription = new QVBoxLayout; languageDescription->setSpacing(3);
+    languageDescription->addWidget(localizedLabel(language, u"setting.language"));
+    state_->standardLanguageNote = Theme::label(language, 12, true); state_->standardLanguageNote->setWordWrap(true);
+    state_->standardLanguageNote->setObjectName(QStringLiteral("settingsStandardLanguageNote"));
+    languageDescription->addWidget(state_->standardLanguageNote); languageRow->addLayout(languageDescription, 1);
     state_->language = new LanguageChoice(language); state_->language->setObjectName(QStringLiteral("settingsLanguage"));
     languageRow->addWidget(state_->language); contents->addWidget(language); layout->addWidget(preferences); layout->addSpacing(16);
     auto* archive = Theme::card(state_->general); auto* archiveLayout = new QVBoxLayout(archive);
@@ -470,6 +474,8 @@ void SettingsWindow::refreshValues()
     if (snapshot.canOpenLinks) { state_->language->insertSeparator(state_->language->count()); state_->language->addItem(translated(u"setting.getMoreLang"), QString()); }
     state_->language->setCurrentIndex(selected);
     state_->language->setToolTip(selected >= 0 ? state_->language->itemText(selected) : QString());
+    state_->standardLanguageNote->setText(snapshot.standardDialogLanguageNote);
+    state_->standardLanguageNote->setVisible(!snapshot.standardDialogLanguageNote.isEmpty());
     state_->archivePath->setFullText(snapshot.archiveDirectory); state_->archive->setToolTip(snapshot.archiveDirectory);
     state_->shortcutButton->setText(snapshot.captureShortcut); state_->shortcutButton->setToolTip(snapshot.captureShortcut);
     state_->shortcutDescription->setVisible(snapshot.shortcutEditing == ShortcutEditing::LocalCapture);

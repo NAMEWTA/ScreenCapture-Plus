@@ -1,0 +1,144 @@
+{
+  "repository": "https://github.com/PipeWire/pipewire.git",
+  "version": "1.6.11",
+  "commit": "4287f31510771fc999f8a58a024c81ca10b8d55f",
+  "reference": {
+    "path": "src/examples/audio-capture.c",
+    "blob": "2429a2d3491b6621cddd48492161b184ae378ca4",
+    "sha256": "a6fbdf1e0b42d1e842944a193e559a57b02793da80c52eb5d623b4c05f921b94",
+    "license": "MIT",
+    "copyright": "Copyright © 2022 Wim Taymans"
+  },
+  "use": "Stream creation, SPA audio negotiation and dequeue/process/queue lifecycle adapted in src/platform/linux/pipewire/PipeWireAudio.cpp. The production adapter adds two explicit requested sources, bounded owned PCM queues, graph-clock mapping, cancellation and strict error propagation; no external capture process or generated audio substitutes for native input.",
+  "license": {
+    "file": "COPYING",
+    "upstream": "COPYING",
+    "blob": "aa100ce9c02238111b56e394ad5a13311e23a521",
+    "sha256": "8909c319a7e27dbb33a15b9035f89ab3b7b2f6a12f8bcddc755206a8db1ada44"
+  },
+  "projectReuse": {
+    "repository": "https://github.com/NAMEWTA/huhucapture.git",
+    "ref": "251bc0071278c6b711c840bf5188d16870bc7349",
+    "branch": "refactor/qt6-resume",
+    "pullRequest": 7,
+    "files": [
+      {
+        "path": "src/platform/linux/pipewire/PipeWireAudio.h",
+        "blob": "e54551811757e5ba8016d89ff2b64e6d95b4f20c"
+      },
+      {
+        "path": "src/platform/linux/pipewire/PipeWireAudio.cpp",
+        "blob": "e617413534ed3f397f3bbe134cd5629edb6745ff"
+      },
+      {
+        "path": "src/recording/AudioSource.h",
+        "blob": "ee41c244f5886da2b8c5783c8c824e37363797df"
+      },
+      {
+        "path": "tests/platform/pipewire_audio_tests.cpp",
+        "blob": "493392419f8e98e911ba6ea230686e882d9dbc68"
+      },
+      {
+        "path": "src/recording/SoftwareMp4Recording.cpp",
+        "blob": "6f6eb84d3c6421f4caad6227c35f98f3624f96a8",
+        "use": "Pending video frame duration, bounded audio catch-up, producer-before-codec teardown adapted in LiveRecording.cpp; retain this branch shared codecs and exact AAC tail fix."
+      },
+      {
+        "path": "src/recording/FrameSource.cpp",
+        "blob": "a7b5316356f5aa344d963e6301f1473b1a65b096",
+        "use": "Reuse native borrowed BGRA -> finite FramePool row copying in X11Recording.cpp; preserve the existing single X11Capture, FrameQueue and shared recording consumer."
+      },
+      {
+        "path": "tests/qt/recording_pipeline_tests.cpp",
+        "blob": "757b5485bf1ede3c16b084c48f3ced06d8e2ddbf",
+        "use": "Review actual codec fixture coverage and unavailable hardware boundaries; local live_recording_tests covers this branch source/queue/session interfaces."
+      },
+      {
+        "path": "src/platform/linux/RecordingBackend.cpp",
+        "blob": "cf87ee1868cfd3a1a9bfec4054853a0f08e76d0e",
+        "use": "Reuse worker-owned native X11 capture -> shared recording architecture; retain this branch queue, session and strict codecs. The UI still must resolve native recording controls placement."
+      }
+    ],
+    "changes": [
+      "Preserve existing two-source native stream, bounded queues, prepare/read sum-and-limit mixer and worker teardown.",
+      "Allocate only selected rings within the caller combined byte budget; check native channel positions and sink selection failures.",
+      "Reject absent PCM intervals instead of manufacturing up to 100 ms silence; only native GAP/EMPTY buffers explicitly represent silence.",
+      "The existing graph-clock mapping still requires actual device/long-running drift verification, separately from unavailable-endpoint tests."
+    ],
+    "license": "MIT (project LICENSE, Copyright (c) 2026 NAMEWTA)"
+  },
+  "additionalOfficialSources": [
+    {
+      "path": "src/pipewire/stream.c",
+      "blob": "a4f96cff2b4b2127901b15822c1b5c94665b3c98",
+      "use": "Read buffer time, graph clock snapshot and pw_stream_get_nsec before validating the inherited audio clock mapping."
+    },
+    {
+      "path": "src/gst/gstpipewiresrc.c",
+      "blob": "9918a631ac033fbf61d8dfb783767928d972334b",
+      "use": "Read mature source buffer timestamp handling; no GStreamer runtime or copied device layer is introduced."
+    }
+  ],
+  "localProjectReuse": {
+    "ref": "584224b8cb5dec0ce087289f17e3de8bf31617d5",
+    "path": "tests/qt/native_recording_probe.cpp",
+    "blob": "706a07fd864903bb5f3fefdf920c1f031619a590",
+    "use": "Reuse visible native test pattern, actual backend/session, strict media decode and pixel verification in the Linux X11 recording probe."
+  },
+  "nativeGraphValidation": {
+    "input": "Explicit upstream-derived 440 Hz / 880 Hz native signal streams, not a physical audio source or product fallback",
+    "sources": [
+      {
+        "path": "src/examples/audio-src.c",
+        "blob": "914d18fe90d7aa54d6519b2147b6413f35de4044",
+        "copyright": "Copyright © 2018 Wim Taymans",
+        "license": "MIT",
+        "use": "Reusable native output stream, sine filling and buffer queue lifecycle, adapted into tests/platform/pipewire_audio_signal.cpp with bounded/checked native data."
+      },
+      {
+        "path": "src/daemon/pipewire.conf.in",
+        "blob": "049b236b423b9556e6ee5898bb28f8b638bc14ea",
+        "use": "Official dummy driver and null-audio-sink/monitor graph configuration."
+      },
+      {
+        "path": "src/daemon/minimal.conf.in",
+        "blob": "9c95723498987ced29a35128d0543eb1c69bb8d4",
+        "use": "Official minimal module graph and automatic DSP port configuration."
+      },
+      {
+        "path": "src/daemon/client.conf.in",
+        "blob": "fcbc5e0211f8c59e738696a3402ab17894ceb5ba",
+        "use": "Official client module/configuration base for isolated test processes only."
+      },
+      {
+        "path": "src/tools/pw-link.c",
+        "blob": "e33ceda7f5307ce76d3acc1c3f2fdad04bb8e0b2",
+        "use": "Read real registry port IDs and link lifetime semantics before using the pinned official executable."
+      },
+      {
+        "path": "src/tools/pw-dump.c",
+        "blob": "e72e7d2576128e29cb9dfd464793fecc63e4d35e",
+        "use": "Read actual registry node/port identity and JSON output semantics before inspecting/linking owned nodes."
+      },
+      {
+        "path": "src/modules/module-adapter.c",
+        "blob": "9f5474a0847b5fde38e5d0a075836a85460d5c54",
+        "use": "Read native adapter/follower lifetime and DSP port implementation; no custom transport or resampler is substituted."
+      },
+      {
+        "path": "src/modules/module-adapter/adapter.c",
+        "blob": "e049ccc4d5aec11208df7f197819f269fcd0fadd",
+        "use": "Read native audio adapter loading and media class/direction handling."
+      }
+    ],
+    "cases": [
+      "system",
+      "microphone",
+      "mixed",
+      "clipped-mix",
+      "daemon-loss",
+      "source-loss"
+    ],
+    "scope": "Real private native graph, original production PipeWireAudio, PCM clock coverage, graph rate conversion, mix/clamp and owned-process loss. Does not prove physical device policy, hardware capture, long-running A/V calibration or installation."
+  }
+}

@@ -62,6 +62,7 @@ struct SettingsController::State {
     quint64 shortcutRequest{}, viewToken{};
     bool ready{}, initialized{}, initializingShortcut{}, canOpenArchive{}, canOpenLinks{}, lanAvailable{};
     bool stopping{}, shutdownNotified{}, captureActive{};
+    bool standardDialogLanguageAvailable{true};
 
     State(Config::SettingsStore& settings, Localization::LanguageCatalog& language, QString launch)
         : store(settings), catalog(language), autoStart(launch), executable(std::move(launch)) {}
@@ -175,6 +176,7 @@ UI::SettingsSnapshot SettingsController::snapshot() const
     result.canChangeLanguage = active && !busy();
     result.languageCode = state_->store.value({QStringLiteral("common"), QStringLiteral("language")}).toString();
     result.effectiveLanguageCode = state_->catalog.effectiveCode();
+    if (!state_->standardDialogLanguageAvailable) result.standardDialogLanguageNote = state_->catalog.text(u"setting.qtLanguageFallback");
     result.languages = state_->catalog.available();
     result.archiveDirectory = state_->archive;
     result.canOpenArchive = active && state_->canOpenArchive && !state_->archive.isEmpty();
@@ -321,6 +323,11 @@ void SettingsController::setLanAvailable(bool available)
 { state_->lanAvailable = available; refreshViews(); }
 void SettingsController::setLinksAvailable(bool available)
 { state_->canOpenLinks = available; refreshViews(); }
+void SettingsController::setStandardDialogLanguageAvailable(bool available)
+{
+    if (state_->standardDialogLanguageAvailable == available) return;
+    state_->standardDialogLanguageAvailable = available; refreshViews();
+}
 void SettingsController::setApplicationVersion(const QString& version)
 { state_->version = version; for (const auto& window : state_->views) if (window) window->setApplicationVersion(version); }
 void SettingsController::setUpdateSnapshot(const UI::AboutUpdateSnapshot& update)

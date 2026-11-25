@@ -29,6 +29,7 @@ struct ApplicationOptions {
     // override Windows honors an existing config.json beside the executable.
     QString portableDirectory;
     Recording::Backend recordingBackend;
+    Recording::LiveBackendFactory liveRecordingBackend;
     UI::Qt::RecordingCapabilities recordingCapabilities;
 };
 

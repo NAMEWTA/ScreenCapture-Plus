@@ -4,6 +4,9 @@
 #ifdef Q_OS_WIN
 #include "platform/windows/NativeGifRecording.h"
 #include "platform/windows/NativeMp4Recording.h"
+#elif defined(Q_OS_LINUX)
+#include "platform/linux/LiveRecording.h"
+#include "platform/linux/X11Recording.h"
 #endif
 
 #include <QApplication>
@@ -36,10 +39,19 @@ HuhuCapture::Application::ApplicationOptions applicationOptions(const QString& p
         // Device and encoder availability is checked by the real backend on
         // preparation, including microphone privacy and unavailable defaults.
     }
+#elif defined(Q_OS_LINUX)
+    const auto platform = QGuiApplication::platformName();
+    if (platform == QStringLiteral("xcb") || platform.startsWith(QStringLiteral("wayland"))) {
+        if (platform == QStringLiteral("xcb"))
+            options.recordingBackend = Platform::Linux::makeX11RecordingBackend();
+        options.liveRecordingBackend = Platform::Linux::makeLiveRecordingBackend;
+        const Capture::Capability usable{Capture::CapabilityState::Available, {}};
+        options.recordingCapabilities = {usable, usable, usable, usable};
+        // LiveSource supplies actual Portal admission/permission state before
+        // exposing capture actions. A recording worker then verifies its exact
+        // claimed pixels, codec and requested real audio devices on preparation.
+    }
 #endif
-    // A provider is installed only when its real worker exists. The Linux
-    // capture/recording provider supplies its capabilities during integration;
-    // no synthetic frames, successful empty backend or pretend audio sources.
     return options;
 }
 

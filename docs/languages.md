@@ -43,9 +43,36 @@
 
 一个应用只装配一个 `LanguageCatalog`，窗口通过 `text(QStringView)` 和 `changed()` 使用同一状态。载入新语言后清空解析缓存，窗口重新布局并关闭或重新定位弹层。调用在应用所属线程进行；导出和后台任务接收文本副本，不跨线程读取可变缓存。语言服务不拥有设置窗口，也不承担配置保存。
 
+## Qt 标准对话框
+
+项目的六份 JSON 不包含 Qt 自己的文件对话框和标准按钮。宿主另持有一个很薄的
+`QtTranslations`，按同一 `LanguageCatalog::effectiveCode()` 调用官方
+`QTranslator::load(QLocale, "qtbase", "_", directory)`。目录来自部署的
+`qt.conf` 所解析的 `QLibraryInfo::TranslationsPath`；安装树携带与锁定 Qt
+SDK 一致的原始编译 `.qm`，不把标准对话框字符串再抄进 C++。
+
+切换语言会移除原翻译器并安装新目录，现有 Qt 标准按钮收到真实
+`LanguageChange` 后重译；选择英文则恢复 Qt 的原文，不要求冗余英文 QM。
+复用依据为固定 Qt 的
+[QTranslator](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/kernel/qtranslator.cpp)
+和 [QDialogButtonBox](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/widgets/widgets/qdialogbuttonbox.cpp)
+实现，属于使用其公开接口，并未复制 Qt 翻译代码。
+
+固定 Qt 6.12.1 的实际官方目录提供简体、繁体、日语和俄语，**没有印尼语
+`qtbase_id.qm`**。项目自己的印尼语界面仍使用原 `Lang`，受影响的标准对话框
+使用默认语言。其他实际目录缺失同样返回未载入，并在已有设置语言行显示说明；
+不会在每次启动、截图或一次性模式强制弹确认框，也不假装沿用了其他语言。
+操作系统完全拥有的原生文件选择器仍由系统语言与桌面后端决定；Qt 字符串
+切换不能证明这些外部窗口已经全部改变语言。
+
 ## 验证边界
 
 `qt_language_catalog` 实际读取六份原资源，验证中日文字、两种 UTF-16 BOM、UTF-8 BOM、损坏编码、缺键/空值/错误类型、缓存刷新、Windows 空便携目录不合并、Linux 用户覆盖和完整代码匹配。
+
+`qt_standard_translation_tests.cpp` 使用真实部署或 SDK 中的 QM，核对现有
+`QDialogButtonBox` 的“打开／取消”在四种非英文目录之间确实改变、移除后恢复
+英文，以及空目录确实返回失败。本地 Linux 已对固定 SDK 的实际目录运行通过。
+它不合成 QM，不把印尼语目录缺失记为官方覆盖，也不替代原生 OS 对话框验收。
 
 提交翻译前保持原文件编码与结构，并检查 JSON、品牌名称、缺键回退和实际按钮宽度。中文输入法、长译文布局、语言弹层导航及跨显示器 DPI 仍须由正式 Qt 窗口交互和真实桌面验收覆盖，不能从资源读取通过推断其结果。
 

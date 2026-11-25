@@ -1,4 +1,5 @@
 #include "services/capture/ScreenCaptureService.h"
+#include "capture/SourceIdentity.h"
 #include "platform/ScreenCaptureBackend.h"
 #include "services/media/MediaArchiveService.h"
 
@@ -29,7 +30,6 @@
 
 namespace HuhuCapture::Capture {
 namespace {
-std::atomic<quint64> sourceSequence{};
 quint64 next(std::atomic<quint64>& sequence)
 { auto value = sequence.fetch_add(1) + 1; return value ? value : sequence.fetch_add(1) + 1; }
 Failure failure(Failure::Code code, QString detail) { return {code, 0, std::move(detail)}; }
@@ -125,6 +125,7 @@ struct ScreenCaptureService::State {
         QImage authorized;
         QPoint cursor;
         bool requiresPortal{};
+        bool automaticScroll{};
     };
     struct Work {
         std::stop_source stop;
@@ -273,6 +274,8 @@ struct ScreenCaptureService::State {
 #endif
         const Capability available{CapabilityState::Available, {}};
         capability.screenshot = capability.windowSelection = capability.desktopCoordinates = capability.cursorWarp = available;
+        capability.automaticScroll = result.automaticScroll ? available : Capability{CapabilityState::Unavailable,
+            QStringLiteral("This desktop does not provide automatic scrolling input")};
         initialized();
     }
 #ifdef Q_OS_LINUX
@@ -322,7 +325,7 @@ struct ScreenCaptureService::State {
                     }, [this, pending](WorkResult result) {
                         Snapshot snapshot;
                         if (!result.failure) {
-                            snapshot.image = std::move(result.authorized); snapshot.sourceId = next(sourceSequence); snapshot.generation = epoch;
+                            snapshot.image = std::move(result.authorized); snapshot.sourceId = nextSourceIdentity(); snapshot.generation = epoch;
                             snapshot.coordinates = CoordinateSpace::AuthorizedSourcePixels;
                             snapshot.cursor = {snapshot.image.width() / 2, snapshot.image.height() / 2};
                             snapshot.sourceName = QStringLiteral("xdg-desktop-portal");
@@ -421,6 +424,7 @@ void ScreenCaptureService::initialize()
             if (stop.stop_requested()) { result.failure = cancelled(); return result; }
             worker.backend = std::make_unique<Platform::ScreenCaptureBackend>();
             result.failure = worker.backend->initialize(); result.requiresPortal = worker.backend->requiresPortal();
+            result.automaticScroll = !result.failure && worker.backend->supportsAutomaticScroll();
             if (result.requiresPortal || result.failure) worker.backend.reset();
             return result;
         }, [this](State::WorkResult result) { state_->nativeInitialized(std::move(result)); });
@@ -469,7 +473,7 @@ quint64 ScreenCaptureService::request(QWindow* parent)
             if (!result.failure && (pending->epoch != state_->epoch || !sameScreens(pending->screens))) result.failure = changed();
             if (!result.failure) result.failure = bindScreens(pending->screens, result.capture.desktop, snapshot.screens);
             if (!result.failure && !pending->cancellation && !pending->stop.stop_requested() && !state_->stopping) {
-                snapshot.image = std::move(result.capture.image); snapshot.sourceId = next(sourceSequence); snapshot.generation = state_->epoch;
+                snapshot.image = std::move(result.capture.image); snapshot.sourceId = nextSourceIdentity(); snapshot.generation = state_->epoch;
                 snapshot.coordinates = CoordinateSpace::DesktopPixels; snapshot.desktopOrigin = result.capture.desktop.bounds.topLeft();
                 snapshot.cursor = result.capture.desktop.cursor - *snapshot.desktopOrigin; snapshot.sourceName = state_->capability.backend;
                 snapshot.windows.reserve(result.capture.desktop.windows.size());

@@ -8,6 +8,7 @@
 #include "services/desktop/SystemClipboard.h"
 #include "services/localization/LanguageCatalog.h"
 #include "services/media/MediaArchiveService.h"
+#include "services/update/UpdateService.h"
 #include "ui/qt/CaptureWindow.h"
 #include "ui/qt/SettingsWindow.h"
 
@@ -114,6 +115,8 @@ void verifyDrained(app::QtApplication& host)
     if (const auto* value = host.findChild<desktop::FileRevealer*>()) require(!value->busy(), "Exit waits for actual file-manager work");
     if (const auto* value = host.findChild<app::SettingsController*>()) require(!value->busy(), "Exit waits for native shortcut callbacks");
     if (const auto* value = host.findChild<app::LanController*>()) require(!value->busy(), "Exit waits for the actual LAN controller");
+    if (const auto* value = host.findChild<HuhuCapture::Updates::UpdateService*>())
+        require(value->snapshot().stopped && !value->busy(), "Exit waits for actual update network/worker shutdown");
 }
 
 struct Observation : QObject {
@@ -205,8 +208,9 @@ void independentAndDrain(QApplication& application, const QString& artifacts)
         "The actual offscreen capture is explicitly unavailable inside the independent journey");
     auto* capture = host.findChild<app::CaptureWorkspace*>(); auto* clipboard = host.findChild<desktop::SystemClipboard*>();
     require(capture && clipboard && !capture->capabilities().screenshot.canRequest(), "Production capability reports a genuinely unavailable desktop source");
-    require(!host.findChild<app::SettingsController*>() && !host.findChild<app::LanController*>() && !host.findChild<QSystemTrayIcon*>(),
-        "One-shot creates no shortcut/settings controller, LAN runtime or tray even when saved LAN is enabled");
+    require(!host.findChild<app::SettingsController*>() && !host.findChild<app::LanController*>() && !host.findChild<QSystemTrayIcon*>() &&
+        !host.findChild<HuhuCapture::Updates::UpdateService*>(),
+        "One-shot creates no shortcut/settings controller, LAN runtime, updater or tray even when saved LAN is enabled");
     require(host.findChildren<desktop::SystemClipboard*>().size() == 1 && host.findChildren<app::MediaWorkspace*>().size() == 1 &&
         host.findChildren<localization::LanguageCatalog*>().size() == 1, "Independent journeys still reuse one shared application service of each kind");
     require(!QFileInfo::exists(QDir(directory.path()).filePath(QStringLiteral("lan"))) && read(path) == original,
@@ -308,7 +312,10 @@ int childMain(QApplication& application, const QStringList& arguments)
     app::ApplicationOptions options; options.portableDirectory = parsed.portableDirectory;
     app::QtApplication host(application, options);
     int result = 2; bool sawRole{}, clipboardDrained{};
-    QObject::connect(&host, &app::QtApplication::operationFailed, &host, [&] { QTimer::singleShot(0, &host, acknowledgeErrors); });
+    QObject::connect(&host, &app::QtApplication::operationFailed, &host, [&](const QString& message) {
+        std::cerr << "Actual host operation failed: " << message.toStdString() << '\n' << std::flush;
+        QTimer::singleShot(0, &host, acknowledgeErrors);
+    });
     QObject::connect(&host, &app::QtApplication::started, &host, [&](app::InstanceRole role) {
         sawRole = true;
         if (role == app::InstanceRole::Forwarded) {

@@ -188,6 +188,10 @@ public:
     // GUI-thread only. Returns nullopt on a foreign thread. Snapshot reads do
     // not start networking and never wait for the actor or a file operation.
     std::optional<ViewSnapshot> viewSnapshot() const;
+    // Application idle checks reuse this same GUI read model without copying
+    // retained progress or terminal payloads. A foreign-thread call is treated
+    // as busy; it cannot certify that the service is idle.
+    bool hasActiveTransfers() const;
 
     // Final lifetime barrier, also used by the destructor. Normal UI exit first
     // calls disable and waits for Disabled; only the final teardown joins here.

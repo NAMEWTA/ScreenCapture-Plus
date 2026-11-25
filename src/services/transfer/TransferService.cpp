@@ -1099,6 +1099,15 @@ std::optional<ViewSnapshot> TransferService::viewSnapshot() const
     return result;
 }
 
+bool TransferService::hasActiveTransfers() const
+{
+    if (QThread::currentThread() != thread()) return true;
+    return std::any_of(impl_->views.cbegin(), impl_->views.cend(), [](const auto& entry) {
+        const auto direction = std::get<1>(entry.first);
+        return (direction == 1 || direction == 2) && !entry.second.terminal;
+    });
+}
+
 void TransferService::remember(Event& event)
 {
     if (event.kind == EventKind::Enabled || event.kind == EventKind::Disabled || event.kind == EventKind::ListenerFailed) {

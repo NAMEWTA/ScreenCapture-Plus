@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/NAMEWTA/huhucapture.git",
+  "commit": "251bc0071278c6b711c840bf5188d16870bc7349",
+  "path": "tests/qt/legacy_mp3_recording_tests.cpp",
+  "blob": "1e5034233165996a361c811bf2667a82fc4738eb",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 NAMEWTA",
+  "use": "Reuse the same-project native MF H.264+MP3 fixture generator and late-MP3 corruption test. Unmodified actual codec/data tests; both platforms must inspect the exact Windows-generated manifest hashes.",
+  "scope": "No physical audio/desktop acquisition or timing drift evidence. The pinned FFmpeg dependency must include the native MP3 decoder and mpegaudio parser. Actual validation in this branch remains pending."
+}

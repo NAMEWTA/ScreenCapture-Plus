@@ -45,6 +45,7 @@ public:
     ScreenCaptureBackend& operator=(const ScreenCaptureBackend&) = delete;
     Capture::Failure initialize();
     bool requiresPortal() const noexcept;
+    bool supportsAutomaticScroll() const noexcept;
     NativeScreenshot capture(std::stop_token stop);
     Capture::Failure moveCursor(const CaptureDesktop& expected, QPoint target,
         QPoint& actual, std::stop_token stop);

@@ -137,12 +137,31 @@ void progressResetsRetries()
     require(model.accept(moved).reason == ScrollStopReason::ReachedBottom, "the restored ninth-sample threshold remains exact");
     std::cout << "PASS real progress resets stationary retry state\n";
 }
+void manualReadingAndRetainedOutput()
+{
+    const auto content = page(31, 400, 5);
+    const auto first = viewport(content, 31, 180, 5, 0);
+    ScrollCaptureModel model;
+    require(model.begin(first, 31, 180) == ScrollStartError::None, "begin a manually scrolled real page");
+    for (int i = 0; i < 30; ++i)
+        require(model.accept(first, false).next == ScrollNextStep::Scroll && model.running(),
+            "a user reading a manual source cannot establish automatic reached-bottom");
+    require(model.accept(viewport(content, 31, 180, 5, 17), false).appended && model.height() == 197,
+        "manual scrolling retains the same exact matched page rows");
+    const auto* backing = model.pixels().data();
+    const auto bytes = model.pixels().size();
+    model.stop();
+    require(model.pixels().data() == backing && model.pixels().size() == bytes && model.hasImage() && !model.running() &&
+        std::equal(model.pixels().begin(), model.pixels().end(), content.begin()),
+        "the completed manual image retains the same backing allocation and fixed header for output");
+    std::cout << "PASS manual reading intervals and exact retained output allocation\n";
+}
 }
 int main()
 {
     static_assert(ScrollCaptureRules::comparisonRows == 100 && ScrollCaptureRules::firstScrollDelayMs == 88 &&
         ScrollCaptureRules::scrollSettleMs == 250 && ScrollCaptureRules::settleRecheckMs == 250 &&
         ScrollCaptureRules::retryDelayMs == 500);
-    try { actualPagePixels(); stationaryAndCaptureFailure(); changedButUnmatched(); heightAndMemoryLimits(); progressResetsRetries(); }
+    try { actualPagePixels(); stationaryAndCaptureFailure(); changedButUnmatched(); heightAndMemoryLimits(); progressResetsRetries(); manualReadingAndRetainedOutput(); }
     catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }
 }

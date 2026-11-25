@@ -54,6 +54,11 @@ def main():
         build.mkdir()
         arguments = [str(source / "configure"), "--prefix=" + str(prefix), *package["configure"]]
         run(*arguments, cwd=build, env=env)
+        if name == "ffmpeg":
+            components = (build / "config_components.h").read_text(encoding="utf-8")
+            for required in ("MP3FLOAT_DECODER", "MPEGAUDIO_PARSER"):
+                if f"#define CONFIG_{required} 1" not in components.splitlines():
+                    raise SystemExit(f"The locked media profile must retain Windows MP3 recordings: {required}")
         run("make", "-j" + str(options.jobs), cwd=build, env=env)
         run("make", "install", cwd=build, env=env)
         metadata["components"][name] = {"repository": package["repository"], "commit": package["commit"],

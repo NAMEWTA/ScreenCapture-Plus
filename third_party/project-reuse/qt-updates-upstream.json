@@ -1,0 +1,288 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/NAMEWTA/huhucapture",
+  "commit": "251bc0071278c6b711c840bf5188d16870bc7349",
+  "pullRequest": "https://github.com/NAMEWTA/huhucapture/pull/7",
+  "author": "NAMEWTA (project and original Git contributor history retained)",
+  "license": "MIT",
+  "licenseFile": "LICENSE",
+  "licenseGitBlob": "fe1f753bfa1c8a4a79c384dcbc4af3717fa719b9",
+  "licenseSha256": "9ba1ddd5d61d708fc273caa9ddd13fa5e0d253ef70df5efcbc61352e39247abe",
+  "copyrightNotices": [
+    "Copyright (c) 2026 NAMEWTA",
+    "Copyright (c) 2020 - 2026 ThorVG Project"
+  ],
+  "reuse": "Reuse existing independent updater, metadata contracts, About state mapping and selected language keys. Preserve its branch and unmerged work. Keep one current QtApplication host.",
+  "files": [
+    {
+      "path": "src/services/update/ReleaseManifest.h",
+      "upstreamGitBlob": "9e558873d6515f822182113248b7fb4f126ef9e7",
+      "upstreamSha256": "9431828749e03f02d0f0ba3ac2f242d05d44ee62f1ed199d44cb4e093bf4cb89",
+      "upstreamBytes": 1685,
+      "reuse": "Adapt existing implementation; current changes bind selected contentRoot, bound redirect deadlines, join shutdown and test failure paths."
+    },
+    {
+      "path": "src/services/update/ReleaseManifest.cpp",
+      "upstreamGitBlob": "bd6ff8dea45bef2688688c12d3a5a18297c775ec",
+      "upstreamSha256": "40c0b0301325806d2ba698495f025c49bc770a2d7df38501d570670a3e107c1f",
+      "upstreamBytes": 15687,
+      "reuse": "Adapt existing implementation; current changes bind selected contentRoot, bound redirect deadlines, join shutdown and test failure paths."
+    },
+    {
+      "path": "src/services/update/UpdateService.h",
+      "upstreamGitBlob": "c7a978011095b787b2e7e4e7d5670dd3da6e6b82",
+      "upstreamSha256": "ffae450f36c3dd1e87fbc2c01be66a03fc42a2fab36af6885f6419f7209d51ff",
+      "upstreamBytes": 2239,
+      "reuse": "Adapt existing implementation; current changes bind selected contentRoot, bound redirect deadlines, join shutdown and test failure paths."
+    },
+    {
+      "path": "src/services/update/UpdateService.cpp",
+      "upstreamGitBlob": "39e2e5ccebfac7fae85d5c39ce6210a3520d623a",
+      "upstreamSha256": "429490c14378f950beda368300a80d3286c78428a7ab99fa5187c113da704da2",
+      "upstreamBytes": 20908,
+      "reuse": "Adapt existing implementation; current changes bind selected contentRoot, bound redirect deadlines, join shutdown and test failure paths."
+    },
+    {
+      "path": "src/ui/qt/UpdatePresentation.h",
+      "upstreamGitBlob": "48ddaaac57e37bc383286ded246d8f4d0d6073c1",
+      "upstreamSha256": "41bca306c8cddb078e4c968335d12963319ecec59cf7f88cb2fe65d9a9cbb389",
+      "upstreamBytes": 2240,
+      "reuse": "Adapt existing implementation; current changes bind selected contentRoot, bound redirect deadlines, join shutdown and test failure paths."
+    },
+    {
+      "path": "tests/qt/update_service_tests.cpp",
+      "upstreamGitBlob": "952d6764273231edbeda986fa16e7f61de7f65e2",
+      "upstreamSha256": "b5c884fc5cf72e5d3e1bb26424b6d874c65524f08cbc3be7e0b418cca004a399",
+      "upstreamBytes": 23170,
+      "reuse": "Adapt existing implementation; current changes bind selected contentRoot, bound redirect deadlines, join shutdown and test failure paths."
+    },
+    {
+      "path": "src/app/DesktopApplication.cpp",
+      "upstreamGitBlob": "fb0801fc73a398a229b39ff4bf59102ea7d9bdd9",
+      "upstreamSha256": "2dbaa1f99aa66d452bf3d0db7a595c893bd2985928468623bc0e85d078506fd7",
+      "upstreamBytes": 41230,
+      "reuse": "Review/adapt only installation marker, updater ownership and About mapping into the existing QtApplication; do not import this alternate host."
+    },
+    {
+      "path": "src/app/SettingsController.h",
+      "upstreamGitBlob": "f75435263bab878589422b11a1f9bb3fe91bd644",
+      "upstreamSha256": "66f179f25315d75e6d8217a41b655305c9e2a4dc648acfafb96b2fa73de705e5",
+      "upstreamBytes": 2356,
+      "reuse": "Review About update snapshot/action wiring; retain the current SettingsController platform implementations."
+    },
+    {
+      "path": "src/app/SettingsController.cpp",
+      "upstreamGitBlob": "07f5db713d825b9d2170520505421efb1525a8db",
+      "upstreamSha256": "1ceaf224be220070409118da0241aa029ae9fea0c7257a3eb01ba0d679b6fc39",
+      "upstreamBytes": 20585,
+      "reuse": "Review About update snapshot/action wiring; retain the current SettingsController platform implementations."
+    },
+    {
+      "path": "src/ui/qt/AboutPanel.cpp",
+      "upstreamGitBlob": "53e5d332898d15105ebdf4dbeeffdd8b880367d5",
+      "upstreamSha256": "52117354dde5d4ec3e3477369b78c5a6c2522fed26786e03a916baa63c312f43",
+      "upstreamBytes": 9715,
+      "reuse": "Adapt existing project presentation/contracts and add explicit cancelled, unavailable and durability states."
+    },
+    {
+      "path": "src/ui/qt/DesktopTypes.h",
+      "upstreamGitBlob": "d7462cfc108e333dec7676d1077420acabaef561",
+      "upstreamSha256": "78cd3464b3a50a5eb03d7faea5cf92ba48d30e53a314ce0d1f60a1376dd66884",
+      "upstreamBytes": 2632,
+      "reuse": "Adapt existing project presentation/contracts and add explicit cancelled, unavailable and durability states."
+    },
+    {
+      "path": "docs/qt-updates.md",
+      "upstreamGitBlob": "dda7c20f9141f59760f9b1c86d1299c0403c6f60",
+      "upstreamSha256": "a0dead5c80598324707e9cdd8c82cfb364aec780e6274a5f8f209fa1330fad96",
+      "upstreamBytes": 12247,
+      "reuse": "Adapt existing implementation; current changes bind selected contentRoot, bound redirect deadlines, join shutdown and test failure paths."
+    }
+  ],
+  "languages": [
+    {
+      "path": "Lang/Bahasa Indonesia.id-ID.json",
+      "upstreamGitBlob": "dfe10aa0b2ca96ccde8f6676ca77216f6e959437",
+      "upstreamSha256": "adafdbc0075f562aab0a0a1bc05a4c8cbda0743bd34f878dd893e798bb9640bf",
+      "upstreamBytes": 38672,
+      "encoding": "UTF-16LE with BOM",
+      "copiedKeys": [
+        "update.installWindows",
+        "update.extractWindows",
+        "update.installDeb",
+        "update.replaceAppImage",
+        "long.title",
+        "long.stop",
+        "long.manualReady",
+        "long.manualCapturing",
+        "long.pointerPaused",
+        "long.finished",
+        "long.outputBusy",
+        "long.captureBottom",
+        "long.sizeLimit"
+      ]
+    },
+    {
+      "path": "Lang/English.en-US.json",
+      "upstreamGitBlob": "40d775acfcfb388d112d95b08d8d52968a42ef33",
+      "upstreamSha256": "f7fa7ea751eb5cca1c4bc249b93e247fa874389bb11be818c21b030b4bc0d841",
+      "upstreamBytes": 38556,
+      "encoding": "UTF-16LE with BOM",
+      "copiedKeys": [
+        "update.installWindows",
+        "update.extractWindows",
+        "update.installDeb",
+        "update.replaceAppImage",
+        "long.title",
+        "long.stop",
+        "long.manualReady",
+        "long.manualCapturing",
+        "long.pointerPaused",
+        "long.finished",
+        "long.outputBusy",
+        "long.captureBottom",
+        "long.sizeLimit"
+      ]
+    },
+    {
+      "path": "Lang/Русский.ru-RU.json",
+      "upstreamGitBlob": "90c356470bff4c147b9fabb1f80e54c424241df3",
+      "upstreamSha256": "48f81a933b6413947dd5f9a810f8eca47ca12b14526f62efc1f88d3a221de363",
+      "upstreamBytes": 38674,
+      "encoding": "UTF-16LE with BOM",
+      "copiedKeys": [
+        "update.installWindows",
+        "update.extractWindows",
+        "update.installDeb",
+        "update.replaceAppImage",
+        "long.title",
+        "long.stop",
+        "long.manualReady",
+        "long.manualCapturing",
+        "long.pointerPaused",
+        "long.finished",
+        "long.outputBusy",
+        "long.captureBottom",
+        "long.sizeLimit"
+      ]
+    },
+    {
+      "path": "Lang/日本語.ja-JP.json",
+      "upstreamGitBlob": "e461308a5e00feed8978b2b85da601bfebc85c20",
+      "upstreamSha256": "9fa4a19bf1a93ccef9d18295be64a9ba850627ec6e779d4de72471ac59e98968",
+      "upstreamBytes": 27428,
+      "encoding": "UTF-16LE with BOM",
+      "copiedKeys": [
+        "update.installWindows",
+        "update.extractWindows",
+        "update.installDeb",
+        "update.replaceAppImage",
+        "long.title",
+        "long.stop",
+        "long.manualReady",
+        "long.manualCapturing",
+        "long.pointerPaused",
+        "long.finished",
+        "long.outputBusy",
+        "long.captureBottom",
+        "long.sizeLimit"
+      ]
+    },
+    {
+      "path": "Lang/简体中文.zh-CN.json",
+      "upstreamGitBlob": "ed00a7060a2df9906755b586fe5cb0a3c878213c",
+      "upstreamSha256": "42bc0dcac9a8c92686f9f558a7cf7e677218d80ecfec8359be21424337fb5ca2",
+      "upstreamBytes": 23518,
+      "encoding": "UTF-16LE with BOM",
+      "copiedKeys": [
+        "update.installWindows",
+        "update.extractWindows",
+        "update.installDeb",
+        "update.replaceAppImage",
+        "long.title",
+        "long.stop",
+        "long.manualReady",
+        "long.manualCapturing",
+        "long.pointerPaused",
+        "long.finished",
+        "long.outputBusy",
+        "long.captureBottom",
+        "long.sizeLimit"
+      ]
+    },
+    {
+      "path": "Lang/繁體中文.zh-TW.json",
+      "upstreamGitBlob": "6e82444658f5e7267a97977ad3b229bd87c36dab",
+      "upstreamSha256": "53c57bc2c69446a33787da1ad6275110061882f7ff609ecc24a5eb3b0a823bff",
+      "upstreamBytes": 23404,
+      "encoding": "UTF-16LE with BOM",
+      "copiedKeys": [
+        "update.installWindows",
+        "update.extractWindows",
+        "update.installDeb",
+        "update.replaceAppImage",
+        "long.title",
+        "long.stop",
+        "long.manualReady",
+        "long.manualCapturing",
+        "long.pointerPaused",
+        "long.finished",
+        "long.outputBusy",
+        "long.captureBottom",
+        "long.sizeLimit"
+      ]
+    }
+  ],
+  "newAdaptations": [
+    {
+      "paths": [
+        "src/services/localization/QtTranslations.h",
+        "src/services/localization/QtTranslations.cpp",
+        "tests/qt/qt_standard_translation_tests.cpp"
+      ],
+      "origin": "New thin public-Qt-API adapter in this change; not copied from a nonexistent PR #7 QtTranslations implementation. Official compiled qm catalogs remain SDK/deployment dependencies.",
+      "consultedSources": [
+        {
+          "repository": "https://github.com/qt/qtbase",
+          "commit": "5af1a37e31a869cd6eb8a73d82e2c71a450e6634",
+          "path": "src/corelib/kernel/qtranslator.cpp",
+          "upstreamGitBlob": "6000edaa177bfe2b903aea9e8701d2d99f79264a",
+          "upstreamSha256": "a6a5f6046ccf7d7f33296ceea22f877dd01359edb735f72029a0551234c33456",
+          "reuse": "Source review only; no Qt implementation copied. Use public QTranslator, QLocale and QApplication APIs."
+        },
+        {
+          "repository": "https://github.com/qt/qtbase",
+          "commit": "5af1a37e31a869cd6eb8a73d82e2c71a450e6634",
+          "path": "src/widgets/widgets/qdialogbuttonbox.cpp",
+          "upstreamGitBlob": "96b7351ab2ea1327c132a1109a221083ca074fca",
+          "upstreamSha256": "e7c79da5a2bc0e86885b26f097f21fd1f0b354789be3d1c2b4daa4726da9d9d1",
+          "reuse": "Source review only; no Qt implementation copied. Use public QTranslator, QLocale and QApplication APIs."
+        }
+      ]
+    },
+    {
+      "paths": [
+        "src/services/update/Installation.h",
+        "src/services/update/Installation.cpp"
+      ],
+      "origin": "Extract PR #7 DesktopApplication installation-marker behavior; add same-deployment-tree, size, schema, platform, architecture and optional-version checks."
+    },
+    {
+      "paths": [
+        "src/core/UpdatePolicy.h"
+      ],
+      "origin": "Extract package names, budgets, path/version rules from the reviewed updater, without a new version source."
+    }
+  ],
+  "languageAdaptations": [
+    "Only listed keys were copied verbatim; complete PR #7 language documents were not substituted for current files.",
+    "long.ready was rewritten to retain Windows/X11 click-in-selection; Wayland uses long.manualReady.",
+    "Cancelled/unavailable/durability/package prompt, missing-standard-catalog, paused-source/control-position and shared live-authorization strings are new adaptations.",
+    "Existing update.promptDownload remains unchanged; Qt uses update.promptPackageDownload pending the separately validated old Windows bridge.",
+    "Existing project, LAN and clipboard keys/values and UTF-16 BOM are preserved."
+  ],
+  "boundaries": [
+    "No official Qt translation was synthesized. The fixed SDK has zh_CN, zh_TW, ja and ru; missing Indonesian standard-dialog catalog is reported.",
+    "Metadata/hash/type-header checks and these component tests do not prove actual package payload, installation, upgrades, uninstallation or P11a acceptance."
+  ]
+}

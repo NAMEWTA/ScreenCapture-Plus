@@ -41,6 +41,10 @@ public:
     // wrong thread). While the service remains alive, a nonzero token receives
     // exactly one terminal result. Normal application exit awaits shutdownFinished.
     quint64 start(BackendRequest request);
+    // Capture a provider for only this admitted task. Rejection never invokes
+    // it or changes the constructor's default. The owner releases any claimed
+    // live-source consumer when token == 0; nonzero tokens complete normally.
+    quint64 start(BackendRequest request, Backend requestBackend);
     // The first intent wins. Repeated stop clicks cannot change an in-flight
     // save into a discard or publish the same recording twice.
     bool requestStop(StopIntent intent);

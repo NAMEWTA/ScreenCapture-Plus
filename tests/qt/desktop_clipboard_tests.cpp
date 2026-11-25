@@ -280,7 +280,14 @@ void runUnavailableFilePortal(const QString& path, const QString& expectedImage)
     child.setProcessEnvironment(environment);
     child.start(QCoreApplication::applicationFilePath(), {QStringLiteral("--file-portal-unavailable"), path, expectedImage});
     require(child.waitForStarted(2000), "start a separate real client with an unavailable document bus");
-    waitFor([&] { return child.state() == QProcess::NotRunning; }, "portal capability rejection completes without a GUI-thread wait");
+    try {
+        waitFor([&] { return child.state() == QProcess::NotRunning; }, "portal capability rejection completes without a GUI-thread wait");
+    } catch (...) {
+        const auto output = child.readAll(); std::cerr << output.constData();
+        child.kill(); child.waitForFinished(2000);
+        const auto tail = child.readAll(); std::cerr << tail.constData();
+        throw;
+    }
     const auto output = child.readAll(); std::cout << output.constData();
     require(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0, "the separate client validates actual unavailable-portal behavior");
 }

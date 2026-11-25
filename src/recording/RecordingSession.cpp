@@ -23,8 +23,14 @@ std::filesystem::path nativePath(const QString& path)
 #endif
 }
 
-Media::Failure backendFailure(const Core::RecordingResult& result)
+Media::Failure backendFailure(const BackendResult& backend)
 {
+    const auto& result = backend.media;
+    if (result.firstError && !backend.detail.empty())
+        return {Media::Error::Write, QString::fromStdString(backend.detail)};
+    if (result.firstError && result.firstError->stage == Core::RecordingStage::Capture &&
+        backend.sourceTerminal && !backend.sourceTerminal->detail.empty())
+        return {Media::Error::Read, QString::fromStdString(backend.sourceTerminal->detail)};
     if (!result.firstError)
         return {Media::Error::InvalidMedia, QStringLiteral("The recording did not finalize complete media")};
     return {Media::Error::Write, QStringLiteral("Recording failed at stage %1 (native code %2)")
@@ -89,6 +95,14 @@ struct RecordingSession::State {
 
     static SessionResult execute(const std::shared_ptr<Work>& work)
     {
+        // A provider can own the first native lease even when staging fails
+        // before invocation. Drop that task-local ownership on every exit of
+        // the actual worker, before the completed future emits GUI terminal
+        // signals. Queued notifications may keep Work alive for longer.
+        struct ReleaseProvider {
+            Backend& backend;
+            ~ReleaseProvider() { backend = nullptr; }
+        } releaseProvider{work->backend};
         SessionResult result; result.token = work->token;
         Media::StagingFile staging;
         const auto closeIntent = [&] {
@@ -157,7 +171,7 @@ struct RecordingSession::State {
                     const auto discarded = staging.discard();
                     if (discarded) finishFailure(discarded);
                     else result.state = SessionState::Cancelled;
-                } else finishFailure(result.backend.media.firstError ? backendFailure(result.backend.media) :
+                } else finishFailure(result.backend.media.firstError ? backendFailure(result.backend) :
                     Media::Failure{Media::Error::Cancelled, QStringLiteral("The recording was retained during shutdown")});
                 return result;
             }
@@ -165,7 +179,7 @@ struct RecordingSession::State {
                 const auto discarded = staging.discard();
                 if (discarded) finishFailure(discarded);
                 else if (result.backend.media.firstError) {
-                    result.failure = backendFailure(result.backend.media); result.state = SessionState::Failed;
+                    result.failure = backendFailure(result.backend); result.state = SessionState::Failed;
                 } else result.state = result.backend.media.framesWritten ? SessionState::Discarded : SessionState::Cancelled;
                 return result;
             }
@@ -175,7 +189,7 @@ struct RecordingSession::State {
                 else result.state = SessionState::Cancelled;
                 return result;
             }
-            if (!result.backend.media.canArchive()) { finishFailure(backendFailure(result.backend.media)); return result; }
+            if (!result.backend.media.canArchive()) { finishFailure(backendFailure(result.backend)); return result; }
             const auto finalizedFile = Platform::readFileSnapshot(nativePath(staging.path()), error);
             if (!finalizedFile) {
                 finishFailure({Media::Error::Read, QString::fromStdString(error.message())}); return result;
@@ -265,12 +279,19 @@ quint64 RecordingSession::start(BackendRequest request)
 {
     if (QThread::currentThread() != thread() || state_->closing || state_->active ||
         !state_->archive || !state_->backend || !state_->nextToken) return 0;
+    try { return start(request, state_->backend); }
+    catch (...) { return 0; }
+}
+quint64 RecordingSession::start(BackendRequest request, Backend requestBackend)
+{
+    if (QThread::currentThread() != thread() || state_->closing || state_->active ||
+        !state_->archive || !requestBackend || !state_->nextToken) return 0;
     std::shared_ptr<State::Work> work;
     QFutureWatcher<SessionResult>* watcher{};
     try {
         work = std::make_shared<State::Work>();
         work->token = state_->nextToken++; work->request = request;
-        work->backend = state_->backend; work->archive = state_->archive; work->delivery = state_->delivery;
+        work->backend = std::move(requestBackend); work->archive = state_->archive; work->delivery = state_->delivery;
         watcher = new QFutureWatcher<SessionResult>(this);
         connect(watcher, &QFutureWatcher<SessionResult>::finished, this, [this, work, watcher] {
             auto future = watcher->future(); watcher->deleteLater();

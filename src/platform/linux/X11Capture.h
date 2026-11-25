@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -34,17 +35,22 @@ struct X11Desktop {
 // only until the next capture/reset/destruction. All failures preserve a reason.
 class X11Capture final {
 public:
-    X11Capture();
+    explicit X11Capture(std::stop_token stop = {});
     ~X11Capture();
     X11Capture(const X11Capture&) = delete;
     X11Capture& operator=(const X11Capture&) = delete;
     bool initialize();
     bool isXWayland() const noexcept;
+    bool supportsAutomaticScroll() const noexcept;
     bool desktop(X11Desktop& result, bool includeWindows = true);
     bool capture(int x, int y, int width, int height, bool includeCursor = false);
     bool moveCursor(int x, int y, int& actualX, int& actualY);
     // Positive steps scroll down; negative steps scroll up.
     bool scroll(int x, int y, int steps);
+    // Capture's automatic wheel path never moves the user's pointer. The first
+    // actual target must be inside selection; leaving that window pauses input.
+    bool scrollAtPointer(const X11Rectangle& selection, int steps);
+    bool scrollPaused() const noexcept;
     void reset() noexcept;
     std::span<const std::uint8_t> pixels() const noexcept;
     int width() const noexcept;

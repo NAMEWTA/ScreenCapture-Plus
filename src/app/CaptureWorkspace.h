@@ -10,7 +10,7 @@
 class QWidget;
 
 namespace HuhuCapture::Desktop { class SystemClipboard; }
-namespace HuhuCapture::Capture { class CaptureSession; }
+namespace HuhuCapture::Capture { class CaptureSession; class LiveCaptureSource; }
 namespace HuhuCapture::UI::Qt { class CaptureWindow; }
 
 namespace HuhuCapture::Application {
@@ -30,6 +30,10 @@ public:
     void setTranslator(UI::Qt::DesktopTranslator translator);
     void initialize();
     Capture::CaptureCapabilities capabilities() const;
+    // Application lifetime owners. Record/scroll claim the single authorized
+    // live source only after this workspace reselects its actual first frame.
+    Capture::LiveCaptureSource& liveSource() noexcept;
+    Capture::ScreenCaptureService& nativeSource() noexcept;
     bool sourceIsCurrent(quint64 sourceId, quint64 generation) const;
     bool start(Core::CaptureEntry entry = Core::CaptureEntry::Capture,
         const QString& activationToken = {});
@@ -53,6 +57,9 @@ Q_SIGNALS:
     void liveActionActivationRequested(quint64 token, const QString& activationToken);
     void sourceInvalidated(quint64 sourceId, quint64 generation, const HuhuCapture::Capture::Failure& failure);
     void shutdownFinished();
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     struct State;

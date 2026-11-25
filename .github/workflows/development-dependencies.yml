@@ -27,7 +27,7 @@ jobs:
       - name: Install official runner build prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config nasm dbus libglib2.0-dev libglib2.0-dev-bin libwayland-dev libwayland-bin libxkbcommon-dev libgl-dev libegl-dev libxcb1-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb-xtest0-dev
+          sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config nasm dbus libglib2.0-dev libglib2.0-dev-bin libwayland-dev libwayland-bin libxkbcommon-dev libgl-dev libegl-dev libxcb1-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb-xtest0-dev libssl-dev
       - name: Restore the fixed official Qt SDK archives
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
         with:
@@ -35,7 +35,7 @@ jobs:
           host: linux
           target: desktop
           arch: linux_gcc_64
-          archives: qtbase qtsvg qtwayland icu
+          archives: qtbase qtsvg qtwayland qttranslations icu
           aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4'
           py7zrversion: '==1.1.3'
           cache: false

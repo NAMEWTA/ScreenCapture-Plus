@@ -2,6 +2,7 @@
 
 #include "app/MediaWorkspace.h"
 #include "capture/CaptureSession.h"
+#include "services/capture/LiveCaptureSource.h"
 #include "services/desktop/SystemClipboard.h"
 #include "services/recognition/QrService.h"
 #include "ui/qt/CaptureWindow.h"
@@ -76,6 +77,7 @@ struct CaptureWorkspace::State {
     MediaWorkspace& media;
     Desktop::SystemClipboard& clipboard;
     cap::ScreenCaptureService source;
+    cap::LiveCaptureSource live;
     cap::CaptureSession session;
     ui::CaptureWindow view;
     Desktop::WindowActivation activation;
@@ -84,16 +86,28 @@ struct CaptureWorkspace::State {
     std::shared_ptr<Job> job;
     std::optional<TextPublication> publication;
     QPointer<QDialog> qrDialog;
+    QPointer<QDialog> authorization;
+    QTimer authorizationDeadline;
+    cap::Capability recordingCapability, scrollingCapability;
+    cap::Action streamAction{cap::Action::Record};
     Core::CaptureEntry entry{Core::CaptureEntry::Capture};
     QString activationToken;
-    bool initializing{}, ready{}, pending{}, stopping{}, sourceStopped{}, shutdownReported{}, journeyActive{};
+    bool initializing{}, ready{}, liveReady{}, pending{}, stopping{}, sourceStopped{}, liveStopped{}, shutdownReported{}, journeyActive{};
+    bool preparingLive{}, switchingSource{};
     quint64 captureToken{};
     quint64 liveActionToken{};
+    quint64 streamToken{}, authorizationRequest{}, streamSourceId{}, streamGeneration{};
 
     State(CaptureWorkspace* parent, MediaWorkspace& workspace, Desktop::SystemClipboard& systemClipboard)
         : owner(parent), media(workspace), clipboard(systemClipboard), view(session)
     {
         pool.setMaxThreadCount(1); pool.setExpiryTimeout(-1);
+        authorizationDeadline.setSingleShot(true); authorizationDeadline.setInterval(3000);
+        QObject::connect(&authorizationDeadline, &QTimer::timeout, owner, [this] {
+            if (preparingLive && !streamToken)
+                authorizationFailed({cap::Failure::Code::Unavailable, 0,
+                    QStringLiteral("The screen-sharing parent window could not be exposed")});
+        });
         const cap::Capability available{cap::CapabilityState::Available, {}};
         for (const auto action : {cap::Action::Edit, cap::Action::Pin, cap::Action::Qr,
                  cap::Action::History, cap::Action::SaveAs, cap::Action::Clipboard,
@@ -102,9 +116,30 @@ struct CaptureWorkspace::State {
     }
     QString text(QStringView key) const
     { return translator ? translator(key) : key.toString(); }
+    QString text(QStringView key, const char* fallback) const
+    {
+        const auto value = text(key);
+        return value.isEmpty() || value == key ? QString::fromUtf8(fallback) : value;
+    }
+    bool needsStream() const
+    { return source.capabilities().backend == QStringLiteral("xdg-desktop-portal"); }
+    void updateLiveCapabilities()
+    {
+        const QPointer<CaptureWorkspace> alive(owner);
+        for (const auto action : {cap::Action::Record, cap::Action::Scroll}) {
+            auto available = action == cap::Action::Record ? recordingCapability : scrollingCapability;
+            if (available.canRequest() && needsStream()) {
+                if (!liveReady) available = {cap::CapabilityState::Busy, QStringLiteral("Screen-sharing capabilities are being checked")};
+                else if (!live.capability().canRequest()) available = live.capability();
+                else available.state = cap::CapabilityState::RequiresPermission;
+            }
+            session.setCapability(action, available);
+            if (!alive) return;
+        }
+    }
     bool busy() const
     {
-        return pending || captureToken || job || publication || qrDialog ||
+        return pending || captureToken || streamToken || preparingLive || job || publication || qrDialog ||
             (session.stage() != cap::Stage::Empty && session.stage() != cap::Stage::Closed);
     }
     void changed()
@@ -120,19 +155,21 @@ struct CaptureWorkspace::State {
     }
     void finishJourney()
     {
+        if (preparingLive || streamToken || liveActionToken ||
+            (session.stage() != cap::Stage::Empty && session.stage() != cap::Stage::Closed)) return;
         if (!std::exchange(journeyActive, false) || stopping) return;
         QTimer::singleShot(0, owner, [target = owner] { Q_EMIT target->captureFinished(); });
     }
     void finishShutdown()
     {
-        if (!stopping || !sourceStopped || job || publication || qrDialog || shutdownReported) return;
+        if (!stopping || !sourceStopped || !liveStopped || job || publication || qrDialog || shutdownReported) return;
         shutdownReported = true;
         QTimer::singleShot(0, owner, [target = owner] { Q_EMIT target->shutdownFinished(); });
     }
     void complete(quint64 token, cap::ActionResult result, const QString& detail = {})
     {
         if (!token || session.activeRequest() != token) return;
-        if (liveActionToken == token) liveActionToken = 0;
+        if (liveActionToken == token) { liveActionToken = 0; if (streamToken) live.stop(streamToken); }
         const QPointer<CaptureWorkspace> alive(owner);
         session.complete(token, result, detail);
         if (!alive) return;
@@ -142,6 +179,13 @@ struct CaptureWorkspace::State {
     void begin()
     {
         if (stopping || !ready || !pending) return;
+        const auto action = options(entry).enter;
+        if (needsStream() && action && (*action == cap::Action::Record || *action == cap::Action::Scroll)) {
+            if (!liveReady) return;
+            pending = false;
+            authorize(*action, 0);
+            return;
+        }
         pending = false;
         if (!source.capabilities().screenshot.canRequest()) {
             const auto detail = source.capabilities().screenshot.reason;
@@ -156,6 +200,99 @@ struct CaptureWorkspace::State {
             reportFailure(QStringLiteral("The screen capture service could not accept this request"));
             finishJourney();
         }
+    }
+    void refreshAuthorization()
+    {
+        if (!authorization) return;
+        authorization->setWindowTitle(text(streamAction == cap::Action::Scroll ? u"cap.long" : u"cap.video"));
+        if (auto* message = authorization->findChild<QLabel*>(QStringLiteral("captureLiveAuthorizationMessage")))
+            message->setText(text(u"cap.authorizeLive", "Choose one screen or window to share, then select the region again in the newly authorized image."));
+        if (auto* status = authorization->findChild<QLabel*>(QStringLiteral("captureLiveAuthorizationStatus")))
+            status->setText(text(u"cap.authorizingLive", "Waiting for screen-sharing permission…"));
+        if (auto* close = authorization->findChild<QPushButton*>(QStringLiteral("captureLiveAuthorizationCancel")))
+            close->setText(text(u"tool.close"));
+    }
+    void cleanupAuthorization()
+    {
+        authorizationDeadline.stop();
+        if (!authorization) return;
+        auto* dialog = authorization.data(); authorization.clear();
+        QObject::disconnect(dialog, nullptr, owner, nullptr);
+        dialog->hide(); dialog->deleteLater();
+    }
+    void authorizationFailed(const cap::Failure& error)
+    {
+        authorizationDeadline.stop(); preparingLive = false;
+        const auto request = std::exchange(authorizationRequest, 0);
+        if (authorization) authorization->hide();
+        const QPointer<CaptureWorkspace> alive(owner);
+        if (streamToken) live.cancel(streamToken);
+        else cleanupAuthorization();
+        if (!alive) return;
+        if (request && session.activeRequest() == request)
+            complete(request, error.code == cap::Failure::Code::Cancelled ? cap::ActionResult::Cancelled : cap::ActionResult::Failed, error.detail);
+        else if (!stopping && error.code != cap::Failure::Code::Cancelled) reportFailure(error.detail);
+        if (alive) { changed(); finishJourney(); finishShutdown(); }
+    }
+    void requestAuthorizedSource()
+    {
+        if (stopping || !preparingLive || streamToken || !authorization || !authorization->isVisible()) return;
+        auto* native = authorization->windowHandle();
+        if (!native || !native->isExposed()) return;
+        authorizationDeadline.stop();
+        streamToken = live.request(native);
+        if (!streamToken) {
+            authorizationFailed({cap::Failure::Code::Unavailable, 0,
+                QStringLiteral("The screen-sharing source could not accept this request")});
+            return;
+        }
+        changed();
+    }
+    void authorize(cap::Action action, quint64 request)
+    {
+        if (stopping) return;
+        if (preparingLive || streamToken) {
+            if (request) complete(request, cap::ActionResult::Failed,
+                QStringLiteral("The previous screen-sharing source is still finishing"));
+            return;
+        }
+        if (!session.capability(action).canRequest()) {
+            const auto detail = session.capability(action).reason;
+            if (request) complete(request, cap::ActionResult::Failed, detail);
+            else { reportFailure(detail); finishJourney(); }
+            return;
+        }
+        // PR #7's visible authorization parent/reselection journey is retained,
+        // while this workspace uses one shared live owner for both consumers.
+        // The prior Screenshot is never a coordinate contract for ScreenCast.
+        streamAction = action; authorizationRequest = request; preparingLive = true;
+        auto* dialog = new QDialog;
+        dialog->setObjectName(QStringLiteral("captureLiveAuthorization"));
+        ui::DesktopTheme::apply(dialog); dialog->setModal(false);
+        auto* layout = new QVBoxLayout(dialog); layout->setContentsMargins(20, 16, 20, 16); layout->setSpacing(12);
+        auto* message = ui::DesktopTheme::label(dialog); message->setWordWrap(true);
+        message->setObjectName(QStringLiteral("captureLiveAuthorizationMessage")); layout->addWidget(message);
+        auto* status = ui::DesktopTheme::label(dialog, 12, true); status->setWordWrap(true);
+        status->setObjectName(QStringLiteral("captureLiveAuthorizationStatus")); layout->addWidget(status);
+        auto* cancel = ui::DesktopTheme::button(dialog, "captureLiveAuthorizationCancel"); layout->addWidget(cancel);
+        authorization = dialog; refreshAuthorization(); dialog->resize(420, dialog->sizeHint().height());
+        QObject::connect(cancel, &QPushButton::clicked, dialog, &QDialog::reject);
+        QObject::connect(dialog, &QDialog::rejected, owner, [this] {
+            if (preparingLive) authorizationFailed({cap::Failure::Code::Cancelled, 0, {}});
+        });
+        QObject::connect(dialog, &QObject::destroyed, owner, [this] {
+            if (preparingLive) authorizationFailed({cap::Failure::Code::Cancelled, 0, {}});
+        });
+        const QPointer<CaptureWorkspace> alive(owner);
+        view.setPresentationVisible(false); if (!alive) return;
+        dialog->show(); if (!alive || !authorization) return;
+        if (auto* native = dialog->windowHandle()) {
+            native->installEventFilter(owner);
+            activation.request(native, std::exchange(activationToken, {}));
+        }
+        authorizationDeadline.start();
+        QTimer::singleShot(0, owner, [this] { requestAuthorizedSource(); });
+        changed();
     }
     bool submit(quint64 token, std::function<Prepared(std::stop_token)> worker,
         std::function<void(Prepared)> completed)
@@ -342,6 +479,11 @@ struct CaptureWorkspace::State {
             return;
         case cap::Action::Scroll: case cap::Action::Record:
         {
+            if (request.coordinates == cap::CoordinateSpace::AuthorizedSourcePixels &&
+                !live.isCurrent(request.sourceId, request.generation)) {
+                authorize(request.action, request.token);
+                return;
+            }
             const QPointer<CaptureWorkspace> alive(owner);
             liveActionToken = request.token;
             view.setPresentationVisible(false);
@@ -353,8 +495,19 @@ struct CaptureWorkspace::State {
     }
     void cancel(quint64 token)
     {
+        if (switchingSource) return;
         const QPointer<CaptureWorkspace> alive(owner);
-        if (liveActionToken == token) liveActionToken = 0;
+        const bool ownedLiveAction = liveActionToken == token;
+        if (ownedLiveAction) liveActionToken = 0;
+        if (authorizationRequest == token) {
+            authorizationRequest = 0; preparingLive = false; authorizationDeadline.stop();
+            if (authorization) authorization->hide();
+        }
+        if (streamToken) {
+            if (ownedLiveAction) live.stop(streamToken);
+            else live.cancel(streamToken);
+        } else if (!preparingLive) cleanupAuthorization();
+        if (!alive) return;
         if (job && job->token == token) job->stop.request_stop();
         if (publication && publication->captureToken == token) clipboard.cancel(publication->serviceToken);
         if (!alive) return;
@@ -371,10 +524,15 @@ CaptureWorkspace::CaptureWorkspace(MediaWorkspace& media, Desktop::SystemClipboa
     connect(&state_->source, &cap::ScreenCaptureService::initialized, this, [this](const auto&, const auto&) {
         state_->ready = true; state_->initializing = false;
         const QPointer<CaptureWorkspace> alive(this);
+        state_->updateLiveCapabilities(); if (!alive) return;
         Q_EMIT initialized();
         if (alive) state_->begin();
     });
-    connect(&state_->source, &cap::ScreenCaptureService::capabilitiesChanged, this, [this] { Q_EMIT capabilitiesChanged(); });
+    connect(&state_->source, &cap::ScreenCaptureService::capabilitiesChanged, this, [this] {
+        const QPointer<CaptureWorkspace> alive(this);
+        state_->updateLiveCapabilities();
+        if (alive) Q_EMIT capabilitiesChanged();
+    });
     connect(&state_->source, &cap::ScreenCaptureService::sourceInvalidated, this, &CaptureWorkspace::sourceInvalidated);
     connect(&state_->source, &cap::ScreenCaptureService::finished, this, [this](quint64 token, const auto& snapshot, const auto& failure) {
         if (token != state_->captureToken) return;
@@ -399,6 +557,70 @@ CaptureWorkspace::CaptureWorkspace(MediaWorkspace& media, Desktop::SystemClipboa
     connect(&state_->source, &cap::ScreenCaptureService::shutdownFinished, this, [this] {
         state_->sourceStopped = true; state_->captureToken = 0; state_->finishShutdown();
     });
+    connect(&state_->live, &cap::LiveCaptureSource::initialized, this, [this](const auto&, const auto&) {
+        state_->liveReady = true;
+        const QPointer<CaptureWorkspace> alive(this);
+        state_->updateLiveCapabilities(); if (!alive) return;
+        Q_EMIT capabilitiesChanged(); if (!alive) return;
+        state_->begin();
+    });
+    connect(&state_->live, &cap::LiveCaptureSource::capabilityChanged, this, [this] {
+        const QPointer<CaptureWorkspace> alive(this);
+        state_->updateLiveCapabilities();
+        if (alive) Q_EMIT capabilitiesChanged();
+    });
+    connect(&state_->live, &cap::LiveCaptureSource::prepared, this,
+        [this](quint64 token, const cap::Snapshot& snapshot, const cap::Failure& failure) {
+            if (token != state_->streamToken) return;
+            if (!state_->preparingLive || state_->stopping) { state_->live.cancel(token); return; }
+            if (failure) { state_->authorizationFailed(failure); return; }
+            if (!state_->live.isCurrent(snapshot.sourceId, snapshot.generation)) {
+                state_->authorizationFailed({cap::Failure::Code::SourceChanged, 0,
+                    QStringLiteral("The newly authorized source is no longer current")});
+                return;
+            }
+            const QPointer<CaptureWorkspace> alive(this);
+            state_->preparingLive = false; state_->authorizationRequest = 0;
+            state_->streamSourceId = snapshot.sourceId; state_->streamGeneration = snapshot.generation;
+            state_->switchingSource = true;
+            state_->session.cancel(); if (!alive) return;
+            state_->view.close(); if (!alive) return;
+            state_->switchingSource = false;
+            if (state_->authorization) state_->authorization->hide();
+            auto error = state_->session.load(snapshot, {state_->streamAction});
+            if (!alive) return;
+            if (!error) error = state_->view.open();
+            if (!alive) return;
+            if (error) {
+                state_->live.cancel(token);
+                state_->session.cancel(); if (!alive) return;
+                if (error.code != cap::Failure::Code::Cancelled) state_->reportFailure(error.detail);
+            } else state_->view.activate();
+            if (alive) state_->changed();
+        });
+    connect(&state_->live, &cap::LiveCaptureSource::sourceClosed, this,
+        [this](quint64 sourceId, quint64 generation, const cap::Failure& failure) {
+            if (sourceId != state_->streamSourceId || generation != state_->streamGeneration) return;
+            const QPointer<CaptureWorkspace> alive(this);
+            // A normal stopped producer has no failure. Record/scroll retain
+            // their output while their worker finalizes and releases its claim.
+            if (failure) Q_EMIT sourceInvalidated(sourceId, generation, failure);
+            if (!alive || state_->liveActionToken || state_->switchingSource) return;
+            // The owned preview remains a valid frozen image, like an ordinary
+            // screenshot after display invalidation. Editing/QR/image output
+            // may continue; a new live action must authorize and select again.
+            if (failure && failure.code != cap::Failure::Code::Cancelled && !state_->stopping)
+                state_->reportFailure(failure.detail);
+        });
+    connect(&state_->live, &cap::LiveCaptureSource::stopped, this, [this](quint64 token, const auto&) {
+        if (token != state_->streamToken) return;
+        state_->streamToken = 0; state_->streamSourceId = 0; state_->streamGeneration = 0;
+        state_->cleanupAuthorization();
+        state_->changed(); state_->finishJourney(); state_->finishShutdown();
+    });
+    connect(&state_->live, &cap::LiveCaptureSource::shutdownFinished, this, [this] {
+        state_->liveStopped = true; state_->finishShutdown();
+    });
     connect(&state_->session, &cap::CaptureSession::cursorNudged, this, [this](QPoint point) {
         const auto& snapshot = state_->session.snapshot();
         if (snapshot.coordinates == cap::CoordinateSpace::DesktopPixels)
@@ -416,8 +638,11 @@ CaptureWorkspace::CaptureWorkspace(MediaWorkspace& media, Desktop::SystemClipboa
         });
     connect(&state_->session, &cap::CaptureSession::actionCancelled, this, [this](quint64 token) { state_->cancel(token); });
     connect(&state_->session, &cap::CaptureSession::closed, this, [this] {
+        if (state_->switchingSource) return;
         const QPointer<CaptureWorkspace> alive(this);
         state_->view.close();
+        if (!alive) return;
+        if (state_->streamToken && !state_->liveActionToken) state_->live.stop(state_->streamToken);
         if (alive) { state_->changed(); state_->finishJourney(); }
     });
     connect(&state_->view, &ui::CaptureWindow::actionRequested, this,
@@ -431,28 +656,46 @@ CaptureWorkspace::CaptureWorkspace(MediaWorkspace& media, Desktop::SystemClipboa
     });
 }
 CaptureWorkspace::~CaptureWorkspace()
-{ shutdown(); state_->pool.waitForDone(); if (state_->qrDialog) delete state_->qrDialog; }
+{
+    shutdown(); state_->pool.waitForDone();
+    if (state_->qrDialog) delete state_->qrDialog;
+    if (state_->authorization) delete state_->authorization;
+}
 void CaptureWorkspace::setTranslator(ui::DesktopTranslator translator)
-{ state_->translator = std::move(translator); state_->view.setTranslator(state_->translator); }
+{
+    state_->translator = std::move(translator);
+    state_->view.setTranslator(state_->translator); state_->refreshAuthorization();
+}
 void CaptureWorkspace::initialize()
 {
     if (state_->ready || state_->initializing || state_->stopping) return;
-    state_->initializing = true; state_->source.initialize();
+    state_->initializing = true;
+    const QPointer<CaptureWorkspace> alive(this);
+    state_->source.initialize();
+    if (alive) state_->live.initialize();
 }
 cap::CaptureCapabilities CaptureWorkspace::capabilities() const { return state_->source.capabilities(); }
+cap::LiveCaptureSource& CaptureWorkspace::liveSource() noexcept { return state_->live; }
+cap::ScreenCaptureService& CaptureWorkspace::nativeSource() noexcept { return state_->source; }
 bool CaptureWorkspace::sourceIsCurrent(quint64 sourceId, quint64 generation) const
-{ return state_->source.isCurrent(sourceId, generation); }
+{ return state_->live.isCurrent(sourceId, generation) || state_->source.isCurrent(sourceId, generation); }
 bool CaptureWorkspace::start(Core::CaptureEntry entry, const QString& activationToken)
 {
     if (QThread::currentThread() != thread() || state_->stopping) return false;
     if (state_->busy()) {
         if (entry != state_->entry || state_->pending || state_->captureToken || state_->job || state_->publication) return false;
+        if (state_->preparingLive && state_->authorization) {
+            state_->activation.request(nativeWindow(state_->authorization), activationToken);
+            return true;
+        }
         if (state_->liveActionToken) {
             Q_EMIT liveActionActivationRequested(state_->liveActionToken, activationToken);
             return true;
         }
         if (state_->qrDialog) state_->activation.request(nativeWindow(state_->qrDialog), activationToken);
-        else state_->view.activate(activationToken);
+        else if (state_->session.stage() != cap::Stage::Closed && state_->session.stage() != cap::Stage::Empty)
+            state_->view.activate(activationToken);
+        else return false;
         return true;
     }
     state_->entry = entry; state_->pending = true; state_->journeyActive = true;
@@ -463,8 +706,10 @@ bool CaptureWorkspace::start(Core::CaptureEntry entry, const QString& activation
 }
 void CaptureWorkspace::setLiveCapability(cap::Action action, cap::Capability capability)
 {
-    if (action == cap::Action::Record || action == cap::Action::Scroll)
-        state_->session.setCapability(action, std::move(capability));
+    if (action != cap::Action::Record && action != cap::Action::Scroll) return;
+    if (action == cap::Action::Record) state_->recordingCapability = std::move(capability);
+    else state_->scrollingCapability = std::move(capability);
+    state_->updateLiveCapabilities();
 }
 void CaptureWorkspace::completeLiveAction(quint64 token, cap::ActionResult result, const QString& detail)
 { state_->complete(token, result, detail); }
@@ -478,7 +723,8 @@ bool CaptureWorkspace::busy() const noexcept { return state_->busy(); }
 void CaptureWorkspace::shutdown()
 {
     if (state_->stopping) return;
-    state_->stopping = true; state_->pending = false;
+    state_->stopping = true; state_->pending = false; state_->preparingLive = false;
+    state_->authorizationDeadline.stop();
     const QPointer<CaptureWorkspace> alive(this);
     if (state_->job) state_->job->stop.request_stop();
     state_->session.cancel();
@@ -490,6 +736,15 @@ void CaptureWorkspace::shutdown()
     state_->view.close();
     if (!alive) return;
     state_->source.shutdown();
+    if (!alive) return;
+    if (state_->authorization) state_->authorization->hide();
+    state_->live.shutdown();
     if (alive) state_->finishShutdown();
+}
+bool CaptureWorkspace::eventFilter(QObject* watched, QEvent* event)
+{
+    if (state_->authorization && watched == state_->authorization->windowHandle() && event->type() == QEvent::Expose)
+        QTimer::singleShot(0, this, [this] { state_->requestAuthorizedSource(); });
+    return QObject::eventFilter(watched, event);
 }
 } // namespace HuhuCapture::Application

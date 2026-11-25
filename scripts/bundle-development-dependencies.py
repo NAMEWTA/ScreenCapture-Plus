@@ -19,7 +19,7 @@ HOST_LIBRARIES = re.compile(r"^(ld-linux.*|lib(c|m|pthread|dl|rt|util|resolv|anl
 HOST_PACKAGES = {"libc6", "libc6-dev", "libc-dev-bin", "linux-libc-dev", "libstdc++6", "libgcc-s1"}
 MODULES = ("gio-2.0", "gio-unix-2.0", "gobject-2.0", "gthread-2.0", "glib-2.0",
            "wayland-client", "wayland-cursor", "wayland-egl", "xkbcommon", "gl", "egl",
-           "xcb", "xcb-keysyms", "xcb-randr", "xcb-shm", "xcb-xfixes", "xcb-xtest")
+           "xcb", "xcb-keysyms", "xcb-randr", "xcb-shm", "xcb-xfixes", "xcb-xtest", "openssl")
 
 
 def output(*arguments, env=None):
@@ -139,6 +139,8 @@ def make_bundle(options):
     qt_version = output(str(qt / "bin/qmake"), "-query", "QT_VERSION")
     if qt_version != lock["qtMigration"]["qt"]["version"]:
         raise RuntimeError("The installed Qt SDK differs from the fixed lock")
+    if not (qt / "translations").is_dir() or not list((qt / "translations").glob("qtbase_*.qm")):
+        raise RuntimeError("The fixed official Qt translations archive is required for deployment")
     originals = {"qt": qt,
         "portal": (root / ".deps/portal-validation/install").resolve(),
         "pipewire": (root / ".deps/pipewire-validation/install").resolve(),
@@ -255,7 +257,7 @@ def make_bundle(options):
     metadata["originalPrefixes"]["cmake"] = str(cmake_prefix)
     (bundle / "tools/bin").mkdir(parents=True)
     tool_packages = set()
-    for name in ("ninja", "pkg-config"):
+    for name in ("ninja", "pkg-config", "dbus-run-session", "dbus-daemon"):
         # GitHub's /usr/local/bin/ninja may precede the official Ubuntu package
         # without belonging to dpkg. Select the installed package explicitly so
         # its observed version, executable bytes and copyright share one source.
@@ -388,6 +390,12 @@ def make_bundle(options):
         target = licenses / "system" / (package.replace(":", "_") + ".copyright")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(copyright_file.resolve(), target)
+    # Debian copyright files refer to these exact installed license texts.
+    # Preserve those references' contents as well as each package's notice.
+    common_licenses = Path("/usr/share/common-licenses")
+    if not common_licenses.is_dir() or not any(common_licenses.iterdir()):
+        raise RuntimeError("The runner's common license texts are missing")
+    shutil.copytree(common_licenses, licenses / "system/common-licenses", symlinks=False)
     for path in (root / "third_party").rglob("*"):
         if path.is_file() and (path.name.upper().startswith(("LICENSE", "COPYING", "NOTICE")) or path.name == "upstream.json"):
             target = licenses / "project" / path.relative_to(root / "third_party")
@@ -428,7 +436,7 @@ def make_bundle(options):
     metadata["systemFiles"] = copied_system
     metadata["elfSonames"] = verify_soname_aliases(bundle)
     metadata["hostAbiVersions"] = sorted(abi_requirements)
-    metadata["hostRequirements"] = "Linux amd64 satisfying hostAbiVersions, a C++20 compiler and its matching standard-library/libc/kernel development headers, and binutils readelf for actual SONAME validation. The current CMake validation requires dbus-run-session; session-fault tests also require dbus-daemon. No glibc, loader, compiler, GPU driver, compositor, bus daemon or user session is supplied. GUI/Portal acceptance is separate."
+    metadata["hostRequirements"] = "Linux amd64 satisfying hostAbiVersions, a C++20 compiler and its matching standard-library/libc/kernel development headers, and binutils readelf for actual SONAME validation. Matching dbus-run-session/dbus-daemon binaries are supplied for isolated validation, without a running user bus. No glibc, loader, compiler, GPU driver, compositor or user session is supplied. GUI/Portal acceptance is separate."
     (bundle / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     shutil.copy2(Path(__file__), bundle / "bundle-development-dependencies.py")
     inventory = {}

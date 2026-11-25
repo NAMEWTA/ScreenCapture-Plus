@@ -79,7 +79,8 @@ BackendResult capture(const BackendRequest& request, int descriptor,
         return result;
     };
     const auto region = alignedMp4Region(request.region, request.maximumFrameBytes);
-    if (request.format != Format::Mp4 || !region || !request.framesPerSecond ||
+    if (request.coordinates != CoordinateSpace::DesktopPixels || request.sourceId || request.generation ||
+        request.format != Format::Mp4 || !region || !request.framesPerSecond ||
         request.framesPerSecond > 240 || request.maximumDuration.count() <= 0 ||
         request.maximumDuration > std::chrono::minutes(120) || request.firstFrameTimeout.count() <= 0 ||
         request.firstFrameTimeout > std::chrono::minutes(1) ||

@@ -112,15 +112,18 @@ void AboutPanel::refreshUpdate()
     const auto& update = state_->update;
     const bool busy = update.stage == UpdateStage::Checking || update.stage == UpdateStage::Downloading;
     const bool downloaded = update.stage == UpdateStage::Downloaded && !update.file.isEmpty();
+    const bool retained = !update.file.isEmpty();
     const bool failed = update.stage == UpdateStage::Failed || (update.stage == UpdateStage::Downloaded && !downloaded);
     state_->download->setEnabled(update.canDownload && !busy);
     state_->download->setText(translated(failed ? u"update.retry" : u"update.download"));
-    state_->folder->setVisible(downloaded); state_->folder->setEnabled(downloaded && update.canOpenFolder);
-    state_->folder->setToolTip(update.file); state_->path->setFullText(update.file); state_->path->setVisible(downloaded);
+    state_->folder->setVisible(retained); state_->folder->setEnabled(retained && update.canOpenFolder);
+    state_->folder->setToolTip(update.file); state_->path->setFullText(update.file); state_->path->setVisible(retained);
     state_->progress->setVisible(update.stage == UpdateStage::Downloading);
     state_->status->setProperty("error", failed); Theme::repolish(state_->status);
     switch (update.stage) {
     case UpdateStage::Idle: state_->status->setText(translated(u"update.idle")); break;
+    case UpdateStage::Cancelled: state_->status->setText(translated(u"update.cancelled")); break;
+    case UpdateStage::Unavailable: state_->status->setText(translated(u"update.unavailable")); break;
     case UpdateStage::Checking:
         state_->download->setText(translated(u"update.checking")); state_->status->setText(translated(u"update.idle")); break;
     case UpdateStage::Available: state_->status->setText(translated(u"update.found") + QStringLiteral(" v") + update.version); break;
@@ -133,10 +136,11 @@ void AboutPanel::refreshUpdate()
     }
     case UpdateStage::Downloaded:
         state_->status->setText(downloaded ? QStringLiteral("v") + update.version + QStringLiteral(" · ") +
-            translated(u"update.downloaded") : translated(u"update.saveError")); break;
+            translated(update.installationInstructionsKey) : translated(u"update.saveError")); break;
     case UpdateStage::Failed: {
         const auto* key = update.error == UpdateError::Metadata ? u"update.metadataError" :
             update.error == UpdateError::Folder ? u"update.folderError" : update.error == UpdateError::Integrity ? u"update.integrityError" :
+            update.error == UpdateError::DurabilityUnknown ? u"update.durabilityUnknown" :
             update.error == UpdateError::Save ? u"update.saveError" : u"update.networkError";
         state_->status->setText(translated(key)); break;
     }

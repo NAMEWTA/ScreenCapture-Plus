@@ -77,6 +77,12 @@ Qt 图像数据，GIF/MP4 提供 `text/uri-list`；没有自写像素传输或 W
 文件发布先以 QtDBus 异步调用实际 `FileTransfer.version` 属性，最多三秒；
 缺失或不支持的服务返回 `Unavailable`，不替换之前的剪贴板内容。检查通过后
 才执行既有 worker 磁盘身份校验和 Qt 发布。取消或失败均释放本次读租约。
+断开的 D-Bus 连接还会立即返回已经结束的调用。固定 Qt 的
+`QDBusPendingCallWatcher` 在这一无内部 helper 的分支不发 `finished`；服务
+检查 `isFinished()` 并在下一轮事件中处理相同结果。两条路径核对同一 watcher
+身份，只完成一次，不在 GUI 线程使用 `waitForFinished()`，也不把缺少通知
+留成永远忙碌的文件复制请求。实现依据是固定 Qt 的
+[pending-call 源码](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/dbus/qdbuspendingcall.cpp)。
 图像、纯文本和原始 URI 消费端不因此被当成文件 Portal 的验收证据。
 预检是当时的能力证明；服务在成功发布后中断或文件随后被用户清理时，不能
 保证未来取回仍成功。发布回执与之后接收端实际完成文件取回仍是不同事件。

@@ -4,6 +4,7 @@
 #include "app/MediaWorkspace.h"
 #include "capture/CaptureSession.h"
 #include "recording/RecordingSession.h"
+#include "services/capture/LiveCaptureSource.h"
 #include "services/desktop/CaptureExclusion.h"
 #include "services/desktop/WindowActivation.h"
 
@@ -63,6 +64,7 @@ struct RecordingWorkspace::State {
     MediaWorkspace& media;
     CaptureWorkspace& capture;
     rec::RecordingSession session;
+    rec::LiveBackendFactory liveBackend;
     ui::RecordingCapabilities capabilities;
     ui::DesktopTranslator translator;
     Desktop::WindowActivation activation;
@@ -74,13 +76,14 @@ struct RecordingWorkspace::State {
     QRect region;
     quint64 captureToken{}, recordingToken{}, sourceId{}, generation{}, outputToken{}, nextOutputToken{1};
     QString sourceFailure;
-    bool hasBackend{}, stopping{}, sessionStopped{}, shutdownReported{}, cancelled{};
+    std::stop_source producerStop{std::nostopstate};
+    bool hasBackend{}, fromLive{}, consumerClaimed{}, stopping{}, sessionStopped{}, shutdownReported{}, cancelled{};
 
     State(RecordingWorkspace* q, std::shared_ptr<Media::MediaArchiveService> archive,
         MediaWorkspace& mediaWorkspace, CaptureWorkspace& captureWorkspace, rec::Backend backend,
-        ui::RecordingCapabilities available)
+        ui::RecordingCapabilities available, rec::LiveBackendFactory liveFactory)
         : owner(q), media(mediaWorkspace), capture(captureWorkspace), session(std::move(archive), backend),
-          capabilities(std::move(available)), hasBackend(bool(backend))
+          liveBackend(std::move(liveFactory)), capabilities(std::move(available)), hasBackend(bool(backend))
     {
         timer.setInterval(250);
         QObject::connect(&timer, &QTimer::timeout, owner, [this] {
@@ -93,11 +96,22 @@ struct RecordingWorkspace::State {
     void updateCapability()
     {
         cap::Capability available{cap::CapabilityState::Unavailable, QStringLiteral("A recording backend is unavailable")};
-        if (hasBackend && !stopping) {
+        const auto liveCapability = capture.liveSource().capability();
+        if (!stopping && (hasBackend || (liveBackend && liveCapability.canRequest()))) {
             if (capabilities.mp4.canRequest()) available = capabilities.mp4;
             else available = capabilities.gif;
+            if (!hasBackend && available.canRequest()) available = liveCapability;
         }
         capture.setLiveCapability(cap::Action::Record, std::move(available));
+    }
+    void releaseConsumer()
+    {
+        if (!std::exchange(consumerClaimed, false)) return;
+        // This runs after the session's worker has returned and released the
+        // provider, including failures before its encoder was ever invoked.
+        producerStop.request_stop();
+        capture.liveSource().consumerFinished(sourceId, generation);
+        producerStop = std::stop_source{std::nostopstate};
     }
     void protect(QWindow* window)
     {
@@ -178,7 +192,7 @@ struct RecordingWorkspace::State {
             showFailure(QStringLiteral("The selected desktop changed before recording started. Capture a new region.")); return;
         }
         const auto capability = options.format == rec::Format::Mp4 ? capabilities.mp4 : capabilities.gif;
-        if (!hasBackend || !capability.canRequest() ||
+        if ((!fromLive && !hasBackend) || (fromLive && !liveBackend) || !capability.canRequest() ||
             (options.systemAudio && !capabilities.systemAudio.canRequest()) ||
             (options.microphone && !capabilities.microphone.canRequest())) {
             showFailure(QStringLiteral("The selected recording format or audio source is unavailable")); return;
@@ -190,7 +204,30 @@ struct RecordingWorkspace::State {
         request.maximumDuration = options.format == rec::Format::Gif ? std::chrono::minutes(6) : std::chrono::minutes(120);
         request.systemAudio = options.format == rec::Format::Mp4 && options.systemAudio;
         request.microphone = options.format == rec::Format::Mp4 && options.microphone;
-        const auto token = session.start(request);
+        quint64 token{};
+        const QPointer<RecordingWorkspace> alive(owner);
+        if (fromLive) {
+            request.coordinates = rec::CoordinateSpace::AuthorizedSourcePixels;
+            request.sourceId = sourceId; request.generation = generation;
+            auto consumer = capture.liveSource().claim(sourceId, generation,
+                {static_cast<std::uint32_t>(region.x()), static_cast<std::uint32_t>(region.y()),
+                 static_cast<std::uint32_t>(region.width()), static_cast<std::uint32_t>(region.height())});
+            if (!consumer) {
+                showFailure(QStringLiteral("The authorized recording source is no longer available. Select a new source.")); return;
+            }
+            producerStop = consumer->stop; consumerClaimed = true;
+            try {
+                token = session.start(request, liveBackend(std::move(*consumer)));
+            } catch (...) {
+                consumer.reset();
+                if (alive) releaseConsumer();
+                if (alive) showFailure(QStringLiteral("The recording source could not be admitted within the available resources"));
+                return;
+            }
+            consumer.reset();
+            if (alive && !token) releaseConsumer();
+        } else token = session.start(request);
+        if (!alive) return;
         if (!token) { showFailure(QStringLiteral("The recording session could not accept this request")); return; }
         recordingToken = token; changed();
     }
@@ -198,26 +235,30 @@ struct RecordingWorkspace::State {
     {
         if (request.action != cap::Action::Record) return;
         const auto& snapshot = capture.session().snapshot();
-        if (stopping || captureToken || session.busy() || !hasBackend ||
+        if (stopping || captureToken || session.busy() ||
             !request.token || capture.session().activeRequest() != request.token ||
             request.sourceId != snapshot.sourceId || request.generation != snapshot.generation ||
             !capture.sourceIsCurrent(request.sourceId, request.generation)) {
             capture.completeLiveAction(request.token, cap::ActionResult::Failed,
                 QStringLiteral("The recording source is busy or has changed")); return;
         }
-        // A Portal screenshot and a later ScreenCast authorization are distinct
-        // sources. Only a provider holding the actual stream may establish their
-        // mapping; a source-local bitmap rectangle is never a desktop rectangle.
-        if (request.coordinates != cap::CoordinateSpace::DesktopPixels || !request.desktopRect) {
+        // Source-local recording is admitted only after this same authorized
+        // stream's first frame has been selected by the shared capture session.
+        // An earlier Portal screenshot cannot establish this pixel domain.
+        const bool authorized = request.coordinates == cap::CoordinateSpace::AuthorizedSourcePixels;
+        if ((authorized && (!liveBackend || !capture.liveSource().isCurrent(request.sourceId, request.generation))) ||
+            (!authorized && (!hasBackend || !request.desktopRect))) {
             capture.completeLiveAction(request.token, cap::ActionResult::Failed,
-                QStringLiteral("This recording backend requires a verified desktop source")); return;
+                QStringLiteral("The recording request has no matching live or native desktop source")); return;
         }
         captureToken = request.token; sourceId = request.sourceId; generation = request.generation;
-        region = *request.desktopRect; cancelled = false; archived.reset(); sourceFailure.clear();
+        fromLive = authorized; region = authorized ? request.sourceRect : *request.desktopRect;
+        cancelled = false; archived.reset(); sourceFailure.clear();
         window = new ui::RecordingWindow;
         window->setTranslator(translator); window->setCapabilities(capabilities);
         const cap::ScreenBinding* placement{}; qint64 largest{};
         for (const auto& binding : snapshot.screens) {
+            if (fromLive) break; // No inferred global outline for a Portal source.
             if (!binding.screen) continue;
             const auto intersection = request.sourceRect.intersected(binding.sourcePixels);
             if (intersection.isEmpty()) continue;
@@ -256,10 +297,14 @@ struct RecordingWorkspace::State {
 
 RecordingWorkspace::RecordingWorkspace(std::shared_ptr<Media::MediaArchiveService> archive,
     MediaWorkspace& media, CaptureWorkspace& capture, rec::Backend backend,
-    ui::RecordingCapabilities capabilities, QObject* parent)
+    ui::RecordingCapabilities capabilities, rec::LiveBackendFactory liveBackend, QObject* parent)
     : QObject(parent), state_(std::make_unique<State>(this, std::move(archive), media, capture,
-          std::move(backend), std::move(capabilities)))
+          std::move(backend), std::move(capabilities), std::move(liveBackend)))
 {
+    connect(&capture.liveSource(), &cap::LiveCaptureSource::initialized, this,
+        [this](const auto&, const auto&) { state_->updateCapability(); });
+    connect(&capture.liveSource(), &cap::LiveCaptureSource::capabilityChanged, this,
+        [this](const auto&) { state_->updateCapability(); });
     connect(&capture, &CaptureWorkspace::liveActionRequested, this,
         [this](const cap::ActionRequest& request, QWidget*) { state_->open(request); });
     connect(&capture, &CaptureWorkspace::liveActionActivationRequested, this, [this](quint64 token, const QString& activationToken) {
@@ -298,6 +343,7 @@ RecordingWorkspace::RecordingWorkspace(std::shared_ptr<Media::MediaArchiveServic
     });
     connect(&state_->session, &rec::RecordingSession::finished, this, [this](const rec::SessionResult& result) {
         if (result.token != state_->recordingToken) return;
+        state_->releaseConsumer();
         state_->timer.stop(); state_->hideOutlines();
         if (state_->window) state_->window->setElapsed(result.backend.elapsed);
         const QPointer<RecordingWorkspace> alive(this);

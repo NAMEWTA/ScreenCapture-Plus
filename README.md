@@ -15,7 +15,9 @@
 
 [下载 v0.0.5](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
 
-> **Qt / Linux 重构正在实施：** [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 是唯一主计划。当前正式下载仍为下文的 Windows v0.0.5；根目录 CMake 提供共享模型与 Qt / 平台验证程序，尚无功能完整的 Qt 产品或 Linux 安装包。实现边界、数据保护、P00–P14 状态与未验证项目见 [迁移状态](docs/qt-migration.md)。
+> **Qt / Linux 重构正在实施：** [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 是唯一主计划。当前正式下载仍为下文的 Windows v0.0.5；根目录 CMake 已构建同一套 C++20 / Qt 6 应用、共享界面与服务，并接入双平台完整包流水线。新架构尚未通过完整桌面、设备、安装升级和性能验收，当前没有正式 Qt / Linux 发行版。实现边界、数据保护、P00–P14 状态与未验证项目见 [迁移状态](docs/qt-migration.md)。
+
+开发者可从 [Qt 应用生命周期](docs/qt-application.md)、[完整包构建](docs/qt-packaging.md) 和 [完整包更新](docs/qt-updates.md) 阅读当前实现。开发产物中的 Windows 安装包用于当前用户安装，便携 ZIP 必须整体解压；Linux DEB 用于系统包管理，AppImage 用于独立运行。Qt 运行库、平台插件、翻译和编码依赖都属于完整目录的一部分，单独取出其中的 EXE 不能作为新版分发方式。符号包用于调试，`build-info`、发行清单和 SHA256 文件用于核对来源与完整性。
 
 ## 截图与说明，一起保存
 

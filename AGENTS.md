@@ -12,6 +12,22 @@ regression baseline until P12 passes; P13 then removes Ling and the old build.
 Do not describe component validation as a complete Qt/Linux product or weaken
 release gates to remove the old architecture early.
 
+`HUHUCAPTURE_BUILD_APP=ON` enables the actual product dependencies and builds
+the one `huhucapture` target. Keep production libraries in the root CMake file,
+validation targets in `build/cmake/tests.cmake`, and deployment in
+`build/cmake/qt-install.cmake`. `BUILD_TESTING=OFF` must still compile and install
+the full application without discovering test interpreters or test daemons.
+`qt-application.yml` is the single full Qt application/package pipeline; other
+workflows validate component configurations or the retained Windows baseline.
+Development packages retain their real dirty/source identity and never satisfy
+the stable release gates. See [packaging](docs/qt-packaging.md).
+
+CaptureWorkspace alone owns authorized live capture. A recording or scrolling
+worker claims that source once and returns every frame lease before reporting
+consumer completion. Do not reopen a second Portal session, infer global pixels
+from a Wayland screenshot, invent silent PCM, or let GUI teardown precede worker
+drain. Qt views and application ownership remain shared across both platforms.
+
 Reuse existing production behavior first, pinned cited upstream second, then
 mature libraries. Keep pure editor models free of Qt/Win32 and use them in the
 existing adapters while migrating. Register shared targets and tests in CMake;

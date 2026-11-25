@@ -245,6 +245,7 @@ void contracts(const QString& pictures)
     ui::TransferSettingsPanel settings(sender); settings.setTranslator(translate); show(settings);
     require(!sender.statistics().nativeRunning && sender.state() == transfer::ServiceState::Disabled,
         "Opening both real views creates no runtime, listener or discovery");
+    require(!sender.hasActiveTransfers() && !receiver.hasActiveTransfers(), "Cold services certify no active transfer in their own read model");
     require(!child<QPushButton>(*window, "transferSend")->isEnabled() && !settings.requestApply(),
         "An unconnected configuration cannot invent an enabled service");
     const auto source = createPng(senderArchive);
@@ -302,6 +303,8 @@ void contracts(const QString& pictures)
     host.dispatch(); waitFor([&] { return host.finished; }, "Actual media preparation and service admission complete");
     require(bool(host.last), "The host submits actual prepared media after view destruction");
     const auto offer = received.wait(transfer::EventKind::ReceiveOffer);
+    require(sender.hasActiveTransfers() && receiver.hasActiveTransfers(),
+        "The same service read model keeps an actual awaiting-confirmation transfer active after its task view closes");
     require(!host.histories.front().expired(), "The service retains the real source lease while confirmation is pending");
     require(senderArchive->reserveRemoval(source).failure.code == media::Error::Busy, "Active send protects original history data");
     {
@@ -319,6 +322,8 @@ void contracts(const QString& pictures)
     const auto outgoing = sent.wait(transfer::EventKind::SendFinished, host.last.request);
     require(incoming.status == HUHU_OK && outgoing.status == HUHU_OK && incoming.receivedFiles.size() == 1,
         "Both ends require the real successful TLS/archive result");
+    require(!sender.hasActiveTransfers() && !receiver.hasActiveTransfers(),
+        "Actual terminal receipts release application idle suppression without deleting retained task history");
     const auto actualPath = incoming.receivedFiles.front().path;
     require(incoming.receivedFiles.front().published && read(actualPath) == read(source.path), "Actual archived PNG bytes are preserved");
     require(host.histories.front().expired(), "Neither a closed view nor the read-only snapshot retains a media lease");

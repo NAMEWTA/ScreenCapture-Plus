@@ -1,6 +1,8 @@
 # Build dependencies and output
 /.deps/
 /artifacts/
+__pycache__/
+*.pyc
 
 # Local IDE state
 **/.vs/

@@ -304,9 +304,14 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
             message.setArguments({QStringLiteral("org.freedesktop.portal.FileTransfer"), QStringLiteral("version")});
             auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message, 3000), this);
             state_->filePortal = watcher;
-            connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, token, watcher] {
+            const auto completed = [this, token, watcher] {
+                // A disconnected connection returns an already finished call
+                // without Qt's private watcher helper. No finished signal is
+                // emitted in that case (Qt 6.12.1 qdbuspendingcall.cpp). Both
+                // completion paths must consume the same owner identity once.
+                if (state_->filePortal != watcher) return;
                 const QDBusPendingReply<QDBusVariant> reply = *watcher;
-                if (state_->filePortal == watcher) state_->filePortal.clear();
+                state_->filePortal.clear();
                 watcher->deleteLater();
                 if (state_->active != token) { updateBusy(); return; }
                 bool numeric = false;
@@ -318,7 +323,9 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
                     return;
                 }
                 validatePrepared(token);
-            });
+            };
+            connect(watcher, &QDBusPendingCallWatcher::finished, this, completed);
+            if (watcher->isFinished()) QTimer::singleShot(0, watcher, completed);
             return token;
         }
 #endif

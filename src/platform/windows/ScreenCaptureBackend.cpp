@@ -83,6 +83,7 @@ Capture::Failure ScreenCaptureBackend::initialize()
     CaptureDesktop value; return desktop(value, false);
 }
 bool ScreenCaptureBackend::requiresPortal() const noexcept { return false; }
+bool ScreenCaptureBackend::supportsAutomaticScroll() const noexcept { return true; }
 NativeScreenshot ScreenCaptureBackend::capture(std::stop_token stop)
 {
     NativeScreenshot result;

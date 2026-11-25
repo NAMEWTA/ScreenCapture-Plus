@@ -25,6 +25,7 @@ struct SettingsSnapshot {
     QString autoStartUnavailableReason;
     QString languageCode;
     QString effectiveLanguageCode;
+    QString standardDialogLanguageNote;
     QVector<Localization::LanguageEntry> languages;
     QString archiveDirectory;
     QString captureShortcut;
@@ -43,13 +44,14 @@ struct SettingChange {
     QStringList shortcutKeys;
 };
 
-enum class UpdateStage { Idle, Checking, Available, Downloading, Downloaded, Failed };
-enum class UpdateError { None, Network, Metadata, Folder, Integrity, Save };
+enum class UpdateStage { Idle, Checking, Available, Downloading, Downloaded, Failed, Cancelled, Unavailable };
+enum class UpdateError { None, Network, Metadata, Folder, Integrity, Save, DurabilityUnknown };
 struct AboutUpdateSnapshot {
     UpdateStage stage{UpdateStage::Idle};
     UpdateError error{UpdateError::None};
     QString version;
     QString file;
+    QString installationInstructionsKey{QStringLiteral("update.downloaded")};
     quint64 received{};
     quint64 total{};
     bool canDownload{};

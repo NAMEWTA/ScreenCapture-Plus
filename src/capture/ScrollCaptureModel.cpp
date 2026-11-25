@@ -52,9 +52,9 @@ void ScrollCaptureModel::stop(ScrollStopReason reason) noexcept
     std::vector<std::uint8_t>().swap(currentGray_);
 }
 
-ScrollUpdate ScrollCaptureModel::dismissed(ScrollStopReason reason) noexcept
+ScrollUpdate ScrollCaptureModel::dismissed(ScrollStopReason reason, bool automatic) noexcept
 {
-    if (++dismissals_ > ScrollCaptureRules::maximumDismissals) {
+    if (automatic && ++dismissals_ > ScrollCaptureRules::maximumDismissals) {
         stop(reason);
         return stopped();
     }
@@ -87,7 +87,7 @@ bool ScrollCaptureModel::reserveAppend(int rows)
     return true;
 }
 
-ScrollUpdate ScrollCaptureModel::accept(std::span<const std::uint8_t> pixels) noexcept
+ScrollUpdate ScrollCaptureModel::accept(std::span<const std::uint8_t> pixels, bool automatic) noexcept
 {
     if (!running()) return stopped();
     if (pixels.size() != previous_.size()) {
@@ -107,7 +107,7 @@ ScrollUpdate ScrollCaptureModel::accept(std::span<const std::uint8_t> pixels) no
                     }
                 }
             }
-            if (changeStartY_ == -1) return dismissed(ScrollStopReason::ReachedBottom);
+            if (changeStartY_ == -1) return dismissed(ScrollStopReason::ReachedBottom, automatic);
             firstCheck_ = false;
         }
         const int stripHeight = std::min(ScrollCaptureRules::comparisonRows, frameHeight_ - changeStartY_);
@@ -132,7 +132,7 @@ ScrollUpdate ScrollCaptureModel::accept(std::span<const std::uint8_t> pixels) no
                 return {ScrollNextStep::Settle, ScrollStopReason::None, false};
             }
             settleRechecks_ = 0;
-            return dismissed(ScrollStopReason::ReachedBottom);
+            return dismissed(ScrollStopReason::ReachedBottom, automatic);
         }
         if (!reserveAppend(rows)) {
             stop(ScrollStopReason::MemoryLimit);

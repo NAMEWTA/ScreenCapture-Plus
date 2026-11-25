@@ -31,7 +31,8 @@ BackendResult capture(const BackendRequest& request, FileHandle& writer,
     };
     const auto& region = request.region;
     const auto layout = Core::pixelLayout(region.width, region.height, 4);
-    if (request.format != Format::Gif || !layout || layout->bytes > request.maximumFrameBytes ||
+    if (request.coordinates != CoordinateSpace::DesktopPixels || request.sourceId || request.generation ||
+        request.format != Format::Gif || !layout || layout->bytes > request.maximumFrameBytes ||
         region.width > 65535 || region.height > 65535 || !request.framesPerSecond || request.framesPerSecond > 50 ||
         request.systemAudio || request.microphone || request.maximumDuration.count() <= 0 ||
         request.maximumDuration > std::chrono::minutes(6) || request.firstFrameTimeout.count() <= 0 ||

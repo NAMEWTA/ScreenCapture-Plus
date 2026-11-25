@@ -155,15 +155,29 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
     const auto decodedLast = av_rescale_q(lastPts, timeBase, hundredNs);
     const auto decodedEnd = av_rescale_q(lastEnd, timeBase, hundredNs);
     const auto inputEnd = sink.lastSubmitted + sink.lastSubmittedDuration;
-    const auto frameTicks = (10'000'000ll + fps - 1) / fps;
-    require(std::llabs(decodedLast - sink.lastEncoded) <= 1 && decodedEnd >= inputEnd &&
-        decodedEnd - inputEnd <= frameTicks,
-        "The final actual output timestamp must match MF and cover the last input without an unexplained extra interval");
+    // Retained MF frame-rate conversion maps the actual input interval onto
+    // whole output slots. The e23 and 8e native artifacts prove both upward
+    // and downward rounding; demanding only ceil(inputEnd) was not its actual
+    // contract. Require the exact nearest whole cadence, not an arbitrary
+    // millisecond tolerance or permission to lose a complete output frame.
+    const auto expectedSlots = av_rescale_q(inputEnd, hundredNs, cadence);
+    const auto expectedEnd = av_rescale_q(expectedSlots, cadence, hundredNs);
+    if (std::llabs(decodedLast - sink.lastEncoded) > 1 || expectedSlots <= 0 ||
+        decoded != static_cast<std::uint64_t>(expectedSlots) || std::llabs(decodedEnd - expectedEnd) > 1) {
+        throw std::runtime_error("The complete MF output must match its actual encoded stage and nearest nominal-FPS tail slot: "
+            "decoded=" + std::to_string(decoded) + ", expectedSlots=" + std::to_string(expectedSlots) +
+            ", decodedLast100ns=" + std::to_string(decodedLast) + ", mfLastEncoded100ns=" + std::to_string(sink.lastEncoded) +
+            ", decodedEnd100ns=" + std::to_string(decodedEnd) + ", submittedEnd100ns=" + std::to_string(inputEnd) +
+            ", quantizedSubmittedEnd100ns=" + std::to_string(expectedEnd));
+    }
     return {{QStringLiteral("framesDecoded"), static_cast<qint64>(decoded)},
         {QStringLiteral("packetsDecoded"), static_cast<qint64>(packets)},
         {QStringLiteral("lastDecoded100ns"), static_cast<qint64>(decodedLast)},
         {QStringLiteral("decodedEnd100ns"), static_cast<qint64>(decodedEnd)},
         {QStringLiteral("submittedEnd100ns"), static_cast<qint64>(inputEnd)},
+        {QStringLiteral("expectedOutputSlots"), static_cast<qint64>(expectedSlots)},
+        {QStringLiteral("quantizedSubmittedEnd100ns"), static_cast<qint64>(expectedEnd)},
+        {QStringLiteral("tailRounding100ns"), static_cast<qint64>(decodedEnd - inputEnd)},
         {QStringLiteral("nominalFps"), static_cast<qint64>(fps)},
         {QStringLiteral("contiguousTimeline"), true}};
 }

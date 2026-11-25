@@ -1,0 +1,11 @@
+// Build-time identity retained in the actual binary, independently of the JSON
+// installed beside it. The packaging verifier compares these exact values.
+extern "C" {
+#if defined(_MSC_VER)
+#pragma section(".huhu", read)
+__declspec(allocate(".huhu")) extern const char huhuPackageIdentity[] =
+#else
+__attribute__((used, retain, section(".huhucapture"))) extern const char huhuPackageIdentity[] =
+#endif
+    "HUHU_BUILD_IDENTITY_V1\0" R"huhu(@HUHU_BINARY_BUILD_IDENTITY@)huhu" "\0HUHU_BUILD_IDENTITY_END";
+}

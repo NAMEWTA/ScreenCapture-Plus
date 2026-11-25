@@ -12,11 +12,12 @@ huhucapture 在 `main` 维护。修改围绕一个可观察的问题，说明改
 | 图形、批注范围、备注和完整导出 | [批注设计](docs/annotations.md) |
 | 设置、列表、字体、控件和交互 | [界面设计](docs/design.md) |
 | 依赖、版本、构建和发行文件 | [构建与发布](docs/building.md) |
+| Qt 完整应用、安装树和新架构更新 | [Qt 应用](docs/qt-application.md)、[Qt 打包](docs/qt-packaging.md)、[Qt 更新](docs/qt-updates.md) |
 | 原生窗口、输入、显示和设备验证 | [验证边界](docs/validation.md) |
 | 图标与翻译 | [品牌资源](docs/brand.md)、[语言约定](docs/languages.md) |
 | 代码代理协作 | [AGENTS.md](AGENTS.md) |
 
-问题报告提供版本、Windows 版本、DPI/显示器布局、复现步骤与实际结果。截图含私密内容时，可以换成相同尺寸和布局的复现底图。设计提议说明用户场景、预期行为及失败时如何保留结果。
+问题报告提供程序版本、操作系统与桌面会话（Linux 还需说明 X11/Wayland、桌面环境）、DPI/显示器布局、复现步骤与实际结果。截图含私密内容时，可以换成相同尺寸和布局的复现底图。设计提议说明用户场景、预期行为及失败时如何保留结果。
 
 ## 实施边界
 
@@ -40,6 +41,8 @@ huhucapture 在 `main` 维护。修改围绕一个可观察的问题，说明改
 
 共享核心和 Qt / Portal 的 CMake 入口见 [构建与发布](docs/building.md)；LocalSend 的真实 TLS 测试见 [core 适配说明](docs/localsend-core.md)。固定工具链和配置必须与 CI 一致，不以本机另一个 Qt 版本代替私有 ABI 验证。
 
+完整 Qt 应用使用 `qt-application-linux` / `qt-application-windows` 预设和相同的 `HUHUCAPTURE_BUILD_APP=ON` 生产目标。固定依赖恢复完成后，构建、测试、安装按 [Qt 打包](docs/qt-packaging.md) 执行。关闭 `BUILD_TESTING` 必须仍能构建、安装全部生产服务；只在测试模块发现 Python、Xvfb 和 D-Bus 测试启动器。跨平台正式产物须来自同一源提交，依次通过组件、完整应用、安装树、包内运行库、实际安装升级和 Issue 必要验收。
+
 仍在维护的 Windows 回归入口为：
 
 ```powershell
@@ -56,4 +59,4 @@ pwsh ./scripts/package.ps1
 
 提交说明包含问题、用户可观察的变化、实际命令和结果、未执行的边界。性能结论附同机同场景测量，无法测量时只描述减少的具体工作量。不要提交 `.deps`、`artifacts`、个人配置、IDE 状态或临时日志。
 
-准备发布时，同步默认版本、显式声明和该版本说明；完整验证通过后由既有发布流程产生同一组 EXE、符号、元数据和校验和。不要手动改写已生成 EXE 的版本或混合来自不同构建的发行文件。
+准备发布时，同步唯一版本源、显式声明和该版本说明。旧 Windows 基线继续使用原发行门槛；Qt 首版还须完成桥接、对应源码及四种完整包的同源聚合与实际验收。开发包和组件测试不能授权正式发布。不要手动改写二进制版本或混合来自不同构建的发行文件。

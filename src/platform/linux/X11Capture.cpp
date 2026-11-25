@@ -5,6 +5,7 @@
  * See third_party/ffmpeg-xcbgrab/upstream.md for exact sources and changes.
  */
 #include "platform/linux/X11Capture.h"
+#include "platform/linux/X11SignalMask.h"
 #include "core/PixelBuffer.h"
 #include <xcb/xcb.h>
 #include <xcb/randr.h>
@@ -12,6 +13,7 @@
 #include <xcb/xfixes.h>
 #include <xcb/xtest.h>
 #include <sys/shm.h>
+#include <sys/socket.h>
 #include <algorithm>
 #include <bit>
 #include <cerrno>
@@ -32,6 +34,14 @@ bool validPosition(int x, int y)
     y >= std::numeric_limits<std::int16_t>::min() && y <= std::numeric_limits<std::int16_t>::max(); }
 }
 struct X11Capture::State {
+    // PR7's cancellation only shuts down this worker-owned socket. It never
+    // closes/reuses the descriptor or touches the Qt/X11 connection.
+    struct InterruptConnection {
+        int descriptor;
+        void operator()() const noexcept { static_cast<void>(::shutdown(descriptor, SHUT_RDWR)); }
+    };
+    std::stop_token stop;
+    std::optional<std::stop_callback<InterruptConnection>> interrupt;
     xcb_connection_t* connection{};
     xcb_screen_t* screen{}; // owned by connection setup
     int screenNumber{};
@@ -46,17 +56,21 @@ struct X11Capture::State {
     int width{}, height{};
     std::size_t stride{};
     std::string failure;
-    bool fail(std::string text) { failure = std::move(text); return false; }
+    xcb_window_t scrollTarget{};
+    bool scrollPaused{};
+    explicit State(std::stop_token token) : stop(token) {}
+    bool fail(std::string text) { failure = stop.stop_requested() ? "X11 capture was cancelled" : std::move(text); return false; }
     bool connected()
-    { return connection && !xcb_connection_has_error(connection) ? true : fail("The X11 connection is unavailable"); }
+    { return !stop.stop_requested() && connection && !xcb_connection_has_error(connection) ? true : fail("The X11 connection is unavailable"); }
     bool checked(xcb_void_cookie_t cookie, const char* detail)
     {
         const auto error = reply(xcb_request_check(connection, cookie));
         return error ? fail(std::string(detail) + " (X11 error " + std::to_string(error->error_code) + ")") : true;
     }
-    void releaseShared() noexcept
+    void releaseShared(bool notifyServer = true) noexcept
     {
-        if (segment && connection) xcb_shm_detach(connection, std::exchange(segment, 0));
+        if (segment && connection && notifyServer) xcb_shm_detach(connection, segment);
+        segment = 0;
         if (shared) shmdt(std::exchange(shared, nullptr));
         sharedBytes = 0;
     }
@@ -250,21 +264,50 @@ struct X11Capture::State {
         }
         return true;
     }
+    bool wheel(int steps)
+    {
+        if (!xtestAvailable) return fail("The X11 server does not support real XTest scrolling");
+        if (steps < -120 || steps > 120) return fail("The requested scroll exceeds one bounded input operation");
+        const auto button = static_cast<std::uint8_t>(steps >= 0 ? 5 : 4);
+        for (int index = 0; index < std::abs(steps); ++index) {
+            if (stop.stop_requested()) return fail("X11 capture was cancelled");
+            // Reuse PR7's paired submission: a stopped press acknowledgement
+            // cannot prevent the release from reaching the owned connection.
+            const auto press = xcb_test_fake_input_checked(connection, XCB_BUTTON_PRESS, button, XCB_CURRENT_TIME, screen->root, 0, 0, 0);
+            const auto release = xcb_test_fake_input_checked(connection, XCB_BUTTON_RELEASE, button, XCB_CURRENT_TIME, screen->root, 0, 0, 0);
+            const bool pressed = checked(press, "Send an actual X11 scroll press");
+            const bool released = checked(release, "Send an actual X11 scroll release");
+            if (!pressed || !released || !connected()) return false;
+        }
+        failure.clear(); return true;
+    }
 };
-X11Capture::X11Capture() : state_(std::make_unique<State>()) {}
+X11Capture::X11Capture(std::stop_token stop) : state_(std::make_unique<State>(stop)) {}
 X11Capture::~X11Capture() { reset(); }
 void X11Capture::reset() noexcept
 {
-    state_->releaseShared();
+    const X11SignalMask signals;
+    state_->releaseShared(signals.valid());
+    state_->interrupt.reset(); // waits for any shutdown callback before close
     if (state_->connection) xcb_disconnect(std::exchange(state_->connection, nullptr));
     state_->screen = nullptr; state_->image.clear(); state_->width = state_->height = 0; state_->stride = 0;
     state_->wayland = state_->shmAvailable = state_->xfixesAvailable = state_->xtestAvailable = false;
     state_->randrMajor = state_->randrMinor = 0;
+    state_->scrollTarget = 0; state_->scrollPaused = false;
 }
 bool X11Capture::initialize()
 {
+    const X11SignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
     reset(); state_->failure.clear();
+    if (state_->stop.stop_requested()) return state_->fail("X11 capture was cancelled");
+    // xcb_connect's authentication/setup precedes exposure of the socket and
+    // cannot be interrupted through libxcb. Established I/O is cancellable.
     state_->connection = xcb_connect(nullptr, &state_->screenNumber);
+    if (!state_->connected()) return false;
+    const auto descriptor = xcb_get_file_descriptor(state_->connection);
+    if (descriptor < 0) return state_->fail("The owned X11 connection has no socket");
+    state_->interrupt.emplace(state_->stop, State::InterruptConnection{descriptor});
     if (!state_->connected()) return false;
     const auto* setup = xcb_get_setup(state_->connection);
     auto screen = xcb_setup_roots_iterator(setup);
@@ -303,8 +346,11 @@ bool X11Capture::initialize()
     return true;
 }
 bool X11Capture::isXWayland() const noexcept { return state_->wayland; }
+bool X11Capture::supportsAutomaticScroll() const noexcept { return state_->xtestAvailable && !state_->wayland; }
 bool X11Capture::desktop(X11Desktop& output, bool includeWindows)
 {
+    const X11SignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
     if (!state_->connected() || !state_->screen) return false;
     X11Desktop result;
     const auto geometry = reply(xcb_get_geometry_reply(state_->connection, xcb_get_geometry(state_->connection, state_->screen->root), nullptr));
@@ -320,6 +366,8 @@ bool X11Capture::desktop(X11Desktop& output, bool includeWindows)
 }
 bool X11Capture::capture(int x, int y, int width, int height, bool includeCursor)
 {
+    const X11SignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
     if (!state_->connected() || !state_->screen) return false;
     const auto layout = Core::pixelLayout(width, height, 4);
     if (!layout || layout->bytes > maximumBytes || width > 65535 || height > 65535 || !validPosition(x, y))
@@ -358,6 +406,8 @@ bool X11Capture::capture(int x, int y, int width, int height, bool includeCursor
 }
 bool X11Capture::moveCursor(int x, int y, int& actualX, int& actualY)
 {
+    const X11SignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
     if (!state_->connected() || !state_->screen) return false;
     if (!validPosition(x, y)) return state_->fail("The cursor target exceeds X11 coordinates");
     if (!state_->checked(xcb_warp_pointer_checked(state_->connection, XCB_NONE, state_->screen->root,
@@ -368,21 +418,37 @@ bool X11Capture::moveCursor(int x, int y, int& actualX, int& actualY)
 }
 bool X11Capture::scroll(int x, int y, int steps)
 {
+    const X11SignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
     if (!state_->connected() || !state_->screen) return false;
-    if (!state_->xtestAvailable) return state_->fail("The X11 server does not support real XTest scrolling");
-    if (steps < -120 || steps > 120) return state_->fail("The requested scroll exceeds one bounded input operation");
     int actualX{}, actualY{};
     if (!moveCursor(x, y, actualX, actualY)) return false;
     if (actualX != x || actualY != y) return state_->fail("The X11 cursor did not reach the scroll target");
-    const auto button = static_cast<std::uint8_t>(steps >= 0 ? 5 : 4);
-    for (int index = 0; index < std::abs(steps); ++index) {
-        if (!state_->checked(xcb_test_fake_input_checked(state_->connection, XCB_BUTTON_PRESS, button, XCB_CURRENT_TIME,
-                state_->screen->root, 0, 0, 0), "Send an actual X11 scroll press")) return false;
-        if (!state_->checked(xcb_test_fake_input_checked(state_->connection, XCB_BUTTON_RELEASE, button, XCB_CURRENT_TIME,
-                state_->screen->root, 0, 0, 0), "Send an actual X11 scroll release")) return false;
-    }
-    state_->failure.clear(); return true;
+    return state_->wheel(steps);
 }
+bool X11Capture::scrollAtPointer(const X11Rectangle& selection, int steps)
+{
+    const X11SignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    state_->scrollPaused = false;
+    if (!state_->connected() || !state_->screen) return false;
+    const auto pointer = reply(xcb_query_pointer_reply(state_->connection, xcb_query_pointer(state_->connection, state_->screen->root), nullptr));
+    if (!pointer || !pointer->same_screen) return state_->fail("The current X11 scrolling target is unavailable");
+    const auto target = pointer->child ? pointer->child : state_->screen->root;
+    if (!state_->scrollTarget) {
+        if (pointer->root_x < selection.x || pointer->root_y < selection.y ||
+            std::int64_t(pointer->root_x) >= std::int64_t(selection.x) + selection.width ||
+            std::int64_t(pointer->root_y) >= std::int64_t(selection.y) + selection.height) {
+            state_->scrollPaused = true; return state_->fail("Move the pointer into the selected scrolling region to start");
+        }
+        state_->scrollTarget = target;
+    }
+    if (target != state_->scrollTarget) {
+        state_->scrollPaused = true; return state_->fail("Move the pointer back over the scrolling target to continue");
+    }
+    return state_->wheel(steps);
+}
+bool X11Capture::scrollPaused() const noexcept { return state_->scrollPaused; }
 std::span<const std::uint8_t> X11Capture::pixels() const noexcept { return state_->image; }
 int X11Capture::width() const noexcept { return state_->width; }
 int X11Capture::height() const noexcept { return state_->height; }

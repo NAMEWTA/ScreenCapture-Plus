@@ -5,6 +5,7 @@
 #include "app/LanController.h"
 #include "app/MediaWorkspace.h"
 #include "app/RecordingWorkspace.h"
+#include "app/ScrollWorkspace.h"
 #include "app/SettingsController.h"
 #include "app/Version.h"
 #include "services/config/SettingsStore.h"
@@ -13,11 +14,15 @@
 #include "services/desktop/WindowActivation.h"
 #include "services/files/QtPaths.h"
 #include "services/localization/LanguageCatalog.h"
+#include "services/localization/QtTranslations.h"
 #include "services/media/GifInspection.h"
 #include "services/media/VideoInspection.h"
+#include "services/update/Installation.h"
+#include "services/update/UpdateService.h"
 #include "ui/qt/DesktopTheme.h"
 #include "ui/qt/HistoryWindow.h"
 #include "ui/qt/TransferWindow.h"
+#include "ui/qt/UpdatePresentation.h"
 #ifdef Q_OS_WIN
 #include "platform/windows/DesktopSession.h"
 #endif
@@ -46,9 +51,11 @@
 #include <QWindow>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <limits>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -81,6 +88,9 @@ namespace {
 namespace ui = HuhuCapture::UI::Qt;
 
 QString brand() { return QString::fromWCharArray(Brand::name.data(), static_cast<qsizetype>(Brand::name.size())); }
+QString versionText() { return QString::fromUtf8(Version::text.data(), static_cast<qsizetype>(Version::text.size())); }
+qint64 updateDay()
+{ return std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now()).time_since_epoch().count(); }
 
 struct Paths {
     QString settings, data, runtime, scope, executable;
@@ -209,6 +219,7 @@ struct QtApplication::State {
     std::unique_ptr<SingleInstance> instance;
     std::unique_ptr<Config::SettingsStore> store;
     std::unique_ptr<Localization::LanguageCatalog> catalog;
+    std::unique_ptr<Localization::QtTranslations> qtTranslations;
     std::shared_ptr<Media::MediaArchiveService> archive;
     std::unique_ptr<Desktop::SystemClipboard> clipboard;
     std::unique_ptr<Desktop::FileRevealer> revealer;
@@ -217,25 +228,36 @@ struct QtApplication::State {
     std::unique_ptr<LanController> lan;
     std::unique_ptr<CaptureWorkspace> capture;
     std::unique_ptr<RecordingWorkspace> recording;
+    std::unique_ptr<ScrollWorkspace> scroll;
     std::unique_ptr<Desktop::WindowActivation> activation;
+    std::unique_ptr<Updates::UpdateService> updates;
     std::unique_ptr<QMenu> trayMenu;
     std::unique_ptr<QSystemTrayIcon> tray;
     std::array<QAction*, 5> menuActions{};
     std::unique_ptr<EntryWindow> entry;
     QPointer<QMessageBox> errorDialog;
+    QPointer<QMessageBox> updatePrompt;
     std::deque<QString> errors;
     QSet<quint64> directoryRequests;
     QTimer trayWatch;
+    QTimer updateCheckTimer, updatePromptTimer;
+    qint64 updateAttemptedDay{(std::numeric_limits<qint64>::min)()};
+    QString promptedUpdateVersion;
     quint64 activationRequest{};
     bool checkQueued{}, journeyFinished{}, trayAvailable{};
-    bool settingsStopped{true}, lanStopped{true}, recordingStopped{true}, captureStopped{true}, mediaStopping{};
+    bool settingsStopped{true}, lanStopped{true}, recordingStopped{true}, scrollStopped{true}, captureStopped{true}, mediaStopping{};
+    bool updatesStopped{true};
     bool clipboardStopping{}, clipboardStopped{true};
     bool errorQueued{}, exitEmitted{}, keepClipboard{};
     int exitCode{};
 
     State(QtApplication* parent, QApplication& app, ApplicationOptions configuration)
         : owner(parent), application(app), options(std::move(configuration))
-    { trayWatch.setInterval(2000); }
+    {
+        trayWatch.setInterval(2000);
+        updateCheckTimer.setSingleShot(true); updateCheckTimer.setInterval(15000);
+        updatePromptTimer.setSingleShot(true); updatePromptTimer.setInterval(5000);
+    }
 
     QString text(QStringView key) const { return catalog ? catalog->text(key) : key.toString(); }
     bool stopping() const { return phase == ApplicationPhase::Draining || phase == ApplicationPhase::ClipboardOwner || phase == ApplicationPhase::Stopped; }
@@ -337,16 +359,118 @@ struct QtApplication::State {
 
     void refreshLanguage()
     {
+        if (qtTranslations) {
+            const bool standardDialogsAvailable = qtTranslations->load(catalog->effectiveCode());
+            if (settings) settings->setStandardDialogLanguageAvailable(standardDialogsAvailable);
+        }
         const auto translate = translator();
         if (media) media->setTranslator(translate);
         if (capture) capture->setTranslator(translate);
         if (recording) recording->setTranslator(translate);
+        if (scroll) scroll->setTranslator(translate);
         if (lan) lan->setTranslator(translate);
         if (trayMenu) {
             constexpr std::array keys{u"shortcut.runCapture", u"clipboard.title", u"tray.setting", u"lan.settings", u"tray.exit"};
             for (std::size_t index = 0; index < keys.size(); ++index) menuActions[index]->setText(text(keys[index]));
         }
+        if (updatePrompt && updates) updatePrompt->setText(updatePromptText());
         refreshEntry();
+    }
+
+    bool updateIdle() const
+    {
+        return phase == ApplicationPhase::Running && !initial.oneShot &&
+            !errorDialog && errors.empty() && !QApplication::activeModalWidget() && !QApplication::activePopupWidget() &&
+            !hasVisibleJourney() && (!capture || !capture->busy()) && (!recording || !recording->busy()) &&
+            (!scroll || !scroll->busy()) &&
+            (!media || !media->busy()) && (!clipboard || !clipboard->busy()) && (!revealer || !revealer->busy()) &&
+            (!settings || !settings->busy()) && (!lan || (!lan->busy() && !lan->service().hasActiveTransfers()));
+    }
+    bool updateCheckDue() const
+    {
+        if (!updates || !store || initial.oneShot) return false;
+        const auto today = updateDay();
+        return updateAttemptedDay < today &&
+            store->value({QStringLiteral("common"), QStringLiteral("updateCheckDay")}).toInteger(0) < today;
+    }
+    void rememberUpdateAttempt()
+    {
+        updateAttemptedDay = updateDay();
+        const auto saved = store->setValue({QStringLiteral("common"), QStringLiteral("updateCheckDay")},
+            QJsonValue(static_cast<double>(updateAttemptedDay)));
+        // The task may continue after a preference-write failure, but cannot
+        // rewrite stale settings or retry silently on every idle notification.
+        if (!saved.ok()) report(text(u"setting.saveFailed") + QStringLiteral("\n") + saved.detail);
+    }
+    void considerAutomaticUpdate()
+    {
+        if (!updateCheckDue() || !updateIdle() || updates->busy()) { updateCheckTimer.stop(); return; }
+        if (!updateCheckTimer.isActive()) updateCheckTimer.start();
+    }
+    void checkUpdateWhenIdle()
+    {
+        if (!updateCheckDue() || !updateIdle() || updates->busy()) return;
+        if (updates->check()) { promptedUpdateVersion.clear(); rememberUpdateAttempt(); }
+    }
+    QString updatePromptText() const
+    {
+        return text(u"update.found") + QStringLiteral(" v") + updates->snapshot().version +
+            QStringLiteral("\n\n") + text(u"update.promptPackageDownload");
+    }
+    void promptForUpdate()
+    {
+        if (!updates || stopping() || updates->snapshot().stage != Updates::Stage::Available || updatePrompt ||
+            promptedUpdateVersion == updates->snapshot().version) return;
+        if (!updateIdle()) { updatePromptTimer.start(); return; }
+        promptedUpdateVersion = updates->snapshot().version;
+        auto* dialog = new QMessageBox(QMessageBox::Information, brand(), updatePromptText(), QMessageBox::Yes | QMessageBox::No);
+        dialog->setObjectName(QStringLiteral("applicationUpdateAvailable")); dialog->setTextFormat(Qt::PlainText);
+        dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->setWindowModality(Qt::NonModal);
+        dialog->setDefaultButton(QMessageBox::No); dialog->setEscapeButton(QMessageBox::No);
+        updatePrompt = dialog;
+        QObject::connect(dialog, &QDialog::finished, owner, [this](int answer) {
+            updatePrompt.clear();
+            if (answer == QMessageBox::Yes && phase == ApplicationPhase::Running) downloadUpdate();
+            scheduleCheck();
+        });
+        dialog->open();
+    }
+    void downloadUpdate()
+    {
+        if (phase != ApplicationPhase::Running || !updates || updates->busy()) return;
+        updateCheckTimer.stop(); updatePromptTimer.stop();
+        if (updatePrompt) updatePrompt->reject();
+        if (updates->download()) rememberUpdateAttempt();
+    }
+    void setupUpdates()
+    {
+#ifdef Q_OS_WIN
+        const auto installation = Updates::readInstallation(QCoreApplication::applicationDirPath(), versionText(), u"windows", u"x64");
+#else
+        const auto installation = Updates::readInstallation(QCoreApplication::applicationDirPath(), versionText(), u"linux", u"amd64");
+#endif
+        if (!installation.packageKind) {
+            ui::AboutUpdateSnapshot unavailable; unavailable.stage = ui::UpdateStage::Unavailable;
+            settings->setUpdateSnapshot(unavailable); return;
+        }
+        Updates::Options configuration;
+        configuration.downloadsDirectory = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        configuration.currentVersion = versionText(); configuration.packageKind = *installation.packageKind;
+        updates = std::make_unique<Updates::UpdateService>(std::move(configuration), owner);
+        QObject::connect(updates.get(), &Updates::UpdateService::changed, owner, [this](const Updates::Snapshot& value) {
+            settings->setUpdateSnapshot(ui::aboutUpdateSnapshot(value));
+            if (value.stage == Updates::Stage::Available && !stopping() && !updatePromptTimer.isActive()) updatePromptTimer.start();
+            else if (value.stage != Updates::Stage::Available) updatePromptTimer.stop();
+            scheduleCheck();
+        });
+        QObject::connect(updates.get(), &Updates::UpdateService::shutdownFinished, owner, [this] { updatesStopped = true; scheduleCheck(); });
+        QObject::connect(&updateCheckTimer, &QTimer::timeout, owner, [this] { checkUpdateWhenIdle(); });
+        QObject::connect(&updatePromptTimer, &QTimer::timeout, owner, [this] { promptForUpdate(); });
+        QObject::connect(settings.get(), &SettingsController::downloadRequested, owner, [this] { downloadUpdate(); });
+        QObject::connect(settings.get(), &SettingsController::openUpdateFolderRequested, owner, [this](const QString& path) {
+            if (updates && !path.isEmpty() && path == updates->snapshot().file) openDirectory(QFileInfo(path).absolutePath());
+        });
+        settings->setUpdateSnapshot(ui::aboutUpdateSnapshot(updates->snapshot()));
     }
     void refreshEntry()
     {
@@ -409,7 +533,7 @@ struct QtApplication::State {
         });
         trayAvailable = QSystemTrayIcon::isSystemTrayAvailable();
         tray->show();
-        QObject::connect(&trayWatch, &QTimer::timeout, owner, [this] { inspectTray(); });
+        QObject::connect(&trayWatch, &QTimer::timeout, owner, [this] { inspectTray(); scheduleCheck(); });
         trayWatch.start();
         if (!trayAvailable) showEntry();
     }
@@ -432,6 +556,7 @@ struct QtApplication::State {
         const auto language = catalog->load(selectedLanguage.isEmpty() ? QStringLiteral("en-US") : selectedLanguage);
         if (!language.usable) { fatal(text(u"setting.languageFailed")); return false; }
         if (language.fellBack) report(text(u"setting.languageFallback"));
+        qtTranslations = std::make_unique<Localization::QtTranslations>();
         archive = std::make_shared<Media::MediaArchiveService>(Media::MediaArchiveService::defaultDirectory(),
             [](const QString& path, Media::Kind kind, std::stop_token stop) {
                 if (kind == Media::Kind::Gif) return Media::inspectGif(path, {}, stop);
@@ -464,12 +589,20 @@ struct QtApplication::State {
         });
         QObject::connect(capture.get(), &CaptureWorkspace::shutdownFinished, owner, [this] { captureStopped = true; scheduleCheck(); });
         recording = std::make_unique<RecordingWorkspace>(archive, *media, *capture,
-            std::move(options.recordingBackend), options.recordingCapabilities, owner);
+            std::move(options.recordingBackend), options.recordingCapabilities,
+            std::move(options.liveRecordingBackend), owner);
         QObject::connect(recording.get(), &RecordingWorkspace::busyChanged, owner, [this] { scheduleCheck(); });
         QObject::connect(recording.get(), &RecordingWorkspace::operationFailed, owner,
             [this](const QString& message) { report(message); });
         QObject::connect(recording.get(), &RecordingWorkspace::shutdownFinished, owner, [this] {
             recordingStopped = true; stopMedia(); scheduleCheck();
+        });
+        scroll = std::make_unique<ScrollWorkspace>(*media, *capture, owner);
+        QObject::connect(scroll.get(), &ScrollWorkspace::busyChanged, owner, [this] { scheduleCheck(); });
+        QObject::connect(scroll.get(), &ScrollWorkspace::operationFailed, owner,
+            [this](const QString& message) { report(message); });
+        QObject::connect(scroll.get(), &ScrollWorkspace::shutdownFinished, owner, [this] {
+            scrollStopped = true; stopMedia(); scheduleCheck();
         });
         activation = std::make_unique<Desktop::WindowActivation>(owner);
         QObject::connect(QGuiApplication::clipboard(), &QClipboard::changed, owner, [this](QClipboard::Mode mode) {
@@ -500,9 +633,8 @@ struct QtApplication::State {
                 if (phase == ApplicationPhase::Running && lan) lan->openTransfers(entries);
             });
             settings->setArchiveDirectory(archive->directory()); settings->setLanAvailable(true); settings->setLinksAvailable(true);
-            settings->setApplicationVersion(QString::fromUtf8(Version::text.data(), static_cast<qsizetype>(Version::text.size())));
-            // A real UpdateService will supply its own snapshots and actions.
-            // The default about snapshot leaves downloads disabled.
+            settings->setApplicationVersion(versionText());
+            setupUpdates();
         }
         refreshLanguage();
         return true;
@@ -515,6 +647,7 @@ struct QtApplication::State {
             if (!initial.oneShot) {
                 settings->initialize(); lan->initialize(); media->setSendAvailable(lan->available());
                 setupTray(); refreshLanguage();
+                scheduleCheck();
             }
             if (!initial.background) {
                 if (!startJourney(initial.entry)) {
@@ -548,14 +681,15 @@ struct QtApplication::State {
     void check()
     {
         if (phase == ApplicationPhase::Running) {
+            if (!initial.oneShot) considerAutomaticUpdate();
             if (initial.oneShot && journeyFinished && capture && !capture->busy() &&
-                (!recording || !recording->busy()) && media && !media->busy() &&
+                (!recording || !recording->busy()) && (!scroll || !scroll->busy()) && media && !media->busy() &&
                 !clipboard->busy() && !revealer->busy() && errors.empty() && !errorDialog && !hasVisibleJourney())
                 owner->requestQuit();
             return;
         }
         if (phase != ApplicationPhase::Draining) return;
-        if (!settingsStopped || !lanStopped || !recordingStopped || !captureStopped) return;
+        if (!settingsStopped || !lanStopped || !recordingStopped || !scrollStopped || !captureStopped || !updatesStopped) return;
         if ((media && media->busy()) || (revealer && revealer->busy())) return;
         if (clipboard && !clipboardStopping) {
             clipboardStopping = true; clipboardStopped = false;
@@ -567,7 +701,7 @@ struct QtApplication::State {
     }
     void stopMedia()
     {
-        if (phase != ApplicationPhase::Draining || !recordingStopped || mediaStopping) return;
+        if (phase != ApplicationPhase::Draining || !recordingStopped || !scrollStopped || mediaStopping) return;
         mediaStopping = true;
         captureStopped = !capture;
         if (capture) capture->shutdown();
@@ -585,15 +719,19 @@ struct QtApplication::State {
         setPhase(ApplicationPhase::Draining);
         if (instance) instance->stopAccepting();
         trayWatch.stop(); if (trayMenu) trayMenu->setEnabled(false);
+        updateCheckTimer.stop(); updatePromptTimer.stop();
+        if (updatePrompt) updatePrompt->reject();
         if (activation && activationRequest) activation->cancel(activationRequest);
         refreshEntry();
-        settingsStopped = !settings; lanStopped = !lan; recordingStopped = !recording;
+        settingsStopped = !settings; lanStopped = !lan; recordingStopped = !recording; scrollStopped = !scroll; updatesStopped = !updates;
         if (settings) settings->shutdown();
         if (lan) lan->shutdown();
+        if (updates) updates->shutdown();
         // Active recording finishes or retains its owned recovery file before
         // capture cancellation can issue any live-action cancel/discard signal.
         if (recording) recording->shutdown();
-        else stopMedia();
+        if (scroll) scroll->shutdown();
+        stopMedia();
         scheduleCheck();
     }
     void finishExit(bool explicitlyReleaseClipboard)
@@ -629,8 +767,10 @@ QtApplication::~QtApplication()
     state_->application.removeEventFilter(this);
     if (state_->instance) state_->instance->stopAccepting();
     state_->trayWatch.stop();
+    state_->updateCheckTimer.stop(); state_->updatePromptTimer.stop();
     for (auto* service : children()) disconnect(service, nullptr, this, nullptr);
     if (state_->errorDialog) { disconnect(state_->errorDialog, nullptr, this, nullptr); delete state_->errorDialog; }
+    if (state_->updatePrompt) { disconnect(state_->updatePrompt, nullptr, this, nullptr); delete state_->updatePrompt; }
     if (state_->tray) { state_->tray->hide(); state_->tray->setContextMenu(nullptr); }
     // Normal exit has already drained the services. Their destructors retain
     // the last-resort resource barriers for abnormal owner destruction.
@@ -670,7 +810,7 @@ bool QtApplication::eventFilter(QObject* watched, QEvent* event)
     if (watched == &state_->application && event->type() == QEvent::Quit && state_->phase != ApplicationPhase::Stopped) {
         requestQuit(); return true;
     }
-    if (state_->initial.oneShot && (event->type() == QEvent::Close || event->type() == QEvent::Hide || event->type() == QEvent::Destroy))
+    if (event->type() == QEvent::Close || event->type() == QEvent::Hide || event->type() == QEvent::Destroy || event->type() == QEvent::Show)
         state_->scheduleCheck();
     return QObject::eventFilter(watched, event);
 }

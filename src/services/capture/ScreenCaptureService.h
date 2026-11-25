@@ -14,6 +14,7 @@ struct CaptureCapabilities {
     Capability windowSelection;
     Capability desktopCoordinates;
     Capability cursorWarp;
+    Capability automaticScroll;
     QString backend; // diagnostic identity; the host owns localized UI wording
 };
 
