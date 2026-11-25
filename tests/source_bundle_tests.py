@@ -219,6 +219,100 @@ class SourceBundleTests(unittest.TestCase):
         self.assertEqual(bundle.validate_vendor(vendor, lock, None, {}, gaps), [])
         self.assertEqual(gaps, ["rust-vendor:absent@2.0.0: locked package source is missing"])
 
+    def test_pinned_cargo_registry_filter_has_exact_path_boundaries(self):
+        omitted = (".git", ".git/config", "nested/.git/HEAD", ".gitignore", "nested/.gitignore",
+                   ".gitattributes", "nested/.gitattributes", ".cargo-ok")
+        retained = (".GIT/config", ".Gitignore", "nested/.Gitattributes", "nested/.cargo-ok",
+                    ".cargo_vcs_info.json", ".github/workflows/ci.yml", ".gitignored", ".gitignore/source.rs",
+                    ".cargo-ok/source.rs", "src/lib.rs", "LICENSE")
+        for name in omitted:
+            with self.subTest(omitted=name):
+                self.assertFalse(bundle.cargo_registry_vendor_file(name))
+        for name in retained:
+            with self.subTest(retained=name):
+                self.assertTrue(bundle.cargo_registry_vendor_file(name))
+        # The comparison filter does not relax the general archive safety gate.
+        archive = self.root / "administrative.crate"
+        source_archive(archive, {".git/config": "administrative data"})
+        with self.assertRaisesRegex(ValueError, "Git administrative data"):
+            bundle.extract_tar(archive, self.root / "unsafe", "crate-1.0.0")
+
+    def test_registry_vendor_checks_all_retained_bytes_after_fixed_cargo_filtering(self):
+        vendor, cache = self.root / "vendor", self.root / "cache"
+        vendor.mkdir()
+        cache.mkdir()
+        crate = vendor / "crate-1.0.0"
+        kept = {"Cargo.toml": '[package]\nname="crate"\nversion="1.0.0"\nlicense="MIT"\n',
+                "src/lib.rs": "pub fn original() {}\n", "LICENSE": "Original test license\n",
+                ".cargo_vcs_info.json": '{"git":{"sha1":"' + "1" * 40 + '"}}\n',
+                ".github/workflows/ci.yml": "name: Contract fixture\n", "nested/.cargo-ok": "nested source\n",
+                "nested/.Gitignore": "Case-sensitive source\n"}
+        omitted = {".gitignore": "target/\n", "nested/.gitattributes": "*.rs text\n", ".cargo-ok": "marker\n"}
+        archive = cache / "crate-1.0.0.crate"
+        source_archive(archive, {**kept, **omitted})
+        original_archive = archive.read_bytes()
+        lock = self.root / "Cargo.lock"
+        write(lock, 'version=4\n[[package]]\nname="crate"\nversion="1.0.0"\n'
+                    'source="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="' + bundle.digest(archive) + '"\n')
+
+        def provide(files):
+            if crate.exists():
+                shutil.rmtree(crate)
+            for name, value in files.items():
+                write(crate / name, value)
+            write_json(crate / ".cargo-checksum.json", {
+                "package": bundle.digest(archive),
+                "files": {name: hashlib.sha256(value.encode()).hexdigest() for name, value in files.items()},
+            })
+
+        # This is an explicit archive/directory contract fixture, not a claim
+        # that the test executes Cargo. Both original and retained views are real.
+        provide(kept)
+        gaps = []
+        self.assertEqual(len(bundle.validate_vendor(vendor, lock, cache, {}, gaps)), 1)
+        self.assertEqual(gaps, [])
+        self.assertEqual(archive.read_bytes(), original_archive)
+        stage = self.root / "retained"
+        stage.mkdir()
+        collector = bundle.Collector({"rustVendor": {"directory": str(vendor), "registryCache": str(cache)}},
+                                     self.root, stage)
+        collector.cargo_lock = lock
+        collector.lock = {"qtMigration": {"rustToolchain": "unverified-next-toolchain"}}
+        with self.assertRaisesRegex(ValueError, "pinned to Cargo 1.97.1"):
+            collector.collect_rust()
+        collector.lock["qtMigration"]["rustToolchain"] = "1.97.1"
+        collector.collect_rust()
+        source = collector.components["rust-vendor"]["source"]
+        self.assertEqual(source["registryComparisonPolicy"]["cargoVersion"], source["toolchain"])
+        self.assertEqual(source["registryComparisonPolicy"]["cargoCommit"], "c980f4866141969fab6254a680546a277789d6f0")
+        self.assertEqual((stage / source["registryArchives"][0]["archive"]["path"]).read_bytes(), original_archive)
+        self.assertNotIn("replay", source)
+        self.assertIn("rust-vendor: actual offline replay with the pinned Cargo toolchain is missing", collector.gaps)
+        for name in ("src/lib.rs", "LICENSE", ".cargo_vcs_info.json", "nested/.cargo-ok"):
+            with self.subTest(missing=name):
+                provide({key: value for key, value in kept.items() if key != name})
+                with self.assertRaisesRegex(ValueError, "missing=1") as error:
+                    bundle.validate_vendor(vendor, lock, cache, {}, [])
+                self.assertIn(repr(name), str(error.exception))
+        for name in ("src/lib.rs", "nested/.Gitignore"):
+            with self.subTest(changed=name):
+                provide({**kept, name: "Rewritten bytes and checksum\n"})
+                with self.assertRaisesRegex(ValueError, "changed=1") as error:
+                    bundle.validate_vendor(vendor, lock, cache, {}, [])
+                self.assertIn(repr(name), str(error.exception))
+        for name in (".gitignore", "unexpected.rs"):
+            with self.subTest(unexpected=name):
+                provide({**kept, name: "Not in the fixed vendor view\n"})
+                with self.assertRaisesRegex(ValueError, "unexpected=1") as error:
+                    bundle.validate_vendor(vendor, lock, cache, {}, [])
+                self.assertIn(repr(name), str(error.exception))
+        provide({**kept, **{f"extra-{index:02d}.rs": "extra\n" for index in range(12)}})
+        with self.assertRaisesRegex(ValueError, "unexpected=12") as error:
+            bundle.validate_vendor(vendor, lock, cache, {}, [])
+        self.assertIn("extra-04.rs", str(error.exception))
+        self.assertNotIn("extra-05.rs", str(error.exception))
+        self.assertEqual(archive.read_bytes(), original_archive)
+
     def test_unsafe_and_duplicate_archive_entries_are_rejected(self):
         for index, member in enumerate(("../outside.c", "/absolute.c", "a/../../outside.c")):
             archive = self.root / (str(index) + ".tar")

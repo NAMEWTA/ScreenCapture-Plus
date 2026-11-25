@@ -24,6 +24,10 @@ IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9._+-]{0,95}\Z")
 MAX_FILE = 2 * 1024**3
 MAX_TREE = 32 * 1024**3
 MAX_FILES = 500_000
+CARGO_REGISTRY_VENDOR_TOOLCHAIN = "1.97.1"
+CARGO_REGISTRY_VENDOR_COMMIT = "c980f4866141969fab6254a680546a277789d6f0"
+CARGO_REGISTRY_VENDOR_SOURCE = ("https://github.com/rust-lang/cargo/blob/" +
+                                CARGO_REGISTRY_VENDOR_COMMIT + "/src/cargo/ops/vendor.rs")
 COMMON = {"huhucapture", "localsend", "gifski", "rust-vendor", "rust-toolchain-source", "ffmpeg",
           "qtbase", "qtsvg", "qttranslations"}
 APPIMAGE_STATIC_SOURCES = {"appimage-musl", "appimage-fuse", "appimage-squashfuse", "appimage-zstd",
@@ -378,6 +382,16 @@ def license_files(root, files=None):
              "LICENSES" in (part.upper() for part in Path(entry["path"]).parts)) and entry["size"]]
 
 
+def cargo_registry_vendor_file(path):
+    # Match vendor_this in the locked Cargo 1.97.1 registry unpack operation:
+    # https://github.com/rust-lang/cargo/blob/c980f4866141969fab6254a680546a277789d6f0/src/cargo/ops/vendor.rs
+    # This is only the comparison view. Original .crate bytes remain retained,
+    # and the existing archive/path safety checks still run before this filter.
+    relative_path = PurePosixPath(path)
+    return (".git" not in relative_path.parts and
+            relative_path.name not in (".gitattributes", ".gitignore") and path != ".cargo-ok")
+
+
 def validate_vendor(vendor, cargo_lock, registry_cache, git_sources, gaps, external_licenses=None):
     packages = tomllib.loads(cargo_lock.read_text(encoding="utf-8"))["package"]
     wanted = {(p["name"], p["version"]): p for p in packages if p.get("source")}
@@ -411,10 +425,19 @@ def validate_vendor(vendor, cargo_lock, registry_cache, git_sources, gaps, exter
                 require(digest(archive) == locked["checksum"], f"Registry archive differs from Cargo.lock: {key}")
                 with tempfile.TemporaryDirectory(prefix="huhucapture-crate-") as temp:
                     original = extract_tar(archive, Path(temp), key[0] + "-" + key[1])
-                    actual = [{k: v for k, v in p.items() if k != "mode"} for p in by_path.values()]
-                    expected = [{k: v for k, v in p.items() if k != "mode"} for p in original]
-                    require(sorted(actual, key=lambda p: p["path"]) == expected,
-                            f"Vendored bytes differ from the locked registry archive: {key}")
+                    actual = {p["path"]: {k: v for k, v in p.items() if k != "mode"} for p in by_path.values()}
+                    expected = {p["path"]: {k: v for k, v in p.items() if k != "mode"} for p in original
+                                if cargo_registry_vendor_file(p["path"])}
+                    if actual != expected:
+                        differences = (
+                            ("missing", sorted(expected.keys() - actual.keys())),
+                            ("unexpected", sorted(actual.keys() - expected.keys())),
+                            ("changed", sorted(name for name in actual.keys() & expected.keys()
+                                               if actual[name] != expected[name])),
+                        )
+                        detail = "; ".join(f"{label}={len(paths)} {[name[:160] for name in paths[:5]]!r}"
+                                           for label, paths in differences)
+                        raise ValueError(f"Vendored bytes differ from the locked registry archive: {key}; {detail}")
         elif locked["source"].startswith("git+"):
             require(checksum.get("package") is None, "Git vendor packages must not claim a registry checksum")
             commit = locked["source"].rsplit("#", 1)[-1]
@@ -747,6 +770,9 @@ class Collector:
         if not specification:
             self.gap("rust-vendor: full locked Cargo directory source and registry archives are missing")
             return
+        require(self.lock["qtMigration"]["rustToolchain"] == CARGO_REGISTRY_VENDOR_TOOLCHAIN,
+                "Registry vendor comparison is pinned to Cargo " + CARGO_REGISTRY_VENDOR_TOOLCHAIN +
+                "; the locked toolchain needs its own verified comparison policy")
         vendor = self.path(specification["directory"])
         expected = inventory(vendor)
         git_sources = {value["source"]["commit"]: self.stage / value["path"] for value in self.components.values()
@@ -766,7 +792,10 @@ class Collector:
         destination = self.sources / "rust-vendor"
         copy_verified_tree(vendor, destination, expected)
         provenance = {"kind": "cargo-vendor", "cargoLockSha256": digest(self.cargo_lock),
-                      "packages": records, "toolchain": self.lock["qtMigration"]["rustToolchain"]}
+                      "packages": records, "toolchain": self.lock["qtMigration"]["rustToolchain"],
+                      "registryComparisonPolicy": {"cargoVersion": CARGO_REGISTRY_VENDOR_TOOLCHAIN,
+                                                   "cargoCommit": CARGO_REGISTRY_VENDOR_COMMIT,
+                                                   "source": CARGO_REGISTRY_VENDOR_SOURCE}}
         archives = []
         if cache:
             for index, package in enumerate(records):

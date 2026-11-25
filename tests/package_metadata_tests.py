@@ -81,7 +81,7 @@ class MetadataBoundaries(unittest.TestCase):
             compiler,environment,evidence=packager.prepare_nsis(
                 ROOT/'artifacts/packaging-tools/nsis/nsis-3.11-setup.exe',workspace)
             self.assertEqual(evidence['version'],'v3.11')
-            self.assertEqual(compiler,Path(environment['NSISDIR'])/'Bin/makensis.exe')
+            self.assertTrue(compiler.samefile(Path(environment['NSISDIR'])/'Bin/makensis.exe'))
             self.assertEqual(len(evidence['compilerCandidates']),2)
             self.assertEqual(evidence['sha256'],metadata.sha256(compiler))
             unexpected=workspace/'nsis/unexpected/makensis.exe';unexpected.parent.mkdir()

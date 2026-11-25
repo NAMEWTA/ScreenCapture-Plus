@@ -124,6 +124,12 @@ cargo +1.97.1 vendor --locked --offline --versioned-dirs \
 
 收集器逐个检查所有锁中远端包，包括其他平台的锁定包。每个包名、版本、来源、`.cargo-checksum.json` 文件集合与内容必须匹配。注册表包还必须提供原始 `.crate`：先核对整个原始档案的 Cargo.lock SHA256，再解出并与 vendor 比较，防止修改源文件后同时改写目录校验清单。原始 `.crate` 与 vendor 都进入最终档案。只提供 `.cargo-checksum.json` 而没有原始档案会留下明确缺项。
 
+注册表的比较视图遵循实际固定 Cargo 1.97.1 的 [`vendor_this` 规则](https://github.com/rust-lang/cargo/blob/c980f4866141969fab6254a680546a277789d6f0/src/cargo/ops/vendor.rs)：大小写精确的 `.git` 路径组件、任意层级文件名为 `.gitignore` 或 `.gitattributes` 的条目，以及包根的 `.cargo-ok` 不进入 vendor。普通隐藏文件、`.cargo_vcs_info.json`、`.github/` 下源码和嵌套的 `nested/.cargo-ok` 仍须逐字节匹配；不采用统一的隐藏文件忽略规则。原始 tar 完整保留，过滤只用于比较预期文件集合，不改写归档或目录校验清单。通用解包器仍先拒绝 `.git` 管理路径和其他不安全成员，这项兼容处理没有扩展可接受的源档案范围。
+
+`rust-vendor` 的 `registryComparisonPolicy` 记录该规则对应的 Cargo 1.97.1、完整提交和官方源码地址；提供 vendor 时，项目锁中的工具链必须与此策略一致。新工具链需要重新核对实际规则，不能继续沿用旧策略却记录成另一版本。这一字段记录比较依据，不代表收集器实际执行了 Cargo，也不是离线重做 receipt。
+
+剩余项的缺失、额外文件或字节变化都使收集失败，即使同时重写 `.cargo-checksum.json` 也不能通过。诊断分别列出三类差异的总数、每类最多五个路径及每个路径最多 160 个字符，便于核对真实失败而不输出整个源码树。这些注册表比较规则不替代许可证、固定 Cargo 离线 replay 或静态来源闭包要求。
+
 gifski 的完整固定 Git 源码也必须提供；vendor 中源文件与该检出逐字节比较。Cargo.toml 的转换另由实际固定 Cargo 离线重做验证。`replay` 应使用明确的已安装 `cargo`、`rustc` 可执行文件，要求版本与主锁一致，并设置 `RUSTUP_AUTO_INSTALL=0`；即使误指向硬链接形式的 rustup proxy，也不能自动取得缺失工具链。它把所需缓存复制到新的临时目录，不使用原缓存作为可写工作区，再比较完整 vendor 输出。缺少重做证据时保留缺项，不生成虚构成功日志。
 
 `rust-toolchain-source` 是必需组件。Rust 的 `std`、`alloc`、panic/runtime、compiler-builtins 等静态输入不等于普通 Cargo vendor。应提供实际编译器对应的完整源码及子模块，或带真实 `git-commit-hash` 的固定官方源码档案；重做时从 `rustc --version --verbose` 取得完整提交并核对。原始工具链/标准库许可也必须保留。
