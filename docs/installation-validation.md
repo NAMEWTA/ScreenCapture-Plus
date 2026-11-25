@@ -54,20 +54,25 @@ Qt 6.12.1 的 [`QPlatformWindow::formatWindowTitle`](https://github.com/qt/qtbas
 `Screen capture` 不是实际系统标题。探针精确匹配平台格式，并继续核对进程归属、
 原始可执行文件 hash、包内模块和拖选后的像素；不以标题前缀接受任何产品窗口。
 
-提交 `24f94d403acfe82212c955729e6e34de16bce5b4` 的
-[完整应用 CI](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885695)
+提交 `659cc9d7f882e3fd1d92cdb6f2360ed2c31ab735` 的
+[完整应用 CI](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036685)
 已在 Ubuntu X11 runner 完成两种 Linux 包的上述旅程：DEB 安装、同包重装、
 移除与 purge，AppImage 免 FUSE 运行、同文件替换与移除；每种包首次和重装后
-均通过真实截图拖选、像素核对和正常退出。DEB 六个、AppImage 五个数据检查点
-保留原配置、未知字段及 PNG / MP4 字节。证据归档为该次运行的
+均通过真实截图拖选、像素核对和正常退出。四条 GUI 旅程共执行 16 个实际
+控制拒绝进程，全部返回 2 且未观察到产品窗口。DEB 六个、AppImage 五个
+数据检查点保留原配置、未知字段及 PNG / MP4 字节。证据归档为该次运行的
 `qt-application-linux`，其中 `installation-results.json` 保留全部实际路径和 hash。
-该 CI 的合并提交身份为 `59f4ae3b0444537d35b30b98dc9a7c3595e64538`，
-源码树与上述分支提交相同；没有改写产物中的真实构建身份。
+CI 的合并提交身份为 `7bf1f08908af6664fae81e04486b3eeee6ae7fcd`，源码树与
+上述分支提交相同；没有改写产物中的真实构建身份。
 
-同轮 Windows 完整产品和独立 GUI 探针已编译，但 Qt 原 SPDX 多配置重复记录
-校验、NSIS `File /oname` 参数语法使材料和安装器步骤失败，安装旅程未执行。
-修复后仍须在新的 Windows CI 执行。上文新增的四个控制进程拒绝检查也尚未
-包含在这轮已通过的 Linux 结果中，不能以旧旅程代替其新验收。
+同轮 Windows Server 2022 runner 已生成真实 NSIS 安装包和便携 ZIP。
+实际目录冲突检查非零退出并保留用户文件；正常安装仍返回 2，未完成安装登记。
+原 artifact 内有 760 个与包清单完整相同的程序文件，下一文件是完整安装路径
+长达 263 字符的 Rust 标准库通知，从该文件起共 417 个文件未安装。这与固定 NSIS 的
+普通 Win32 路径限制一致；它不表示程序已成功安装或运行。
+[工具链通知](rust-toolchain-materials.md)已改用保留来源映射的紧凑布局，完整
+许可原文保持不变。修正后的 NSIS 安装、DLL 占用下的重试/卸载和便携 ZIP
+旅程仍待新原生 CI，不通过缩短测试目录或开启全机长路径策略规避检查。
 
 ## 与完整应用 CI 相同的入口
 

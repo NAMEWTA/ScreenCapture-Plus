@@ -227,7 +227,7 @@ class QtOriginals(unittest.TestCase):
         _, files = qt_materials.sdk_spdx(materials, self.prefix, version)
         relative = 'plugins/platforms/qwindows.dll' if os.name == 'nt' else 'plugins/platforms/libqxcb.so'
         with tempfile.TemporaryDirectory() as directory:
-            prefix = Path(directory)
+            prefix = materials.real_directory(Path(directory))
             actual = prefix / relative; actual.parent.mkdir(parents=True)
             shutil.copyfile(self.prefix / relative, actual)
             self.assertEqual(qt_materials.original_sdk_file(materials, prefix, relative, files)['sha256'],

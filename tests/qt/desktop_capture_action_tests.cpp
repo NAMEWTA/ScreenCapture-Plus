@@ -17,10 +17,36 @@ void check(bool value, const char* message)
 }
 void environmentCases()
 {
-    for (const auto& value : {QByteArray(), QByteArray("bad"), QByteArray(32, '0'), QByteArray(32, 'g'), QByteArray(4096, 'a')}) {
+    check(qunsetenv(proofEnvironment), "Clear the real verification environment");
+    Core::StartupRequest absent;
+    absent.action = Core::StartupAction::FinishCapture;
+    check(!qEnvironmentVariableIsSet(proofEnvironment) &&
+        !Desktop::DesktopCaptureAction::applyProbeEnvironment(absent) &&
+        absent.action == Core::StartupAction::FinishCapture,
+        "An absent verification environment must preserve the ordinary finish request");
+
+    // Qt uses _putenv_s on Windows: setting an empty value removes the
+    // variable. POSIX setenv retains a present, empty value. Check the actual
+    // API state before applying the shared parser, rather than inventing input.
+    check(qputenv(proofEnvironment, QByteArray()), "Set the real empty verification environment");
+    Core::StartupRequest empty;
+    empty.action = Core::StartupAction::FinishCapture;
+#ifdef Q_OS_WIN
+    check(!qEnvironmentVariableIsSet(proofEnvironment) &&
+        !Desktop::DesktopCaptureAction::applyProbeEnvironment(empty) &&
+        empty.action == Core::StartupAction::FinishCapture,
+        "Windows empty qputenv must remove the variable and preserve FinishCapture");
+#else
+    check(qEnvironmentVariableIsSet(proofEnvironment) &&
+        bool(Desktop::DesktopCaptureAction::applyProbeEnvironment(empty)) &&
+        empty.action == Core::StartupAction::Invalid && !qEnvironmentVariableIsSet(proofEnvironment),
+        "A present empty verification environment must be rejected and consumed");
+#endif
+    for (const auto& value : {QByteArray("bad"), QByteArray(32, '0'), QByteArray(32, 'g'), QByteArray(4096, 'a')}) {
         Core::StartupRequest request;
         request.action = Core::StartupAction::FinishCapture;
-        qputenv(proofEnvironment, value);
+        check(qputenv(proofEnvironment, value) && qgetenv(proofEnvironment) == value,
+            "Set the actual malformed verification environment without changing its bytes");
         check(bool(Desktop::DesktopCaptureAction::applyProbeEnvironment(request)), "A malformed verification environment was accepted");
         check(request.action == Core::StartupAction::Invalid && !qEnvironmentVariableIsSet(proofEnvironment),
             "Malformed verification must not execute FinishCapture or leak its environment");

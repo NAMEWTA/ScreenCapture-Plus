@@ -106,6 +106,15 @@ def compiler_notice(relative):
             (path.parent.as_posix() == 'share/doc/rust' and original_notice(relative)))
 
 
+def notice_destination(output, family, archive_relative):
+    # Runtime notices do not need the source distribution's deeply nested
+    # layout. Retain the original basename and bind its full archive path in
+    # the report; compact, distinct directories also fit ordinary Windows
+    # installation paths without requiring a machine-wide long-path policy.
+    key = hashlib.sha256(archive_relative.encode('utf-8')).hexdigest()[:16]
+    return output / 'notices/rust-toolchain' / family / key / PurePosixPath(archive_relative).name
+
+
 def stream_member(stream, size, destination=None):
     digest, length = hashlib.sha256(), 0
     outgoing = None
@@ -187,7 +196,7 @@ def verify_distribution(spec, archive, identity, output, source_output):
                 materials.meta.require(member.size <= 32 * 1024 * 1024, 'Oversized original distribution metadata')
                 destination = metadata_directory / relative
             elif notice:
-                destination = output / 'notices/rust-toolchain' / family / (payload or relative)
+                destination = notice_destination(output, family, relative)
             incoming = package.extractfile(member)
             materials.meta.require(incoming is not None, 'The official Rust archive member cannot be read')
             with incoming:
@@ -199,11 +208,11 @@ def verify_distribution(spec, archive, identity, output, source_output):
             if is_root_metadata:
                 metadata[relative] = {'path': destination.relative_to(source_output).as_posix(), **digest}
                 if notice:
-                    target = output / 'notices/rust-toolchain' / family / relative
+                    target = notice_destination(output, family, relative)
                     materials.copy_original(destination, target)
-                    notices.append({'path': target.relative_to(output).as_posix(), **digest})
+                    notices.append({'path': target.relative_to(output).as_posix(), 'archivePath': relative, **digest})
             elif notice:
-                notices.append({'path': destination.relative_to(output).as_posix(), **digest})
+                notices.append({'path': destination.relative_to(output).as_posix(), 'archivePath': relative, **digest})
     materials.meta.require({'version', 'git-commit-hash', 'COPYRIGHT', 'LICENSE-APACHE', 'LICENSE-MIT'} <= metadata.keys(),
                            'The original Rust component lacks full version/commit/license overlay evidence')
     commit = (metadata_directory / 'git-commit-hash').read_text(encoding='utf-8').strip()

@@ -4,6 +4,7 @@
 #include <Windows.h>
 
 #include "recording/RecordingSession.h"
+#include "recording_evidence.h"
 #ifdef HUHUCAPTURE_GIF_RECORDING_PROBE
 #include "platform/windows/NativeGifRecording.h"
 #include "services/media/GifInspection.h"
@@ -148,15 +149,12 @@ std::shared_ptr<media::MediaArchiveService> archiveAt(const QString& path)
             return {{media::Error::Unsupported, QStringLiteral("The probe inspector does not handle the requested format")}, kind, {}, 0};
         });
 }
-QJsonObject resultJson(const recording::SessionResult& result)
+QJsonObject backendJson(const recording::BackendResult& result)
 {
     QJsonObject item;
-    item[QStringLiteral("token")] = static_cast<qint64>(result.token);
-    item[QStringLiteral("state")] = static_cast<int>(result.state);
-    item[QStringLiteral("intent")] = static_cast<int>(result.intent);
-    item[QStringLiteral("framesSubmitted")] = static_cast<qint64>(result.backend.media.framesWritten);
-    if (result.backend.media.sinkStatistics) {
-        const auto& statistics = *result.backend.media.sinkStatistics;
+    item[QStringLiteral("framesSubmitted")] = static_cast<qint64>(result.media.framesWritten);
+    if (result.media.sinkStatistics) {
+        const auto& statistics = *result.media.sinkStatistics;
         QJsonObject sink;
         sink[QStringLiteral("queryStatus")] = static_cast<qint64>(statistics.queryStatus);
         sink[QStringLiteral("samplesReceived")] = static_cast<qint64>(statistics.received);
@@ -173,10 +171,30 @@ QJsonObject resultJson(const recording::SessionResult& result)
         sink[QStringLiteral("captureEnd100ns")] = static_cast<qint64>(statistics.captureEnd);
         item[QStringLiteral("sinkStatistics")] = sink;
     }
-    item[QStringLiteral("finalized")] = result.backend.media.finalized;
-    item[QStringLiteral("stopRequested")] = result.backend.stopRequested;
-    item[QStringLiteral("durationLimitReached")] = result.backend.durationLimitReached;
-    item[QStringLiteral("elapsed100ns")] = static_cast<qint64>(result.backend.elapsed.count());
+    item[QStringLiteral("finalized")] = result.media.finalized;
+    item[QStringLiteral("stopRequested")] = result.stopRequested;
+    item[QStringLiteral("durationLimitReached")] = result.durationLimitReached;
+    item[QStringLiteral("elapsed100ns")] = static_cast<qint64>(result.elapsed.count());
+    if (result.media.firstError) {
+        item[QStringLiteral("nativeStage")] = static_cast<int>(result.media.firstError->stage);
+        item[QStringLiteral("nativeError")] = static_cast<qint64>(result.media.firstError->code);
+    }
+    if (result.prepared) {
+        const auto& ready = *result.prepared;
+        item[QStringLiteral("source")] = static_cast<int>(ready.source);
+        item[QStringLiteral("codec")] = static_cast<int>(ready.codec);
+        item[QStringLiteral("region")] = QJsonArray{ready.region.x, ready.region.y, ready.region.width, ready.region.height};
+        item[QStringLiteral("systemAudio")] = ready.systemAudio;
+        item[QStringLiteral("microphone")] = ready.microphone;
+    }
+    return item;
+}
+QJsonObject resultJson(const recording::SessionResult& result)
+{
+    auto item = backendJson(result.backend);
+    item[QStringLiteral("token")] = static_cast<qint64>(result.token);
+    item[QStringLiteral("state")] = static_cast<int>(result.state);
+    item[QStringLiteral("intent")] = static_cast<int>(result.intent);
     item[QStringLiteral("failure")] = result.failure.detail;
     item[QStringLiteral("archivePath")] = result.archive.path;
     item[QStringLiteral("archiveDurable")] = result.archive.durable();
@@ -186,18 +204,6 @@ QJsonObject resultJson(const recording::SessionResult& result)
         item[QStringLiteral("archiveEntryBytes")] = static_cast<qint64>(result.archivedEntry->snapshot.bytes);
     }
     item[QStringLiteral("recoveryPath")] = result.recoveryPath;
-    if (result.backend.media.firstError) {
-        item[QStringLiteral("nativeStage")] = static_cast<int>(result.backend.media.firstError->stage);
-        item[QStringLiteral("nativeError")] = static_cast<qint64>(result.backend.media.firstError->code);
-    }
-    if (result.backend.prepared) {
-        const auto& ready = *result.backend.prepared;
-        item[QStringLiteral("source")] = static_cast<int>(ready.source);
-        item[QStringLiteral("codec")] = static_cast<int>(ready.codec);
-        item[QStringLiteral("region")] = QJsonArray{ready.region.x, ready.region.y, ready.region.width, ready.region.height};
-        item[QStringLiteral("systemAudio")] = ready.systemAudio;
-        item[QStringLiteral("microphone")] = ready.microphone;
-    }
     return item;
 }
 QString digest(const QString& path)
@@ -464,6 +470,10 @@ int main(int argc, char** argv)
             completed->archive.path.isEmpty() && !completed->archivedEntry && completed->backend.media.canArchive(),
             "Shutdown must retain actual finalized staging instead of claiming it was saved or deleting it");
         try {
+            stopped[QStringLiteral("recoveryEvidence")] = HuhuCapture::Tests::retainRecordingEvidence(
+                completed->recoveryPath, run.path() + (gifProbe ?
+                    QStringLiteral("/retained-shutdown.gif") : QStringLiteral("/retained-shutdown.mp4")));
+            cases[cases.size() - 1] = stopped; saveReport();
             inspectRecording(completed->recoveryPath, completed->backend,
                 run.path() + QStringLiteral("/shutdown-cover.png"), stopped);
         } catch (...) { cases[cases.size() - 1] = stopped; saveReport(); throw; }
@@ -498,19 +508,22 @@ int main(int argc, char** argv)
         require(orphan->start(request) != 0, "Start real worker before deleting its QObject owner");
         waitFor([&] { return ownerDeleted && returned->load(std::memory_order_acquire) &&
             QThreadPool::globalInstance()->activeThreadCount() == 0; }, "Destroyed owner did not leave a terminating independent worker");
+        auto destroyed = backendJson(*nativeResult);
+        destroyed[QStringLiteral("case")] = QStringLiteral("owner-destroyed");
+        destroyed[QStringLiteral("destructorMilliseconds")] = static_cast<qint64>(deletionDuration.count());
+        cases.append(destroyed); saveReport();
         require(orphan.isNull() && deletionDuration < 1s && nativeResult->media.canArchive(),
             "QObject destruction must return without joining the native recorder or losing its result");
         const auto files = QDir(orphanArchive->directory()).entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
         require(files.size() == 1, "Destroyed-owner recording must retain exactly its owned unpublished file");
         const auto recovery = QDir(orphanArchive->directory()).filePath(files.front());
-        QJsonObject destroyed;
-        destroyed[QStringLiteral("case")] = QStringLiteral("owner-destroyed");
         destroyed[QStringLiteral("recoveryPath")] = recovery;
-        destroyed[QStringLiteral("destructorMilliseconds")] = static_cast<qint64>(deletionDuration.count());
-        destroyed[QStringLiteral("source")] = nativeResult->prepared ? static_cast<int>(nativeResult->prepared->source) : -1;
-        destroyed[QStringLiteral("framesSubmitted")] = static_cast<qint64>(nativeResult->media.framesWritten);
-        cases.append(destroyed); saveReport();
+        cases[cases.size() - 1] = destroyed; saveReport();
         try {
+            destroyed[QStringLiteral("recoveryEvidence")] = HuhuCapture::Tests::retainRecordingEvidence(
+                recovery, run.path() + (gifProbe ? QStringLiteral("/retained-owner-destroyed.gif") :
+                    QStringLiteral("/retained-owner-destroyed.mp4")));
+            cases[cases.size() - 1] = destroyed; saveReport();
             inspectRecording(recovery, *nativeResult, run.path() + QStringLiteral("/destroyed-owner-cover.png"), destroyed);
         } catch (...) { cases[cases.size() - 1] = destroyed; saveReport(); throw; }
         cases[cases.size() - 1] = destroyed; saveReport();

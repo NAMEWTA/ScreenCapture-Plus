@@ -4,7 +4,7 @@
 
 ## 当前构建是什么
 
-当前正式版本仍是 v0.0.5 的 Windows 产品。根目录 CMake 已提供共享 C++20 模型、Qt 服务、原生适配和实际 `huhucapture` 程序目标。`HUHUCAPTURE_BUILD_APP=ON` 装配同一套启动、托盘、截图、编辑、历史、设置、录制与局域网服务；双平台已完成完整目标及 `BUILD_TESTING=OFF` 生产配置的真实编译链接，Linux 开发 DEB、AppImage、符号与校验文件已由同源流水线生成。**该宿主仍在功能集成中，不是已通过 P12 的完整产品或正式安装包**。集成测试发现的问题仍须修复重验，组件、链接或打包成功不能替代真实桌面、音源、两端互传、安装升级和性能验收。
+当前正式版本仍是 v0.0.5 的 Windows 产品。根目录 CMake 已提供共享 C++20 模型、Qt 服务、原生适配和实际 `huhucapture` 程序目标。`HUHUCAPTURE_BUILD_APP=ON` 装配同一套启动、托盘、截图、编辑、历史、设置、录制与局域网服务；双平台已完成完整目标及 `BUILD_TESTING=OFF` 生产配置的真实编译链接，Windows 安装包、便携 ZIP、Linux DEB、AppImage、符号与校验文件已由同源流水线生成。**该宿主仍在功能集成中，不是已通过 P12 的完整产品或正式安装包**。集成测试发现的问题仍须修复重验，组件、链接或打包成功不能替代真实桌面、音源、两端互传、安装升级和性能验收。
 
 迁移目标是一个 C++20 / Qt 6 Widgets 产品，两端使用同一套界面、编辑器状态与应用服务。平台目录只处理真实系统差异。现有 Windows 原生采集、Media Foundation 和 WASAPI 继续复用；Linux 的 Portal 控制面复用固定 libportal，局域网协议复用固定 LocalSend Rust core。
 
@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `src/core/` | 无 Qt / Win32 的像素、批注排版、活动历史、归档命名、录制结果和时间合同 | 会话、能力与跨屏坐标的完整产品合同 |
 | `src/app/QtApplication.*`、`SingleInstance.*` 与 `src/core/Startup.h` | 同一 QApplication / 托盘 / 可见后备入口、配置和服务所有者；既有 CLI、非阻塞动作转发、录制/滚动/更新接线及真实关闭屏障；旧产品复用启动规则 | 完整双端 IPC / 托盘、真实桌面启动与退出旅程 |
-| `src/services/desktop/DesktopCaptureAction.*` | 已安装 GNOME 完成动作的真实 GIO 查找、进程/既有 IPC 验证及注册变化撤回；共享录屏/长截图继续拥有停止业务 | 正向子进程 IPC、真实 GNOME 菜单可达性及无托盘完整采集验收 |
+| `src/services/desktop/DesktopCaptureAction.*` | 已安装 GNOME 完成动作的真实 GIO 查找、子进程/既有 IPC 验证及注册变化撤回；真实总线子进程往返检查已通过，停止业务仍由共享录屏/长截图拥有 | 真实 GNOME 菜单可达性及无托盘完整采集验收 |
 | `src/editor/` 的模型与 `EditorDocument.h` | 共用几何、拖动、文字、编号、批注、工具参数与唯一活动历史；原 Windows 工具和 Qt 工作区直接复用 | 完整产品的物理输入与长期会话验收 |
 | `src/ui/qt/Editor*` 与 `MediaWorkspace` | 共用九工具画布、单一文字输入、完整批注面板、原图马赛克及带令牌的异步归档 / 剪贴板 / 贴图输出；双平台组件构建与受控交互测试 | 真实 IME、混合 DPI、完整桌面字体和导出旅程 |
 | `src/services/rendering/` | Qt 字体测量、完整备注排版和离屏合图，保留原图像素与失败时旧输出；共享编辑器使用同一导出路径 | 真实桌面字体 / IME 与大图资源验收 |
@@ -28,7 +28,7 @@
 | `src/platform/FileCommitter.h` | 同一份提交结果和暂存所有权合同 | 所有图片、录屏及接收导入统一使用，文件 lease 和恢复界面 |
 | `src/platform/windows/` | 原生文件发布、采集和音频格式边界；原 Windows 归档已使用共享提交合同 | 完整 Windows 能力从 Ling 解耦、Qt 线程和窗口集成 |
 | `src/platform/linux/portal/` | libportal 截图 / ScreenCast / GlobalShortcuts 控制面、取消、绑定替换及 FD 所有权，真实总线断开处理；指定 Sway 父窗生命周期和实际授权采流已验证；同一会话的数据连接刷新已接入 | 新刷新首帧、快捷键活动会话排空及真实 GNOME / Plasma 授权验收 |
-| `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease 与 CPU / MemFd 数据面，固定客户端和受控失败路径补丁；真实 Sway 采流、尺寸变化和服务断开已通过 Debug / Release 探针 | 新 Wayland 刷新像素时序、GNOME / Plasma 和物理音源验收 |
+| `src/core/MediaFrame.*` 与 `src/platform/linux/pipewire/` | 无 Qt 的有界帧池、跨线程只读 lease 与 CPU / MemFd 数据面，固定客户端和受控失败路径补丁；真实 Sway 采流已验证，新的生产者调度组合仍有尺寸切换停滞 | 尺寸切换恢复、新 Wayland 刷新像素时序、GNOME / Plasma 和物理音源验收 |
 | `third_party/localsend/` 与 `src/platform/rust/` | 固定上游 core 与 gifski 的单一 Rust 静态库、C ABI、真实 TLS / 文件流与受控关闭；共享 Qt 设备 / 任务服务及完整媒体检查已装配 | 聚合 ABI、真实取消和同进程 Qt 控制层已通过指定双平台 CI；物理双端和完整产品旅程尚未验收 |
 
 同一工具的交互规则不能因为平台迁移而被“统一”成不同语义。例如普通矩形越过对边时可以翻转，批注范围则限制在原图内；普通序号按活动最大值加一，批注高水位编号永不复用。移动、文字与样式修改仍遵循现有历史语义，不借模型抽取改变撤销行为。
@@ -71,15 +71,42 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 
 应用所有权、启动和退出屏障见 [共享 Qt 宿主](qt-application.md)。截图与录屏的接线见 [共享工作区](capture-workspaces.md)，来源与坐标约束见 [采集服务](screen-capture.md) 和 [授权实时源](live-capture-source.md)，长截图的保留规则见 [共享长截图模型](scroll-capture.md)，软件编码和 AAC 尾样本合同见 [Linux 录制](linux-recording.md)。[完整包更新](qt-updates.md)、[同源打包](qt-packaging.md) 和 [实际安装生命周期](installation-validation.md) 分别记录下载、部署与运行验证边界。这些实现尚不代表整个工作包已经验收。
 
-提交 `11c6033e51a26cd8dda5a403da239ccd5953fe72` 的 [Qt 验证](https://github.com/NAMEWTA/huhucapture/actions/runs/45629021964) 已完成：Windows Debug / Release 各 66 项、Linux 各 75 项通过。真实锁定 Sway / Portal / PipeWire 的两个配置均收到并逐像素核对实际 MemFd 帧，完成尺寸变化、服务断开、缓冲归还和共享来源排空。[Windows / Linux 聚合运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45629019877) 也通过。这些结果确认已有采流与释放路径，不代替新加入的隐藏控件后首帧刷新探针，也不覆盖 GNOME / Plasma 或物理桌面。
+## 当前集成证据
 
-加入刷新和更完整关闭门槛后的 `24f94d403acfe82212c955729e6e34de16bce5b4` [Qt 运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885852) 中，Windows 两配置各 67 项通过，Linux Debug 79 项与直接 PipeWire 三个场景通过；随后共享来源探针在刷新后的第一消费帧像素断言失败。该 Linux job 失败，新的专用刷新探针和 Release 后续检查没有执行。旧配置通过不能覆盖这个新失败，首帧门槛保持不变，实际原因仍须结合失败帧与原生日志验证。
+以下结果来自提交 `659cc9d7f882e3fd1d92cdb6f2360ed2c31ab735`。CI 构建身份为
+PR 合并提交 `7bf1f08908af6664fae81e04486b3eeee6ae7fcd`，其源码树与分支提交
+完全相同；原始包、报告和媒体中的提交身份均未改写。
 
-同一 `24f94d4` 的 [完整应用运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885695) 中，Linux 93 项、Windows 79 项集成检查通过，两平台完整应用及 `BUILD_TESTING=OFF` 生产配置均实际编译、安装运行时并通过原生 TLS 检查。Linux 六种真实 PipeWire 音频图通过：系统、麦克风、混音和限幅混音各处理 144,000 个样本帧；服务/来源断开均按故障合同退出，六种场景 FD 增量与清理错误均为零。这是实际隔离音频图的短程验证，`physicalDevices` 与 `longRunningAvDrift` 均未验证。Windows 生成的原 H264 / MP3 文件也由独立 Linux job 按原始字节完整解码通过。
+| 实际流水线 | 已完成 | 失败或未执行范围 |
+| --- | --- | --- |
+| [Qt 组件](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036886) | Linux Debug 83/83；Windows Debug 67/68；真实 GIO 注册、监视变化及子进程 IPC 往返通过 | Windows 空环境变量测试错误；受控 Wayland 尺寸切换停滞；两端后续 Release 未执行 |
+| [完整应用](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036685) | Linux 97/97、Windows 79/80；两端完整产品与关闭测试的生产配置实际编译链接，原生 TLS 检查通过；四种开发包及符号生成 | Windows 同一环境变量测试失败；两端材料收集各有阻塞；Windows 安装尚未完成 |
+| [原生视频](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036728) | Linux Debug / Release；Windows Debug 3/3；Windows Release 视频/HEVC、录制保存/复制/丢弃/关闭通过 | Windows Release owner 销毁后的尾帧断言失败，不能用其他生命周期的通过覆盖 |
+| [Rust 原生聚合](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036760) | Windows / Linux 同进程真实 GIF、TLS、传输、归档和排空通过 | 物理双端、完整产品互传和长时性能尚未验收 |
+| [保留的 Windows 产品](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036700) | 原 Release / Debug 构建、核心、原生 GUI 与更新桥接检查通过 | 没有执行正式发布；此基线不能替代 Qt 产品验收 |
 
-Linux DEB 和 AppImage 已完成真实产品拖选、像素检查、正常退出、同包重装和移除，并保留原配置与媒体字节；详见[安装证据边界](installation-validation.md)。AppImage 使用官方免 FUSE 路径，不能据此声明 FUSE 挂载或跨版本升级通过。Windows 材料校验遇到 Qt 官方多配置 SPDX 的同路径重复记录，NSIS 生成器另有 `/oname` 参数引号错误；该轮安装器与安装旅程未通过。两项已据原始产物和固定官方实现修正，仍待下一轮原生 CI。
+Linux 六种真实 PipeWire 音频图继续通过：系统、麦克风、混音和限幅混音各
+处理 144,000 个样本帧；服务/来源断开按故障合同退出，六种场景 FD 增量和
+清理错误均为零。它们是实际隔离音频图的短程检查，实体音源及长时同步未验证。
+同轮 Windows 生成的原 H264 / MP3 文件由独立 Linux job 按原始字节完整解码通过。
 
-该提交的[原生聚合运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885748)和[保留的 Windows 产品回归](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885799)通过。独立[视频验证](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885690)中 Linux 两配置通过，Windows Debug 的视频/HEVC 检查通过，但真实录制尾时间线断言失败，Release 未执行；该失败仍需修复重验，不能被完整应用的另一场录制通过覆盖。
+DEB 和 AppImage 的首次/同包重装后均完成真实截图拖选、像素核对、正常退出，
+并执行新增的四个控制请求拒绝路径；随后实际移除并核对配置与媒体保留。
+详见[安装证据边界](installation-validation.md)。Windows 安装器已生成，实际
+安装在深层通知路径处中断，便携包旅程尚未执行。跨版本升级、FUSE、干净机器
+与物理桌面不在这些通过范围内。
+
+Qt 空环境变量测试已按 Windows 的真实删除语义修正；受控 Portal 验证桌面
+补充正常重协商移除当前缓冲后的既有重试调度。尺寸变化、共享来源刷新和独立
+首帧像素检查仍待修复后的原生 CI，不将旧配置的通过当作新调度组合已通过。
+
+[标准库材料](rust-toolchain-materials.md)已在两端原 runner 完成实际 Rust 源码、
+目标库和通知的字节核对；全应用对应源码仍未闭合。Linux 原生收集因 CMake
+安装树遗漏 x264 失败，Windows 原生收集因 FFmpeg 源码树差异失败，Windows Qt
+原插件与官方 SPDX 的字节核对也未通过。同一 Windows 材料测试另因临时 SDK
+目录未规范化而在路径范围检查处失败；该夹具已复用生产目录规范化入口，仍须
+原生重跑，签名诊断不能替代此项。修复或诊断后的下一轮证据与完整
+[分发材料范围](distribution-materials.md)仍是发行前置条件。
 
 ## 平台支持与验证口径
 

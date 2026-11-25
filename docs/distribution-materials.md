@@ -24,6 +24,12 @@ python3 scripts/collect-runtime-materials.py system \
 
 成功输出的 `runtime-materials.json` 将每个已检查路径绑定到原输入字节与实际包，`notices/system/` 含未改写的通知。无法归属的路径写入 `failures`，命令失败，原应用安装树和原依赖不修改。成功也不意味着正式发行就绪：`systemAttributionComplete` 仅指本阶段系统库归属检查，所有 source package 档案的状态仍为 `not-collected`。
 
+这个范围止于原 CMake 安装树。后续固定 `linuxdeploy` 还会将 GLib、XCB 等
+真实依赖加入 AppDir，且会修改 ELF 的 RPATH；最终 DEB / AppImage 的这些路径
+不能继承初始树的 `systemAttributionComplete`。完整发行还须在原打包 runner
+核对增补库的实际来源、官方部署变换、原通知和精确 source package 档案。
+最终文件清单能证明包中有哪些字节，不能仅凭库名证明这些源码材料已齐备。
+
 收集成功后，CI 将整个输出目录复制到待打包树的 `share/huhucapture/licenses/collected-runtime/`，随后正常打包，使该次真实记录本身进入最终文件清单。复制只针对本次生成的安装树；不要对用户已安装的目录执行这个工程步骤。正式打包原有对应源码门槛仍须独立通过。
 
 Qt 平台插件的公开部署流程可能改变 RPATH，系统库步骤将 `plugins/` 中实际文件的哈希记入 `deferredPlugins`。这些文件交给下面的 Qt 步骤核实；目录名本身不是来源证明。ICU 等 SDK 随附库不能套用发行版同名包的许可证材料。
@@ -51,6 +57,16 @@ Windows 使用实际安装目录、Visual Studio 构建目录和该次应用的�
 不同校验值、许可、版权、包关系或重复 ID 均拒绝，不能按配置名任取一条。
 这是固定 Qt 的 [`_handle_multi_config_custom_file` / `_add_custom_file`](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/cmake/QtPublicSbomFileHelpers.cmake)
 实际生成方式；合并元数据后仍核实原 SHA1 和实际完整 SHA256。
+
+Windows 的原 Qt 插件还出现了原 SPDX SHA1 与实际完整 DLL 不同的问题，不能以
+版本名、文件名或签名颁发者名称替代字节归属。`probe-qt-sdk-signing.py` 只针对
+三个实际相关插件使用已注册 Windows SDK 的官方 SignTool 取证：记录工具版本与
+哈希，对原文件执行严格签名验证，只在独占副本上移除签名，再将副本完整 SHA1
+与原 SPDX 直接比较。它不补写 PE 字段、不修改 SDK 或原 SPDX，也不改变材料
+收集器的通过条件。原文件前后身份、完整哈希、命令结果和副本单独保存在
+`qt-sdk-signing-windows`；该原生诊断尚待 CI，不能据本地 PE 结构分析宣称绑定通过。
+官方依据为 [SignTool 验证与移除命令](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool)
+及 [PE 签名覆盖范围](https://learn.microsoft.com/en-us/windows/win32/secbp/understanding-pe-signatures)。
 
 重放仅接受本项目当前生成的公开 `qt_deploy_runtime_dependencies` 调用及相对目的目录。收集器不执行生成目录里的任意 include、可选插件脚本或 hooks；它只读取生成 support 中的字面量设置，核对原 SDK / 工具路径，然后调用同一 SDK 的 `Qt6CoreDeploySupport.cmake`。CMake 与 `windeployqt` 负责所有实际变换，没有自行编写 ELF / PE 归一化。`CMAKE_INSTALL_PREFIX` 和 `QT_DEPLOY_PREFIX` 均指向收集器独占的临时目录，子进程移除 `DESTDIR`，不会以安装脚本向用户目录或原安装树写入。记录实际脚本、工具哈希、stdout/stderr 和输出匹配，并复核原安装清单及原构建/SDK 输入未变。部署选项变化时必须重新审查，不能扩大接受范围来跳过失败。
 
@@ -103,6 +119,25 @@ python3 scripts/collect-runtime-materials.py rust \
 原始 `LICENSE`、`COPYING`、`COPYRIGHT`、`NOTICE`、`UNLICENSE` 和 crate 声明的许可文件复制到 `notices/rust/`；SPDX 表达式、作者、源地址和版本保留在 `rust-materials.json`。找不到原许可全文的 crate 列入 `missingCrateNoticeTexts`，不能根据一个表达式伪造作者文本。Cargo vendor 不包含 Rust 标准库完整源码，因此 vendor 报告中的这项状态仍为 `not-collected`。独立的[标准库与工具链材料](rust-toolchain-materials.md)步骤核对实际 rustup 原清单、官方 rust-src/std/compiler 档案和 sysroot 字节，保留标准库源码及完整通知；只有该步骤实际完成才具备相应组件证据。
 
 `vendorSourceComplete` 表示原 receipt/解析图所需的 vendored crates 和 workspace 已确实收集并核验；`licenseTextCoverageComplete` 还要求原 crate / 工具链通知齐全。二者均不能替代组合发行的许可与完整对应源码门槛。普通运行包只加入本次 `notices/` 和 `rust-materials.json`；完整 vendor、源码和命令日志保存在独立 CI 产物中。
+
+有些 crate 发布包省略了仓库外层的原许可文件。补充映射集中在
+[`third_party/rust-notices/upstream.json`](../third_party/rust-notices/upstream.json)，
+只适用于已经逐文件核对的准确 Cargo 内容：先核全部 vendor 文件与原 checksum，
+再核 source、registry checksum、许可声明和整个 checksum JSON 的精确哈希；
+有 VCS / Git lock 记录时继续核对固定提交。补充原文自身的大小、SHA256、Git blob
+也必须一致。运行时不会按 crate 名称或 SPDX 表达式下载、合成通知。
+
+当前审阅集合中的 12 个条目对应 20 份可验证原通知。`r-efi` 复用原 vendor 的
+`AUTHORS` 中完整许可及版权，gifski 复用项目已保留的同 blob `LICENSE`，其他
+缺失原文保留在上述目录。两个 WinAPI GNU 包的全部原发布文件匹配固定历史树，
+但没有发布 commit 记录，因此仍明确为 `publicationCommitRecorded: false`。
+原作者、版本、许可表达式和 `presentInBuildMetadata` 字段不因补充通知而改变。
+
+收集器将补充材料写入新的通知目录，并在完整源码产物旁置留存，保持 vendor
+及其 checksum 文件不变。清单自身也原样留存并在收集前后核对。这个集合仍有
+`gif-dispose 5.0.1` 原许可全文缺失，以及 `rustls-platform-verifier-android 0.1.1`
+预编译 AAR 未绑定的缺口；它们继续列为未完成。该子集的真实文件与冲突拒绝
+检查不代替完整双平台 Cargo 收集或对应源码验收。
 
 ## 原生依赖的源码、补丁与真实配置
 

@@ -61,6 +61,13 @@ source 文件，包括被忽略的新头文件。实际 source 如出现新的�
 先保留失败路径并审查上游生成链，不能加入一个笼统的 ignored-files 豁免。
 已有源码的任意未声明修改、遗漏补丁文件或未收集的 submodule 同样失败。
 
+若实际索引与固定补丁树不同，失败时另存
+`families/<family>/source-differences.json`：记录组件、Git 版本、实际转换设置、
+两棵树标识和差异总数，最多保留前 64 个路径的模式与 blob 标识。它还保留原工作
+文件的大小与 SHA256，并对总大小不超过 16 MiB 的普通文件补充原字节的 Git blob
+标识，便于区分原内容变更与索引转换；不导出未知改动正文，也不自动接受行尾差异。
+此诊断不绕过原树相等门槛，不产生成功源码档案，命令仍返回非零。
+
 只有临时仓库接收新对象、索引和 archive 属性；原工作树、HEAD、config、index
 不会被 checkout、reset、clean、add 或 apply 写入。所有原 Git 读取禁止可选锁，
 结束时复核原源码逐文件清单和控制文件未变。自定义 clean/smudge filter 或文本
@@ -85,6 +92,19 @@ SHA256 和 Git 的行尾转换设置；Git 的规范源码档案不等于 Window
 Meson introspection 的 compiler 参数是 IDE 提示，不能冒充真实编译命令；材料中
 同时保留实际 Ninja 与 `compile_commands.json`。Meson 安装可能改写 RPATH，故不
 将 build 目录 ELF 与 install 前缀直接相等作为前提，也不自行编写 ELF 归一化。
+
+Linux 的 CMake 安装树必须先包含实际 x264 运行库。固定 CMake 的依赖解析不会将
+应用的 `RUNPATH` 继承给 FFmpeg 的间接依赖；它可能从 `ldconfig` 找到系统 x264，
+再由 Qt 的系统路径过滤规则排除。安装脚本因此从与 `libavcodec` 相同的实际
+pkg-config 库目录定位 x264，禁止默认系统搜索，在 Qt 部署之后执行独立安装脚本，
+并用官方 `FOLLOW_SYMLINK_CHAIN` 保留共享库及版本符号链接链。Qt 生成的部署
+脚本及收集器的严格重放合同保持不变。这里不修改 ELF 字节，也不把后续 linuxdeploy 的
+补入结果当作此前原生收集已成功。完整大小、SHA256、源码与构建记录仍由同一个
+收集器核验；找不到实际运行库仍须失败。
+
+该接线依据固定 [CMake 3.31.6 的 Linux 解析顺序与库链安装规则](https://github.com/Kitware/CMake/blob/v3.31.6/Help/command/file.rst)。
+本地使用已构建的真实应用与 SDK 库确认了解析差异；完整原构建 runner 上的收集
+结果仍须由修复后的流水线验证，不能由单库安装检查推导四个家族全部完成。
 
 FFmpeg 的固定 configure 会把整个 shell 环境写入 `ffbuild/config.log`，因此此日志
 明确不复制。保留受控命令、实际 `config.mak` / 配置头等需要的配置，不将 runner

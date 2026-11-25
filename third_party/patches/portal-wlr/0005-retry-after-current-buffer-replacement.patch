@@ -1,0 +1,52 @@
+Subject: [PATCH] validation: rearm producer after current buffer replacement
+
+Project-local integration correction for the pinned validation desktop after
+0001-0004. This is not represented as a new upstream commit.
+
+An ordinary resize can replace all PipeWire buffers while the stream remains
+STREAMING. The frame-lifetime backport correctly cancels the frame attached
+to the removed current buffer, but that also removes the frame-ready callback
+which drives the next graph iteration. No state transition restarts the graph.
+
+Reuse the existing starvation retry from upstream commit
+d24d6a1b726352eb2645c38416b76e214e54a7c0 by Scott Leggett
+<scott@sl.id.au>: arm it only when replacement removes the current buffer of
+a live stream. Its timer triggers after the native removal callback returns,
+retries at the negotiated rate until a buffer is available, and is disarmed by
+the existing successful dequeue, PAUSED and teardown paths. Do not directly
+re-enter capture while PipeWire is replacing the buffer array.
+
+Upstream retry source: src/screencast/pipewire_screencast.c, Git blob
+69176df81d2e50f1f50359a410b3334de59c79bb at the commit above.
+Frame cancellation source: 5724a432fc95690aef19e55e62178d71b60d0cbb,
+already attributed in 0002/upstream.json.
+Base: e1d5d16f0e064a0b788c5d70c11461b15ee7a4af plus patches 0001-0004.
+License: MIT, matching the retained upstream license and project license.
+
+This adds no pixels or new scheduling loop, changes no client assertion or
+deadline, and applies only to the owned validation producer. Positive resize
+and refresh behavior must still pass their real compositor probes.
+
+--- a/src/screencast/pipewire_screencast.c
++++ b/src/screencast/pipewire_screencast.c
+@@ -19,6 +19,7 @@
+ 
+ #define DAMAGE_REGION_COUNT 16
+ 
++static void pwr_arm_process_retry(struct xdpw_screencast_instance *cast);
+ static void pwr_disarm_process_retry(struct xdpw_screencast_instance *cast);
+ 
+ static struct spa_pod *build_buffer(struct spa_pod_builder *b, uint32_t blocks, uint32_t size,
+@@ -597,6 +598,12 @@
+ 		cast->current_frame.pw_buffer = NULL;
+ 		cast->current_frame.xdpw_buffer = NULL;
+ 		xdpw_wlr_frame_cancel(cast);
++		if (!cast->destroy_pending && cast->pwr_stream_state) {
++			// Cancelling the frame also removes its driver trigger. Retry after
++			// PipeWire finishes replacing buffers, using the existing timer.
++			logprint(DEBUG, "pipewire: current buffer removed while streaming, retrying process");
++			pwr_arm_process_retry(cast);
++		}
+ 	}
+ 	for (uint32_t plane = 0; plane < buffer->buffer->n_datas; plane++) {
+ 		buffer->buffer->datas[plane].fd = -1;

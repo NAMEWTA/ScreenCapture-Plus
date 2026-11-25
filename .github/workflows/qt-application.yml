@@ -363,6 +363,23 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python scripts/test-qt-package-runtime.py --prefix artifacts/install/windows --probe artifacts/cmake/application-windows/RelWithDebInfo/package_runtime_probe.exe --certificate tests/fixtures/qt-tls/localhost-test-cert.pem --private-key tests/fixtures/qt-tls/localhost-test-key.pem --report artifacts/cmake/application-windows/package-runtime.json
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Inspect original Qt SDK signatures with the installed Windows SDK tool
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $sdkKeys = @('HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows Kits\Installed Roots')
+          $sdkRoots = @($sdkKeys | ForEach-Object { Get-ItemPropertyValue -LiteralPath $_ -Name KitsRoot10 -ErrorAction SilentlyContinue } | Sort-Object -Unique)
+          $candidates = @($sdkRoots | ForEach-Object {
+            Get-ChildItem -LiteralPath (Join-Path $_ 'bin') -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | ForEach-Object {
+              $candidate = Join-Path $_.FullName 'x64/signtool.exe'
+              if (Test-Path -LiteralPath $candidate -PathType Leaf) { [PSCustomObject]@{ Path = $candidate; Version = [Version]$_.Name } }
+            }
+          })
+          $signtool = $candidates | Sort-Object -Property Version -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'No actual registered Windows SDK x64 SignTool is available' }
+          python scripts/probe-qt-sdk-signing.py --qt-prefix "$env:QT_ROOT_DIR" --signtool $signtool.Path --output artifacts/qt-sdk-signing-windows
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Check original Windows notices, SDK bytes and the actual Rust graph
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
         shell: pwsh
@@ -464,6 +481,7 @@ jobs:
           path: |
             artifacts/packages/windows/
             artifacts/runtime-materials-qt-windows/
+            artifacts/qt-sdk-signing-windows/
             artifacts/runtime-materials-rust-windows/
             artifacts/runtime-materials-native-windows/
             artifacts/runtime-materials-rust-toolchain-windows/

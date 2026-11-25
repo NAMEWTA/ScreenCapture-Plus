@@ -62,6 +62,83 @@ def verify_build_inputs(api, receipt, library):
     return lock, fingerprints, cargo_lock
 
 
+def original_notice_reviews(api):
+    """Read the small audited set of notices omitted by these exact crates."""
+    path = api.ROOT / 'third_party/rust-notices/upstream.json'
+    identity = api.unchanged_digest(path)
+    value = api.meta.json_read(path, 256 * 1024)
+    api.meta.require(api.unchanged_digest(path) == identity, 'Original crate notice review changed while reading')
+    api.meta.require(value.get('schemaVersion') == 1 and value.get('correspondingSourceComplete') is False and
+                     isinstance(value.get('crates'), list) and len(value['crates']) <= 64,
+                     'Unsupported original crate notice review')
+    entries = {}
+    for entry in value['crates']:
+        key = (entry['name'], entry['version'])
+        api.meta.require(key not in entries and entry.get('notices'), 'Duplicate or empty original crate notice review')
+        entries[key] = entry
+    return path, identity, entries
+
+
+def reviewed_crate_notices(api, crate, locked, declaration, checksum_path, review, review_identity, output):
+    """Supplement notices without changing Cargo's immutable vendor directory.
+
+    The reviewed Cargo checksum file binds the complete original file inventory,
+    whose every byte was already checked above. It is deliberately stricter than
+    matching a crate name/version or an SPDX license expression.
+    """
+    api.meta.require(review['source'] == locked['source'] and
+                     review.get('registryChecksum') == locked.get('checksum') and
+                     review['declaredLicense'] == declaration and
+                     review['cargoChecksumFileSha256'] == api.unchanged_digest(checksum_path)['sha256'],
+                     'Original crate notice review differs from the exact Cargo source: ' + crate.name)
+    commit = review['upstreamCommit']
+    api.meta.require(re.fullmatch(r'[0-9a-f]{40}', commit), 'Original crate notice review lacks an exact commit')
+    binding = review['bindingType']
+    if binding == 'cargo-vcs-and-authored-files-match':
+        vcs = api.meta.json_read(crate / '.cargo_vcs_info.json', 16384)
+        api.meta.require(vcs.get('git', {}).get('sha1') == commit and
+                         vcs.get('path_in_vcs') == review['pathInVcs'] and
+                         not vcs.get('git', {}).get('dirty', False),
+                         'Original crate VCS identity differs from its notice review: ' + crate.name)
+    elif binding == 'cargo-lock-git-revision-and-files-match':
+        api.meta.require(locked['source'].startswith('git+') and locked['source'].endswith('#' + commit),
+                         'Original Git crate revision differs from its notice review: ' + crate.name)
+    else:
+        api.meta.require(binding == 'all-published-files-match-upstream-commit' and
+                         locked['source'].startswith('registry+') and review['publicationCommitRecorded'] is False,
+                         'Unknown original crate notice binding: ' + crate.name)
+    notices = []
+    for entry in review['notices']:
+        kind = entry['inputKind']
+        api.meta.require(kind in {'cargo-vendor', 'project-original'}, 'Unknown original crate notice input')
+        relative = api.meta.safe_relative(entry['inputPath'])
+        api.meta.require(kind == 'cargo-vendor' or relative.startswith('third_party/'),
+                         'Retained upstream notice must be a reviewed third_party original')
+        base = crate if kind == 'cargo-vendor' else api.ROOT
+        original = base / relative
+        api.meta.require(original.is_file() and not original.is_symlink() and
+                         original.resolve().is_relative_to(base.resolve()), 'Original crate notice escapes its input')
+        expected = {key: entry[key] for key in ('size', 'sha256')}
+        api.meta.require(0 < expected['size'] <= 1024 * 1024 and api.unchanged_digest(original) == expected,
+                         'Retained original crate notice bytes differ: ' + crate.name + '/' + relative)
+        data = original.read_bytes()
+        git_blob = hashlib.sha1(b'blob ' + str(len(data)).encode('ascii') + b'\0' + data).hexdigest()
+        api.meta.require(git_blob == entry['gitBlobSha1'], 'Original crate notice Git blob differs: ' + crate.name)
+        upstream = api.meta.safe_relative(entry['upstreamPath'])
+        target = Path('notices/rust/crates') / crate.name / upstream
+        retained = api.copy_original(original, output / target)
+        api.meta.require(retained == expected, 'Original crate notice changed while retaining: ' + crate.name)
+        notices.append({'source': upstream, 'path': target.as_posix(), 'origin': kind,
+                        'upstreamRepository': review['upstreamRepository'], 'upstreamCommit': commit,
+                        'gitBlobSha1': git_blob, **retained})
+    return notices, {'repository': review['upstreamRepository'], 'commit': commit, 'bindingType': binding,
+                     'pathInVcs': review['pathInVcs'], 'matchedPublishedFileCount': review['matchedPublishedFileCount'],
+                     'cargoGeneratedFiles': review['cargoGeneratedFiles'],
+                     'publicationCommitRecorded': review['publicationCommitRecorded'],
+                     'reviewFile': review_identity, 'cargoChecksumFileSha256': review['cargoChecksumFileSha256'],
+                     'scope': 'Original notice attribution to these exact Cargo bytes; no combined-source closure'}
+
+
 def checked_vendor(api, directory, locked, metadata, output):
     """Cargo supplies/normalizes files; its checksums establish their content."""
     locked_by_name = {}
@@ -70,6 +147,7 @@ def checked_vendor(api, directory, locked, metadata, output):
             locked_by_name.setdefault((package['name'], package['version']), []).append(package)
     actual = {(entry['name'], entry['version'], entry.get('source')): entry
               for entry in metadata['packages'] if entry.get('source')}
+    review_path, review_identity, notice_reviews = original_notice_reviews(api)
     seen, records, missing_notices = set(), [], []
     directories = sorted(directory.iterdir())
     api.meta.require(0 < len(directories) <= 2048, 'Cargo produced an empty or oversized vendor inventory')
@@ -127,6 +205,12 @@ def checked_vendor(api, directory, locked, metadata, output):
             original = crate / relative
             api.meta.require(original.stat().st_size > 0, 'The original crate notice is empty: ' + str(original))
             notices.append({'source': relative, 'path': path.as_posix(), **api.copy_original(original, output / path)})
+        review = notice_reviews.get((name, version))
+        provenance = None
+        if review is not None:
+            additional, provenance = reviewed_crate_notices(api, crate, locked_package, declaration,
+                                                           checksum_path, review, review_identity, output)
+            notices.extend(additional)
         if not notices:
             missing_notices.append({'name': name, 'version': version, 'source': locked_package['source'],
                                     'declaredLicense': declaration})
@@ -137,8 +221,10 @@ def checked_vendor(api, directory, locked, metadata, output):
                         'authors': package.get('authors', []) if package else manifest.get('authors', []),
                         'repository': package.get('repository') if package else manifest.get('repository'),
                         'vendorDirectory': crate.name, 'sourceFileCount': len(contents),
-                        'cargoChecksumFile': api.unchanged_digest(checksum_path), 'notices': notices})
+                        'cargoChecksumFile': api.unchanged_digest(checksum_path), 'notices': notices,
+                        'supplementalNoticeReview': provenance})
     api.meta.require(set(actual) <= seen, 'Some packages in the real native build graph were not vendored')
+    api.meta.require(api.unchanged_digest(review_path) == review_identity, 'Original crate notice review changed')
     return records, missing_notices
 
 
@@ -192,9 +278,28 @@ def collect(api, options):
                          'Cargo generated an unexpected source destination; do not rewrite its configuration')
         (source_output / '.cargo').mkdir()
         (source_output / '.cargo/config.toml').write_text(vendor_text, encoding='utf-8', newline='')
+        review_path, review_identity, _ = original_notice_reviews(api)
         report['packages'], missing = checked_vendor(api, source_output / 'vendor',
                                                     tomllib.loads(cargo_lock.read_text(encoding='utf-8')), metadata, output)
         report['missingCrateNoticeTexts'] = missing
+        # Additional originals live beside the full vendor tree. Never insert
+        # them into crates or regenerate Cargo's checksum files.
+        api.meta.require(api.unchanged_digest(review_path) == review_identity and
+                         all(package['supplementalNoticeReview'] is None or
+                             package['supplementalNoticeReview']['reviewFile'] == review_identity
+                             for package in report['packages']),
+                         'Original crate notice review changed during vendor collection')
+        for destination in (evidence / 'original-crate-notice-review.json',
+                            source_output / 'original-crate-notice-review.json'):
+            api.meta.require(api.copy_original(review_path, destination) == review_identity,
+                             'Original crate notice review changed while retaining')
+        for package in report['packages']:
+            for notice in package['notices']:
+                if notice.get('origin') == 'project-original':
+                    expected = {key: notice[key] for key in ('size', 'sha256')}
+                    relative = api.meta.safe_relative(notice['path'])
+                    api.meta.require(api.copy_original(output / relative, source_output / relative) == expected,
+                                     'Supplemental original crate notice changed before source retention')
         for relative, expected in fingerprints.items():
             retained = source_output / 'workspace' / api.meta.safe_relative(relative)
             api.meta.require(api.copy_original(api.ROOT / relative, retained)['sha256'] == expected,

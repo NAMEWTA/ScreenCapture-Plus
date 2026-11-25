@@ -277,6 +277,10 @@
           {
             "path": "third_party/patches/portal-wlr/0004-close-retry-and-frame-ownership-gaps.patch",
             "sha256": "8baf3c40500f949526061979f7dd494e38fbdb19758866c4cec7f067fe07bc81"
+          },
+          {
+            "path": "third_party/patches/portal-wlr/0005-retry-after-current-buffer-replacement.patch",
+            "sha256": "067f6801914a45871ecf09ccbb6c6c6ea2bb0f2d695e2bf6c611a59798d201fd"
           }
         ]
       },

@@ -109,6 +109,33 @@ qt_deploy_runtime_dependencies(
 string(CONFIGURE "${_huhu_deploy_content}" _huhu_deploy_content @ONLY)
 qt_generate_deploy_script(TARGET huhucapture OUTPUT_SCRIPT _huhu_deploy_script CONTENT "${_huhu_deploy_content}")
 install(SCRIPT "${_huhu_deploy_script}" COMPONENT Runtime)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # GRD can resolve FFmpeg's indirect x264 dependency through the host
+    # ldconfig cache, then omit that system path. Use the same private media
+    # prefix as the linked codec and retain its complete shared-library chain.
+    pkg_get_variable(_huhu_x264_libdir x264 libdir)
+    pkg_get_variable(_huhu_avcodec_libdir libavcodec libdir)
+    if(NOT IS_DIRECTORY "${_huhu_x264_libdir}" OR NOT IS_DIRECTORY "${_huhu_avcodec_libdir}")
+        message(FATAL_ERROR "The locked software media prefix must provide x264 and libavcodec pkg-config metadata")
+    endif()
+    file(REAL_PATH "${_huhu_x264_libdir}" _huhu_x264_libdir)
+    file(REAL_PATH "${_huhu_avcodec_libdir}" _huhu_avcodec_libdir)
+    if(NOT _huhu_x264_libdir STREQUAL _huhu_avcodec_libdir)
+        message(FATAL_ERROR "x264 and libavcodec must come from the same restored software media prefix")
+    endif()
+    find_file(_huhu_x264_runtime NAMES libx264.so PATHS "${_huhu_x264_libdir}"
+        NO_DEFAULT_PATH NO_CACHE REQUIRED)
+    file(REAL_PATH "${_huhu_x264_runtime}" _huhu_x264_real_file)
+    get_filename_component(_huhu_x264_real_directory "${_huhu_x264_real_file}" DIRECTORY)
+    if(NOT _huhu_x264_real_directory STREQUAL _huhu_x264_libdir)
+        message(FATAL_ERROR "The x264 shared-library chain escaped its restored media directory")
+    endif()
+    # Keep this outside the public Qt deployment script: the Qt materials
+    # collector replays only that script's exact reviewed deployment call.
+    configure_file("${PROJECT_SOURCE_DIR}/build/package/linux-x264-runtime.cmake.in"
+        "${PROJECT_BINARY_DIR}/package/linux-x264-runtime.cmake" @ONLY)
+    install(SCRIPT "${PROJECT_BINARY_DIR}/package/linux-x264-runtime.cmake" COMPONENT Runtime)
+endif()
 if(WIN32)
     install(DIRECTORY "${PROJECT_SOURCE_DIR}/Lang" DESTINATION . COMPONENT Runtime)
     foreach(_huhu_component IN ITEMS avcodec avformat avutil swscale)

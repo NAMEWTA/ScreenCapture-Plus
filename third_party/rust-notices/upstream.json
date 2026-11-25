@@ -1,0 +1,452 @@
+{
+  "schemaVersion": 1,
+  "scope": "Exact additional original notices for already Cargo-verified package bytes; metadata and license expressions remain unchanged",
+  "correspondingSourceComplete": false,
+  "sourceReview": "The original Windows/Linux 24f vendor inventories match each other. Commit binding compares every authored file, mapping Cargo.toml.orig and external readmes; Cargo generated manifests/locks are retained separately. GNU import-library files exactly match the upstream 2018 commit named Publish 0.3.4; the original crates contain no publication VCS record, so this is content equivalence and does not assert the upload commit. No later same-version tag is substituted.",
+  "crates": [
+    {
+      "name": "asn1-rs-impl",
+      "version": "0.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7",
+      "cargoChecksumFileSha256": "edacb6142a1bf9defff975589014d653c9627d5e4fa624020700decce4f9a300",
+      "declaredLicense": "MIT/Apache-2.0",
+      "declaredRepository": "https://github.com/rusticata/asn1-rs.git",
+      "authors": [
+        "Pierre Chifflier <chifflier@wzdftpd.net>"
+      ],
+      "upstreamRepository": "https://github.com/rusticata/asn1-rs",
+      "upstreamCommit": "a20e5f7319c896737ad0f2557037817b91ad854f",
+      "pathInVcs": "impl",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 3,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        ".cargo_vcs_info.json"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/asn1-rs-impl-0.2.0/LICENSE-APACHE",
+          "upstreamPath": "LICENSE-APACHE",
+          "gitBlobSha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "size": 10847,
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/asn1-rs-impl-0.2.0/LICENSE-MIT",
+          "upstreamPath": "LICENSE-MIT",
+          "gitBlobSha1": "290e7b9be19d39a81c8eb24c75a6b5f1e57fea71",
+          "size": 1060,
+          "sha256": "a5c61b93b6ee1d104af9920cf020ff3c7efe818e31fe562c72261847a728f513"
+        }
+      ]
+    },
+    {
+      "name": "gifski",
+      "version": "1.34.0",
+      "source": "git+https://github.com/ImageOptim/gifski.git?rev=1060eab4500a20f27e2fa3ab7e85473d0e921cbd#1060eab4500a20f27e2fa3ab7e85473d0e921cbd",
+      "registryChecksum": null,
+      "cargoChecksumFileSha256": "5a80938a0aa2d7ca2190344e99e6e5f6ed2e601195fde4c731730f72c551d798",
+      "declaredLicense": "AGPL-3.0-or-later",
+      "declaredRepository": "https://github.com/ImageOptim/gifski",
+      "authors": [
+        "Kornel <kornel@geekhood.net>"
+      ],
+      "upstreamRepository": "https://github.com/ImageOptim/gifski",
+      "upstreamCommit": "1060eab4500a20f27e2fa3ab7e85473d0e921cbd",
+      "pathInVcs": "",
+      "bindingType": "cargo-lock-git-revision-and-files-match",
+      "matchedPublishedFileCount": 18,
+      "cargoGeneratedFiles": [
+        "Cargo.toml"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/gifski/LICENSE",
+          "upstreamPath": "LICENSE",
+          "gitBlobSha1": "24eda8a7b7de8d7028274f10ef3976f4f9916760",
+          "size": 32240,
+          "sha256": "4e2b565ed4c9537443eb92a10d745a6f8aeb75fa086fd7b955bb52e2cde48a4d"
+        }
+      ]
+    },
+    {
+      "name": "jni",
+      "version": "0.22.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "5efd9a482cf3a427f00d6b35f14332adc7902ce91efb778580e180ff90fa3498",
+      "cargoChecksumFileSha256": "52b442689963c62e1c170e2192dcc239170a4b1adaa3993d70f132f4ef213113",
+      "declaredLicense": "MIT OR Apache-2.0",
+      "declaredRepository": "https://github.com/jni-rs/jni-rs",
+      "authors": [
+        "jni team"
+      ],
+      "upstreamRepository": "https://github.com/jni-rs/jni-rs",
+      "upstreamCommit": "5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7",
+      "pathInVcs": "crates/jni",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 73,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        ".cargo_vcs_info.json",
+        "Cargo.lock"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/jni-0.22.4/LICENSE-APACHE",
+          "upstreamPath": "LICENSE-APACHE",
+          "gitBlobSha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "size": 10847,
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/jni-0.22.4/LICENSE-MIT",
+          "upstreamPath": "LICENSE-MIT",
+          "gitBlobSha1": "74323882c4eeb6ce9f75f1f3269d212038f394d2",
+          "size": 1104,
+          "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960"
+        }
+      ]
+    },
+    {
+      "name": "jni-macros",
+      "version": "0.22.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "a00109accc170f0bdb141fed3e393c565b6f5e072365c3bd58f5b062591560a3",
+      "cargoChecksumFileSha256": "76f48720380bb648bd5d0a2a13b11ac8daa01916ffdfe512fba60c6c919542da",
+      "declaredLicense": "MIT OR Apache-2.0",
+      "declaredRepository": "https://github.com/jni-rs/jni-rs",
+      "authors": [],
+      "upstreamRepository": "https://github.com/jni-rs/jni-rs",
+      "upstreamCommit": "33045a124105c939d1e2cbdcb5a39e5d868ffa03",
+      "pathInVcs": "crates/jni-macros",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 11,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        ".cargo_vcs_info.json",
+        "Cargo.lock"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/jni-macros-0.22.4/LICENSE-APACHE",
+          "upstreamPath": "LICENSE-APACHE",
+          "gitBlobSha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "size": 10847,
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/jni-macros-0.22.4/LICENSE-MIT",
+          "upstreamPath": "LICENSE-MIT",
+          "gitBlobSha1": "74323882c4eeb6ce9f75f1f3269d212038f394d2",
+          "size": 1104,
+          "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960"
+        }
+      ]
+    },
+    {
+      "name": "jni-sys-macros",
+      "version": "0.4.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264",
+      "cargoChecksumFileSha256": "527c1b074a4287b4041b64e3a9231baa78fdd4c1074220c6fd11c6cd99f846f6",
+      "declaredLicense": "MIT OR Apache-2.0",
+      "declaredRepository": "https://github.com/jni-rs/jni-sys",
+      "authors": [
+        "Robert Bragg <robert@sixbynine.org>"
+      ],
+      "upstreamRepository": "https://github.com/jni-rs/jni-sys",
+      "upstreamCommit": "64d77b7a5f119d7b55b4e2c169a4668067ff59e6",
+      "pathInVcs": "jni-sys-macros",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 3,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        ".cargo_vcs_info.json",
+        "Cargo.lock"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/jni-sys-macros-0.4.1/LICENSE-APACHE",
+          "upstreamPath": "LICENSE-APACHE",
+          "gitBlobSha1": "8f71f43fee3f78649d238238cbde51e6d7055c82",
+          "size": 11358,
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/jni-sys-macros-0.4.1/LICENSE-MIT",
+          "upstreamPath": "LICENSE-MIT",
+          "gitBlobSha1": "2008402b8a1299cf118ea38e02116bfcc72e53c3",
+          "size": 1071,
+          "sha256": "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1"
+        }
+      ]
+    },
+    {
+      "name": "r-efi",
+      "version": "5.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f",
+      "cargoChecksumFileSha256": "c22efaa24bf9cfccd910fcd7ed644971f8214217f3cc7e5f5498f4f548a8f7cd",
+      "declaredLicense": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "declaredRepository": "https://github.com/r-efi/r-efi",
+      "authors": [],
+      "upstreamRepository": "https://github.com/r-efi/r-efi",
+      "upstreamCommit": "97b55bed1c2c91dcbf787674849f05337ff80b33",
+      "pathInVcs": "",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 65,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        ".cargo_vcs_info.json",
+        "Cargo.lock"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "cargo-vendor",
+          "inputPath": "AUTHORS",
+          "upstreamPath": "AUTHORS",
+          "gitBlobSha1": "7397b2bd6a8580d51fe7b23783f8f1a05fa70291",
+          "size": 3693,
+          "sha256": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7"
+        }
+      ]
+    },
+    {
+      "name": "r-efi",
+      "version": "6.0.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf",
+      "cargoChecksumFileSha256": "1c7141a2ef53447882f98911f0dd7acfcdeb4fb06ff2909ffb08f2684efb7d36",
+      "declaredLicense": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+      "declaredRepository": "https://github.com/r-efi/r-efi",
+      "authors": [],
+      "upstreamRepository": "https://github.com/r-efi/r-efi",
+      "upstreamCommit": "7e1b0322d31d625f81a5656096330934f9cd835d",
+      "pathInVcs": "",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 65,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        ".cargo_vcs_info.json",
+        "Cargo.lock"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "cargo-vendor",
+          "inputPath": "AUTHORS",
+          "upstreamPath": "AUTHORS",
+          "gitBlobSha1": "79c8b7c4a1dabcfbc718b7fe6d43b1892f9850cd",
+          "size": 3733,
+          "sha256": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111"
+        }
+      ]
+    },
+    {
+      "name": "valuable",
+      "version": "0.1.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65",
+      "cargoChecksumFileSha256": "8f9704823d3aee06a8f521a50b6ceb2b82aa1b5c587356a48f2218b8ae9c573c",
+      "declaredLicense": "MIT",
+      "declaredRepository": "https://github.com/tokio-rs/valuable",
+      "authors": [],
+      "upstreamRepository": "https://github.com/tokio-rs/valuable",
+      "upstreamCommit": "9efc29b6e58cef28f6566a47aa7e142a55fead77",
+      "pathInVcs": "valuable",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 20,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        ".cargo_vcs_info.json",
+        "Cargo.lock"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/valuable-0.1.1/LICENSE",
+          "upstreamPath": "LICENSE",
+          "gitBlobSha1": "4ca822a5cb54142a14070f5be388e60497781615",
+          "size": 1065,
+          "sha256": "ed60d479b8fd1f64e9cbc3de449a16a53ac1b3d1b6aeb9bf9d190a8e93061b44"
+        }
+      ]
+    },
+    {
+      "name": "webrtc",
+      "version": "0.14.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "08fd686c0920ac08f3a57eacc48e31f0e4ca1ffefba4478784606f78c14e83ad",
+      "cargoChecksumFileSha256": "5012480f476c63b39bcb1069dd9c8427e8219c1cc9ab0827264ea33f2c018140",
+      "declaredLicense": "MIT OR Apache-2.0",
+      "declaredRepository": "https://github.com/webrtc-rs/webrtc",
+      "authors": [
+        "Rain Liu <yliu@webrtc.rs>"
+      ],
+      "upstreamRepository": "https://github.com/webrtc-rs/webrtc",
+      "upstreamCommit": "a1f8f1919235d8452835852e018efd654f2f8366",
+      "pathInVcs": "webrtc",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 89,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        ".cargo_vcs_info.json",
+        "Cargo.lock"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/webrtc-0.14.0/LICENSE-APACHE",
+          "upstreamPath": "LICENSE-APACHE",
+          "gitBlobSha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "size": 10847,
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/webrtc-0.14.0/LICENSE-MIT",
+          "upstreamPath": "LICENSE-MIT",
+          "gitBlobSha1": "e11d93befe8321ba69c2c96f7aa501c07ade27de",
+          "size": 1066,
+          "sha256": "56cc6c08157f4faf70d351b3a7ceac143399d5359a78c180e06dcd0390784f4d"
+        }
+      ]
+    },
+    {
+      "name": "winapi-i686-pc-windows-gnu",
+      "version": "0.4.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6",
+      "cargoChecksumFileSha256": "78becd75c6da6669d23209422c48956ea4bdc051102e2221369437de3c1ec2ff",
+      "declaredLicense": "MIT/Apache-2.0",
+      "declaredRepository": "https://github.com/retep998/winapi-rs",
+      "authors": [
+        "Peter Atashian <retep998@gmail.com>"
+      ],
+      "upstreamRepository": "https://github.com/retep998/winapi-rs",
+      "upstreamCommit": "9497609ef44cc9bcd16cd2411c0ee6ccaf5483aa",
+      "pathInVcs": "i686",
+      "bindingType": "all-published-files-match-upstream-commit",
+      "matchedPublishedFileCount": 1390,
+      "cargoGeneratedFiles": [
+        "Cargo.toml"
+      ],
+      "publicationCommitRecorded": false,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/winapi-0.4.0/LICENSE-APACHE",
+          "upstreamPath": "LICENSE-APACHE",
+          "gitBlobSha1": "8dada3edaf50dbc082c9a125058f25def75e625a",
+          "size": 11357,
+          "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+        },
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/winapi-0.4.0/LICENSE-MIT",
+          "upstreamPath": "LICENSE-MIT",
+          "gitBlobSha1": "796e929aa550bcf4840b199500b7c5bf96edcb75",
+          "size": 1068,
+          "sha256": "5b19674a1db628a475850a131956ed49521b744e3dda8f5a94141f9aba681219"
+        }
+      ]
+    },
+    {
+      "name": "winapi-x86_64-pc-windows-gnu",
+      "version": "0.4.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f",
+      "cargoChecksumFileSha256": "d4c3efe40c0961fdfe3a77b61ae3f16c96cfbf3c4177a3e223048f1721f490d9",
+      "declaredLicense": "MIT/Apache-2.0",
+      "declaredRepository": "https://github.com/retep998/winapi-rs",
+      "authors": [
+        "Peter Atashian <retep998@gmail.com>"
+      ],
+      "upstreamRepository": "https://github.com/retep998/winapi-rs",
+      "upstreamCommit": "9497609ef44cc9bcd16cd2411c0ee6ccaf5483aa",
+      "pathInVcs": "x86_64",
+      "bindingType": "all-published-files-match-upstream-commit",
+      "matchedPublishedFileCount": 1419,
+      "cargoGeneratedFiles": [
+        "Cargo.toml"
+      ],
+      "publicationCommitRecorded": false,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/winapi-0.4.0/LICENSE-APACHE",
+          "upstreamPath": "LICENSE-APACHE",
+          "gitBlobSha1": "8dada3edaf50dbc082c9a125058f25def75e625a",
+          "size": 11357,
+          "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+        },
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/winapi-0.4.0/LICENSE-MIT",
+          "upstreamPath": "LICENSE-MIT",
+          "gitBlobSha1": "796e929aa550bcf4840b199500b7c5bf96edcb75",
+          "size": 1068,
+          "sha256": "5b19674a1db628a475850a131956ed49521b744e3dda8f5a94141f9aba681219"
+        }
+      ]
+    },
+    {
+      "name": "yasna",
+      "version": "0.5.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd",
+      "cargoChecksumFileSha256": "a8f6f11b6a1298395c1006c665f4fc47be20aae12ceff7f0030177928415918d",
+      "declaredLicense": "MIT OR Apache-2.0",
+      "declaredRepository": "https://github.com/qnighy/yasna.rs",
+      "authors": [
+        "Masaki Hara <ackie.h.gmai@gmail.com>"
+      ],
+      "upstreamRepository": "https://github.com/qnighy/yasna.rs",
+      "upstreamCommit": "b7e65f9a4c317494cce2d18ea02b3d6eaaea7985",
+      "pathInVcs": "",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 15,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        ".cargo_vcs_info.json"
+      ],
+      "publicationCommitRecorded": true,
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/yasna-0.5.2/LICENSE-APACHE",
+          "upstreamPath": "LICENSE-APACHE",
+          "gitBlobSha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "size": 10847,
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/yasna-0.5.2/LICENSE-MIT",
+          "upstreamPath": "LICENSE-MIT",
+          "gitBlobSha1": "eaa67b3cb827ab4ece77b37e2de875657fc3cdee",
+          "size": 1055,
+          "sha256": "2a7df90e60fd5512b8bca35d3ce90e068f21c52d962855053fd1d9e2e7ca0f16"
+        }
+      ]
+    }
+  ]
+}

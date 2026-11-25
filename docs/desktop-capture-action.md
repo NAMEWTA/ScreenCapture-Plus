@@ -113,6 +113,10 @@ actions，再调用 native launch_action；这一代码关系不等同于已经�
   不选主/不写 IPC 文件、nonce 保真、v1/v2 和非法组合拒绝。
 - `desktop_capture_action_tests` 使用实际 Qt 回调，检查 nonce 解析、无真实
   桌面时不声称可用、关闭 admission、排队结果顺序和重入销毁。
+  环境变量用例先核对真实 API 状态：固定 Qt 的
+  [`qputenv`](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/global/qtenvironmentvariables.cpp)
+  在 Windows 上将空值删除，在 Unix 上保留存在的空值。前者保持普通 Finish，
+  后者按坏验证数据拒绝；非空坏数据的拒绝和消费检查在两端一致。
 - `desktop_capture_action_probe` 默认读取真正的隔离 GIO application registry，
   检查目标/配置、隐藏条目、错误动作、取消和物理替换。它不会声称 GNOME 菜单
   已显示。`--gio-roundtrip` 必须在真正的 session bus 下运行，并实际启动另一个
@@ -132,7 +136,15 @@ dbus-run-session -- ./desktop_capture_action_probe --gio-roundtrip
 native 变更通知，正确重新解析，并通过回调内销毁。真实 Finish 在无 primary 时也已实际
 返回失败且未创建锁、socket 或子目录。当前工作环境禁止 Unix socket bind；
 跨进程正向测试在 QLocalServer listen 被拒绝，私有 dbus-daemon 也在 bind 被拒绝，
-因此这两项须由 CI 实际裁决，不记为通过。
+本地不记为通过。
+
+提交 `659cc9d7f882e3fd1d92cdb6f2360ed2c31ab735` 的
+[Linux Debug CI](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036886/job/139328100702)
+已通过这四项检查。真实 session bus 下 GIO 启动的子进程收到主实例 ACK，
+nonce 仅准入一次、重放被拒绝、真实 Finish 次数为零；注册覆盖/恢复检查收到
+两次 native 变更并通过回调内销毁。这确认验证请求与既有 IPC 的实际往返，
+不代表已经操作 GNOME Shell。Windows 同轮的空环境变量夹具失败，已按上述
+平台 API 语义修正；修正后的本地 Linux 测试通过，Windows 结果仍须重新执行。
 
 GNOME 46/50 的真实菜单显示、无托盘/无 GlobalShortcuts 时的用户操作、Overview
 对源像素的影响、手动滚动到完成及所得长图，均需在各目标桌面另验。路由 ACK

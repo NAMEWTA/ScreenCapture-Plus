@@ -172,6 +172,39 @@
         "The two existing add_buffer failure paths use the same deferred terminal cleanup. Later add_buffer callbacks allocate nothing, keep user_data null, and leave remove_buffer cleanup active."
       ],
       "unchanged": "No new capture backend, synthetic image, fixed frame drop, codec, application frame-rate choice or weakened pixel/metadata assertion."
+    },
+    {
+      "file": "0005-retry-after-current-buffer-replacement.patch",
+      "sha256": "067f6801914a45871ecf09ccbb6c6c6ea2bb0f2d695e2bf6c611a59798d201fd",
+      "kind": "project-local integration correction after 0001-0004",
+      "upstreamReuse": [
+        {
+          "commit": "d24d6a1b726352eb2645c38416b76e214e54a7c0",
+          "author": {
+            "name": "Scott Leggett",
+            "email": "scott@sl.id.au"
+          },
+          "url": "https://github.com/emersion/xdg-desktop-portal-wlr/commit/d24d6a1b726352eb2645c38416b76e214e54a7c0",
+          "path": "src/screencast/pipewire_screencast.c",
+          "blob": "69176df81d2e50f1f50359a410b3334de59c79bb",
+          "reuse": "Call the existing starvation retry, preserving its delay, single-timer ownership, successful dequeue disarm and terminal checks."
+        },
+        {
+          "commit": "5724a432fc95690aef19e55e62178d71b60d0cbb",
+          "url": "https://github.com/emersion/xdg-desktop-portal-wlr/commit/5724a432fc95690aef19e55e62178d71b60d0cbb",
+          "reuse": "Preserve the existing removal-time frame cancellation from patch 0002."
+        }
+      ],
+      "purpose": "Restart the existing producer driver after normal renegotiation removes its currently held buffer without a PAUSED/STREAMING transition.",
+      "adaptation": "One forward declaration and a guarded call to the existing timer in the current-buffer removal branch; no new frame, capture loop, application producer, timeout or pixel rule.",
+      "license": "MIT; unchanged retained upstream license.txt and project-local MIT adaptation",
+      "verification": {
+        "exactBaseBlobs": 15,
+        "orderedFivePatchReplay": true,
+        "producerCompilationAfter0005": false,
+        "positiveResizeAfter0005": false,
+        "positiveRefreshAfter0005": false
+      }
     }
   ],
   "validation": {
@@ -190,10 +223,31 @@
     ],
     "notRun": [
       "Local validation-desktop C compilation (host libdrm/gbm/systemd/inih development packages unavailable)",
-      "Native compositor behavior after these patches; CI must run the first-frame pixel probe",
+      "Producer compilation and positive resize after patch 0005; native first-frame refresh with all patches remains unverified.",
       "GNOME, Plasma, physical displays and a user's external Portal installation",
       "Native legacy pre-buffer close, initial failed/dmabuf-only events, unsupported Y_INVERT, add-buffer failure and retry-starvation destruction under an actual compositor"
-    ]
+    ],
+    "afterSchedulingBackports": {
+      "applicationCommit": "659cc9d7f882e3fd1d92cdb6f2360ed2c31ab735",
+      "job": 139328100702,
+      "artifact": 15038874389,
+      "artifactSha256": "74fe30a69b5375fe37d0f9564c8730eee4e8548cf45e2777684a919e3232610b",
+      "producerCompiled": true,
+      "debugCtestsPassed": 83,
+      "directCapturePassed": true,
+      "resizePassed": false,
+      "observed": "All six delivered frames were 800x600. Constraints changed, the held frame was cancelled during four old-buffer removals, and 1024x768 negotiation added four buffers without leaving STREAMING. No subsequent process callback ran before the client format deadline. No BUFFER_CONSTRAINTS frame failure appeared.",
+      "notRunAfterFailure": [
+        "daemon-loss",
+        "shared live-source refresh",
+        "dedicated first-frame refresh",
+        "Release"
+      ],
+      "evidenceFiles": {
+        "artifacts/cmake/qt-validation/pipewire/Debug/resize/portal-wlr.log": "51c0211fe6719201fcd6dfae5ec4a6484ddc52755973f39ce90da783dcbdfcd4",
+        "artifacts/cmake/qt-validation/pipewire/Debug/resize/result.json": "e5d7c90ecf5407dc52457f948dc087654dba0f802e00631b6a07f968863350e0"
+      }
+    }
   },
   "runtimeDependencies": "No added runtime or protocol dependency. Reuses the validation desktop's existing PipeWire and timer APIs; application dependencies and producer frame-rate choice are unchanged.",
   "lifetimeAuditSources": [

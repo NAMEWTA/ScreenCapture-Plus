@@ -195,6 +195,53 @@ def verify_archive(archive, family, expected, output):
     return files, notices
 
 
+def source_difference_report(family, source, source_output, expected_tree, expected, actual_tree, actual,
+                             before, controls, conversion):
+    """Keep bounded identity evidence when the real index comparison fails.
+
+    Source contents are not exported here. The raw worktree blob identity can
+    distinguish an unchanged upstream file from a Git conversion difference;
+    neither identity nor diagnostics changes the exact-tree acceptance gate.
+    """
+    changed = sorted(name for name in set(expected) | set(actual) if expected.get(name) != actual.get(name))
+    differences, remaining = [], 16 * 1024 * 1024
+    for name in changed[:64]:
+        original = before.get(name)
+        item = {'path': name, 'expected': expected.get(name), 'actual': actual.get(name),
+                'originalWorktree': original}
+        if original is not None:
+            if 'linkTarget' in original:
+                payload = original['linkTarget'].encode('utf-8')
+                item['worktreeGitBlobSha1'] = hashlib.sha1(
+                    b'blob ' + str(len(payload)).encode() + b'\0' + payload).hexdigest()
+            elif original['size'] <= remaining:
+                path = source / name
+                expected_input = {key: original[key] for key in ('size', 'sha256')}
+                require(snapshot(path) == expected_input, 'Original source changed while diagnosing: ' + name)
+                digest = hashlib.sha1(b'blob ' + str(original['size']).encode() + b'\0')
+                with path.open('rb') as incoming:
+                    while chunk := incoming.read(1024 * 1024):
+                        digest.update(chunk)
+                require(snapshot(path) == expected_input, 'Original source changed while diagnosing: ' + name)
+                item['worktreeGitBlobSha1'] = digest.hexdigest()
+                remaining -= original['size']
+            else:
+                item['worktreeGitBlobStatus'] = 'not-computed: bounded diagnostic byte budget'
+        differences.append(item)
+    unchanged = source_inventory(source) == before and all(snapshot(path) == digest for path, digest in controls.items())
+    relative = Path('families') / family / 'source-differences.json'
+    (source_output / relative).parent.mkdir(parents=True, exist_ok=True)
+    materials.meta.json_write(source_output / relative, {
+        'schemaVersion': 1, 'scope': 'Failed source comparison identities only; not source acceptance',
+        'family': family, 'originalSource': str(source), 'gitVersion': git(['--version'], cwd=source),
+        'gitCheckoutConversion': conversion, 'expectedPatchedGitTree': expected_tree,
+        'actualCanonicalGitTree': actual_tree, 'differenceCount': len(changed),
+        'differencesTruncated': len(changed) > len(differences), 'differences': differences,
+        'originalWorktreeAndIndexUnchanged': unchanged, 'sourceAccepted': False,
+    })
+    return relative.as_posix(), len(changed)
+
+
 def archive_source(family, source, package, output, source_output, inputs):
     require((source / '.git').is_dir() and not (source / '.git').is_symlink(),
             'Use the original builder checkout, not a substituted source archive or worktree')
@@ -249,7 +296,12 @@ def archive_source(family, source, package, output, source_output, inputs):
         git(['add', '--renormalize', '--', '.'], cwd=source, git_dir=owned, index=actual_index, conversion=conversion)
         git(['add', '-A', '--', '.'], cwd=source, git_dir=owned, index=actual_index, conversion=conversion)
         actual_tree = git(['write-tree'], cwd=source, git_dir=owned, index=actual_index)
-        require(actual_tree == expected_tree, 'Original source has changes beyond the exact ordered locked patches')
+        if actual_tree != expected_tree:
+            diagnostic, count = source_difference_report(
+                family, source, source_output, expected_tree, expected, actual_tree,
+                tree_files(source, owned, actual_tree), before, controls, conversion)
+            raise ValueError(f'Original {family} source has changes beyond the exact ordered locked patches: '
+                             f'{count} paths; see {diagnostic}')
         # Highest-precedence archive attributes in the OWNED Git directory
         # disable export omission/substitution; every resulting blob is checked.
         attributes = owned / 'info/attributes'; attributes.parent.mkdir(exist_ok=True)

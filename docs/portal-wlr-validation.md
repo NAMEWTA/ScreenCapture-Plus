@@ -79,16 +79,41 @@ removal still runs its normal cleanup. This uses the existing instance list
 without a new thread, deferred timer allocation or ownership framework.
 The exact reviewed source identities are included in `upstream.json`.
 
+## Buffer replacement without a state change
+
+The [subsequent Linux Debug run](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036886/job/139328100702)
+at `659cc9d7f882e3fd1d92cdb6f2360ed2c31ab735` compiled patches 0001–0004,
+passed 83 ordinary tests and direct capture, then failed the resize scenario.
+Its TRACE shows six matching 800 × 600 frames, a held capture frame, two
+constraints updates, removal of the four old buffers, successful 1024 × 768
+negotiation and four new buffers. No new process callback followed before the
+client's five-second format deadline. The stream remained STREAMING through
+replacement; no BUFFER_CONSTRAINTS frame failure was observed. The client's
+geometry notification therefore did not prove that a new-size frame arrived.
+
+Removing the current buffer correctly cancels its capture frame, but also
+removes the frame-ready callback that drives the next graph iteration.
+`0005-retry-after-current-buffer-replacement.patch` restores that missing
+schedule through the existing upstream starvation timer, only for the held
+buffer of a live, nonterminal stream. The native removal callback returns
+before the timer fires; missing buffers follow the existing bounded-rate retry,
+and successful dequeue, pause and teardown retain their existing disarm paths.
+The patch adds no new capture loop and changes neither pixels nor deadlines.
+It is a local integration correction, attributed separately from the upstream
+backports. Its real resize and refresh checks remain pending CI.
+
 ## Verification and support boundary
 
 The fixed source blobs and license have been checked by their Git object IDs.
-All four patches apply in order with `git apply --check`; the resulting source
-bytes match the reviewed backports and local ownership correction. The new diagnostic client
+All five patches apply in order with `git apply --check`; the resulting source
+bytes match the reviewed backports and local corrections. The diagnostic client
 compiled with the fixed Qt 6.12.1 SDK and strict GCC 14 warnings. This workspace
 lacks the compositor's host development headers and cannot create the private
-Unix sockets required by the native desktop. Patched producer compilation and
-actual positive first-frame behavior therefore remain CI work, not local
-passes.
+Unix sockets required by the native desktop. The four-patch producer compiled
+in the run above, but compilation with 0005, positive resize recovery and actual
+first-frame behavior remain CI work. Daemon-loss, shared live-source refresh,
+the dedicated first-frame check and Release did not run after that resize
+failure; earlier results cannot cover these new changes.
 
 A previously executed native PipeWire client check confirmed that disconnect
 can emit `UNCONNECTED` synchronously. It did not use a compositor or validate

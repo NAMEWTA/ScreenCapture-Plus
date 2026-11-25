@@ -137,8 +137,12 @@ Plasma, physical displays, mixed DPI, remote desktop policy or long-run gates.
 The first integrated shared-owner CI run (`24f94d4`, job `139288150686`) failed
 the actual pattern assertion on its first consumed frame after refresh. The
 initial preview passed and all owners drained; fresh-frame acceptance is still
-open. [The validation backend record](portal-wlr-validation.md) preserves this
-failure, the new actual-pixel diagnostics and the narrowly selected upstream
-producer fixes. Those fixes belong only to the owned validation desktop and
-cannot establish that the user's system Portal has equivalent behavior.
+open. The subsequent `659cc9d7` Linux Debug run compiled the controlled producer
+backports and passed direct capture, but stopped earlier at resize: new buffers
+were negotiated without another process callback. The refresh checks therefore
+did not execute. [The validation backend record](portal-wlr-validation.md)
+preserves both failures, the actual-pixel diagnostics and the minimal retry
+correction after current-buffer removal. These changes belong only to the owned
+validation desktop and cannot establish that the user's system Portal has
+equivalent behavior.
 
