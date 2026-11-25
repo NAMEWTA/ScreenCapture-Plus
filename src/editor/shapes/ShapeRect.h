@@ -1,6 +1,7 @@
 #pragma once
 #include <include/Ling.h>
 #include "editor/shapes/ShapeBase.h"
+#include "editor/BoxModel.h"
 class ShapeRect : public ShapeBase
 {
 public:
@@ -16,12 +17,9 @@ public:
 	void setCursor() override;
 public:
 private:
-	std::vector<D2D1_RECT_F> draggers;
-	// 给初值：mouseDown 只记按下点，rect 要等第一次 mouseDrag 才算出来，
-	// 而这之间已经可能来一次 paint（刷新时机不受控），不初始化就是拿垃圾值画矩形
-	D2D1_RECT_F rect{ 0,0,0,0 };
+	HuhuCapture::Editor::BoxModel model_;
 	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-	float strokeWidth, pressX, pressY;
+	float strokeWidth;
 	bool isFill{ false };
 };
 

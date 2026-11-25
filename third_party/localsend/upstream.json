@@ -1,0 +1,48 @@
+{
+  "repository": "https://github.com/localsend/localsend",
+  "commit": "44f48f18a5503c43873570ff489d27ff1983e198",
+  "release_reference": "v1.19.0",
+  "crate": "localsend",
+  "crate_version": "0.1.0",
+  "license": "Apache-2.0",
+  "attribution": "LocalSend contributors; authorship is retained in the fixed upstream source history.",
+  "source_manifest": "upstream-files.json",
+  "mapping": {
+    "packages/core/": "core/",
+    "LICENSE": "LICENSE",
+    "rust-toolchain.toml": "rust-toolchain.toml",
+    "Cargo.lock": "Cargo.lock (initial unmodified lock; regenerate only using Cargo)",
+    "Cargo.toml": "replaced with the independent core-only workspace manifest"
+  },
+  "patch": "patches/native-core.patch",
+  "protocol": {
+    "repository": "https://github.com/localsend/protocol",
+    "commit": "62bd3406ec80d62f2ed46269cdc06c4dcc391083",
+    "version": "2.2",
+    "path": "README.md"
+  },
+  "additional_dependencies": [
+    {
+      "name": "infer",
+      "version": "0.22.0",
+      "repository": "https://github.com/bojand/infer",
+      "source_commit_reviewed": "cb05400c5f43e07200fbc1c5753e15946e9b1de8",
+      "license": "MIT",
+      "license_file": "infer.LICENSE",
+      "license_git_blob_sha": "588aa079e90b16ff98e0e5804cfac789e04f6f75",
+      "attribution": "Copyright (c) 2019 Bojan",
+      "features": [],
+      "default_features": false,
+      "purpose": "Bounded magic-number type detection before archive commit permission; not a full-media decoder",
+      "source_reviewed": ["Cargo.toml", "LICENSE", "src/matchers/image.rs", "src/matchers/video.rs"]
+    }
+  ],
+  "local_fixtures": [
+    {
+      "path": "core/tests/fixtures/one-pixel.png",
+      "origin": "Generated for huhucapture tests; 1x1 RGBA PNG with zlib-compressed scanline",
+      "license": "project test code license"
+    }
+  ],
+  "maintenance_document": "../../docs/localsend-core.md"
+}

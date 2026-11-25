@@ -48,6 +48,8 @@ if(BUILD_TESTING)
     huhucapture_test(media_file_names tests/media_file_name_tests.cpp)
     huhucapture_test(release_versions tests/release_version_tests.cpp)
     huhucapture_test(annotation_model tests/annotation_model_tests.cpp)
+    huhucapture_test(box_model tests/box_model_tests.cpp)
+    huhucapture_test(stroke_model tests/stroke_model_tests.cpp)
     huhucapture_test(recording_results tests/recording_result_tests.cpp)
     if(TARGET huhucapture_file_committer)
         find_package(Threads REQUIRED)
@@ -93,7 +95,7 @@ if(HUHUCAPTURE_QT_VALIDATION)
             src/platform/windows/GdiCapture.cpp
             src/recording/VideoMp4.cpp)
         target_link_libraries(huhucapture_native_media PUBLIC huhucapture_core
-            gdi32 user32 ole32 oleaut32 uuid shell32 shlwapi
+            gdi32 user32 ole32 oleaut32 uuid shell32 shlwapi propsys
             d3d11 dxgi windowscodecs mf mfplat mfreadwrite mfuuid
             wininet comctl32)
         target_compile_definitions(huhucapture_native_media PUBLIC

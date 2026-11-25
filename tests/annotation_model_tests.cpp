@@ -175,7 +175,7 @@ void historyAndInterruptedCreationKeepHighWaterMark()
     const auto add = [&]() {
         const auto number = sequence.allocate();
         CHECK(number.has_value());
-        return history.append(std::make_unique<Model>(*number, 320, 200, 1));
+        return history.append(std::make_unique<Model>(*number, 320, 200, 1.0f));
     };
     auto* first = add();
     create(*first);

@@ -7,9 +7,7 @@
 
 using Microsoft::WRL::ComPtr;
 
-ShapeLine::ShapeLine(WinPin* win) :ShapeBase(win), draggers{
-	D2D1::RectF(0,0,0,0),
-	D2D1::RectF(0,0,0,0)}
+ShapeLine::ShapeLine(WinPin* win) : ShapeBase(win)
 {
 	auto toolSub = win->toolSub.get();
 	auto color = toolSub->getSelectedColor();
@@ -49,99 +47,38 @@ void ShapeLine::paint(ID2D1DeviceContext* ctx)
 
 void ShapeLine::paintDragger(ID2D1DeviceContext* ctx)
 {
-	for (auto& dragger:draggers)
-	{
-		ctx->DrawRectangle(dragger, brushDragger.Get(), win->dpi);
-	}
+    for (const auto& bounds : model_.handles(draggerSize))
+        ctx->DrawRectangle(D2D1::RectF(bounds.left, bounds.top, bounds.right, bounds.bottom),
+            brushDragger.Get(), win->dpi);
 }
 
 void ShapeLine::mouseDrag(const float x, const float y)
 {
-	// Shift 按下时不再追加顶点，而是拖动端点 —— 效果是一条直线；松开 Shift 就是自由画
-	bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-	if (hoverDraggerIndex == 0) {
-		if (shiftDown) {
-			auto& p = linePoints[0];
-			p.x = x;
-			p.y = y;
-		}
-		else {
-			linePoints.insert(linePoints.begin(), { x,y });
-		}
-		makePath();
-	}
-	else if (hoverDraggerIndex == 1) {
-		if (shiftDown) {
-			auto& p = linePoints[linePoints.size() - 1];
-			p.x = x;
-			p.y = y;
-		}
-		else {
-			linePoints.push_back({ x,y });
-		}
-		makePath();
-	}
-	else if (hoverDraggerIndex == 8) {
-		auto spanX{ x - pressX };
-		auto spanY{ y - pressY };
-		for (auto& p:linePoints)
-		{
-			p.x += spanX;
-			p.y += spanY;
-		}
-		makePath();
-		pressX = x;
-		pressY = y;
-	}
+    if (!model_.gestureActive()) return;
+    model_.drag({x, y}, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+    makePath();
 }
 
 void ShapeLine::mouseDown(const float x, const float y)
 {
-	if (hoverDraggerIndex == -1) { //首次创建
-		linePoints.push_back({ x,y }); 
-		if (GetKeyState(VK_SHIFT) & 0x8000) {
-			linePoints.push_back({ x,y });
-		}
-		makePath();
-		hoverDraggerIndex = 1;
-		win->refresh();
-	}
-	else if (hoverDraggerIndex == 8) {
-		pressX = x;
-		pressY = y;
-	}
+    const bool wasPlaced = model_.placed();
+    hoverDraggerIndex = static_cast<int>(model_.beginGesture({x, y},
+        (GetKeyState(VK_SHIFT) & 0x8000) != 0,
+        static_cast<HuhuCapture::Editor::PathHandle>(hoverDraggerIndex)));
+    if (!wasPlaced && model_.placed()) {
+        makePath();
+        win->refresh();
+    }
 }
 
 void ShapeLine::mouseUp(const float x, const float y)
 {
-	auto half{ draggerSize / 2 };
-	auto& start = linePoints[0];
-	draggers[0].left = start.x - half;
-	draggers[0].top = start.y - half;
-	draggers[0].right = start.x + half;
-	draggers[0].bottom = start.y + half;
-	auto& end = linePoints[linePoints.size() - 1];
-	draggers[1].left = end.x - half;
-	draggers[1].top = end.y - half;
-	draggers[1].right = end.x + half;
-	draggers[1].bottom = end.y + half;
+    model_.finishGesture();
 }
 
 void ShapeLine::mouseMove(const float x, const float y)
 {
-    hoverDraggerIndex = -1;
-    if (isInRect(draggers[0], x, y))
-    {
-        hoverDraggerIndex = 0;
-    }
-    else if (isInRect(draggers[1], x, y))
-    {
-        hoverDraggerIndex = 1;
-    }
-    if (hoverDraggerIndex == -1)
-    {
-		hitTest({ x,y });
-    }
+    hoverDraggerIndex = static_cast<int>(model_.hitTest({x, y}, draggerSize, strokeWidth, win->dpi));
 }
 
 void ShapeLine::setCursor()
@@ -153,47 +90,16 @@ void ShapeLine::setCursor()
 
 void ShapeLine::makePath()
 {
-	auto d2d = Ling::D2D::get();
-	// ReleaseAndGetAddressOf 而不是 GetAddressOf：后者不放旧对象，自由画时每个鼠标事件漏一个几何体
-	d2d->d2dFactory->CreatePathGeometry(path.ReleaseAndGetAddressOf());
-	ComPtr<ID2D1GeometrySink> sink;
-	path->Open(sink.GetAddressOf());
-	sink->BeginFigure(linePoints[0], D2D1_FIGURE_BEGIN_HOLLOW);
-	if (linePoints.size() > 1) {
-		sink->AddLines(&linePoints[1], (UINT32)(linePoints.size() - 1));
-	}	
-	sink->EndFigure(D2D1_FIGURE_END_OPEN);
-	sink->Close();
-}
-
-float  ShapeLine::pointToSegmentDistance(const D2D1_POINT_2F& p, const D2D1_POINT_2F& a, const D2D1_POINT_2F& b)
-{
-	float abx = b.x - a.x, aby = b.y - a.y;
-	float apx = p.x - a.x, apy = p.y - a.y;
-	float ab2 = abx * abx + aby * aby;
-	float t = (ab2 == 0.0f) ? 0.0f : (apx * abx + apy * aby) / ab2;
-	t = std::max(0.0f, std::min(1.0f, t));  // 限制在线段范围内
-	float cx = a.x + t * abx;
-	float cy = a.y + t * aby;
-	float dx = p.x - cx, dy = p.y - cy;
-
-	return std::sqrtf(dx * dx + dy * dy);
-}
-
-void ShapeLine::hitTest(const D2D1_POINT_2F& mousePos)
-{
-	// 只有笔画边缘那一圈算命中：粗笔画（马赛克、橡皮擦尤其明显）整片都能拖的话，
-	// 就没法在已有笔画上面再画一笔了 —— 鼠标一按下会变成拖动旧元素。
-	// 矩形模式本来就是只有边框附近才响应，这里跟它对齐
-	float outer = strokeWidth * 0.5f + win->dpi; //外沿保持原来的判定范围
-	float inner = outer - draggerSize / 2; //往里让出这么宽算内部。细笔画算出来是负数，等于整条线都能拖
-	// 得先在所有线段里取最小距离再判断：自交的笔画里，某一段的边缘可能正好压在另一段的
-	// 内部，那种位置视觉上是在笔画里面，逐段判断会误判成边缘
-	float minDist{ FLT_MAX };
-	for (size_t i = 0; i + 1 < linePoints.size(); ++i) {
-		minDist = std::min(minDist, pointToSegmentDistance(mousePos, linePoints[i], linePoints[i + 1]));
-	}
-	if (minDist <= outer && minDist >= inner) {
-		hoverDraggerIndex = 8;
-	}
+    const auto points = model_.points();
+    if (points.empty()) return;
+    auto d2d = Ling::D2D::get();
+    d2d->d2dFactory->CreatePathGeometry(path.ReleaseAndGetAddressOf());
+    if (!path) return;
+    ComPtr<ID2D1GeometrySink> sink;
+    path->Open(sink.GetAddressOf());
+    if (!sink) { path.Reset(); return; }
+    sink->BeginFigure({points.front().x, points.front().y}, D2D1_FIGURE_BEGIN_HOLLOW);
+    addPathLines(sink.Get(), points.subspan(1));
+    sink->EndFigure(D2D1_FIGURE_END_OPEN);
+    if (FAILED(sink->Close())) path.Reset();
 }

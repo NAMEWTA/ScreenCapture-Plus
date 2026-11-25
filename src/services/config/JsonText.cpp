@@ -31,6 +31,8 @@ JsonTextResult parseJsonObject(const QByteArray& bytes, QJsonObject& output)
     const QString text = decoder(QByteArrayView(bytes).sliced(skip));
     if (decoder.hasError())
         return {TextError::Encoding, QStringLiteral("Invalid or truncated Unicode encoding")};
+    if (text.trimmed().isEmpty())
+        return {TextError::EmptyDocument, QStringLiteral("The JSON document is empty")};
 
     QJsonParseError parseError;
     const auto document = QJsonDocument::fromJson(text.toUtf8(), &parseError);

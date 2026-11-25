@@ -46,9 +46,11 @@ public:
     // The UI supplies one explicitly selected old config.json; no disk scan.
     // Source bytes and any existing destination are backed up before import.
     // Reimporting the same bytes is idempotent and preserves subsequent edits.
+    // Selecting the active file (including an alias) performs no rewrite.
     SettingsResult importFrom(const QString& sourcePath);
 
 private:
+    SettingsResult checkSnapshot() const;
     SettingsResult persist(QJsonObject candidate, bool forceBackup,
         const QByteArray* importedSource = nullptr);
     QString path_;

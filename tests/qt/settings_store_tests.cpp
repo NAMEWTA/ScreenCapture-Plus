@@ -10,6 +10,7 @@
 #include <QLockFile>
 #include <QTemporaryDir>
 #include <iostream>
+#include <filesystem>
 #include <stdexcept>
 
 namespace config = HuhuCapture::Config;
@@ -101,13 +102,23 @@ void migrationAndUnknownFields(const QTemporaryDir& root)
         "successful migration is not repeated");
     require(restarted.setValue({"common", "language"}, "en-US").ok(), "normal subsequent save succeeds");
     require(read(result.backupPath) == original, "later saves never replace migration backup");
+
+    const auto oldDefaultPath = location(root, "old-default-shortcut");
+    write(oldDefaultPath, R"({"shortcutKey":{"cap":"Ctrl+Alt+A"}})");
+    config::SettingsStore oldDefault(oldDefaultPath);
+    require(oldDefault.load().ok() && oldDefault.value({"shortcutKey", "cap"}).toString() == "F1",
+        "previous default shortcut follows the established v0.0.5 migration");
+    require(oldDefault.save().ok(), "persist migrated default");
+    require(oldDefault.setValue({"shortcutKey", "cap"}, "Ctrl+Alt+A").ok(), "new-schema deliberate shortcut is accepted");
+    require(oldDefault.load().ok() && oldDefault.value({"shortcutKey", "cap"}).toString() == "Ctrl+Alt+A",
+        "schema marker prevents repeating an old-default migration");
 }
 
 void preserveErrors(const QTemporaryDir& root)
 {
     const auto path = location(root, "bad");
     for (const auto& bytes : {QByteArray::fromHex("fffe7b"), QByteArray("not JSON"),
-        QByteArray(R"({"_huhucapture":{"schema":2},"keep":"future"})"), QByteArray()}) {
+        QByteArray(R"({"_huhucapture":{"schema":2},"keep":"future"})")}) {
         write(path, bytes);
         config::SettingsStore store(path);
         require(!store.load().ok(), "existing invalid or future config is not a fresh installation");
@@ -116,6 +127,15 @@ void preserveErrors(const QTemporaryDir& root)
     }
     config::SettingsStore empty{QString()};
     require(!empty.load().ok(), "empty path cannot choose the process working directory");
+    for (const auto& marker : {QByteArray(), QByteArray(" \t\r\n"), utf16(QStringLiteral(" \r\n"))}) {
+        write(path, marker);
+        config::SettingsStore portable(path);
+        require(portable.load().ok() && portable.value({"shortcutKey", "cap"}).toString() == "F1",
+            "documented empty portable marker loads defaults");
+        const auto saved = portable.save();
+        require(saved.ok() && !saved.backupPath.isEmpty() && read(saved.backupPath) == marker,
+            "empty portable marker is backed up before normalization");
+    }
     const auto blocked = QDir(root.path()).filePath("parent-becomes-file");
     config::SettingsStore missing(QDir(blocked).filePath("config.json"));
     require(missing.load().ok(), "missing configuration uses defaults in memory");
@@ -182,9 +202,54 @@ void pathAndImportContracts(const QTemporaryDir& root)
     const auto afterEdit = read(userConfig);
     require(installed.importFrom(executableConfig).ok() && read(userConfig) == afterEdit,
         "reimporting the same source does not erase subsequent user edits");
+    require(installed.importFrom(userConfig).ok() && read(userConfig) == afterEdit,
+        "importing the active file is a no-op and does not rewrite the selected source");
+    write(userConfig, R"({"external":"edit after import"})");
+    require(installed.importFrom(executableConfig).error == config::SettingsError::ChangedOnDisk,
+        "idempotent import still rejects stale destination state");
+    require(QFile::remove(userConfig), "remove destination for outside-change fixture");
+    require(installed.importFrom(executableConfig).error == config::SettingsError::ChangedOnDisk,
+        "idempotent import does not report success for an externally deleted destination");
+    write(userConfig, afterEdit);
     write(executableConfig, "broken source");
     require(!installed.importFrom(executableConfig).ok() && read(userConfig) == afterEdit,
         "invalid import does not replace valid destination");
+}
+
+void aliasProtection(const QTemporaryDir& root)
+{
+    const auto path = location(root, "aliases");
+    write(path, R"({"shortcutKey":{"cap":"Ctrl+Shift+F9"}})");
+    const auto alias = QFileInfo(path).absolutePath() + "/linked-config.json";
+    std::error_code error;
+#ifdef _WIN32
+    std::filesystem::create_symlink(std::filesystem::path(path.toStdWString()),
+        std::filesystem::path(alias.toStdWString()), error);
+#else
+    std::filesystem::create_symlink(std::filesystem::path(path.toUtf8().toStdString()),
+        std::filesystem::path(alias.toUtf8().toStdString()), error);
+#endif
+    if (error) {
+        std::cout << "NOT RUN: symlink creation unavailable: " << error.message() << '\n';
+        return;
+    }
+    config::SettingsStore direct(path), linked(alias);
+    require(direct.load().ok() && linked.load().ok(), "read active config through both names");
+    require(direct.path() == linked.path(), "writer lock and QSaveFile use one canonical destination");
+    const auto before = read(path);
+    require(direct.importFrom(alias).ok() && read(path) == before,
+        "import through an alias leaves the source unchanged");
+    {
+        QLockFile lock(direct.path() + ".lock");
+        require(lock.tryLock(0), "hold real destination lock");
+        require(linked.save().error == config::SettingsError::Locked,
+            "a symbolic alias cannot bypass the active writer lock");
+    }
+    require(direct.setValue({"common", "language"}, "ru-RU").ok(), "save through canonical destination");
+    const auto successful = read(path);
+    require(linked.setValue({"common", "language"}, "en-US").error == config::SettingsError::ChangedOnDisk,
+        "alias writer cannot erase a newer save");
+    require(read(path) == successful && read(alias) == successful, "alias still names the complete saved config");
 }
 } // namespace
 
@@ -199,6 +264,7 @@ int main(int argc, char** argv)
         preserveErrors(directory);
         writersAndBackupCollision(directory);
         pathAndImportContracts(directory);
+        aliasProtection(directory);
         std::cout << "Qt configuration migration, backups, encoding and real filesystem checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

@@ -1,5 +1,7 @@
 #pragma once
 #include <include/Ling.h>
+#include "editor/Geometry.h"
+#include <span>
 class WinPin;
 class ShapeBase
 {
@@ -22,6 +24,10 @@ public:
 	WinPin* win;
 	int hoverDraggerIndex{ -1 };
 protected:
+    // Convert standard geometry in bounded batches: no aliasing cast, no
+    // duplicated persistent point buffer and no per-vertex COM call overhead.
+    static void addPathLines(ID2D1GeometrySink* sink,
+        std::span<const HuhuCapture::Editor::EditorPoint> points);
 protected:
 	float draggerSize;
 	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brushDragger;

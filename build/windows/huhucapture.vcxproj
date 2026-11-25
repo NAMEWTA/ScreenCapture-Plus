@@ -175,6 +175,9 @@
     <ClInclude Include="..\..\src\core\ScrollStitch.h" />
     <ClInclude Include="..\..\src\editor\History.h" />
     <ClInclude Include="..\..\src\editor\AnnotationModel.h" />
+    <ClInclude Include="..\..\src\editor\Geometry.h" />
+    <ClInclude Include="..\..\src\editor\BoxModel.h" />
+    <ClInclude Include="..\..\src\editor\StrokeModel.h" />
     <ClInclude Include="..\..\src\editor\ShapeFactory.h" />
     <ClInclude Include="..\..\src\editor\WinPin.h" />
     <ClInclude Include="..\..\src\editor\shapes\ShapeAnnotation.h" />

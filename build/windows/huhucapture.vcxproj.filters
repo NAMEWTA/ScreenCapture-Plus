@@ -401,6 +401,15 @@
     <ClInclude Include="..\..\src\editor\AnnotationModel.h">
       <Filter>src\editor</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\editor\Geometry.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\BoxModel.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\editor\StrokeModel.h">
+      <Filter>src\editor</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\services\MediaHistory.h">
       <Filter>src\services</Filter>
     </ClInclude>

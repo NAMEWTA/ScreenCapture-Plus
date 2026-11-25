@@ -63,6 +63,10 @@ SettingsResult readFile(const QString& path, QByteArray& bytes, bool& exists)
 SettingsResult parse(const QByteArray& bytes, QJsonObject& output)
 {
     auto result = parseJsonObject(bytes, output);
+    // An empty config.json is the documented legacy portable-mode marker.
+    // Accept only correctly decoded empty/whitespace text, and still back up
+    // those exact bytes before its first write. Broken encoding is not empty.
+    if (result.error == TextError::EmptyDocument) { output = {}; return {}; }
     if (!result.ok()) return {SettingsError::Decode, result.detail, {}, {}};
     const auto metadata = output.value(QLatin1String(metadataKey));
     if (!metadata.isUndefined() && !metadata.isObject())
@@ -88,6 +92,19 @@ void insertMissingDefaults(QJsonObject& root)
     insert(QStringLiteral("common"), {{QStringLiteral("autoStart"), false},
         {QStringLiteral("language"), QStringLiteral("zh-CN")}});
     insert(QStringLiteral("shortcutKey"), {{QStringLiteral("cap"), QStringLiteral("F1")}});
+}
+
+void migrateLegacyShortcut(QJsonObject& root)
+{
+    const auto schema = root.value(QLatin1String(metadataKey)).toObject().value(QStringLiteral("schema"));
+    if (!schema.isUndefined()) return;
+    auto shortcuts = root.value(QStringLiteral("shortcutKey")).toObject();
+    if (shortcuts.value(QStringLiteral("cap")).toString() == QStringLiteral("Ctrl+Alt+A")) {
+        // Preserve v0.0.5's explicit migration of its previous default. Other
+        // custom shortcuts, and deliberate values in the new schema, survive.
+        shortcuts.insert(QStringLiteral("cap"), QStringLiteral("F1"));
+        root.insert(QStringLiteral("shortcutKey"), shortcuts);
+    }
 }
 
 bool replaceValue(QJsonObject& object, const QStringList& keys, qsizetype position, const QJsonValue& value)
@@ -156,7 +173,17 @@ QString settingsPath(PathPolicy policy, const QString& applicationDirectory,
 }
 
 SettingsStore::SettingsStore(QString path)
-    : path_(path.isEmpty() || path.contains(QChar::Null) ? QString() : QFileInfo(path).absoluteFilePath()) {}
+{
+    if (path.isEmpty() || path.contains(QChar::Null)) return;
+    // QSaveFile resolves file symlinks internally. Use that same physical path
+    // for reading and locking, so aliases cannot obtain independent writer
+    // locks for one destination. weakly_canonical also resolves an existing
+    // parent when a fresh configuration does not exist yet.
+    std::error_code error;
+    const auto resolved = std::filesystem::weakly_canonical(
+        nativePath(QFileInfo(path).absoluteFilePath()), error);
+    if (!error) path_ = qtPath(resolved);
+}
 
 SettingsResult SettingsStore::load()
 {
@@ -175,6 +202,7 @@ SettingsResult SettingsStore::load()
     const auto migration = document.value(QLatin1String(metadataKey)).toObject();
     needsMigration_ = existed && migration.value(QStringLiteral("schema")).toInt() != schemaVersion;
     insertMissingDefaults(document);
+    migrateLegacyShortcut(document);
     document_ = std::move(document);
     originalBytes_ = std::move(bytes);
     existed_ = existed;
@@ -206,6 +234,17 @@ SettingsResult SettingsStore::setValue(const QStringList& keys, const QJsonValue
 
 SettingsResult SettingsStore::save() { return persist(document_, false); }
 
+SettingsResult SettingsStore::checkSnapshot() const
+{
+    QByteArray current;
+    bool exists = false;
+    const auto result = readFile(path_, current, exists);
+    if (!result.ok()) return result;
+    if (exists != existed_ || current != originalBytes_)
+        return {SettingsError::ChangedOnDisk, QStringLiteral("Configuration changed on disk; reload before saving"), {}, {}};
+    return {};
+}
+
 SettingsResult SettingsStore::persist(QJsonObject candidate, bool forceBackup, const QByteArray* importedSource)
 {
     if (!loaded_)
@@ -218,12 +257,8 @@ SettingsResult SettingsStore::persist(QJsonObject candidate, bool forceBackup, c
     if (!lock.tryLock(0))
         return {SettingsError::Locked, QStringLiteral("Configuration is in use by another writer"), {}, {}};
 
-    QByteArray current;
-    bool exists = false;
-    auto result = readFile(path_, current, exists);
+    const auto result = checkSnapshot();
     if (!result.ok()) return result;
-    if (exists != existed_ || current != originalBytes_)
-        return {SettingsError::ChangedOnDisk, QStringLiteral("Configuration changed on disk; reload before saving"), {}, {}};
 
     auto metadata = candidate.value(QLatin1String(metadataKey)).toObject();
     metadata.insert(QStringLiteral("schema"), schemaVersion);
@@ -234,7 +269,7 @@ SettingsResult SettingsStore::persist(QJsonObject candidate, bool forceBackup, c
     if (bytes == originalBytes_ && !importedSource) return {};
 
     SettingsResult outcome;
-    if (exists && (needsMigration_ || forceBackup)) {
+    if (existed_ && (needsMigration_ || forceBackup)) {
         outcome = backup(path_, originalBytes_, QStringLiteral("pre-qt"));
         if (!outcome.ok()) return outcome;
     }
@@ -270,13 +305,20 @@ SettingsResult SettingsStore::importFrom(const QString& sourcePath)
     auto result = readFile(sourcePath, bytes, exists);
     if (!result.ok()) return result;
     if (!exists) return {SettingsError::Read, QStringLiteral("Selected configuration does not exist"), {}, {}};
+    if (existsIncludingLink(path_)) {
+        std::error_code error;
+        const bool sameFile = std::filesystem::equivalent(nativePath(sourcePath), nativePath(path_), error);
+        if (error) return {SettingsError::Read, QString::fromStdString(error.message()), {}, {}};
+        if (sameFile) return checkSnapshot();
+    }
     QJsonObject candidate;
     result = parse(bytes, candidate);
     if (!result.ok()) return result;
     const auto digest = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
     const auto previous = document_.value(QLatin1String(metadataKey)).toObject();
-    if (previous.value(QStringLiteral("importedSha256")).toString() == digest) return {};
+    if (previous.value(QStringLiteral("importedSha256")).toString() == digest) return checkSnapshot();
     insertMissingDefaults(candidate);
+    migrateLegacyShortcut(candidate);
     auto metadata = candidate.value(QLatin1String(metadataKey)).toObject();
     metadata.insert(QStringLiteral("importedSha256"), digest);
     metadata.insert(QStringLiteral("importedSource"), QFileInfo(sourcePath).absoluteFilePath());

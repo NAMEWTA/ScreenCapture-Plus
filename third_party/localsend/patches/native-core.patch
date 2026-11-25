@@ -1,0 +1,1717 @@
+--- a/core/Cargo.toml
++++ b/core/Cargo.toml
+@@ -1,7 +1,9 @@
++# huhucapture modification; see docs/localsend-core.md and upstream.json.
+ [package]
+ name = "localsend"
+ version = "0.1.0"
+ edition = "2021"
++license = "Apache-2.0"
+ 
+ [dependencies]
+ anyhow = "1.0.104"
+@@ -12,9 +14,10 @@
+ form_urlencoded = { version = "1.2.2", optional = true }
+ futures-util = { version = "0.3.33", features = ["sink"] }
+ http-body-util = { version = "0.1.4", optional = true }
++infer = { version = "=0.22.0", default-features = false, optional = true }
+ hyper = { version = "1.11.0", features = ["http1", "server"], optional = true }
+ if-addrs = { version = "0.15.0", optional = true }
+-hyper-util = { version = "0.1.20", features = ["server"], optional = true }
++hyper-util = { version = "0.1.20", features = ["server", "tokio"], optional = true }
+ lru = "0.18.1"
+ pem = { version = "4.0.0", optional = true }
+ percent-encoding = { version = "2.3.2", optional = true }
+@@ -56,7 +59,7 @@
+ default = []
+ crypto = ["ed25519-dalek", "rcgen", "rsa", "sha2", "tokio-util"]
+ discovery = ["http", "multicast"]
+-http = ["crypto", "form_urlencoded", "http-body-util", "hyper", "hyper-util", "if-addrs", "pem", "percent-encoding", "reqwest", "rustls", "socket2", "time", "tokio-rustls", "tokio-util", "x509-parser"]
++http = ["crypto", "form_urlencoded", "http-body-util", "infer", "hyper", "hyper-util", "if-addrs", "pem", "percent-encoding", "reqwest", "rustls", "socket2", "time", "tokio-rustls", "tokio-util", "x509-parser"]
+ multicast = ["if-addrs", "socket2", "tokio-util"]
+ webrtc-signaling = ["tokio-tungstenite"]
+ webrtc = ["crypto", "flate2", "dep:webrtc", "webrtc-signaling", "x509-parser"]
+--- a/core/src/crypto/hash.rs
++++ b/core/src/crypto/hash.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ use crate::model::transfer::FileContent;
+ use sha2::{Digest, Sha256};
+ use tokio_util::sync::CancellationToken;
+@@ -59,6 +60,25 @@
+             let file = tokio::fs::File::open(&path).await?;
+             read_and_hash_from_file(&mut hasher, file, cancel_token, progress).await?;
+         }
++        FileContent::File(file) => {
++            read_and_hash_from_file(&mut hasher, tokio::fs::File::from_std(file), cancel_token, progress).await?;
++        }
++        FileContent::ResultStream(mut receiver) => {
++            let mut hashed = 0_u64;
++            loop {
++                let chunk = tokio::select! {
++                    biased;
++                    _ = cancel_token.cancelled() => return Err(HashError::Cancelled),
++                    chunk = receiver.recv() => chunk,
++                };
++                let Some(chunk) = chunk else { break; };
++                let chunk = chunk?;
++                hasher.update(&chunk);
++                hashed = hashed.checked_add(chunk.len() as u64)
++                    .ok_or_else(|| std::io::Error::other("Hash byte count overflow"))?;
++                progress(hashed);
++            }
++        }
+         #[cfg(target_os = "android")]
+         FileContent::Fd(fd) => {
+             use std::os::fd::FromRawFd;
+--- a/core/src/http/client/mod.rs
++++ b/core/src/http/client/mod.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ mod scoped_host;
+ mod server_cert_verifier;
+ mod url;
+@@ -199,7 +200,8 @@
+     let mut sent = 0_u64;
+     let stream = content.into_stream().map(move |chunk| {
+         let chunk = chunk?;
+-        sent += chunk.len() as u64;
++        sent = sent.checked_add(chunk.len() as u64)
++            .ok_or_else(|| anyhow::anyhow!("Upload byte count overflow"))?;
+         progress(sent);
+         Ok::<Bytes, anyhow::Error>(chunk)
+     });
+@@ -376,12 +378,38 @@
+ 
+ pub(super) trait ResponseExt {
+     async fn into_error<T>(self) -> Result<T, ClientError>;
++    async fn bounded_bytes(self) -> Result<Vec<u8>, ClientError>;
++    async fn json_limited<T: serde::de::DeserializeOwned>(self) -> Result<T, ClientError>;
+ }
+ 
+ impl ResponseExt for Response {
++    async fn bounded_bytes(mut self) -> Result<Vec<u8>, ClientError> {
++        let limit = crate::http::limits::CONTROL_BYTES;
++        if self.content_length().is_some_and(|length| length > limit as u64) {
++            return Err(anyhow::anyhow!("Control response exceeds byte limit").into());
++        }
++        let read = async {
++            let mut bytes = Vec::new();
++            while let Some(chunk) = self.chunk().await? {
++                if chunk.len() > limit.saturating_sub(bytes.len()) {
++                    return Err(ClientError::Other(anyhow::anyhow!("Control response exceeds byte limit")));
++                }
++                bytes.extend_from_slice(&chunk);
++            }
++            Ok(bytes)
++        };
++        tokio::time::timeout(crate::http::limits::CONTROL_TIMEOUT, read).await
++            .map_err(|_| ClientError::Other(anyhow::anyhow!("Control response timed out")))?
++    }
++
++    async fn json_limited<T: serde::de::DeserializeOwned>(self) -> Result<T, ClientError> {
++        Ok(serde_json::from_slice(&self.bounded_bytes().await?)?)
++    }
++
+     async fn into_error<T>(self) -> Result<T, ClientError> {
+         let status = self.status().as_u16();
+-        let body = self.text().await.unwrap_or_default();
++        let bytes = self.bounded_bytes().await?;
++        let body = String::from_utf8_lossy(&bytes).into_owned();
+         let message = match serde_json::from_str::<ErrorResponse>(&body) {
+             Ok(error) => error.message,
+             Err(_) => body,
+--- a/core/src/http/client/v2.rs
++++ b/core/src/http/client/v2.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ use super::{ClientError, ResponseExt, ResultWithPublicKey};
+ use crate::http::client::url::{ApiVersion, TargetUrl};
+ use crate::http::dto_v2::{
+@@ -108,7 +109,7 @@
+             _ => (None, None),
+         };
+ 
+-        let body = res.json::<RegisterResponseDtoV2>().await?;
++        let body = res.json_limited::<RegisterResponseDtoV2>().await?;
+ 
+         Ok(ResultWithPublicKey {
+             public_key,
+@@ -199,7 +200,14 @@
+                 });
+             }
+ 
+-            let body = res.json::<PrepareUploadResponseDtoV2>().await?;
++            let body = res.json_limited::<PrepareUploadResponseDtoV2>().await?;
++            if body.session_id.is_empty() || body.session_id.len() > 128
++                || body.session_id.contains('\0') || body.files.len() > 64
++                || body.files.iter().any(|(id, token)| !payload.files.contains_key(id)
++                    || id.len() > 128 || token.is_empty() || token.len() > 128 || token.contains('\0'))
++            {
++                return Err(anyhow::anyhow!("Invalid upload response metadata").into());
++            }
+ 
+             Ok(PrepareUploadResultV2 {
+                 status_code: status.as_u16(),
+@@ -311,7 +319,10 @@
+         }
+         .to_string();
+ 
+-        self.client.post(&url).send().await?;
++        let response = self.client.post(&url).send().await?;
++        if response.status() != StatusCode::OK {
++            return response.into_error().await;
++        }
+ 
+         Ok(())
+     }
+@@ -351,7 +362,7 @@
+             return res.into_error().await;
+         }
+ 
+-        let body = res.json::<InfoResponseDtoV2>().await?;
++        let body = res.json_limited::<InfoResponseDtoV2>().await?;
+ 
+         Ok(body)
+     }
+@@ -409,7 +420,7 @@
+             return res.into_error().await;
+         }
+ 
+-        let body = res.json::<PrepareDownloadResponseDtoV2>().await?;
++        let body = res.json_limited::<PrepareDownloadResponseDtoV2>().await?;
+ 
+         Ok(body)
+     }
+--- /dev/null
++++ b/core/src/http/limits.rs
+@@ -0,0 +1,121 @@
++//! Bounded network policy shared by request parsing and transfer tasks.
++//! huhucapture modification; upstream source and changes are recorded alongside
++//! this vendored crate. Limits do not depend on a GUI being open.
++
++use crate::http::dto_v2::{PrepareUploadRequestDtoV2, RegisterDtoV2};
++use crate::http::server::common::error::AppError;
++use crate::model::discovery::ProtocolType;
++use hyper::StatusCode;
++use std::time::Duration;
++
++pub const CONTROL_BYTES: usize = 1024 * 1024;
++pub const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
++pub const HEADER_BYTES: usize = 64 * 1024;
++pub const HEADER_COUNT: usize = 64;
++pub const DATA_CHUNK_BYTES: usize = 512 * 1024;
++pub const DATA_QUEUE_CHUNKS: usize = 4;
++
++/// Policy for the bound, TLS-only v2 server. HTTP/web/v3 test APIs from upstream
++/// remain available, but the application must use `start_bound_v2`.
++#[derive(Clone, Debug)]
++pub struct TransferLimits {
++    pub control_bytes: usize,
++    pub max_files: usize,
++    pub max_file_bytes: u64,
++    pub max_total_bytes: u64,
++    pub max_name_bytes: usize,
++    pub max_event_queue: usize,
++    pub concurrent_uploads: usize,
++    pub decision_timeout: Duration,
++    pub idle_timeout: Duration,
++    pub commit_timeout: Duration,
++}
++
++impl Default for TransferLimits {
++    fn default() -> Self {
++        Self {
++            control_bytes: CONTROL_BYTES,
++            max_files: 64,
++            max_file_bytes: 32 * 1024 * 1024 * 1024,
++            max_total_bytes: 64 * 32 * 1024 * 1024 * 1024,
++            max_name_bytes: 1024,
++            max_event_queue: 64,
++            concurrent_uploads: 2,
++            decision_timeout: Duration::from_secs(120),
++            idle_timeout: Duration::from_secs(30),
++            commit_timeout: Duration::from_secs(120),
++        }
++    }
++}
++
++impl TransferLimits {
++    pub fn validate(&self) -> anyhow::Result<()> {
++        anyhow::ensure!(self.control_bytes > 0 && self.control_bytes <= CONTROL_BYTES,
++            "control limit must be between 1 and 1 MiB");
++        anyhow::ensure!(self.max_files > 0 && self.max_files <= 64, "invalid file count limit");
++        anyhow::ensure!(self.max_name_bytes > 0 && self.max_name_bytes <= 1024,
++            "invalid filename limit");
++        anyhow::ensure!(self.max_file_bytes > 0 && self.max_total_bytes >= self.max_file_bytes,
++            "invalid file size budget");
++        anyhow::ensure!(self.concurrent_uploads > 0 && self.concurrent_uploads <= 2,
++            "at most two uploads may be active");
++        anyhow::ensure!(self.max_event_queue > 0 && self.max_event_queue <= 64,
++            "invalid event queue budget");
++        anyhow::ensure!(!self.decision_timeout.is_zero() && !self.idle_timeout.is_zero()
++            && !self.commit_timeout.is_zero(), "timeouts must be finite and positive");
++        Ok(())
++    }
++
++    pub(crate) fn register(&self, info: &RegisterDtoV2) -> Result<(), AppError> {
++        let bounded = |value: &str, limit| !value.contains('\0') && value.len() <= limit;
++        if info.alias.is_empty() || !bounded(&info.alias, 256)
++            || !bounded(&info.version, 32)
++            || info.device_model.as_ref().is_some_and(|value| !bounded(value, 256))
++            || !is_digest(&info.fingerprint) || info.port == 0
++            || info.protocol != ProtocolType::Https
++        {
++            return Err(AppError::BadRequest("Invalid device metadata".into()));
++        }
++        Ok(())
++    }
++
++    pub(crate) fn upload(&self, payload: &PrepareUploadRequestDtoV2) -> Result<(), AppError> {
++        self.register(&payload.info)?;
++        if payload.files.is_empty() || payload.files.len() > self.max_files {
++            return Err(AppError::BadRequest("Invalid number of files".into()));
++        }
++        let mut total = 0_u64;
++        for (id, file) in &payload.files {
++            if id.is_empty() || id.len() > 128 || id != &file.id || id.contains('\0')
++                || file.file_name.is_empty() || file.file_name.len() > self.max_name_bytes
++                || file.file_name.chars().any(|c| matches!(c, '\0' | '/' | '\\' | ':'))
++                || matches!(file.file_name.as_str(), "." | "..")
++                || file.preview.as_ref().is_some_and(|preview| !preview.is_empty())
++                || file.sha256.as_ref().is_some_and(|digest| !is_digest(digest))
++                || file.size == 0 || file.size > self.max_file_bytes
++            {
++                return Err(AppError::BadRequest("Invalid file metadata".into()));
++            }
++            let extension = file.file_name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
++            if !matches!((extension.as_str(), file.file_type.as_str()),
++                ("png", "image/png") | ("gif", "image/gif") | ("mp4", "video/mp4"))
++            {
++                return Err(AppError::Status(StatusCode::UNSUPPORTED_MEDIA_TYPE));
++            }
++            if file.metadata.as_ref().is_some_and(|metadata| {
++                [&metadata.modified, &metadata.accessed].iter().any(|value|
++                    value.as_ref().is_some_and(|text| text.len() > 128 || text.contains('\0')))
++            }) {
++                return Err(AppError::BadRequest("Invalid file timestamps".into()));
++            }
++            total = total.checked_add(file.size)
++                .filter(|total| *total <= self.max_total_bytes)
++                .ok_or_else(|| AppError::Status(StatusCode::PAYLOAD_TOO_LARGE))?;
++        }
++        Ok(())
++    }
++}
++
++pub(crate) fn is_digest(value: &str) -> bool {
++    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
++}
+--- a/core/src/http/mod.rs
++++ b/core/src/http/mod.rs
+@@ -1,8 +1,10 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ use thiserror::Error;
+ 
+ pub mod client;
+ pub mod dto;
+ pub mod dto_v2;
++pub mod limits;
+ pub mod server;
+ pub mod state;
+ 
+--- a/core/src/http/server/common/collect_to_json.rs
++++ b/core/src/http/server/common/collect_to_json.rs
+@@ -1,18 +1,41 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ use crate::http::server::common::error::AppError;
++use crate::http::limits::{CONTROL_BYTES, CONTROL_TIMEOUT};
+ use http_body_util::BodyExt;
+-use hyper::body::Incoming;
++use hyper::body::{Body, Incoming};
++use hyper::StatusCode;
+ use serde::de::DeserializeOwned;
+ 
+ pub(crate) trait CollectToJson {
+     async fn collect_to_json<T: DeserializeOwned>(self) -> Result<T, AppError>;
++    async fn collect_to_json_limited<T: DeserializeOwned>(self, limit: usize) -> Result<T, AppError>;
+ }
+ 
+ impl CollectToJson for Incoming {
+     async fn collect_to_json<T: DeserializeOwned>(self) -> Result<T, AppError> {
+-        let bytes = self.collect().await?.to_bytes();
+-        serde_json::from_slice::<T>(&bytes).map_err(|err| {
+-            tracing::warn!("Failed to parse JSON body: {err:#}");
+-            AppError::BadRequest("Invalid JSON body".to_string())
+-        })
++        self.collect_to_json_limited(CONTROL_BYTES).await
++    }
++
++    async fn collect_to_json_limited<T: DeserializeOwned>(mut self, limit: usize) -> Result<T, AppError> {
++        if self.size_hint().lower() > limit as u64 {
++            return Err(AppError::Status(StatusCode::PAYLOAD_TOO_LARGE));
++        }
++        let read = async {
++            let mut bytes = Vec::new();
++            while let Some(frame) = self.frame().await {
++                let frame = frame?;
++                let Ok(data) = frame.into_data() else { continue; };
++                if data.len() > limit.saturating_sub(bytes.len()) {
++                    return Err(AppError::Status(StatusCode::PAYLOAD_TOO_LARGE));
++                }
++                bytes.extend_from_slice(&data);
++            }
++            // Keep serde_json's recursion limit enabled. Never echo a body
++            // (which can include tokens and names) into logs or error messages.
++            serde_json::from_slice::<T>(&bytes)
++                .map_err(|_| AppError::BadRequest("Invalid JSON body".into()))
++        };
++        tokio::time::timeout(CONTROL_TIMEOUT, read).await
++            .map_err(|_| AppError::Status(StatusCode::REQUEST_TIMEOUT))?
+     }
+ }
+--- a/core/src/http/server/common/mod.rs
++++ b/core/src/http/server/common/mod.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ pub mod client_cert_verifier;
+ pub mod collect_to_json;
+ pub mod error;
+@@ -5,4 +6,5 @@
+ pub mod query;
+ pub mod response;
+ pub mod save;
++pub mod verified_upload;
+ pub mod session;
+--- a/core/src/http/server/common/save.rs
++++ b/core/src/http/server/common/save.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ use crate::crypto;
+ use bytes::Bytes;
+ use http_body_util::BodyExt;
+@@ -6,6 +7,9 @@
+ use std::future::Future;
+ use std::path::PathBuf;
+ use tokio::sync::{mpsc, oneshot};
++use crate::http::limits::TransferLimits;
++use super::verified_upload::{CommittedMedia, UploadFailure, UploadVerification, receive_verified};
++use tokio_util::sync::CancellationToken;
+ 
+ /// Channel capacity for file upload chunks (provides backpressure).
+ const UPLOAD_CHANNEL_CAPACITY: usize = 16;
+@@ -17,6 +21,14 @@
+ /// Where the content of an uploaded file should go, decided by the application.
+ #[derive(Debug)]
+ pub enum FileUploadTarget {
++    /// Bounded sink with a separate, hash-validated permission to commit.
++    /// The application returns success only after full media validation and
++    /// durable no-replace archival. Use `verified_upload_channel` to construct.
++    VerifiedStream {
++        binary_tx: mpsc::Sender<Bytes>,
++        verification_tx: oneshot::Sender<Result<UploadVerification, UploadFailure>>,
++        commit_rx: oneshot::Receiver<Result<CommittedMedia, UploadFailure>>,
++    },
+     /// The application consumes the binary chunks itself.
+     ///
+     /// The server forwards chunks into `binary_tx` and closes it at end of file.
+@@ -100,6 +112,9 @@
+ 
+     /// The received bytes do not match the expected SHA-256 checksum.
+     HashMismatch,
++    InvalidMedia,
++    Cancelled,
++    LengthMismatch,
+ }
+ 
+ /// Forwards the body of `req` to `target`.
+@@ -109,14 +124,33 @@
+     file_size: u64,
+     expected_sha256: Option<&str>,
+     timestamps: FileTimestamps,
++    strict: Option<&TransferLimits>,
++    mime: &str,
++    cancel: &CancellationToken,
+ ) -> SaveResult {
+     use sha2::{Digest, Sha256};
++
++    let target = match target {
++        FileUploadTarget::VerifiedStream { binary_tx, verification_tx, commit_rx } => {
++            let defaults = TransferLimits::default();
++            return receive_verified(req, binary_tx, verification_tx, commit_rx, file_size,
++                expected_sha256, mime, strict.unwrap_or(&defaults), cancel).await;
++        }
++        other if strict.is_some() => {
++            // A strict receiver cannot acknowledge a raw path or an unverified
++            // stream. Dropping the channels tells the application it failed.
++            drop(other);
++            return SaveResult::Failed;
++        }
++        other => other,
++    };
+ 
+     // Resolve the target into a chunk sender and a result receiver.
+     // For [FileUploadTarget::Path] and [FileUploadTarget::Fd], the application's
+     // result channel is answered by this function once the complete outcome
+     // (including the checksum verification) is known.
+     let (binary_tx, result_rx, app_result_tx) = match target {
++        FileUploadTarget::VerifiedStream { .. } => unreachable!("handled above"),
+         FileUploadTarget::Stream {
+             binary_tx,
+             result_rx,
+--- a/core/src/http/server/common/session.rs
++++ b/core/src/http/server/common/session.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ use crate::http::server::PeerIp;
+ use crate::model::transfer::FileDto;
+ use std::collections::HashMap;
+@@ -35,6 +36,9 @@
+ 
+     /// The accepted files, mapped by file ID.
+     pub(crate) files: HashMap<String, SessionFileV2>,
++
++    /// Interrupts body reads and commit waits when either side cancels.
++    pub(crate) cancel: CancellationToken,
+ }
+ 
+ impl UploadSessionV2 {
+--- /dev/null
++++ b/core/src/http/server/common/verified_upload.rs
+@@ -0,0 +1,166 @@
++//! Receive/verify/commit handshake used by the native archive adapter.
++//! EOF is not permission to publish. Only a successful `verification` followed
++//! by complete-media validation and a durable, no-replace archive commit may
++//! produce `CommittedMedia`. UI tasks must not own these channels.
++
++use crate::http::limits::{DATA_QUEUE_CHUNKS, TransferLimits};
++use crate::http::server::common::save::{FileUploadTarget, SaveResult};
++use bytes::Bytes;
++use http_body_util::BodyExt;
++use hyper::body::Incoming;
++use hyper::Request;
++use sha2::{Digest, Sha256};
++use tokio::sync::{mpsc, oneshot};
++use tokio_util::sync::CancellationToken;
++
++#[derive(Debug, Clone)]
++pub struct UploadVerification {
++    pub received_bytes: u64,
++    pub actual_sha256: String,
++    /// False for an interoperating peer which omitted the optional digest.
++    pub sender_checksum_matched: bool,
++    /// Recheck immediately before publication. A dropped request, stopped
++    /// listener or cancelled session invalidates the commit permission.
++    pub cancellation: CancellationToken,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum CommittedMedia {
++    Png,
++    Gif,
++    Mp4,
++}
++
++impl CommittedMedia {
++    pub fn mime(self) -> &'static str {
++        match self { Self::Png => "image/png", Self::Gif => "image/gif", Self::Mp4 => "video/mp4" }
++    }
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum UploadFailure {
++    Cancelled,
++    Io,
++    LengthMismatch,
++    ChecksumMismatch,
++    InvalidMedia,
++    /// A final file exists, but its persistence could not be confirmed. Keep
++    /// it and report uncertainty; never acknowledge durable success or retry
++    /// the commit into another archive entry.
++    DurabilityUnknown,
++}
++
++/// Service-side half. Consume bounded chunks into an exclusively owned staging
++/// file. After EOF, await verification; an Err or a dropped sender aborts it.
++/// Then validate the full media with the platform's bounded codec/probe, flush,
++/// close, commit without replacement, and send the actual completion result.
++pub struct VerifiedUploadReceiver {
++    pub chunks: mpsc::Receiver<Bytes>,
++    pub verification: oneshot::Receiver<Result<UploadVerification, UploadFailure>>,
++    pub completion: oneshot::Sender<Result<CommittedMedia, UploadFailure>>,
++}
++
++pub fn verified_upload_channel() -> (FileUploadTarget, VerifiedUploadReceiver) {
++    let (binary_tx, chunks) = mpsc::channel(DATA_QUEUE_CHUNKS);
++    let (verification_tx, verification) = oneshot::channel();
++    let (completion, commit_rx) = oneshot::channel();
++    (FileUploadTarget::VerifiedStream { binary_tx, verification_tx, commit_rx },
++        VerifiedUploadReceiver { chunks, verification, completion })
++}
++
++pub(crate) async fn receive_verified(
++    req: Request<Incoming>,
++    binary_tx: mpsc::Sender<Bytes>,
++    verification_tx: oneshot::Sender<Result<UploadVerification, UploadFailure>>,
++    mut commit_rx: oneshot::Receiver<Result<CommittedMedia, UploadFailure>>,
++    file_size: u64,
++    expected_sha256: Option<&str>,
++    mime: &str,
++    limits: &TransferLimits,
++    cancel: &CancellationToken,
++) -> SaveResult {
++    const PREFIX_BYTES: usize = 64 * 1024;
++    if binary_tx.max_capacity() > DATA_QUEUE_CHUNKS || file_size > limits.max_file_bytes {
++        let _ = verification_tx.send(Err(UploadFailure::Io));
++        return SaveResult::Failed;
++    }
++    let mut body = req.into_body();
++    let mut hasher = Sha256::new();
++    let mut prefix = Vec::with_capacity(PREFIX_BYTES);
++    let mut received = 0_u64;
++    let receive = async {
++        loop {
++            let frame = tokio::time::timeout(limits.idle_timeout, body.frame()).await
++                .map_err(|_| UploadFailure::Io)?;
++            let Some(frame) = frame else { break; };
++            let frame = frame.map_err(|_| UploadFailure::Io)?;
++            let Ok(data) = frame.into_data() else { continue; };
++            received = received.checked_add(data.len() as u64)
++                .filter(|count| *count <= file_size && *count <= limits.max_file_bytes)
++                .ok_or(UploadFailure::LengthMismatch)?;
++            hasher.update(&data);
++            let take = data.len().min(PREFIX_BYTES - prefix.len());
++            prefix.extend_from_slice(&data[..take]);
++            // Byte bounds matter, not just the number of channel entries. A
++            // huge HTTP frame must not become a huge FFI/event queue element.
++            for chunk in data.chunks(crate::http::limits::DATA_CHUNK_BYTES) {
++                tokio::time::timeout(limits.idle_timeout, binary_tx.send(Bytes::copy_from_slice(chunk)))
++                    .await.map_err(|_| UploadFailure::Io)?
++                    .map_err(|_| UploadFailure::Io)?;
++            }
++        }
++        if received != file_size { return Err(UploadFailure::LengthMismatch); }
++        let actual = crate::crypto::hash::to_hex(&hasher.finalize());
++        if expected_sha256.is_some_and(|expected| !actual.eq_ignore_ascii_case(expected)) {
++            return Err(UploadFailure::ChecksumMismatch);
++        }
++        // Reuse infer's bounded magic-number detection. This rejects a type
++        // spoof before the commit permission; it is not a decoder/completeness
++        // guarantee. Full Qt/FFmpeg validation remains mandatory in the sink.
++        if infer::get(&prefix).is_none_or(|kind| kind.mime_type() != mime) {
++            return Err(UploadFailure::InvalidMedia);
++        }
++        Ok(UploadVerification { received_bytes: received, actual_sha256: actual,
++            sender_checksum_matched: expected_sha256.is_some(), cancellation: cancel.clone() })
++    };
++    let verification = tokio::select! {
++        biased;
++        _ = cancel.cancelled() => Err(UploadFailure::Cancelled),
++        result = receive => result,
++    };
++    drop(binary_tx);
++    // A consumer cannot claim persistence before receiving permission. This
++    // catches accidentally acknowledging EOF as success in an archive adapter.
++    if verification.is_ok()
++        && !matches!(commit_rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)) {
++        let _ = verification_tx.send(Err(UploadFailure::Io));
++        return SaveResult::Failed;
++    }
++    let failure = verification.as_ref().err().copied();
++    if verification_tx.send(verification).is_err() { return SaveResult::Failed; }
++    if let Some(failure) = failure { return save_result(failure); }
++
++    // This is the only successful ACK path. Merely consuming the last chunk or
++    // passing a checksum never acknowledges that an archive was persisted.
++    let committed = tokio::select! {
++        biased;
++        _ = cancel.cancelled() => return SaveResult::Cancelled,
++        result = tokio::time::timeout(limits.commit_timeout, commit_rx) => result,
++    };
++    match committed {
++        Ok(Ok(Ok(media))) if media.mime() == mime => SaveResult::Success,
++        Ok(Ok(Ok(_))) => SaveResult::InvalidMedia,
++        Ok(Ok(Err(failure))) => save_result(failure),
++        _ => SaveResult::Failed,
++    }
++}
++
++fn save_result(failure: UploadFailure) -> SaveResult {
++    match failure {
++        UploadFailure::ChecksumMismatch => SaveResult::HashMismatch,
++        UploadFailure::LengthMismatch => SaveResult::LengthMismatch,
++        UploadFailure::InvalidMedia => SaveResult::InvalidMedia,
++        UploadFailure::Cancelled => SaveResult::Cancelled,
++        _ => SaveResult::Failed,
++    }
++}
+--- a/core/src/http/server/mod.rs
++++ b/core/src/http/server/mod.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ pub mod common;
+ mod connection_limit;
+ pub mod internal;
+@@ -13,6 +14,7 @@
+ use crate::http::server::v2::ServerEventV2;
+ use crate::http::server::web::{WebConfig, WebShare};
+ use crate::http::state::ClientInfo;
++use crate::http::limits::{TransferLimits, HEADER_BYTES, HEADER_COUNT};
+ use common::client_cert_verifier::CustomClientCertVerifier;
+ use common::error::AppError;
+ use common::response;
+@@ -21,7 +23,7 @@
+ use connection_limit::{ConnectionLimiter, LimitReached, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP};
+ use hyper::body::Incoming;
+ use hyper::{Method, Request, Response, StatusCode};
+-use hyper_util::rt::TokioIo;
++use hyper_util::rt::{TokioIo, TokioTimer};
+ use lru::LruCache;
+ use rustls::pki_types::pem::PemObject;
+ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+@@ -31,7 +33,7 @@
+ use std::ops::Deref;
+ use std::sync::Arc;
+ use tokio::io::{AsyncRead, AsyncWrite};
+-use tokio::sync::{mpsc, oneshot, Mutex};
++use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
+ use tokio_util::sync::CancellationToken;
+ use tokio_util::task::TaskTracker;
+ use web::WebState;
+@@ -66,6 +68,9 @@
+ 
+     /// Maps client IPs to the number of failed PIN attempts.
+     pub(crate) pin_attempts: Mutex<LruCache<IpAddr, u32>>,
++
++    /// Strict-mode upload concurrency, held until the archive commit responds.
++    pub(crate) uploads: Semaphore,
+ }
+ 
+ #[derive(Clone)]
+@@ -90,6 +95,9 @@
+ 
+     /// Limits the connections being served, shared by the IPv4 and IPv6 listeners.
+     connection_limiter: Arc<ConnectionLimiter>,
++
++    /// Native receiver restrictions; absent for unchanged upstream callers.
++    strict: Option<Arc<TransferLimits>>,
+ }
+ 
+ impl AppState {
+@@ -106,6 +114,7 @@
+                 event_tx: config.event_tx,
+                 session: Mutex::new(None),
+                 pin_attempts: Mutex::new(LruCache::new(NonZeroUsize::new(200).unwrap())),
++                uploads: Semaphore::new(2),
+             })
+         });
+ 
+@@ -123,6 +132,7 @@
+             ))),
+             v2,
+             connection_limiter: ConnectionLimiter::new(MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP),
++            strict: None,
+         }
+     }
+ }
+@@ -137,6 +147,9 @@
+ 
+     /// Whether the IPv6 wildcard listener could be bound.
+     ipv6_bound: bool,
++
++    /// Exact listeners when wildcard binding is disabled.
++    bound_addresses: Vec<SocketAddr>,
+ 
+     /// The task running the accept loops. Completes after a stop has been
+     /// requested, the listeners have been dropped and all connections have
+@@ -161,6 +174,9 @@
+     ///
+     /// Empty when the interfaces cannot be enumerated.
+     pub fn local_addresses(&self) -> Vec<SocketAddr> {
++        if !self.bound_addresses.is_empty() {
++            return self.bound_addresses.clone();
++        }
+         let Ok(interfaces) = if_addrs::get_if_addrs() else {
+             return Vec::new();
+         };
+@@ -192,8 +208,8 @@
+     /// Cancels the active v2 upload session if it matches `session_id`,
+     /// e.g. because the user aborted the transfer on the receiving side.
+     ///
+-    /// Uploads that are already in progress still run to completion, but new
+-    /// upload requests fail and a new session can be created.
++    /// Interrupts in-progress verified streams and rejects subsequent uploads.
++    /// The archive adapter must recheck cancellation before publishing a file.
+     /// No [ServerEventV2::SessionEnd] is emitted: the application initiated
+     /// the cancellation itself.
+     ///
+@@ -205,6 +221,7 @@
+         let mut slot = v2.session.lock().await;
+         match slot.as_ref() {
+             Some(SessionStateV2::Active(session)) if session.session_id == session_id => {
++                session.cancel.cancel();
+                 *slot = None;
+                 true
+             }
+@@ -294,8 +311,100 @@
+         v2: state.v2.clone(),
+         port: bound_port,
+         ipv6_bound,
++        bound_addresses: Vec::new(),
+         task: Mutex::new(Some(task)),
+     })
++}
++
++/// Starts the native v2.2 receiver on explicitly selected IPv4 addresses.
++///
++/// No wildcard, web sharing, internal control or v3 routes are enabled. TLS and
++/// checksum verification are mandatory. The same session state serves every
++/// selected interface. Loopback is allowed for integration tests; the desktop
++/// service selects its permitted LAN interfaces before calling this API.
++pub async fn start_bound_v2(
++    mut addresses: Vec<Ipv4Addr>,
++    port: u16,
++    tls_config: TlsConfig,
++    info: ClientInfo,
++    v2_config: ServerConfigV2,
++    limits: TransferLimits,
++    stop_rx: oneshot::Receiver<()>,
++) -> anyhow::Result<ServerHandle> {
++    limits.validate()?;
++    anyhow::ensure!(!addresses.is_empty(), "no interface selected");
++    anyhow::ensure!(addresses.len() <= 16, "too many selected interfaces");
++    anyhow::ensure!(addresses.iter().all(|address|
++        !address.is_unspecified() && !address.is_multicast() && !address.is_broadcast()),
++        "a concrete unicast IPv4 address is required");
++    anyhow::ensure!(v2_config.verify_checksums, "checksum verification is mandatory");
++    anyhow::ensure!(v2_config.event_tx.max_capacity() <= limits.max_event_queue,
++        "event channel exceeds its capacity budget");
++    addresses.sort();
++    addresses.dedup();
++    let _ = rustls::crypto::ring::default_provider().install_default();
++    // Fail synchronously on an invalid identity, before reporting a listener.
++    create_tls_config(&tls_config, true)?;
++
++    let mut state = AppState::new(Arc::new(Mutex::new(info)), None,
++        Some(v2_config), WebConfig::default());
++    if limits.concurrent_uploads == 1 {
++        state.v2.as_ref().unwrap().uploads.forget_permits(1);
++    }
++    state.strict = Some(Arc::new(limits));
++
++    let mut bound_port = port;
++    let mut listeners = Vec::with_capacity(addresses.len());
++    let mut bound_addresses = Vec::with_capacity(addresses.len());
++    for address in addresses {
++        let listener = tokio::net::TcpListener::bind(SocketAddr::new(address.into(), bound_port)).await?;
++        let address = listener.local_addr()?;
++        bound_port = address.port();
++        bound_addresses.push(address);
++        listeners.push(listener);
++    }
++
++    let task = tokio::spawn({
++        let state = state.clone();
++        async move {
++            let cancel = CancellationToken::new();
++            let connections = TaskTracker::new();
++            let mut accept_tasks = tokio::task::JoinSet::new();
++            for listener in listeners {
++                accept_tasks.spawn(start_server_with_listener(listener, Some(tls_config.clone()),
++                    state.clone(), cancel.clone(), connections.clone()));
++            }
++            tokio::select! {
++                _ = stop_rx => {},
++                result = accept_tasks.join_next() => {
++                    let error = match result {
++                        Some(Ok(Err(error))) => format!("{error:#}"),
++                        Some(Err(error)) => format!("{error:#}"),
++                        _ => "listener stopped unexpectedly".to_string(),
++                    };
++                    if let Some(v2) = &state.v2 {
++                        let _ = v2.event_tx.try_send(ServerEventV2::ListenerFailed { error });
++                    }
++                }
++            }
++            // No selected listener may continue serving after another failed.
++            cancel.cancel();
++            if let Some(v2) = &state.v2 {
++                let mut slot = v2.session.lock().await;
++                match slot.take() {
++                    Some(SessionStateV2::Active(session)) => session.cancel.cancel(),
++                    Some(SessionStateV2::Pending(session)) => session.cancel.cancel(),
++                    None => {},
++                }
++            }
++            accept_tasks.abort_all();
++            while accept_tasks.join_next().await.is_some() {}
++            connections.close();
++            connections.wait().await;
++        }
++    });
++    Ok(ServerHandle { v2: state.v2, port: bound_port, ipv6_bound: false,
++        bound_addresses, task: Mutex::new(Some(task)) })
+ }
+ 
+ /// Binds an IPv6 listener with `IPV6_V6ONLY` enabled.
+@@ -492,12 +601,14 @@
+ ) {
+     let res = match tls_acceptor {
+         Some(tls_acceptor) => {
+-            let tls_stream = match tls_acceptor.accept(tcp_stream).await {
+-                Ok(tls_stream) => tls_stream,
+-                Err(err) => {
++            let tls_stream = match tokio::time::timeout(
++                std::time::Duration::from_secs(10), tls_acceptor.accept(tcp_stream)).await {
++                Ok(Ok(tls_stream)) => tls_stream,
++                Ok(Err(err)) => {
+                     tracing::warn!("TLS handshake error: {err:#}");
+                     return;
+                 }
++                Err(_) => return,
+             };
+ 
+             let client_info = {
+@@ -543,6 +654,10 @@
+     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+ {
+     hyper::server::conn::http1::Builder::new()
++        .timer(TokioTimer::new())
++        .header_read_timeout(std::time::Duration::from_secs(10))
++        .max_buf_size(HEADER_BYTES)
++        .max_headers(HEADER_COUNT)
+         .serve_connection(
+             TokioIo::new(io),
+             hyper::service::service_fn(move |mut req: Request<Incoming>| {
+@@ -641,6 +756,16 @@
+ 
+     let v2_enabled = state.v2.is_some();
+ 
++    if state.strict.is_some() && !matches!((req.method(), req.uri().path()),
++        (&Method::GET, "/api/localsend/v2/info")
++        | (&Method::POST, "/api/localsend/v2/register")
++        | (&Method::POST, "/api/localsend/v2/prepare-upload")
++        | (&Method::POST, "/api/localsend/v2/upload")
++        | (&Method::POST, "/api/localsend/v2/cancel"))
++    {
++        return Err(AppError::Status(StatusCode::NOT_FOUND));
++    }
++
+     match (req.method(), req.uri().path()) {
+         (&Method::GET, "/") => Ok(web::index(&state)),
+         (&Method::GET, "/i18n.json") => web::i18n(&state),
+--- a/core/src/http/server/v2.rs
++++ b/core/src/http/server/v2.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ use crate::http::dto_v2::{
+     InfoResponseDtoV2, PrepareUploadRequestDtoV2, PrepareUploadResponseDtoV2, RegisterDtoV2,
+     RegisterResponseDtoV2,
+@@ -20,7 +21,7 @@
+ use hyper::{Request, Response, StatusCode};
+ use std::collections::{HashMap, HashSet};
+ use std::sync::Arc;
+-use tokio::sync::oneshot;
++use tokio::sync::{mpsc, oneshot};
+ use tokio_util::sync::CancellationToken;
+ use uuid::Uuid;
+ 
+@@ -168,7 +169,10 @@
+     state: AppState,
+     client_info: RequestClientInfo,
+ ) -> Result<JsonResponse<RegisterResponseDtoV2>, AppError> {
+-    let payload = body.collect_to_json::<RegisterDtoV2>().await?;
++    let payload = body.collect_to_json_limited::<RegisterDtoV2>(
++        state.strict.as_ref().map_or(crate::http::limits::CONTROL_BYTES, |limits| limits.control_bytes)
++    ).await?;
++    if let Some(limits) = &state.strict { limits.register(&payload)?; }
+ 
+     // On TLS, only trust registrations whose claimed fingerprint is proven
+     // by the client certificate of the mTLS handshake.
+@@ -253,7 +257,8 @@
+ 
+     let mut payload = req
+         .into_body()
+-        .collect_to_json::<PrepareUploadRequestDtoV2>()
++        .collect_to_json_limited::<PrepareUploadRequestDtoV2>(
++            state.strict.as_ref().map_or(crate::http::limits::CONTROL_BYTES, |limits| limits.control_bytes))
+         .await?;
+ 
+     if payload.files.is_empty() {
+@@ -265,6 +270,7 @@
+     for file in payload.files.values_mut() {
+         file.file_name = filename::normalize(&file.file_name);
+     }
++    if let Some(limits) = &state.strict { limits.upload(&payload)?; }
+ 
+     // Like `register`: a sender with a client certificate must claim the
+     // fingerprint of that certificate, so that `info` cannot pass itself off
+@@ -312,23 +318,39 @@
+         files: payload.files.clone(),
+         decision_tx,
+     };
+-    if v2.event_tx.send(event).await.is_err() {
+-        return Err(AppError::Status(StatusCode::INTERNAL_SERVER_ERROR));
+-    }
+-
++    let queued = if state.strict.is_some() {
++        v2.event_tx.try_send(event).map_err(|error| match error {
++            mpsc::error::TrySendError::Full(_) => AppError::Status(StatusCode::TOO_MANY_REQUESTS),
++            mpsc::error::TrySendError::Closed(_) => AppError::Status(StatusCode::INTERNAL_SERVER_ERROR),
++        })
++    } else {
++        v2.event_tx.send(event).await.map_err(|_| AppError::Status(StatusCode::INTERNAL_SERVER_ERROR))
++    };
++    if let Err(error) = queued {
++        pending_guard.clear().await;
++        return Err(error);
++    }
++
++    let wait_decision = async {
++        match &state.strict {
++            Some(limits) => tokio::time::timeout(limits.decision_timeout, decision_rx).await
++                .map_err(|_| AppError::Status(StatusCode::REQUEST_TIMEOUT))?
++                .map_err(|_| AppError::Status(StatusCode::INTERNAL_SERVER_ERROR)),
++            None => decision_rx.await.map_err(|_| AppError::Status(StatusCode::INTERNAL_SERVER_ERROR)),
++        }
++    };
+     // The sender may cancel the request while the application is deciding.
+     // Returning with the guard still armed frees the slot and emits
+     // [ServerEventV2::PrepareUploadAborted], like a dropped connection.
+     let decision = tokio::select! {
+-        decision = decision_rx => {
+-            decision.map_err(|_| AppError::Status(StatusCode::INTERNAL_SERVER_ERROR))?
+-        }
++        biased;
+         _ = cancelled.cancelled() => {
+             return Err(AppError::Message(
+                 StatusCode::FORBIDDEN,
+                 "Cancelled by sender".to_string(),
+             ));
+         }
++        decision = wait_decision => decision?,
+     };
+ 
+     let accepted_ids = match decision {
+@@ -372,10 +394,16 @@
+ 
+     {
+         let mut slot = v2.session.lock().await;
++        if cancelled.is_cancelled() || !matches!(slot.as_ref(),
++            Some(SessionStateV2::Pending(pending)) if pending.session_id == session_id)
++        {
++            return Err(AppError::Status(StatusCode::FORBIDDEN));
++        }
+         *slot = Some(SessionStateV2::Active(UploadSessionV2 {
+             session_id: session_id.clone(),
+             sender_ip: client_info.ip,
+             files,
++            cancel: cancelled,
+         }));
+     }
+     pending_guard.disarm();
+@@ -399,6 +427,11 @@
+ ) -> Result<Response<BoxedBody>, AppError> {
+     let v2 = require_v2(&state)?;
+     let query = parse_query(req.uri().query());
++
++    // Keep the permit until verification and durable commit are complete.
++    let _permit = if state.strict.is_some() {
++        Some(v2.uploads.try_acquire().map_err(|_| AppError::Status(StatusCode::TOO_MANY_REQUESTS))?)
++    } else { None };
+ 
+     let (Some(session_id), Some(file_id), Some(token)) = (
+         query.get("sessionId"),
+@@ -412,7 +445,7 @@
+     };
+ 
+     // Validate the request and mark the file as in progress.
+-    let file_dto = {
++    let (file_dto, cancelled) = {
+         let mut slot = v2.session.lock().await;
+         let Some(SessionStateV2::Active(session)) = slot.as_mut() else {
+             return Err(invalid_token_error());
+@@ -428,13 +461,21 @@
+         }
+         file.status = FileStatusV2::InProgress;
+         file.attempts = file.attempts.saturating_add(1);
+-        file.dto.clone()
++        (file.dto.clone(), session.cancel.child_token())
+     };
+ 
+     // Marks the file as failed if this request is aborted mid-transfer.
+-    let mut upload_guard = UploadGuard::new(v2.clone(), session_id.clone(), file_id.clone());
++    let mut upload_guard = UploadGuard::new(v2.clone(), session_id.clone(), file_id.clone(), cancelled.clone());
+ 
+     let file_size = file_dto.size;
++    let mime = file_dto.file_type.clone();
++    if state.strict.is_some() {
++        if let Some(length) = req.headers().get(hyper::header::CONTENT_LENGTH) {
++            if length.to_str().ok().and_then(|value| value.parse::<u64>().ok()) != Some(file_size) {
++                return Err(AppError::BadRequest("Content length does not match metadata".into()));
++            }
++        }
++    }
+     let expected_sha256 = match v2.verify_checksums {
+         true => file_dto.sha256.clone(),
+         false => None,
+@@ -454,14 +495,33 @@
+         file: file_dto,
+         target_tx,
+     };
+-    if v2.event_tx.send(event).await.is_err() {
++    let queued = if state.strict.is_some() {
++        v2.event_tx.try_send(event).map_err(|_| ())
++    } else { v2.event_tx.send(event).await.map_err(|_| ()) };
++    if queued.is_err() {
+         upload_guard.finish(SaveResult::Failed).await;
+         return Err(AppError::Status(StatusCode::INTERNAL_SERVER_ERROR));
+     }
+ 
+-    let Ok(target) = target_rx.await else {
+-        upload_guard.finish(SaveResult::Failed).await;
+-        return Err(AppError::Status(StatusCode::INTERNAL_SERVER_ERROR));
++    let target = tokio::select! {
++        biased;
++        _ = cancelled.cancelled() => {
++            upload_guard.finish(SaveResult::Cancelled).await;
++            return Err(AppError::Status(StatusCode::FORBIDDEN));
++        }
++        target = async {
++            match &state.strict {
++                Some(limits) => tokio::time::timeout(limits.idle_timeout, target_rx).await
++                    .map_err(|_| ())?.map_err(|_| ()),
++                None => target_rx.await.map_err(|_| ()),
++            }
++        } => match target {
++            Ok(target) => target,
++            Err(()) => {
++                upload_guard.finish(SaveResult::Failed).await;
++                return Err(AppError::Status(StatusCode::INTERNAL_SERVER_ERROR));
++            }
++        }
+     };
+ 
+     let result = common::save::save_req_to_target(
+@@ -470,6 +530,9 @@
+         file_size,
+         expected_sha256.as_deref(),
+         timestamps,
++        state.strict.as_deref(),
++        &mime,
++        &cancelled,
+     )
+     .await;
+ 
+@@ -478,6 +541,9 @@
+     match result {
+         SaveResult::Success => Ok(Response::new(empty_body())),
+         SaveResult::Failed => Err(AppError::Status(StatusCode::INTERNAL_SERVER_ERROR)),
++        SaveResult::InvalidMedia => Err(AppError::Status(StatusCode::UNSUPPORTED_MEDIA_TYPE)),
++        SaveResult::Cancelled => Err(AppError::Status(StatusCode::FORBIDDEN)),
++        SaveResult::LengthMismatch => Err(AppError::BadRequest("Upload length does not match metadata".into())),
+         SaveResult::HashMismatch => Err(AppError::Message(
+             StatusCode::UNPROCESSABLE_ENTITY,
+             "Checksum mismatch".to_string(),
+@@ -528,6 +594,7 @@
+                 Some(SessionStateV2::Active(session))
+                     if session.session_id == *session_id && session.sender_ip == client_info.ip =>
+                 {
++                    session.cancel.cancel();
+                     *slot = None;
+                     true
+                 }
+@@ -602,7 +669,7 @@
+     /// Frees the pending slot immediately.
+     async fn clear(&mut self) {
+         self.armed = false;
+-        clear_pending_session(&self.v2).await;
++        clear_pending_session(&self.v2, &self.session_id).await;
+     }
+ }
+ 
+@@ -614,7 +681,7 @@
+         let v2 = self.v2.clone();
+         let session_id = std::mem::take(&mut self.session_id);
+         tokio::spawn(async move {
+-            clear_pending_session(&v2).await;
++            clear_pending_session(&v2, &session_id).await;
+             // The application may still be waiting for a decision; tell it
+             // that answering is pointless now.
+             let _ = v2
+@@ -625,9 +692,9 @@
+     }
+ }
+ 
+-async fn clear_pending_session(v2: &V2State) {
++async fn clear_pending_session(v2: &V2State, session_id: &str) {
+     let mut slot = v2.session.lock().await;
+-    if matches!(*slot, Some(SessionStateV2::Pending(_))) {
++    if matches!(slot.as_ref(), Some(SessionStateV2::Pending(pending)) if pending.session_id == session_id) {
+         *slot = None;
+     }
+ }
+@@ -641,20 +708,23 @@
+     session_id: String,
+     file_id: String,
+     armed: bool,
++    cancel: CancellationToken,
+ }
+ 
+ impl UploadGuard {
+-    fn new(v2: Arc<V2State>, session_id: String, file_id: String) -> Self {
++    fn new(v2: Arc<V2State>, session_id: String, file_id: String, cancel: CancellationToken) -> Self {
+         Self {
+             v2,
+             session_id,
+             file_id,
+             armed: true,
++            cancel,
+         }
+     }
+ 
+     async fn finish(&mut self, result: SaveResult) {
+         self.armed = false;
++        if result != SaveResult::Success { self.cancel.cancel(); }
+         finalize_file(&self.v2, &self.session_id, &self.file_id, result).await;
+     }
+ }
+@@ -664,6 +734,7 @@
+         if !self.armed {
+             return;
+         }
++        self.cancel.cancel();
+         let v2 = self.v2.clone();
+         let session_id = std::mem::take(&mut self.session_id);
+         let file_id = std::mem::take(&mut self.file_id);
+@@ -699,7 +770,8 @@
+                     SaveResult::HashMismatch if file.attempts < MAX_UPLOAD_ATTEMPTS => {
+                         FileStatusV2::Pending
+                     }
+-                    SaveResult::Failed | SaveResult::HashMismatch => FileStatusV2::Failed,
++                    SaveResult::Failed | SaveResult::HashMismatch | SaveResult::InvalidMedia
++                    | SaveResult::Cancelled | SaveResult::LengthMismatch => FileStatusV2::Failed,
+                 };
+             }
+         }
+--- a/core/src/model/transfer.rs
++++ b/core/src/model/transfer.rs
+@@ -1,3 +1,4 @@
++// huhucapture modification; see docs/localsend-core.md and upstream.json.
+ use bytes::Bytes;
+ use futures_util::stream::{Stream, StreamExt};
+ use serde::{Deserialize, Serialize};
+@@ -31,6 +32,16 @@
+     /// fully provided.
+     Stream(mpsc::Receiver<Bytes>),
+ 
++    /// An application-owned bounded stream that can distinguish an I/O error
++    /// or cancellation from EOF. The sender must send an Err before closing
++    /// after a failed read; closing without an error means normal EOF.
++    ResultStream(mpsc::Receiver<Result<Bytes, std::io::Error>>),
++
++    /// A stable, already-open file lease. Ownership transfers to this content;
++    /// no path is reopened by an asynchronous worker. The caller validates the
++    /// file identity and resets its cursor before transferring ownership.
++    File(std::fs::File),
++
+     /// A path to a regular file the content is read from.
+     Path(PathBuf),
+ 
+@@ -40,6 +51,13 @@
+ }
+ 
+ impl FileContent {
++    /// Constructs the supported error-preserving application stream. Each
++    /// chunk must be at most 512 KiB; the four queued entries bound read-ahead.
++    pub fn result_channel() -> (mpsc::Sender<Result<Bytes, std::io::Error>>, Self) {
++        let (tx, rx) = mpsc::channel(FILE_CHANNEL_CAPACITY);
++        (tx, Self::ResultStream(rx))
++    }
++
+     /// Normalizes the content into a stream of binary chunks.
+     ///
+     /// [`FileContent::Stream`] is forwarded as-is. For [`FileContent::Path`] and
+@@ -56,6 +74,31 @@
+             FileContent::Stream(rx) => {
+                 tracing::info!("Reading file content via byte stream from application");
+                 Box::pin(ReceiverStream::new(rx).map(Ok))
++            }
++            FileContent::ResultStream(rx) => {
++                if rx.max_capacity() > FILE_CHANNEL_CAPACITY {
++                    return Box::pin(futures_util::stream::once(std::future::ready(Err(
++                        std::io::Error::other("File stream queue exceeds capacity budget")))));
++                }
++                Box::pin(ReceiverStream::new(rx).map(|chunk| {
++                    let bytes = chunk?;
++                    if bytes.len() > READ_BUFFER_SIZE {
++                        return Err(std::io::Error::other("File stream chunk exceeds byte budget"));
++                    }
++                    Ok(bytes)
++                }))
++            }
++            FileContent::File(file) => {
++                let (tx, rx) = mpsc::channel(FILE_CHANNEL_CAPACITY);
++                tokio::spawn(async move {
++                    match file.metadata() {
++                        Ok(metadata) if metadata.is_file() =>
++                            read_file_into_sender(tokio::fs::File::from_std(file), tx).await,
++                        Ok(_) => { let _ = tx.send(Err(std::io::Error::other("Media lease is not a regular file"))).await; }
++                        Err(error) => { let _ = tx.send(Err(error)).await; }
++                    }
++                });
++                Box::pin(ReceiverStream::new(rx))
+             }
+             FileContent::Path(path) => {
+                 tracing::info!("Reading file content from path: {}", path.display());
+@@ -116,7 +159,11 @@
+         match file.read_buf(&mut buffer).await {
+             Ok(0) => break,
+             Ok(n) => {
+-                total += n as u64;
++                let Some(next) = total.checked_add(n as u64) else {
++                    let _ = tx.send(Err(std::io::Error::other("File byte count overflow"))).await;
++                    break;
++                };
++                total = next;
+                 if tx.send(Ok(buffer.split().freeze())).await.is_err() {
+                     break;
+                 }
+--- /dev/null
++++ b/core/tests/native_v2.rs
+@@ -0,0 +1,435 @@
++#![cfg(feature = "http")]
++
++//! Actual loopback TLS and filesystem tests for the native receive boundary.
++//! The archive consumer accepts one complete known PNG fixture, not arbitrary
++//! media. Complete Qt/FFmpeg decoding belongs to the C++ integration tests.
++
++use bytes::Bytes;
++use localsend::crypto::cert::{generate_self_signed, SelfSignedCert};
++use localsend::crypto::hash::sha256_hex;
++use localsend::http::client::{ClientError, LsHttpClientV2};
++use localsend::http::dto_v2::{PrepareUploadRequestDtoV2, PrepareUploadResponseDtoV2, RegisterDtoV2};
++use localsend::http::limits::TransferLimits;
++use localsend::http::server::common::verified_upload::{
++    verified_upload_channel, CommittedMedia, UploadFailure, UploadVerification,
++    VerifiedUploadReceiver,
++};
++use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
++use localsend::http::server::{start_bound_v2, ServerConfigV2, ServerHandle, TlsConfig};
++use localsend::http::state::ClientInfo;
++use localsend::model::discovery::ProtocolType;
++use localsend::model::transfer::{FileContent, FileDto};
++use std::collections::HashMap;
++use std::net::Ipv4Addr;
++use std::path::{Path, PathBuf};
++use std::sync::Arc;
++use std::time::Duration;
++use tokio::io::AsyncWriteExt;
++use tokio::sync::{mpsc, oneshot, Semaphore};
++use tokio_util::sync::CancellationToken;
++
++const PNG: &[u8] = include_bytes!("fixtures/one-pixel.png");
++const WAIT: Duration = Duration::from_secs(10);
++
++#[derive(Clone)]
++enum SinkAction {
++    Commit,
++    Hold(Arc<Semaphore>),
++    FailIo,
++    DurabilityUnknown,
++    EarlyCompletion,
++}
++
++#[derive(Debug)]
++enum Observation {
++    Started,
++    Verified(UploadVerification),
++    Rejected(UploadFailure),
++}
++
++struct Receiver {
++    handle: ServerHandle,
++    identity: SelfSignedCert,
++    sender: SelfSignedCert,
++    root: PathBuf,
++    observations: mpsc::Receiver<Observation>,
++    stop: Option<oneshot::Sender<()>>,
++    application: Option<tokio::task::JoinHandle<()>>,
++}
++
++impl Receiver {
++    async fn start(action: SinkAction, limits: TransferLimits) -> Self {
++        let identity = generate_self_signed().unwrap();
++        let sender = generate_self_signed().unwrap();
++        let root = std::env::temp_dir().join(format!("huhucapture-lan-{}", uuid::Uuid::new_v4()));
++        std::fs::create_dir(&root).unwrap();
++        let (events, mut events_rx) = mpsc::channel(16);
++        let (observations_tx, observations) = mpsc::channel(8);
++        let application = tokio::spawn({
++            let root = root.clone();
++            async move {
++                let mut workers = tokio::task::JoinSet::new();
++                while let Some(event) = events_rx.recv().await {
++                    match event {
++                        ServerEventV2::PrepareUpload { files, decision_tx, .. } => {
++                            let _ = decision_tx.send(PrepareUploadDecisionV2::Accept(files.into_keys().collect()));
++                        }
++                        ServerEventV2::FileUpload { target_tx, .. } => {
++                            let (target, receiver) = verified_upload_channel();
++                            target_tx.send(target).unwrap();
++                            workers.spawn(archive_fixture(receiver, root.clone(), action.clone(), observations_tx.clone()));
++                        }
++                        _ => {}
++                    }
++                    while workers.try_join_next().is_some() {}
++                }
++                workers.shutdown().await;
++            }
++        });
++        let (stop, stop_rx) = oneshot::channel();
++        let handle = start_bound_v2(vec![Ipv4Addr::LOCALHOST], 0,
++            TlsConfig { cert: identity.certificate_pem.clone(), private_key: identity.private_key_pem.clone() },
++            ClientInfo { alias: "huhucapture test".into(), version: "2.2".into(),
++                device_model: None, device_type: None, token: identity.fingerprint.clone() },
++            ServerConfigV2 { pin: None, verify_checksums: true, event_tx: events }, limits, stop_rx)
++            .await.unwrap();
++        Self { handle, identity, sender, root, observations, stop: Some(stop), application: Some(application) }
++    }
++
++    fn client(&self) -> LsHttpClientV2 {
++        LsHttpClientV2::try_new(&self.sender.private_key_pem, &self.sender.certificate_pem,
++            Some(self.identity.fingerprint.clone()), None).unwrap()
++    }
++
++    fn raw_client(&self) -> localsend::reqwest::Client {
++        let pem = format!("{}{}", self.sender.certificate_pem, self.sender.private_key_pem);
++        // These parser/route tests already know the endpoint. Authentication
++        // tests use the upstream pinned client and its existing TLS test suite.
++        localsend::reqwest::Client::builder().use_rustls_tls()
++            .identity(localsend::reqwest::Identity::from_pem(pem.as_bytes()).unwrap())
++            .danger_accept_invalid_certs(true).no_proxy()
++            .redirect(localsend::reqwest::redirect::Policy::none())
++            .timeout(WAIT).build().unwrap()
++    }
++
++    fn payload(&self, file: FileDto) -> PrepareUploadRequestDtoV2 {
++        PrepareUploadRequestDtoV2 {
++            info: RegisterDtoV2 { alias: "sender".into(), version: "2.2".into(),
++                device_model: None, device_type: None, fingerprint: self.sender.fingerprint.clone(),
++                port: 53317, protocol: ProtocolType::Https, download: false },
++            files: HashMap::from([(file.id.clone(), file)]),
++        }
++    }
++
++    async fn prepare(&self, file: FileDto) -> PrepareUploadResponseDtoV2 {
++        tokio::time::timeout(WAIT, self.client().prepare_upload(ProtocolType::Https,
++            "127.0.0.1", self.handle.port(), None, self.payload(file), None,
++            CancellationToken::new())).await.unwrap().unwrap().response.unwrap()
++    }
++
++    fn upload(&self, session: PrepareUploadResponseDtoV2, body: localsend::reqwest::Body)
++        -> tokio::task::JoinHandle<Result<(), ClientError>> {
++        let client = self.client();
++        let port = self.handle.port();
++        tokio::spawn(async move {
++            tokio::time::timeout(WAIT, client.upload(ProtocolType::Https, "127.0.0.1", port,
++                None, &session.session_id, "file", &session.files["file"], body,
++                CancellationToken::new())).await.unwrap()
++        })
++    }
++
++    async fn next(&mut self) -> Observation {
++        tokio::time::timeout(WAIT, self.observations.recv()).await.unwrap().unwrap()
++    }
++
++    async fn shutdown(&mut self) {
++        if let Some(stop) = self.stop.take() { let _ = stop.send(()); }
++        tokio::time::timeout(WAIT, self.handle.wait_stopped()).await.unwrap();
++        if let Some(application) = self.application.take() { application.abort(); let _ = application.await; }
++    }
++}
++
++impl Drop for Receiver {
++    fn drop(&mut self) {
++        if let Some(stop) = self.stop.take() { let _ = stop.send(()); }
++        if let Some(application) = self.application.take() { application.abort(); }
++        for name in ["staging.part", "committed.png", "lease.png", "moved.png"] {
++            let _ = std::fs::remove_file(self.root.join(name));
++        }
++        let _ = std::fs::remove_dir(&self.root);
++    }
++}
++
++fn media() -> FileDto {
++    FileDto { id: "file".into(), file_name: "截图.png".into(), size: PNG.len() as u64,
++        file_type: "image/png".into(), sha256: Some(sha256_hex(PNG)), preview: None, metadata: None }
++}
++
++async fn archive_fixture(mut receiver: VerifiedUploadReceiver, root: PathBuf,
++    action: SinkAction, observations: mpsc::Sender<Observation>) {
++    observations.send(Observation::Started).await.unwrap();
++    if matches!(action, SinkAction::EarlyCompletion) {
++        receiver.completion.send(Ok(CommittedMedia::Png)).unwrap();
++        while receiver.chunks.recv().await.is_some() {}
++        if let Ok(Err(error)) = receiver.verification.await {
++            observations.send(Observation::Rejected(error)).await.unwrap();
++        }
++        return;
++    }
++    let staging = root.join("staging.part");
++    let mut output = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&staging).await.unwrap();
++    while let Some(chunk) = receiver.chunks.recv().await {
++        output.write_all(&chunk).await.unwrap();
++    }
++    output.flush().await.unwrap();
++    let verification = match receiver.verification.await {
++        Ok(Ok(verification)) => verification,
++        result => {
++            drop(output);
++            let _ = tokio::fs::remove_file(&staging).await;
++            let error = result.ok().and_then(Result::err).unwrap_or(UploadFailure::Cancelled);
++            observations.send(Observation::Rejected(error)).await.unwrap();
++            return;
++        }
++    };
++    observations.send(Observation::Verified(verification.clone())).await.unwrap();
++    if let SinkAction::Hold(gate) = &action { gate.acquire().await.unwrap().forget(); }
++    let result = if verification.cancellation.is_cancelled() {
++        Err(UploadFailure::Cancelled)
++    } else if tokio::fs::read(&staging).await.unwrap() != PNG {
++        // A fixture-specific complete-file check. This is intentionally not a
++        // replacement for the production codec validator.
++        Err(UploadFailure::InvalidMedia)
++    } else if matches!(action, SinkAction::FailIo) {
++        Err(UploadFailure::Io)
++    } else {
++        output.sync_all().await.unwrap();
++        drop(output);
++        let result = tokio::task::spawn_blocking({
++            let staging = staging.clone();
++            let destination = root.join("committed.png");
++            move || durable_commit(&staging, &destination)
++        }).await.unwrap();
++        let result = result.map(|()| CommittedMedia::Png);
++        let result = if result.is_ok() && matches!(action, SinkAction::DurabilityUnknown) {
++            // Explicit post-publication failure injection: preserve the actual
++            // file and ensure no success ACK can be produced for this state.
++            Err(UploadFailure::DurabilityUnknown)
++        } else { result };
++        let _ = receiver.completion.send(result);
++        return;
++    };
++    drop(output);
++    let _ = tokio::fs::remove_file(staging).await;
++    let _ = receiver.completion.send(result);
++}
++
++#[cfg(unix)]
++fn durable_commit(source: &Path, destination: &Path) -> Result<(), UploadFailure> {
++    std::fs::hard_link(source, destination).map_err(|_| UploadFailure::Io)?;
++    let directory = std::fs::File::open(destination.parent().unwrap()).map_err(|_| UploadFailure::DurabilityUnknown)?;
++    directory.sync_all().map_err(|_| UploadFailure::DurabilityUnknown)?;
++    std::fs::remove_file(source).map_err(|_| UploadFailure::DurabilityUnknown)?;
++    directory.sync_all().map_err(|_| UploadFailure::DurabilityUnknown)
++}
++
++#[cfg(windows)]
++fn durable_commit(source: &Path, destination: &Path) -> Result<(), UploadFailure> {
++    use std::os::windows::ffi::OsStrExt;
++    #[link(name = "kernel32")]
++    extern "system" { fn MoveFileExW(source: *const u16, destination: *const u16, flags: u32) -> i32; }
++    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
++    let destination: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
++    // The exclusively owned staging file was synced and closed above. No
++    // REPLACE_EXISTING or COPY_ALLOWED flags; same-directory, write-through move.
++    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 8) } == 0 {
++        Err(UploadFailure::Io)
++    } else { Ok(()) }
++}
++
++fn expect_status(result: Result<(), ClientError>, status: u16) {
++    assert!(matches!(&result, Err(ClientError::StatusCode(error)) if error.status == status),
++        "expected status {status}, got {result:?}");
++}
++
++#[tokio::test]
++async fn tls_ack_waits_for_verification_and_durable_commit() {
++    let gate = Arc::new(Semaphore::new(0));
++    let mut receiver = Receiver::start(SinkAction::Hold(gate.clone()), TransferLimits::default()).await;
++    let session = receiver.prepare(media()).await;
++    let upload = receiver.upload(session, PNG.to_vec().into());
++    assert!(matches!(receiver.next().await, Observation::Started));
++    let Observation::Verified(verified) = receiver.next().await else { panic!("not verified"); };
++    assert!(verified.sender_checksum_matched);
++    assert_eq!(verified.actual_sha256, sha256_hex(PNG));
++    assert_eq!(verified.received_bytes, PNG.len() as u64);
++    assert!(!upload.is_finished());
++    assert!(!receiver.root.join("committed.png").exists());
++    gate.add_permits(1);
++    upload.await.unwrap().unwrap();
++    assert_eq!(std::fs::read(receiver.root.join("committed.png")).unwrap(), PNG);
++    assert!(!receiver.root.join("staging.part").exists());
++    let port = receiver.handle.port();
++    receiver.shutdown().await;
++    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await.unwrap();
++    drop(listener);
++}
++
++#[tokio::test]
++async fn missing_optional_digest_is_not_claimed_as_sender_verification() {
++    let mut receiver = Receiver::start(SinkAction::Commit, TransferLimits::default()).await;
++    let mut file = media();
++    file.sha256 = None;
++    let session = receiver.prepare(file).await;
++    let upload = receiver.upload(session, PNG.to_vec().into());
++    assert!(matches!(receiver.next().await, Observation::Started));
++    let Observation::Verified(verified) = receiver.next().await else { panic!("not verified"); };
++    assert!(!verified.sender_checksum_matched);
++    assert_eq!(verified.actual_sha256, sha256_hex(PNG));
++    upload.await.unwrap().unwrap();
++    receiver.shutdown().await;
++}
++
++#[tokio::test]
++async fn bad_checksum_length_or_type_never_publishes() {
++    for scenario in 0..4 {
++        let mut receiver = Receiver::start(SinkAction::Commit, TransferLimits::default()).await;
++        let mut file = media();
++        let mut data = PNG.to_vec();
++        let (status, failure) = match scenario {
++            0 => { file.sha256 = Some("0".repeat(64)); (422, UploadFailure::ChecksumMismatch) }
++            1 => { file.size += 1; (400, UploadFailure::LengthMismatch) }
++            2 => { file.size -= 1; (400, UploadFailure::LengthMismatch) }
++            _ => { data[0] = 0; file.sha256 = Some(sha256_hex(&data)); (415, UploadFailure::InvalidMedia) }
++        };
++        let session = receiver.prepare(file).await;
++        // Unknown body length exercises cumulative bounds rather than merely
++        // mismatching Content-Length headers.
++        let body = localsend::reqwest::Body::wrap_stream(futures_util::stream::iter(
++            vec![Ok::<_, std::io::Error>(Bytes::from(data))]));
++        let upload = receiver.upload(session, body);
++        assert!(matches!(receiver.next().await, Observation::Started));
++        let Observation::Rejected(error) = receiver.next().await else { panic!("invalid body verified"); };
++        assert_eq!(error, failure);
++        expect_status(upload.await.unwrap(), status);
++        assert!(!receiver.root.join("committed.png").exists());
++        receiver.shutdown().await;
++    }
++}
++
++#[tokio::test]
++async fn commit_failures_and_premature_receipts_do_not_ack() {
++    for action in [SinkAction::FailIo, SinkAction::DurabilityUnknown, SinkAction::EarlyCompletion] {
++        let keep_destination = matches!(action, SinkAction::DurabilityUnknown);
++        let mut receiver = Receiver::start(action, TransferLimits::default()).await;
++        let session = receiver.prepare(media()).await;
++        expect_status(receiver.upload(session, PNG.to_vec().into()).await.unwrap(), 500);
++        assert_eq!(receiver.root.join("committed.png").exists(), keep_destination);
++        if keep_destination { assert_eq!(std::fs::read(receiver.root.join("committed.png")).unwrap(), PNG); }
++        receiver.shutdown().await;
++    }
++}
++
++#[tokio::test]
++async fn an_existing_destination_is_never_replaced() {
++    let mut receiver = Receiver::start(SinkAction::Commit, TransferLimits::default()).await;
++    let destination = receiver.root.join("committed.png");
++    std::fs::write(&destination, b"existing media").unwrap();
++    let session = receiver.prepare(media()).await;
++    expect_status(receiver.upload(session, PNG.to_vec().into()).await.unwrap(), 500);
++    assert_eq!(std::fs::read(destination).unwrap(), b"existing media");
++    assert_eq!(std::fs::read(receiver.root.join("staging.part")).unwrap(), PNG);
++    receiver.shutdown().await;
++}
++
++#[tokio::test]
++async fn reading_failure_is_distinct_from_eof_and_cancellation_interrupts_body() {
++    let mut receiver = Receiver::start(SinkAction::Commit, TransferLimits::default()).await;
++    let session = receiver.prepare(media()).await;
++    let (source, content) = FileContent::result_channel();
++    source.send(Ok(Bytes::copy_from_slice(&PNG[..8]))).await.unwrap();
++    source.send(Err(std::io::Error::other("injected source read failure"))).await.unwrap();
++    drop(source);
++    let result = receiver.upload(session, localsend::reqwest::Body::wrap_stream(content.into_stream())).await.unwrap();
++    assert!(result.is_err());
++    assert!(!receiver.root.join("committed.png").exists());
++    receiver.shutdown().await;
++
++    let mut receiver = Receiver::start(SinkAction::Commit, TransferLimits::default()).await;
++    let session = receiver.prepare(media()).await;
++    let session_id = session.session_id.clone();
++    let (source, content) = FileContent::result_channel();
++    source.send(Ok(Bytes::copy_from_slice(&PNG[..8]))).await.unwrap();
++    let upload = receiver.upload(session, localsend::reqwest::Body::wrap_stream(content.into_stream()));
++    assert!(matches!(receiver.next().await, Observation::Started));
++    assert!(receiver.handle.cancel_v2_session(&session_id).await);
++    assert!(upload.await.unwrap().is_err());
++    assert!(matches!(receiver.next().await, Observation::Rejected(UploadFailure::Cancelled)));
++    assert!(!receiver.root.join("committed.png").exists());
++    drop(source);
++    receiver.shutdown().await;
++}
++
++#[tokio::test]
++async fn an_open_media_lease_survives_source_path_replacement() {
++    let mut receiver = Receiver::start(SinkAction::Commit, TransferLimits::default()).await;
++    let path = receiver.root.join("lease.png");
++    std::fs::write(&path, PNG).unwrap();
++    let lease = std::fs::File::open(&path).unwrap();
++    std::fs::rename(&path, receiver.root.join("moved.png")).unwrap();
++    std::fs::write(&path, b"replacement must not be sent").unwrap();
++    let session = receiver.prepare(media()).await;
++    let body = localsend::reqwest::Body::wrap_stream(FileContent::File(lease).into_stream());
++    receiver.upload(session, body).await.unwrap().unwrap();
++    assert_eq!(std::fs::read(receiver.root.join("committed.png")).unwrap(), PNG);
++    assert_eq!(std::fs::read(&path).unwrap(), b"replacement must not be sent");
++    receiver.shutdown().await;
++}
++
++#[tokio::test]
++async fn selected_listener_routes_and_control_bodies_are_bounded() {
++    let mut limits = TransferLimits::default();
++    limits.control_bytes = 1024;
++    let mut receiver = Receiver::start(SinkAction::Commit, limits).await;
++    assert_eq!(receiver.handle.local_addresses(), vec![(Ipv4Addr::LOCALHOST, receiver.handle.port()).into()]);
++    let raw = receiver.raw_client();
++    let base = format!("https://127.0.0.1:{}", receiver.handle.port());
++    for path in ["/", "/i18n.json", "/api/localsend/v1/info", "/api/localsend/v2/show",
++        "/api/localsend/v2/prepare-download", "/api/localsend/v2/download",
++        "/api/localsend/v3/nonce", "/api/localsend/v3/register"] {
++        for method in [localsend::reqwest::Method::GET, localsend::reqwest::Method::POST] {
++            assert_eq!(raw.request(method, format!("{base}{path}")).send().await.unwrap().status().as_u16(), 404);
++        }
++    }
++    assert_eq!(raw.get(format!("{base}/api/localsend/v2/info")).send().await.unwrap().status().as_u16(), 200);
++    let route = format!("{base}/api/localsend/v2/prepare-upload");
++    assert_eq!(raw.post(&route).body(vec![b' '; 2048]).send().await.unwrap().status().as_u16(), 413);
++    let chunked = localsend::reqwest::Body::wrap_stream(futures_util::stream::iter(
++        (0..8).map(|_| Ok::<_, std::io::Error>(Bytes::from(vec![b' '; 256])))));
++    assert_eq!(raw.post(&route).body(chunked).send().await.unwrap().status().as_u16(), 413);
++    assert!(receiver.observations.try_recv().is_err());
++    receiver.shutdown().await;
++}
++
++#[tokio::test]
++async fn invalid_file_metadata_is_rejected_before_application_events() {
++    let mut receiver = Receiver::start(SinkAction::Commit, TransferLimits::default()).await;
++    let raw = receiver.raw_client();
++    let route = format!("https://127.0.0.1:{}/api/localsend/v2/prepare-upload", receiver.handle.port());
++    for scenario in 0..7 {
++        let mut payload = receiver.payload(media());
++        let mut expected_status = 400;
++        match scenario {
++            0 => payload.info.alias = "x".repeat(257),
++            1 => payload.files.get_mut("file").unwrap().file_name = "../escape.png".into(),
++            2 => payload.files.get_mut("file").unwrap().sha256 = Some("not a digest".into()),
++            3 => payload.files.get_mut("file").unwrap().size = 0,
++            4 => { payload.files.get_mut("file").unwrap().file_type = "text/plain".into(); expected_status = 415; }
++            5 => payload.files.get_mut("file").unwrap().preview = Some("not accepted".into()),
++            _ => { payload.files.clear(); for i in 0..65 { let mut file = media(); file.id = format!("f{i}"); payload.files.insert(file.id.clone(), file); } }
++        }
++        assert_eq!(raw.post(&route).json(&payload).send().await.unwrap().status().as_u16(), expected_status);
++    }
++    assert!(receiver.observations.try_recv().is_err());
++    receiver.shutdown().await;
++}
