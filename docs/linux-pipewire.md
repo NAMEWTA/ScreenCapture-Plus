@@ -121,11 +121,16 @@ artifacts/portal/pipewire_fd_tests
 
 ## 真实 Wayland 与 PipeWire 采流检查
 
-[test-pipewire-capture.py](../scripts/test-pipewire-capture.py) 还需要 Ubuntu 的 `pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr libglib2.0-bin dbus sway`。它每轮启动自己的 dbus-daemon、headless Sway/pixman、系统 PipeWire/WirePlumber、permission store 和真实 Portal-wlr/frontend；配置、状态、数据、cache 与 runtime 都是独立目录，不接入用户桌面或用户 bus。服务使用系统库，只有应用探针使用固定客户端/Qt/libportal 部署树，避免用 1.6 插件污染系统 daemon。
+[test-pipewire-capture.py](../scripts/test-pipewire-capture.py) 还需要 Ubuntu 的 `pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr libglib2.0-bin dbus sway fuse3`。它每轮启动自己的 dbus-daemon、headless Sway/pixman、系统 PipeWire/WirePlumber、permission store、document portal 和真实 Portal-wlr/frontend；配置、状态、数据、cache 与 runtime 都是独立目录，不接入用户桌面或用户 bus。服务使用系统库，只有应用探针使用固定客户端/Qt/libportal 部署树，避免用 1.6 插件污染系统 daemon。document portal 的 FUSE mount 随其所属进程在私有 bus 结束前清理；异常退出时只卸载该轮私有 runtime 下的 `doc`，清理结果独立保留。
+
+CI 的无 GPU 桌面使用 [build-validation-desktop.py](../scripts/build-validation-desktop.py) 构建的固定 Portal-wlr 0.8.1。构建前安装 `libpipewire-0.3-dev libinih-dev libgbm-dev libdrm-dev libsystemd-dev` 及前述 Meson/Wayland 工具。脚本清除应用前缀环境，把后端链接到宿主系统库；Wayland protocols 1.40 的 XML 只作为构建输入。两份源码及许可证均保留在私有构建目录，实际链接库版本、后端 SHA-256 与来源写入 `build-info.json`。它们是受控测试桌面的依赖，不能随应用替换用户的 Portal 或系统 daemon。
 
 ```sh
+python3 scripts/build-validation-desktop.py
 python3 scripts/test-pipewire-capture.py artifacts/portal/pipewire_capture_probe \
   --pipewire-prefix .deps/pipewire-validation/install \
+  --portal-backend .deps/validation-desktop/install/libexec/xdg-desktop-portal-wlr \
+  --backend-build-info .deps/validation-desktop/build-info.json \
   --artifacts artifacts/tests/pipewire
 ```
 
@@ -139,6 +144,10 @@ python3 scripts/test-pipewire-capture.py artifacts/portal/pipewire_capture_probe
 
 探针使用 45 秒测试截止值；独立 Python watchdog 在 Qt 或 worker 卡住时终止测试进程，不能把无响应自动算作成功。清理仅针对持有的子进程对象和私有目录，子进程带父进程死亡保护。没有向任意用户 PID 发信号。结果 JSON、软件包实际版本、日志和接收 PNG 保存在指定 artifacts 目录。
 
-Ubuntu 24.04 的 Portal-wlr 基线为 0.7.1；已核对上游提交 `74428f2a8fa7f252e2a46fdf5b697536c66c8a1c` 的 [pipewire_screencast.c](https://github.com/emersion/xdg-desktop-portal-wlr/blob/74428f2a8fa7f252e2a46fdf5b697536c66c8a1c/src/screencast/pipewire_screencast.c)（blob `41c91abd9c14eff49c8e2e1600d32b168d930a64`）、[wlr_screencast.c](https://github.com/emersion/xdg-desktop-portal-wlr/blob/74428f2a8fa7f252e2a46fdf5b697536c66c8a1c/src/screencast/wlr_screencast.c)（blob `c1fae8e01d4b8edc5ef1fc4d4503f28d8f229dfa`）和配置手册（blob `59a4305b727653033fbae43e2a93dceab4192ca2`）：无 modifier 分支使用 SHM/MemFd，提供 Header/VideoTransform。测试通过其正式配置 `output_name=HEADLESS-1, chooser_type=none` 选择脚本自建输出；这不证明人工授权对话框或任何现有桌面同意了采集。没有复制该 backend 源码进入应用。
+Ubuntu 24.04 的 Portal-wlr 0.7.1 在实际 CI 中于 Start 阶段返回 `Operation not permitted`。其 [start_screencast](https://github.com/emersion/xdg-desktop-portal-wlr/blob/74428f2a8fa7f252e2a46fdf5b697536c66c8a1c/src/screencast/screencast.c) 对 screencopy v3 同时要求有效 SHM 和 DMA-BUF format；pixman/headless 没有后者，因此其后续 SHM/MemFd 分支本身存在并不能证明该桌面能够启动采集。
+
+后端采用上游 0.8.1 原版提交 `e1d5d16f0e064a0b788c5d70c11461b15ee7a4af`，没有为测试伪造 Portal 回复或媒体帧。已实际阅读其 [wlr_screencopy.c](https://github.com/emersion/xdg-desktop-portal-wlr/blob/e1d5d16f0e064a0b788c5d70c11461b15ee7a4af/src/screencast/wlr_screencopy.c) 与 [pipewire_screencast.c](https://github.com/emersion/xdg-desktop-portal-wlr/blob/e1d5d16f0e064a0b788c5d70c11461b15ee7a4af/src/screencast/pipewire_screencast.c)：它使用共享 buffer constraints，SHM 格式不依赖 DMA-BUF 存在，无 modifier 分支仍使用 MemFd。MIT 许可证署名 emersion 及各文件原作者。构建使用 [Wayland protocols 1.40](https://github.com/wayland-mirror/wayland-protocols/tree/c7b582cb71ec145026a547dcd8abb9dfeba40541)（MIT，保留完整 COPYING 和各 XML 作者），其 ext-image 协议满足该版本后端的生成要求。版本、commit、构建参数由依赖锁唯一指定。
+
+测试通过正式配置 `output_name=HEADLESS-1, chooser_type=none` 选择脚本自建输出；这不证明人工授权对话框或任何现有桌面同意了采集。后端只用于建立真实测试环境，其源码没有复制进应用。升级测试后端也不构成宣称新一轮采集已通过，仍须以实际结果为准。
 
 编译、原生故障、真实桌面三类结果分别以对应提交的 CI 日志和产物为准。没有实际运行的检查必须保持 **not run**。本探针不能替代 GNOME/Plasma 的接受/拒绝/取消与热插拔、混合 DPI、实体显示器、HDR/DMA-BUF、音频、FFmpeg 同时编码、资源/延迟基线、长时间稳定性、安装包或完整产品验收。

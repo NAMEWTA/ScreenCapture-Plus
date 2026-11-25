@@ -508,20 +508,16 @@ void WinCap::makeToolCap()
 
 bool WinCap::enterByArg()
 {
-    auto& args = Ling::App::get()->args;
-    auto it = args.find(L"--enter");
-    if (it == args.end()) return false;
-    auto& val = it->second;
+    using HuhuCapture::Core::CaptureEntry;
+    const auto entry = App::get()->startup().entry;
+    if (entry == CaptureEntry::Capture) return false;
     // 下面这几条路本来都是从 ToolCap 的按钮进的，start* 会检查选区是不是已经定下来了
     stage = CapStage::Adjust;
     refresh();      //收掉放大镜：这几条路都是马上要换阶段或者弹窗，屏幕上不能留着它
-    if (val == L"long") startLong();
-    else if (val == L"video") startVideo();
-    else if (val == L"qr" || val == L"qrcode") startQrcode();
-    else if (val == L"pin") startPin();   //等于替用户按住了 Ctrl 框选
-    // 值不认识（用户拼错了）：当没给这个参数，照常出工具条。上面那两句白做了，
-    // 但调用方接着也是这两句，重复一遍没有副作用
-    else return false;
+    if (entry == CaptureEntry::Scroll) startLong();
+    else if (entry == CaptureEntry::Recording) startVideo();
+    else if (entry == CaptureEntry::Qr) startQrcode();
+    else if (entry == CaptureEntry::Pin) startPin(); // 等于替用户按住了 Ctrl 框选
     return true;
 }
 

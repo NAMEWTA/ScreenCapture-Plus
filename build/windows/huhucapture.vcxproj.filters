@@ -401,6 +401,9 @@
     <ClInclude Include="..\..\src\core\ShortcutKeys.h">
       <Filter>src\core</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\core\Startup.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\editor\ToolSettings.h">
       <Filter>src\editor</Filter>
     </ClInclude>

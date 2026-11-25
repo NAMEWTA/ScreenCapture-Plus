@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -45,6 +46,19 @@ def terminate(child: subprocess.Popen) -> None:
         except subprocess.TimeoutExpired:
             child.kill()
             child.wait(timeout=3)
+
+
+def unmount_owned_documents(runtime: Path, env: dict[str, str]) -> None:
+    # xdg-document-portal normally unmounts on SIGTERM. After an exceptional
+    # forced exit, detach only this run's known FUSE mount before removing its
+    # private directory; never target the user's session or another mount.
+    mount = str(runtime / "doc")
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        fields = line.split()
+        if len(fields) > 5 and fields[4] == mount:
+            subprocess.run([host_binary("fusermount3"), "-u", mount], env=env,
+                check=True, capture_output=True, text=True, timeout=5)
+            return
 
 
 def require_alive(children: list[tuple[str, subprocess.Popen]], ignored: set[str] | None = None) -> None:
@@ -227,12 +241,16 @@ def run_case(probe: Path, prefix: Path, mode: str, artifacts: Path, programs: di
             # before WirePlumber can automatically activate it.
             start("permission-store", [programs["xdg-permission-store"]])
             wait_bus_name("org.freedesktop.impl.portal.PermissionStore", env, children)
+            # Portal activates this real daemon even for screen capture. Own it
+            # so its FUSE mount is stopped before the bus/private runtime ends.
+            start("document-portal", [programs["xdg-document-portal"]])
+            wait_bus_name("org.freedesktop.portal.Documents", env, children)
             daemon = start("pipewire", [programs["pipewire"]])
             wait_socket(runtime, "pipewire-0", children)
             start("wireplumber", [programs["wireplumber"]])
-            start("portal-wlr", [programs["xdg-desktop-portal-wlr"]])
+            start("portal-wlr", [programs["xdg-desktop-portal-wlr"], "--loglevel=DEBUG"])
             wait_bus_name("org.freedesktop.impl.portal.desktop.wlr", env, children)
-            start("portal", [programs["xdg-desktop-portal"]])
+            start("portal", [programs["xdg-desktop-portal"], "--verbose"])
             wait_bus_name("org.freedesktop.portal.Desktop", env, children)
             client_env = env.copy()
             client_env["LD_LIBRARY_PATH"] = str(prefix / "lib") + (":" + client_loader_path if client_loader_path else "")
@@ -244,34 +262,52 @@ def run_case(probe: Path, prefix: Path, mode: str, artifacts: Path, programs: di
                     client_env[key] = os.environ[key]
             run_probe(probe, mode, client_env, env, children, daemon, artifacts, child_guard)
         finally:
-            for _, child in reversed(children):
-                terminate(child)
-                if child.stdout is not None:
-                    child.stdout.close()
+            cleanup_errors = []
+            for name, child in reversed(children):
+                try:
+                    terminate(child)
+                    if name == "document-portal":
+                        unmount_owned_documents(runtime, env)
+                except (OSError, subprocess.SubprocessError) as error:
+                    cleanup_errors.append(f"{name}: {error}")
+                finally:
+                    if child.stdout is not None:
+                        child.stdout.close()
             for log in logs:
                 log.close()
+            (artifacts / "cleanup.json").write_text(json.dumps({"errors": cleanup_errors}, indent=2) + "\n")
+            if cleanup_errors:
+                raise RuntimeError("Owned service cleanup failed: " + "; ".join(cleanup_errors))
 
 
 def main() -> int:
     args = argparse.ArgumentParser(description=__doc__)
     args.add_argument("probe", type=Path)
     args.add_argument("--pipewire-prefix", required=True, type=Path)
+    args.add_argument("--portal-backend", required=True, type=Path)
+    args.add_argument("--backend-build-info", required=True, type=Path)
     args.add_argument("--artifacts", type=Path, default=Path("artifacts/tests/pipewire"))
     parsed = args.parse_args()
     probe = parsed.probe.resolve(strict=True)
     prefix = parsed.pipewire_prefix.resolve(strict=True)
     if not (prefix / "lib/libpipewire-0.3.so").is_file():
         raise RuntimeError("The pinned PipeWire client prefix is missing")
+    backend = parsed.portal_backend.resolve(strict=True)
+    build_info = json.loads(parsed.backend_build_info.read_text(encoding="utf-8"))
+    if not os.access(backend, os.X_OK) or hashlib.sha256(backend.read_bytes()).hexdigest() != build_info["binarySha256"]:
+        raise RuntimeError("The real Portal backend differs from its actual build evidence")
     artifacts = parsed.artifacts.resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
     programs = {name: host_binary(name) for name in ("dbus-daemon", "sway", "swaymsg", "pipewire", "wireplumber", "gdbus")}
-    for name in ("xdg-desktop-portal", "xdg-desktop-portal-wlr", "xdg-permission-store"):
+    for name in ("xdg-desktop-portal", "xdg-document-portal", "xdg-permission-store"):
         programs[name] = host_binary(name)
+    programs["xdg-desktop-portal-wlr"] = str(backend)
     versions = subprocess.run([host_binary("dpkg-query"), "--show", "--showformat=${Package} ${Version}\n",
         "sway", "pipewire", "wireplumber", "xdg-desktop-portal", "xdg-desktop-portal-wlr"],
         check=True, text=True, capture_output=True).stdout.splitlines()
     (artifacts / "environment.json").write_text(json.dumps({"systemPackages": versions,
         "clientPrefix": str(prefix), "modes": MODES, "backend": "headless", "renderer": "pixman",
+        "portalBackendBuild": build_info,
         "portalSelection": "owned output_name=HEADLESS-1, chooser_type=none",
         "physicalDisplay": False, "gnomeAuthorization": False, "plasmaAuthorization": False,
         "audioAcceptance": False, "dmaBufAcceptance": False, "hdrAcceptance": False}, indent=2) + "\n")

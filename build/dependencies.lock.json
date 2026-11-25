@@ -132,9 +132,10 @@
         "Release",
         "RelWithDebInfo"
       ],
-      "cargoLockStatus": "aggregate-resolution-pending",
+      "cargoLockStatus": "aggregate-resolution-verified-windows-linux",
       "buildPythonVersion": "3.13.17",
-      "setupPythonActionCommit": "ece7cb06caefa5fff74198d8649806c4678c61a1"
+      "setupPythonActionCommit": "ece7cb06caefa5fff74198d8649806c4678c61a1",
+      "cargoLockSha256": "02579ba6cce8b2a4e55a464834b895f40dfb8b677e5211b5883fdd0b8369172c"
     },
     "waylandParent": {
       "repository": "https://github.com/KDE/kwindowsystem.git",
@@ -197,6 +198,29 @@
         "-Dlibsystemd=disabled",
         "-Dlogind=disabled"
       ]
+    },
+    "headlessPortalValidation": {
+      "purpose": "CI-owned software-rendered desktop only; not an application runtime dependency",
+      "backend": {
+        "repository": "https://github.com/emersion/xdg-desktop-portal-wlr.git",
+        "version": "0.8.1",
+        "commit": "e1d5d16f0e064a0b788c5d70c11461b15ee7a4af",
+        "license": "MIT",
+        "mesonOptions": [
+          "--buildtype=release",
+          "-Dsd-bus-provider=libsystemd",
+          "-Dsystemd=disabled",
+          "-Dman-pages=disabled"
+        ]
+      },
+      "waylandProtocols": {
+        "repository": "https://github.com/wayland-mirror/wayland-protocols.git",
+        "upstreamRepository": "https://gitlab.freedesktop.org/wayland/wayland-protocols.git",
+        "version": "1.40",
+        "commit": "c7b582cb71ec145026a547dcd8abb9dfeba40541",
+        "license": "MIT",
+        "scope": "Protocol XML build input, with per-protocol copyright notices retained"
+      }
     }
   }
 }
