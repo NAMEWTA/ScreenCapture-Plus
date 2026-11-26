@@ -43,6 +43,52 @@ The actual build compares the patch bytes and canonical SHA1 records with the
 restored original musl-cross-make source. It preserves the complete original
 archives and Git checkouts for later source collection.
 
+Archive extraction preserves each original regular file's modification time,
+including the ordering between distributed `configure`, `Makefile.in`, and
+their maintainer inputs. It restores directory times after creating their
+children and never applies a symlink's timestamp to its target. Original PAX
+decimal timestamps must be exactly representable by the filesystem; invalid
+or rounded values fail. The retained, hash-checked original archive supplies
+these metadata, and the actual retained collector code implements their
+restoration before any original patches run. The source inventory still checks
+the complete original bytes, links and executable modes.
+
+The timestamp helper checks an ordinary file/directory's identity before and
+after writing. It uses `follow_symlinks=False` only where the interpreter
+advertises support; the
+[Python 3.13 implementation](https://github.com/python/cpython/blob/v3.13.17/Modules/posixmodule.c)
+on Windows does not support that keyword for `utime`. Windows reparse entries
+are rejected. The shared timestamp fixture uses an exact 100 ns multiple,
+matching [Windows FILETIME precision](https://learn.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime); finer
+archive values that a filesystem rounds are rejected rather than normalized.
+The GNU Make ordering fixture runs on Unix. Local Linux fixture results do not
+claim that the Windows collector or a complete cross toolchain ran.
+
+This matters for MPFR 4.2.2, whose original configure enables maintainer rules:
+replacing archive times with extraction times can make `aclocal.m4` newer than
+the distributed `configure` and `Makefile.in`, triggering source regeneration.
+The producer keeps that upstream configure behavior. It does not install a
+different generator to rewrite the source tree or disable maintainer rules to
+hide this extraction error. An actual unchanged source tree and successful
+native producer receipts remain required.
+
+All Git inputs use the shared `original-git-blob-bytes-v1` checkout profile.
+Before the first fetch/checkout, each new owned repository gets the exact
+`info/attributes` policy from `build/package/source_checkout.py`. This preserves
+original LF and CRLF blob bytes and disables working-tree text/filter/encoding
+conversions without modifying upstream attributes or the index. In particular,
+zstd's original `*.vcproj*`, `*.rc`, `*.bat` and `*.cmd` attributes request CRLF
+checkout even when `core.autocrlf=false`; ordinary checkout therefore need not
+equal the original Git objects required by source collection.
+
+The real runtime producer retains both the installed policy and the helper
+bytes before fetching. Each Git input manifest binds those materials. Final
+runtime validation checks the policy and retained copies again, then compares
+the original checkout to its exact source manifest. Existing populated
+repositories or changed policies fail. The collector's original byte comparison
+is unchanged; this is the explicit original-blob source-build profile, not a
+claim that normal Git checkout conversions were reproduced.
+
 ## Exact original toolchain patch application
 
 Only the three locked musl/GCC/binutils archives use the named
@@ -99,9 +145,42 @@ existing case-collision checks. The Linux source archive requires a filesystem
 that can hold the case-distinct names.
 
 This archive has no standalone license/copyright filename recognized by the
-collector. That source gap remains visible until independently verified original
-license materials are supplied; the path profile does not mark source materials
-complete or relax any license gate.
+collector. Its separate locked license supplement retains original upstream
+texts without adding anything to the source directory. All 1,443 archive file
+and link blobs and modes match Sabotage tag `v4.19.88-2`, commit
+`22bba0124dfe2728ef5b4555baa1ae0960492665`, except that the archive omits the
+three top-level shell scripts. The retained original `create-dist.sh` explicitly
+removes those scripts. Restoring their original blob identities reconstructs
+the exact tag tree; no other archive addition, omission or change is accepted.
+
+`build/package/linux_header_licenses.py` checks the fixed original Git objects
+from Linux tag `v4.19.88`, commit `fb683b5e3f53a73e761952735736180939a313df`,
+through its tree to `COPYING` and the ten license/exception texts referenced by
+the actual header declarations. The original texts and provenance live under
+`third_party/appimage/linux-headers-licenses` and are retained as **external**
+materials. The component's original `licenses` list remains empty; its separate
+`externalLicenses` record binds those materials and all per-file observations.
+Every original regular file, its SPDX expression, original notice block byte
+ranges, and the list of files without SPDX markers remain independently
+inspectable. The 18 different expressions are not collapsed to a single GPL
+label, and the 311 files without SPDX markers remain unclassified.
+
+Only the missing retained-text gap for this exact component can be resolved by
+these verified materials. The original archive and source-tree hashes remain
+unchanged. An arbitrary materials entry, another source or platform, an unknown
+profile, a plan-supplied replacement, a changed Git object, or a changed text is
+rejected. Missing source/build receipts and other completion gaps are still
+computed normally; retaining these texts is not a conclusion that every
+file-specific licensing question or distribution review is resolved.
+
+After the real archive is available, run the source-material roundtrip and
+tamper checks explicitly, so this integration test cannot skip for a missing
+input:
+
+```sh
+HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE=.deps/appimage-runtime-source/downloads/linux-headers-4.19.88-2.tar.xz \
+  python tests/appimage_runtime_tests.py -v
+```
 
 ## Run on a real Linux amd64 host
 

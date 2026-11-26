@@ -22,9 +22,41 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 PACKAGE = runpy.run_path(str(ROOT / 'scripts/package-qt.py'))
 PATCHES = HELPER['PATCHES']
 HEADERS = HELPER['HEADERS']
+HEADER_LICENSES = runpy.run_path(str(ROOT / 'build/package/linux_header_licenses.py'))
 
 
 class ProfileTests(unittest.TestCase):
+    def test_original_header_license_object_chain_and_texts_are_fixed(self):
+        pin=BUNDLE.read_json(ROOT/'build/package/dependencies.lock.json')['runtimeSourceBuild']['sources'][HEADERS['COMPONENT']]
+        original=HEADER_LICENSES['validate_profile'](HEADERS['COMPONENT'],pin,'linux',ROOT)
+        self.assertEqual(len(original['kernel']['licenseTexts']),11)
+        self.assertEqual(original['headers']['commit'],'22bba0124dfe2728ef5b4555baa1ae0960492665')
+        self.assertEqual(original['kernel']['commit'],'fb683b5e3f53a73e761952735736180939a313df')
+        for component,platform,changed in (
+                ('unrelated-component','linux',pin),(HEADERS['COMPONENT'],'windows',pin),
+                (HEADERS['COMPONENT'],'linux',{**pin,'licenseSupplement':{'profile':'unknown'}}),
+                (HEADERS['COMPONENT'],'linux',{**pin,'sourceArchive':{'sha256':'0'*64}})):
+            with self.subTest(component=component,platform=platform),self.assertRaisesRegex(ValueError,'exact original'):
+                HEADER_LICENSES['validate_profile'](component,changed,platform,ROOT)
+        with tempfile.TemporaryDirectory() as value:
+            project=Path(value);relative=Path(HEADER_LICENSES['PROVENANCE']['path']).parent
+            shutil.copytree(ROOT/relative,project/relative)
+            license_file=project/relative/'linux/LICENSES/preferred/GPL-2.0'
+            saved=license_file.read_bytes();license_file.write_bytes(saved+b'changed original license\n')
+            with self.assertRaisesRegex(ValueError,'original Git blob'):
+                HEADER_LICENSES['validate_profile'](HEADERS['COMPONENT'],pin,'linux',project)
+            license_file.write_bytes(saved)
+            original_file=project/HEADER_LICENSES['PROVENANCE']['path']
+            altered=BUNDLE.read_json(original_file)
+            altered['kernel']['trees'][0]['entries'][0]['sha']='0'*40
+            original_file.write_bytes(BUNDLE.canonical(altered))
+            with self.assertRaisesRegex(ValueError,'locked bytes'):
+                HEADER_LICENSES['validate_profile'](HEADERS['COMPONENT'],pin,'linux',project)
+            changed=copy.deepcopy(pin);changed['licenseSupplement']['provenance'].update(
+                size=original_file.stat().st_size,sha256=BUNDLE.digest(original_file))
+            with self.assertRaisesRegex(ValueError,'exact original'):
+                HEADER_LICENSES['validate_profile'](HEADERS['COMPONENT'],changed,'linux',project)
+
     def test_exact_header_path_profile_cannot_be_selected_for_other_inputs(self):
         _, _, profile = HELPER['profile']()
         pin=profile['sources'][HEADERS['COMPONENT']]
@@ -74,7 +106,7 @@ class ProfileTests(unittest.TestCase):
     def test_collection_plan_cannot_supply_a_patch_application_profile(self):
         with tempfile.TemporaryDirectory() as value:
             root=Path(value); collector=BUNDLE.Collector({},root,root)
-            for key in ('patchApplication','sourcePathProfile','path_profile'):
+            for key in ('patchApplication','sourcePathProfile','path_profile','licenseSupplement','externalLicenses','licenseTexts'):
                 with self.assertRaisesRegex(ValueError,'cannot (override|choose)'):
                     collector.collect_source({'id':'appimage-musl',key:{'profile':'anything'}})
 
@@ -227,6 +259,74 @@ class NativeFileTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform=='linux', 'The exact original header profile is Linux-only')
 class HeaderPathTests(unittest.TestCase):
+    def test_actual_archive_keeps_external_license_texts_separate_and_native_gaps_open(self):
+        configured=os.environ.get('HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE')
+        archive=Path(configured) if configured else ROOT/'.deps/appimage-runtime-source/downloads/appimage-linux-headers-linux-headers-4.19.88-2.tar.xz'
+        if not configured and not archive.is_file():
+            self.skipTest('Restore the original header archive or set HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE')
+        self.assertTrue(archive.is_file() and not archive.is_symlink())
+        self.assertEqual(archive.stat().st_size,1081424)
+        self.assertEqual(BUNDLE.digest(archive),HEADERS['ARCHIVE_SHA256'])
+        lock=BUNDLE.read_json(ROOT/'build/package/dependencies.lock.json')
+        pin=lock['runtimeSourceBuild']['sources'][HEADERS['COMPONENT']]
+        with tempfile.TemporaryDirectory() as value:
+            root=Path(value)
+            def collector(name,original_pin):
+                stage=root/name;stage.mkdir()
+                actual=BUNDLE.Collector({},root,stage)
+                actual.platform='linux';actual.pins={HEADERS['COMPONENT']:original_pin}
+                actual.exported_project=ROOT
+                copied=actual.sources/'huhucapture/build/package/dependencies.lock.json'
+                copied.parent.mkdir(parents=True);shutil.copyfile(ROOT/'build/package/dependencies.lock.json',copied)
+                return actual
+            item={'id':HEADERS['COMPONENT'],'kind':'tar','archive':str(archive),'prefix':HEADERS['ARCHIVE_PREFIX']}
+            missing=collector('without-supplement',{key:value for key,value in pin.items() if key!='licenseSupplement'})
+            missing.collect_source(item)
+            expected_gap=HEADERS['COMPONENT']+': no retained license/copyright text'
+            self.assertIn(expected_gap,missing.gaps)
+            missing.retain('arbitrary-unbound-license',str(ROOT/'third_party/appimage/linux-headers-licenses/linux/COPYING'))
+            self.assertIn(expected_gap,missing.gaps,'An unrelated materials-only entry cannot resolve a component license gap')
+            actual=collector('with-exact-supplement',pin)
+            actual.gap('unrelated-source: original evidence is still missing')
+            actual.collect_source(item)
+            self.assertEqual(actual.gaps,['unrelated-source: original evidence is still missing'])
+            component=actual.components[HEADERS['COMPONENT']]
+            self.assertEqual(component['files'],missing.components[HEADERS['COMPONENT']]['files'])
+            self.assertEqual(component['sourceTreeSha256'],HEADERS['TREE_SHA256'])
+            self.assertEqual(component['licenses'],[])
+            external=component['externalLicenses']
+            self.assertEqual(len(external['originals']),14)
+            self.assertTrue(all(record['material']['path'].startswith('materials/') for record in external['originals']))
+            observations=BUNDLE.read_json(actual.stage/external['observations']['path'])
+            self.assertEqual(len(observations['files']),1325)
+            self.assertEqual(len(observations['withoutSpdx']),311)
+            self.assertEqual(len(observations['spdxExpressions']),18)
+            self.assertIn('tools/install.sh',observations['withoutSpdx'])
+            self.assertIn('MIT',observations['spdxExpressions'])
+            self.assertIn('(GPL-2.0 OR CDDL-1.0)',observations['spdxExpressions'])
+            source=actual.sources/HEADERS['COMPONENT']
+            for record in observations['files']:
+                data=(source/record['path']).read_bytes()
+                self.assertEqual(hashlib.sha256(data).hexdigest(),record['sha256'])
+                for block in record['noticeBlocks']:
+                    self.assertEqual(hashlib.sha256(data[block['offset']:block['offset']+block['size']]).hexdigest(),block['sha256'])
+            actual.collect_receipts()
+            self.assertIn(HEADERS['COMPONENT']+': matching source/build-parameter receipt is missing',actual.gaps)
+            self.assertIn('unrelated-source: original evidence is still missing',actual.gaps)
+            self.assertEqual(actual.receipts,{})
+            retained=root/'actual-source-materials.tar.gz'
+            BUNDLE.make_archive(actual.stage,retained,1575535105,path_profile=actual.archive_path_profile())
+            with tarfile.open(retained) as stream:
+                names=set(stream.getnames())
+                self.assertIn('huhucapture-sources/'+external['observations']['path'],names)
+                self.assertNotIn('huhucapture-sources/'+component['path']+'/COPYING',names)
+            header=source/'generic/include/linux/types.h';saved=header.read_bytes()
+            header.write_bytes(saved+b'/* changed original header */\n')
+            with self.assertRaisesRegex(ValueError,'original header file changed'):
+                HEADER_LICENSES['review_source'](HEADERS['COMPONENT'],pin,'linux',ROOT,source,component['files'],BUNDLE.__dict__)
+            header.write_bytes(saved)
+            self.assertEqual(BUNDLE.digest(archive),HEADERS['ARCHIVE_SHA256'])
+
     def test_eight_original_pairs_never_admit_extra_names_or_duplicate_entries(self):
         entries=HEADERS['entries'](HEADERS['SOURCE'])
         self.assertEqual(len(entries),16)
@@ -273,6 +373,65 @@ class HeaderPathTests(unittest.TestCase):
                         if kind=='duplicate':output.addfile(entry,io.BytesIO(data))
                 with self.assertRaises(ValueError):
                     BUNDLE.extract_tar(archive,root/kind,path_profile=HEADERS['SOURCE'])
+
+
+@unittest.skipUnless(sys.platform=='linux', 'Runtime dependency checkout executes on the native Linux producer')
+class RuntimeGitCheckoutTests(unittest.TestCase):
+    def test_real_runtime_restore_keeps_original_blobs_and_records_policy_before_fetch(self):
+        with tempfile.TemporaryDirectory(prefix='runtime-git-input-') as value:
+            root=Path(value);upstream=root/'upstream';upstream.mkdir()
+            def git(directory,*arguments,data=None):
+                return subprocess.run(['git','-c','core.hooksPath='+os.devnull,'-C',str(directory),*arguments],
+                    input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                    env=BUNDLE.git_environment(),check=True).stdout
+            git(upstream,'init','--quiet')
+            files={'.gitattributes':b'* text eol=lf\n*.vcproj* text eol=crlf\n*.cmd text eol=crlf\n',
+                   'build/VS2008/fullbench/fullbench.vcproj':b'<Project>original LF bytes</Project>\n',
+                   'original-crlf.cmd':b'@echo off\r\necho original CRLF\r\n'}
+            for name,data in files.items():
+                blob=git(upstream,'hash-object','-w','--stdin',data=data).decode().strip()
+                git(upstream,'update-index','--add','--cacheinfo','100644,'+blob+','+name)
+            git(upstream,'-c','user.name=Runtime checkout fixture','-c','user.email=runtime-fixture@example.invalid',
+                'commit','--quiet','-m','Actual original source-byte fixture')
+            commit=git(upstream,'rev-parse','HEAD').decode().strip()
+            original_index=git(upstream,'ls-files','--stage')
+            workspace=root/'workspace';workspace.mkdir()
+            for name in ('sources','source-inputs','downloads','checkouts'):(workspace/name).mkdir()
+            runtime_bundle=BUILDER['bundle'];original_command=runtime_bundle.git_command
+            observed=[]
+            def local_fixture_transport(directory,*arguments):
+                command=original_command(directory,*arguments)
+                if 'fetch' in arguments:
+                    # Only this offline test enables its real local Git transport.
+                    # The production HTTPS source validation and commands are unchanged.
+                    observed.append(BUILDER['CHECKOUT']['verify_policy'](directory))
+                    self.assertEqual(git(directory,'ls-files','--stage'),b'')
+                    self.assertEqual(git(directory,'for-each-ref','--format=%(refname)'),b'')
+                    index=command.index('fetch');command[index:index]=['-c','protocol.file.allow=always']
+                return command
+            recorder=BUILDER['API']['ExecutionLog'](workspace/'control','linux',ROOT/'scripts/build-appimage-runtime.py')
+            with mock.patch.object(runtime_bundle,'git_command',side_effect=local_fixture_transport):
+                item=BUILDER['restore_input']('native-source-fixture',{'repository':upstream.as_uri(),'commit':commit},
+                                               workspace,recorder,BUILDER['clean_environment']())
+            checkout=Path(item['collection']['directory'])
+            original=BUNDLE.read_json(item['manifest']['path'])
+            policy=original['sourceCheckout']
+            self.assertEqual(len(observed),1)
+            for name,data in files.items():
+                self.assertEqual((checkout/name).read_bytes(),data)
+                self.assertEqual((item['directory']/name).read_bytes(),data)
+            self.assertEqual(git(upstream,'ls-files','--stage'),original_index)
+            self.assertEqual(git(upstream,'rev-parse','HEAD').decode().strip(),commit)
+            BUILDER['HELPER']['verify_checkout_policy'](checkout,policy)
+            runtime_bundle.compare_checkout(checkout,item['files'],commit)
+            attributes=checkout/'.git/info/attributes'
+            attributes.write_bytes(attributes.read_bytes()+b'# changed policy\n')
+            with self.assertRaisesRegex(ValueError,'policy is missing or changed'):
+                BUILDER['HELPER']['verify_checkout_policy'](checkout,policy)
+            attributes.write_bytes(BUILDER['CHECKOUT']['ATTRIBUTES'])
+            retained=Path(policy['retainedPolicy']['path']);retained.write_bytes(retained.read_bytes()+b'# changed evidence\n')
+            with self.assertRaisesRegex(ValueError,'build evidence changed'):
+                BUILDER['HELPER']['verify_checkout_policy'](checkout,policy)
 
 
 @unittest.skipUnless(sys.platform=='linux' and shutil.which('patch') and shutil.which('sh'),

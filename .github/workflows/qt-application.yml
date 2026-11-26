@@ -309,6 +309,7 @@ jobs:
           uname -a > artifacts/appimage-runtime-source-linux/host-kernel.txt
           python tests/appimage_runtime_tests.py
           python scripts/build-appimage-runtime.py --tools artifacts/packaging-tools --workspace .deps/appimage-runtime-source --jobs 2
+          HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE="$GITHUB_WORKSPACE/.deps/appimage-runtime-source/downloads/appimage-linux-headers-linux-headers-4.19.88-2.tar.xz" python tests/appimage_runtime_tests.py HeaderPathTests.test_actual_archive_keeps_external_license_texts_separate_and_native_gaps_open -v
       - name: Prepare the final Linux payloads and actual native candidate packages
         id: prepared
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' && steps.appimage_runtime.outcome == 'success' }}
