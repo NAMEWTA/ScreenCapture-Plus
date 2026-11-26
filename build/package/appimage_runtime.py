@@ -14,6 +14,7 @@ import struct
 ROOT = Path(__file__).resolve().parents[2]
 API = runpy.run_path(str(ROOT / 'build/package/source_receipts.py'))
 PATCHES = runpy.run_path(str(ROOT / 'build/package/toolchain_patches.py'))
+HEADERS = runpy.run_path(str(ROOT / 'build/package/linux_header_paths.py'))
 bundle = API['bundle']
 SOURCE_IDS = {'appimage-toolchain-build', 'appimage-musl', 'appimage-gcc', 'appimage-binutils',
               'appimage-gmp', 'appimage-mpc', 'appimage-mpfr', 'appimage-linux-headers',
@@ -23,7 +24,7 @@ STATIC_IDS = {'appimage-musl', 'appimage-gcc', 'appimage-fuse', 'appimage-squash
 PRODUCERS = ('scripts/build-appimage-runtime.py', 'build/package/appimage_runtime.py',
              'build/package/source_receipts.py', 'scripts/create-source-bundle.py',
              'build/package/toolchain_patches.py', 'third_party/appimage/toolchain-patches/cowpatch.sh',
-             'third_party/appimage/toolchain-patches/upstream.json')
+             'third_party/appimage/toolchain-patches/upstream.json', 'build/package/linux_header_paths.py')
 
 
 def profile():
@@ -38,6 +39,7 @@ def profile():
                    runtime['commit'] == 'dd6cebedcbddde9c82f89b011e8e1d40b6e43868',
                    'The reviewed original type-2 runtime revision changed')
     for name, pin in value['sources'].items():
+        HEADERS['source_profile'](name, pin)
         if 'sourceArchive' in pin:
             archive = pin['sourceArchive']
             bundle.require(archive['url'].startswith('https://') and bundle.HEX64.fullmatch(archive['sha256']) and
@@ -72,6 +74,10 @@ def profile():
 
 def file_identity(path):
     return API['identity'](Path(path))
+
+
+def source_inventory(component, pin, directory):
+    return HEADERS['source_inventory'](component, pin, directory, bundle.__dict__)
 
 
 def producer_identity():
@@ -268,7 +274,7 @@ def validate_report(directory, report):
                        original['sourceTreeSha256'] == value['sourceTreeSha256'] and
                        bundle.tree_digest(original['files']) == value['sourceTreeSha256'],
                        'An actual source input manifest changed')
-        bundle.require(bundle.inventory(directory / 'sources' / name) == original['files'],
+        bundle.require(source_inventory(name, pin, directory / 'sources' / name) == original['files'],
                        'The original runtime source input bytes changed')
     receipts = {}
     executions, receipt_records = {}, {}

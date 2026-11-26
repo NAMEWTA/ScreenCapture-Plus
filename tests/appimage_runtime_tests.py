@@ -2,6 +2,7 @@
 """Offline contracts with real local ar/ELF files, not a runtime-build claim."""
 import hashlib
 import copy
+import io
 import os
 from pathlib import Path
 import runpy
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tarfile
 import unittest
 from unittest import mock
 
@@ -19,9 +21,25 @@ BUNDLE = HELPER['bundle']
 sys.path.insert(0, str(ROOT / 'scripts'))
 PACKAGE = runpy.run_path(str(ROOT / 'scripts/package-qt.py'))
 PATCHES = HELPER['PATCHES']
+HEADERS = HELPER['HEADERS']
 
 
 class ProfileTests(unittest.TestCase):
+    def test_exact_header_path_profile_cannot_be_selected_for_other_inputs(self):
+        _, _, profile = HELPER['profile']()
+        pin=profile['sources'][HEADERS['COMPONENT']]
+        self.assertEqual(HEADERS['source_profile'](HEADERS['COMPONENT'],pin,'linux'),HEADERS['SOURCE'])
+        for component,altered,platform in (
+                ('unrelated-source',pin,'linux'),(HEADERS['COMPONENT'],pin,'windows'),
+                (HEADERS['COMPONENT'],{**pin,'sourcePathProfile':{'profile':'unknown'}},'linux'),
+                (HEADERS['COMPONENT'],{**pin,'sourceArchive':{'sha256':'0'*64}},'linux')):
+            with self.assertRaisesRegex(ValueError,'exact original Linux archive'):
+                HEADERS['source_profile'](component,altered,platform)
+        with mock.patch.object(sys,'platform','win32'):
+            self.assertEqual(HEADERS['entries'](None),{})
+            with self.assertRaisesRegex(ValueError,'Only the reviewed'):
+                HEADERS['entries'](HEADERS['SOURCE'])
+
     def test_canonical_patch_profile_is_narrow_and_complete(self):
         _, _, profile = HELPER['profile']()
         for name in PATCHES['ARCHIVES']:
@@ -56,8 +74,9 @@ class ProfileTests(unittest.TestCase):
     def test_collection_plan_cannot_supply_a_patch_application_profile(self):
         with tempfile.TemporaryDirectory() as value:
             root=Path(value); collector=BUNDLE.Collector({},root,root)
-            with self.assertRaisesRegex(ValueError,'cannot override'):
-                collector.collect_source({'id':'appimage-musl','patchApplication':{'profile':'anything'}})
+            for key in ('patchApplication','sourcePathProfile','path_profile'):
+                with self.assertRaisesRegex(ValueError,'cannot (override|choose)'):
+                    collector.collect_source({'id':'appimage-musl',key:{'profile':'anything'}})
 
     def test_exact_static_toolchain_and_original_asset_pins_coexist(self):
         _, lock, profile = HELPER['profile']()
@@ -189,7 +208,7 @@ class NativeFileTests(unittest.TestCase):
         files=BUNDLE.inventory(source)
         manifest=self.root/'source.json'
         manifest.write_bytes(BUNDLE.canonical({'files':files}))
-        item={'id':'contract-fixture', 'directory':source, 'files':files, 'sourceTreeSha256':BUNDLE.tree_digest(files),
+        item={'id':'contract-fixture', 'pin':{}, 'directory':source, 'files':files, 'sourceTreeSha256':BUNDLE.tree_digest(files),
               'manifest':BUILDER['descriptor'](manifest)}
         prefix=self.root/'install';prefix.mkdir()
         build=BUILDER['Build'](self.root/'receipt','contract-fixture',[item],prefix)
@@ -204,6 +223,56 @@ class NativeFileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Unsuccessful'):
             failed.raw_record({}, {})
         self.assertFalse((self.root/'failed-receipt/source-build-receipt.json').exists())
+
+
+@unittest.skipUnless(sys.platform=='linux', 'The exact original header profile is Linux-only')
+class HeaderPathTests(unittest.TestCase):
+    def test_eight_original_pairs_never_admit_extra_names_or_duplicate_entries(self):
+        entries=HEADERS['entries'](HEADERS['SOURCE'])
+        self.assertEqual(len(entries),16)
+        self.assertEqual(len({name.casefold() for name in entries}),8)
+        names={}
+        for name in entries:
+            BUNDLE.check_unique_path(name,names,entries)
+        with self.assertRaisesRegex(ValueError,'Duplicate'):
+            BUNDLE.check_unique_path(next(iter(entries)),names,entries)
+        with self.assertRaisesRegex(ValueError,'case-colliding'):
+            BUNDLE.check_unique_path('generic/include/linux/netfilter/XT_CONNMARK.h',names,entries)
+        with self.assertRaisesRegex(ValueError,'case-colliding'):
+            BUNDLE.check_unique_path('other.h',{'other.h':{'Other.h'}},entries)
+
+    def test_source_and_sysroot_exceptions_require_exact_original_header_bytes(self):
+        with tempfile.TemporaryDirectory() as value:
+            root=Path(value)
+            for index,profile in enumerate((HEADERS['SOURCE'],HEADERS['SYSROOT'],HEADERS['BUNDLE'])):
+                name=next(iter(HEADERS['entries'](profile)))
+                directory=root/str(index);path=directory/name;path.parent.mkdir(parents=True)
+                path.write_bytes(b'An unrelated file cannot use an allowed header path.\n')
+                with self.assertRaisesRegex(ValueError,'exact original file'):
+                    BUNDLE.inventory(directory,path_profile=profile)
+            directory=root/'ordinary';directory.mkdir()
+            (directory/'Original.h').write_bytes(b'one');(directory/'original.h').write_bytes(b'two')
+            for profile in (None,HEADERS['SOURCE']):
+                with self.assertRaisesRegex(ValueError,'case-colliding'):
+                    BUNDLE.inventory(directory,path_profile=profile)
+            with self.assertRaisesRegex(ValueError,'Only the reviewed'):
+                BUNDLE.inventory(directory,path_profile='arbitrary-case-sensitive-mode')
+
+    def test_real_archives_reject_duplicates_links_and_wrong_original_bytes(self):
+        with tempfile.TemporaryDirectory() as value:
+            root=Path(value);name=next(iter(HEADERS['CASE_FILES']))
+            for kind in ('duplicate','symlink','changed-bytes'):
+                archive=root/(kind+'.tar')
+                with tarfile.open(archive,'w') as output:
+                    entry=tarfile.TarInfo(name)
+                    if kind=='symlink':
+                        entry.type=tarfile.SYMTYPE;entry.linkname='other.h';output.addfile(entry)
+                    else:
+                        data=b'changed original header bytes';entry.size=len(data)
+                        output.addfile(entry,io.BytesIO(data))
+                        if kind=='duplicate':output.addfile(entry,io.BytesIO(data))
+                with self.assertRaises(ValueError):
+                    BUNDLE.extract_tar(archive,root/kind,path_profile=HEADERS['SOURCE'])
 
 
 @unittest.skipUnless(sys.platform=='linux' and shutil.which('patch') and shutil.which('sh'),

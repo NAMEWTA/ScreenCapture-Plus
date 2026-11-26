@@ -76,6 +76,33 @@ checks both complete inventories again and includes its own actual replay
 record in source materials. A collection plan cannot choose another profile.
 All other source patches keep the existing strict `git apply` behavior.
 
+## Original Linux header paths
+
+The exact `linux-headers-4.19.88-2.tar.xz` contains eight pairs of distinct Linux
+UAPI headers whose names differ by case, such as `ip6t_HL.h` and `ip6t_hl.h`.
+Both files are original inputs and must survive extraction and installation.
+`build/package/linux_header_paths.py` fixes all sixteen complete relative paths,
+their original sizes, SHA256 values and modes. The lock also fixes the complete
+1,443-entry source inventory, with its original archive SHA256 unchanged.
+
+Only this fixed source component, its actual `x86_64-linux-musl/include` output,
+and its own component directory in the Linux source bundle use the reviewed
+path profile. The producer checks the complete source tree; its actual copy
+installation records both header identities independently. The collector checks
+the original archive and complete tree again, retains the policy, validates the
+receipt's separate output entries and reopens the written source archive to
+compare every entry. Source copying and archive roundtrips preserve both names.
+A collection plan cannot enable a path exception. Unknown names, duplicate
+entries, links in place of these headers or changed original bytes still fail.
+Ordinary source archives, Windows inputs and final package paths retain their
+existing case-collision checks. The Linux source archive requires a filesystem
+that can hold the case-distinct names.
+
+This archive has no standalone license/copyright filename recognized by the
+collector. That source gap remains visible until independently verified original
+license materials are supplied; the path profile does not mark source materials
+complete or relax any license gate.
+
 ## Run on a real Linux amd64 host
 
 The workspace must be new, separate from the packaging tools, and use a simple
@@ -208,10 +235,13 @@ static ELF checks, exact MD5-field boundaries, original patch identities,
 source recognition, environment isolation and failure handling. Real GNU patch
 fixtures also prove fuzz-two behavior, original command retention, backup-tree
 checking and nonzero failure handling. The three complete original toolchain
-archives have been replayed locally with GNU patch 2.8, and an independent
-collector replay of binutils matches the producer's entire inventory. These
-source-preparation checks do not establish success of the CI host's GNU patch
-version or compilation of the toolchain and runtime. The offline tests do not
+archives have been replayed locally with GNU patch 2.8 and on the native Ubuntu
+host with GNU patch 2.7.6; their complete inventories match. An independent
+collector replay of binutils also matches the producer's entire inventory.
+The original Linux header archive has been extracted, copied through a real
+recorded installation command, collected with that receipt and archived through
+an actual roundtrip with all case-distinct paths intact. These source-preparation
+checks do not establish compilation of the toolchain and runtime. The offline tests do not
 execute the full musl toolchain/runtime build. Native success requires the
 dedicated CI's actual completed report and retained evidence. At implementation
 time, local source download returned HTTP 403; the original toolchain archives

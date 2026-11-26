@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = runpy.run_path(str(ROOT / 'build/package/appimage_runtime.py'))
 API, bundle = HELPER['API'], HELPER['bundle']
 PATCHES = HELPER['PATCHES']
+HEADERS = HELPER['HEADERS']
 TARGET = 'x86_64-linux-musl'
 TOOLCHAIN_INPUTS = ('appimage-toolchain-build', 'appimage-gcc', 'appimage-binutils', 'appimage-musl',
                     'appimage-gmp', 'appimage-mpc', 'appimage-mpfr', 'appimage-linux-headers')
@@ -83,7 +84,8 @@ def restore_input(name, pin, workspace, recorder, environment, *, original_archi
         spec = pin['sourceArchive']
         bundle.require(bundle.digest(archive) == spec['sha256'] and
                        ('size' not in spec or archive.stat().st_size == spec['size']), 'Original source archive changed')
-        files = bundle.extract_tar(archive, directory, pin['archivePrefix'])
+        files = bundle.extract_tar(archive, directory, pin['archivePrefix'],
+                                   path_profile=HEADERS['source_profile'](name, pin))
         patches = []
         for item in pin.get('patches', []):
             path = ROOT / bundle.relative(item['path'])
@@ -99,7 +101,7 @@ def restore_input(name, pin, workspace, recorder, environment, *, original_archi
             patch_replay = descriptor(replay_path)
         else:
             bundle.apply_patches(directory, patches)
-        files = bundle.inventory(directory)
+        files = HELPER['source_inventory'](name, pin, directory)
         collection = {'id': name, 'kind': 'tar', 'archive': str(archive), 'prefix': pin['archivePrefix']}
     else:
         checkout = workspace / 'checkouts' / name
@@ -135,22 +137,27 @@ class Build(API['ExecutionLog']):
     def __init__(self, directory, name, inputs, prefix):
         super().__init__(directory, 'linux', __file__)
         self.name, self.inputs, self.prefix = name, list(inputs), Path(prefix)
-        self.before = bundle.inventory(prefix) if prefix.exists() else []
+        self.before = self.output_inventory() if prefix.exists() else []
         self.install_phases = []
         self.retain_record(ROOT / 'build/package/dependencies.lock.json')
         self.retain_record(ROOT / 'build/package/appimage_runtime.py')
+        self.retain_record(ROOT / 'build/package/linux_header_paths.py')
         for item in self.inputs:
             self.retain_record(item['manifest']['path'])
         self.check_sources()
 
     def check_sources(self):
         for item in self.inputs:
-            bundle.require(bundle.inventory(item['directory']) == item['files'], 'An actual source input changed: ' + item['id'])
+            bundle.require(HELPER['source_inventory'](item['id'], item['pin'], item['directory']) == item['files'],
+                           'An actual source input changed: ' + item['id'])
+
+    def output_inventory(self):
+        return bundle.inventory(self.prefix, path_profile=HEADERS['SYSROOT'] if self.name == 'appimage-toolchain' else None)
 
     def installation(self, component, command, cwd, environment):
-        before = bundle.inventory(self.prefix) if self.prefix.exists() else []
+        before = self.output_inventory() if self.prefix.exists() else []
         index = self.run(command, cwd=cwd, env=environment)
-        after = bundle.inventory(self.prefix)
+        after = self.output_inventory()
         old = {item['path']: item for item in before}
         changed = [item for item in after if item != old.get(item['path'])]
         record = {'component': component, 'commandIndex': index, 'prefix': str(self.prefix),
@@ -165,7 +172,7 @@ class Build(API['ExecutionLog']):
         self.check_sources()
         for path in configuration_files:
             self.retain_record(path)
-        after = bundle.inventory(self.prefix)
+        after = self.output_inventory()
         before = {item['path']: item for item in self.before}
         changed = [item for item in after if item != before.get(item['path'])]
         outputs = [{key: item[key] for key in ('path', 'size', 'sha256')} for item in changed
@@ -186,7 +193,7 @@ class Build(API['ExecutionLog']):
                 'buildRecords': [{'path': item['path'], 'sha256': item['sha256']} for item in self.records],
                 'staticFiles': {item['id']: item['path'] for item in static_inputs}}
         API['write_new'](self.directory / 'receipt-plan.json', plan)
-        bundle.require(bundle.inventory(self.prefix) == after, 'Actual source-build outputs changed while recording')
+        bundle.require(self.output_inventory() == after, 'Actual source-build outputs changed while recording')
         self.check_sources()
         report = {'id': self.name, 'receipt': descriptor(path), 'execution': descriptor(execution),
                   'prefix': str(self.prefix), 'buildRecords': [descriptor(item['path']) for item in self.records]}
@@ -525,7 +532,7 @@ def build_runtime(options):
     plans, inputs, owners = [], {}, {}
     try:
         for path in (lock_path, ROOT / 'build/package/appimage_runtime.py', ROOT / 'third_party/appimage/source-reviews.json',
-                     ROOT / 'third_party/appimage/toolchain-patches/upstream.json'):
+                     ROOT / 'third_party/appimage/toolchain-patches/upstream.json', ROOT / 'build/package/linux_header_paths.py'):
             control.retain_record(path)
         for program in ('curl', 'git', 'gcc', 'g++', 'make', 'ar', 'ld', 'cmake', 'ninja', 'meson', 'pkg-config'):
             control.observe_tool(program, environment)
@@ -578,7 +585,8 @@ def build_runtime(options):
         plans.append(plan); report['receipts'].append(produced)
         report.update(runtime=descriptor(runtime), notice=descriptor(notice), linkClosure=descriptor(closure), probe=descriptor(probe))
         for item in inputs.values():
-            bundle.require(bundle.inventory(item['directory']) == item['files'], 'An original runtime source changed')
+            bundle.require(HELPER['source_inventory'](item['id'], item['pin'], item['directory']) == item['files'],
+                           'An original runtime source changed')
         bundle.require(bundle.digest(lock_path) == report['packageLockSha256'] and
                        HELPER['producer_identity']() == report['producerFiles'], 'Runtime builder or locked inputs changed')
         execution = control.raw_record({'sources': report['sourceInputs']}, {'runtime': report['runtime'], 'linkClosure': report['linkClosure']})
