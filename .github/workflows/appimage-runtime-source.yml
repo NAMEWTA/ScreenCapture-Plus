@@ -37,6 +37,7 @@ jobs:
           python tests/appimage_runtime_tests.py -v
           python tests/source_receipts_tests.py -v
           python tests/source_checkout_tests.py -v
+          python tests/source_bundle_tests.py -v
       - name: Restore unchanged original reviewed packaging tools and source assets
         run: python scripts/restore-packaging-tools.py --platform linux --output .deps/runtime-packaging-tools
       - name: Build every runtime, musl, CRT and compiler-support input from fixed source
@@ -44,6 +45,10 @@ jobs:
           python scripts/build-appimage-runtime.py \
             --tools .deps/runtime-packaging-tools \
             --workspace .deps/appimage-runtime-source --jobs 2
+      - name: Verify the restored original header archive and separate license evidence
+        env:
+          HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE: ${{ github.workspace }}/.deps/appimage-runtime-source/downloads/appimage-linux-headers-linux-headers-4.19.88-2.tar.xz
+        run: python tests/appimage_runtime_tests.py HeaderPathTests.test_actual_archive_keeps_external_license_texts_separate_and_native_gaps_open -v
       - name: Independently recheck the actual successful report and all preserved input bytes
         run: |
           python - <<'PY'

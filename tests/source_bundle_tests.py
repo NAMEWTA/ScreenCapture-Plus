@@ -510,6 +510,93 @@ class SourceBundleTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             bundle.make_archive(source, self.root / "one.tar.gz", 1_700_000_000)
 
+    @unittest.skipUnless(shutil.which("make") and os.name != "nt", "Original release dependency ordering uses GNU make")
+    def test_original_archive_times_preserve_make_rules_without_disabling_regeneration(self):
+        archive = self.root / "release.tar"
+        epoch = 1_700_000_000
+        # The generated release file deliberately precedes its older input in
+        # archive order. Current extraction time reverses their Make ordering.
+        members = [("source", None, epoch - 30),
+                   ("source/generated.c", b"int original_value = 7;\n", epoch + 20),
+                   ("source/input.am", b"original maintainer input\n", epoch + 10),
+                   ("source/build.mk", b"all: generated.c\ngenerated.c: input.am\n"
+                    b"\t@echo actual-maintainer-regeneration >&2\n\t@exit 17\n", epoch + 20),
+                   ("source/dir", None, epoch - 20),
+                   ("source/dir/original.txt", b"original file\n", epoch)]
+        with tarfile.open(archive, "w") as stream:
+            for name, data, stamp in members:
+                info = tarfile.TarInfo(name)
+                info.mtime = stamp
+                if data is None:
+                    info.type = tarfile.DIRTYPE
+                else:
+                    info.size = len(data)
+                stream.addfile(info, None if data is None else io.BytesIO(data))
+            link = tarfile.TarInfo("source/original-link")
+            link.type, link.linkname, link.mtime = tarfile.SYMTYPE, "generated.c", epoch + 90
+            stream.addfile(link)
+        source = self.root / "source"
+        before = bundle.extract_tar(archive, source, "source")
+        for name, _, stamp in members:
+            path = source if name == "source" else source / name.removeprefix("source/")
+            self.assertEqual(path.stat().st_mtime_ns, stamp * 1_000_000_000)
+        actual = subprocess.run(["make", "-f", "build.mk", "all"], cwd=source, capture_output=True)
+        self.assertEqual(actual.returncode, 0, actual.stderr)
+        self.assertNotIn(b"actual-maintainer-regeneration", actual.stdout + actual.stderr)
+        self.assertEqual(bundle.inventory(source), before)
+        # A genuinely newer maintainer input still triggers the original rule.
+        os.utime(source / "input.am", ns=((epoch + 21) * 1_000_000_000,) * 2)
+        changed = subprocess.run(["make", "-f", "build.mk", "all"], cwd=source, capture_output=True)
+        self.assertNotEqual(changed.returncode, 0)
+        self.assertIn(b"actual-maintainer-regeneration", changed.stderr)
+        self.assertEqual(bundle.inventory(source), before)
+
+    def test_archive_pax_times_keep_exact_precision_and_reject_invalid_metadata(self):
+        archive = self.root / "exact-time.tar"
+        with tarfile.open(archive, "w", format=tarfile.PAX_FORMAT) as stream:
+            info = tarfile.TarInfo("original.c")
+            info.size, info.pax_headers = 1, {"mtime": "1700000000.123456700"}
+            stream.addfile(info, io.BytesIO(b"x"))
+        source = self.root / "exact-time"
+        bundle.extract_tar(archive, source)
+        self.assertEqual((source / "original.c").stat().st_mtime_ns, 1_700_000_000_123_456_700)
+        for index, value in enumerate(("nan", "inf", "1e1000000", "-1e1000000", "1e-1000000",
+                                       "1700000000.1234567891")):
+            with self.subTest(timestamp=value):
+                bad = self.root / ("invalid-time-" + str(index) + ".tar")
+                with tarfile.open(bad, "w", format=tarfile.PAX_FORMAT) as stream:
+                    info = tarfile.TarInfo("original.c")
+                    info.size, info.pax_headers = 1, {"mtime": value}
+                    stream.addfile(info, io.BytesIO(b"x"))
+                with self.assertRaisesRegex(ValueError, "timestamp"):
+                    bundle.extract_tar(bad, self.root / ("invalid-time-" + str(index)))
+
+    def test_archive_times_without_nofollow_capability_keep_exact_ordinary_entry(self):
+        path = self.root / "original.c"
+        path.write_bytes(b"original bytes\n")
+        stamp = 1_700_000_000_123_456_700  # Exactly representable in Windows FILETIME's 100 ns units.
+        actual_utime = os.utime
+        def ordinary_only(target, *, ns):
+            # This real-filesystem fixture emulates only the unsupported keyword
+            # boundary. It is not evidence that Windows itself ran here.
+            actual_utime(target, ns=ns)
+        with mock.patch.object(os, "supports_follow_symlinks", set()), \
+                mock.patch.object(os, "utime", side_effect=ordinary_only):
+            bundle.restore_archive_mtime(path, stamp)
+            self.assertEqual(path.stat().st_mtime_ns, stamp)
+            self.assertEqual(path.read_bytes(), b"original bytes\n")
+            if os.name != "nt":
+                link = self.root / "original-link"
+                os.symlink(path.name, link)
+                with self.assertRaisesRegex(ValueError, "unlinked regular"):
+                    bundle.restore_archive_mtime(link, stamp + 100)
+                self.assertEqual(path.stat().st_mtime_ns, stamp)
+        def rounded(target, *, ns):
+            actual_utime(target, ns=(ns[0] // 1000 * 1000, ns[1] // 1000 * 1000))
+        with mock.patch.object(os, "utime", side_effect=rounded):
+            with self.assertRaisesRegex(ValueError, "exact original"):
+                bundle.restore_archive_mtime(path, stamp)
+
     @unittest.skipIf(os.name == "nt", "Source symlink chain construction requires Unix symlink privileges")
     def test_resolved_link_chain_cannot_escape_a_component_or_loop(self):
         source = self.root / "source"

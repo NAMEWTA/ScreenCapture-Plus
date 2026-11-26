@@ -302,6 +302,14 @@
         "sourcePathProfile": {
           "profile": "linux-headers-4.19.88-2-case-v1",
           "sourceTreeSha256": "c0f1c4e0a7d96e99bc8dd3202229a74f47137b2e147afd68205065c520ab1004"
+        },
+        "licenseSupplement": {
+          "profile": "linux-headers-4.19.88-2-licenses-v1",
+          "provenance": {
+            "path": "third_party/appimage/linux-headers-licenses/provenance.json",
+            "size": 17780,
+            "sha256": "d8006cfe996a3e27b816d10457c6919c6be63fad8341835828e64404839926f5"
+          }
         }
       },
       "appimage-fuse": {

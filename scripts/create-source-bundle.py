@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal, InvalidOperation
 import gzip
 import hashlib
 import json
@@ -117,6 +118,10 @@ def ensure_parents(root, path):
 
 def header_path_api():
     return runpy.run_path(str(Path(__file__).resolve().parents[1] / "build/package/linux_header_paths.py"))
+
+
+def header_license_api():
+    return runpy.run_path(str(Path(__file__).resolve().parents[1] / "build/package/linux_header_licenses.py"))
 
 
 def path_entries(profile):
@@ -345,12 +350,50 @@ def export_git(directory, commit, destination, patches=()):
             "sourceTreeSha256": tree_digest(files), "submodules": submodules}, files
 
 
+def archive_mtime_ns(member):
+    # PAX records retain decimal precision that TarInfo.mtime's float can lose.
+    # Refuse metadata that the filesystem cannot represent, rather than silently
+    # changing the release's Make/autotools dependency order.
+    try:
+        seconds = Decimal(str(member.pax_headers.get("mtime", member.mtime)))
+    except InvalidOperation as error:
+        raise ValueError("Invalid original source archive timestamp") from error
+    require(seconds.is_finite(), "Invalid original source archive timestamp")
+    require(Decimal("-9223372036.854775808") <= seconds < Decimal("9223372036.854775808"),
+            "Original source archive timestamp cannot be represented exactly")
+    nanoseconds = int(seconds * 1_000_000_000)
+    require(seconds == Decimal(nanoseconds) / 1_000_000_000,
+            "Original source archive timestamp cannot be represented exactly")
+    return nanoseconds
+
+
+def restore_archive_mtime(path, nanoseconds):
+    before = path.lstat()
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    require((stat.S_ISREG(before.st_mode) or stat.S_ISDIR(before.st_mode)) and
+            not getattr(before, "st_file_attributes", 0) & reparse,
+            "Source archive timestamp requires an unlinked regular file or directory")
+    # CPython 3.13 on Windows does not support the nofollow keyword even for
+    # ordinary files. This extractor owns the new directory and never calls this
+    # helper on an archive symlink. Verify the same ordinary entry before/after;
+    # use the nofollow OS operation as well where the interpreter supports it.
+    options = {"follow_symlinks": False} if os.utime in os.supports_follow_symlinks else {}
+    os.utime(path, ns=(nanoseconds, nanoseconds), **options)
+    after = path.lstat()
+    require((after.st_dev, after.st_ino, after.st_mode) == (before.st_dev, before.st_ino, before.st_mode) and
+            not getattr(after, "st_file_attributes", 0) & reparse,
+            "Source archive timestamp destination changed identity")
+    require(after.st_mtime_ns == nanoseconds,
+            "Filesystem did not preserve the exact original source archive timestamp")
+
+
 def extract_tar(archive, destination, prefix="", *, path_profile=None):
     if prefix:
         relative(prefix)
     names, total, count = {}, 0, 0
     reviewed = path_entries(path_profile)
     destination.mkdir(parents=True, exist_ok=True)
+    directories = []
     with tarfile.open(archive, "r:*") as stream:
         for member in stream:
             name = member.name.removeprefix("./").rstrip("/")
@@ -359,6 +402,7 @@ def extract_tar(archive, destination, prefix="", *, path_profile=None):
             relative(name)
             if prefix:
                 if name == prefix and member.isdir():
+                    directories.append((destination, archive_mtime_ns(member)))
                     continue
                 require(name.startswith(prefix + "/"), "Source archive has an entry outside the selected root")
                 name = name[len(prefix) + 1:]
@@ -372,6 +416,7 @@ def extract_tar(archive, destination, prefix="", *, path_profile=None):
             ensure_parents(destination, path)
             if member.isdir():
                 path.mkdir(exist_ok=True)
+                directories.append((path, archive_mtime_ns(member)))
             elif member.issym():
                 os.symlink(checked_link(name, member.linkname), path)
             else:
@@ -384,6 +429,14 @@ def extract_tar(archive, destination, prefix="", *, path_profile=None):
                     shutil.copyfileobj(source, output, 1024 * 1024)
                 require(path.stat().st_size == member.size, f"Truncated source archive entry: {name}")
                 path.chmod(0o755 if member.mode & 0o111 else 0o644)
+                # These bytes already contain release-generated configure and
+                # Makefile.in files. Extraction time must not make their original
+                # prerequisites newer and spuriously regenerate source inputs.
+                restore_archive_mtime(path, archive_mtime_ns(member))
+    # Child creation changes a directory's mtime; restore it only after all
+    # members exist. Symlink timestamps are never applied to their targets.
+    for path, nanoseconds in sorted(directories, key=lambda item: len(item[0].parts), reverse=True):
+        restore_archive_mtime(path, nanoseconds)
     return inventory(destination, path_profile=path_profile)
 
 
@@ -712,16 +765,24 @@ class Collector:
         self.materials[identifier] = {**actual, "path": relative_path}
         return target
 
-    def component(self, identifier, provenance, files, family=None, source_path=None):
+    def component(self, identifier, provenance, files, family=None, source_path=None, external_licenses=None):
         require(IDENTIFIER.fullmatch(identifier) and identifier not in self.components, "Duplicate or invalid component ID")
         root = source_path or self.sources / identifier
         licenses = license_files(root, files)
-        if not licenses:
+        if external_licenses is not None:
+            helper = header_license_api()
+            require(identifier == helper["COMPONENT"] and external_licenses.get("profile") == helper["PROFILE"] and
+                    provenance.get("archiveSha256") == helper["ARCHIVE_SHA256"] and
+                    tree_digest(files) == external_licenses.get("sourceTreeSha256") == helper["SOURCE_TREE"],
+                    "External header license evidence does not bind this exact original source component")
+        if not licenses and external_licenses is None:
             self.gap(identifier + ": no retained license/copyright text")
         record = {"id": identifier, "name": family or ("qt" if identifier in
                   {"qtbase", "qtsvg", "qtwayland", "qttranslations"} else identifier),
                   "path": root.relative_to(self.stage).as_posix(), "source": provenance,
                   "sourceTreeSha256": tree_digest(files), "files": files, "licenses": licenses}
+        if external_licenses is not None:
+            record["externalLicenses"] = external_licenses
         self.components[identifier] = record
         return record
 
@@ -773,11 +834,15 @@ class Collector:
         require("patchApplication" not in item, "A collection plan cannot override the locked patch application recipe")
         require("sourcePathProfile" not in item and "path_profile" not in item,
                 "A collection plan cannot choose a source path exception")
+        require(not any(key in item for key in ("licenseSupplement", "externalLicenses", "licenseTexts")),
+                "A collection plan cannot override or supply original external license evidence")
         if item.get("kind") == "debian-source":
             return self.collect_debian_source(item)
         destination = self.sources / identifier
         pin = self.pins.get(identifier)
         header_profile = header_path_api()["source_profile"](identifier, pin or {}, self.platform)
+        license_helper = header_license_api()
+        license_profile = license_helper["validate_profile"](identifier, pin or {}, self.platform, self.exported_project)
         source_input = item.get("archive") if item.get("kind") == "tar" else item.get("directory")
         if not source_input or not self.path(source_input).exists():
             self.gap(identifier + ": real source checkout/archive is missing")
@@ -863,7 +928,38 @@ class Collector:
             provenance["sourceSbom"] = self.materials[identifier + "-source-sbom"]
         if not recognizable_source(identifier, pin, files):
             self.gap(identifier + ": archive/checkout has no recognizable native/module source files")
-        self.component(identifier, provenance, files, None if identifier in COMMON | LINUX else item.get("family"))
+        external_licenses = None
+        if license_profile is not None:
+            actual = license_helper["review_source"](identifier, pin, self.platform, self.exported_project,
+                                                       destination, files, globals())
+            self.retain(identifier + "-license-provenance",
+                        str(self.exported_project / license_helper["PROVENANCE"]["path"]))
+            require(all(self.materials[identifier + "-license-provenance"][key] == license_helper["PROVENANCE"][key]
+                        for key in ("size", "sha256")), "Original external license provenance changed during retention")
+            policy = Path(__file__).resolve().parents[1] / "build/package/linux_header_licenses.py"
+            require(digest(policy) == digest(self.exported_project / "build/package/linux_header_licenses.py"),
+                    "External license verification policy differs from the collected project")
+            self.retain(identifier + "-license-policy", str(policy))
+            originals = []
+            for index, (record, path) in enumerate(actual["materials"]):
+                material_id = identifier + "-external-license-" + str(index)
+                self.retain(material_id, str(path))
+                require(all(self.materials[material_id][key] == record[key] for key in ("size", "sha256")),
+                        "Original external license text or distribution script changed during retention")
+                originals.append({"origin": "linux" if record["path"].startswith("linux/") else "sabotage",
+                                  "upstreamPath": record["upstreamPath"], "gitBlob": record["gitBlob"],
+                                  "material": self.materials[material_id]})
+            with tempfile.TemporaryDirectory(prefix="original-header-license-observations-") as temporary:
+                report = Path(temporary) / "original-header-license-observations.json"
+                report.write_bytes(canonical(actual["observations"]))
+                self.retain(identifier + "-license-observations", str(report))
+            external_licenses = {"profile": license_helper["PROFILE"], "sourceTreeSha256": tree_digest(files),
+                                 "provenance": self.materials[identifier + "-license-provenance"],
+                                 "policy": self.materials[identifier + "-license-policy"], "originals": originals,
+                                 "observations": self.materials[identifier + "-license-observations"],
+                                 "meaning": actual["provenance"]["meaning"]}
+        self.component(identifier, provenance, files, None if identifier in COMMON | LINUX else item.get("family"),
+                       external_licenses=external_licenses)
 
     def collect_debian_source(self, item):
         identifier = item["id"]

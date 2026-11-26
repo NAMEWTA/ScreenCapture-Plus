@@ -533,6 +533,7 @@ def build_runtime(options):
               'scope': 'A new static PIE runtime from complete actual source producers; not reproduction of the old official asset',
               'configurationDifferences': ['GCC 9.4.0/musl 1.2.6 source-built static target toolchain replaces floating Alpine/Clang inputs',
                   'Git sources use original Git blob bytes, retaining original LF/CRLF and disabling working-tree conversions before first checkout',
+                  'Source release archives preserve their original regular-file and directory mtimes before applying the unchanged original patches',
                   'Every canonical cross-make patch is retained; target shared toolchain libraries are disabled',
                   'Original fuse 3.15.0 patch and squashfuse 0.5.2 retained; zstd 1.5.6, zlib 1.3.1 and mimalloc 2.1.7 are exact new Git sources',
                   'Real compressed extraction/AppRun execution is checked; this does not establish a FUSE desktop mount or complete application release']}
