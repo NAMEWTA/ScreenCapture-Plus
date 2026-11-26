@@ -267,6 +267,8 @@ def build_toolchain(workspace, inputs, specification, environment, jobs):
                  'libstdc++-v3/libsupc++/Makefile.am', 'libstdc++-v3/libsupc++/Makefile.in',
                  'libiberty/cp-demangle.c'):
         build.retain_record(inputs['appimage-gcc']['directory'] / name)
+    for name in ('configure', 'Makefile'):
+        build.retain_record(inputs['appimage-musl']['directory'] / name)
     makefile = inputs['appimage-toolchain-build']['directory'] / 'litecross/Makefile'
     command = ['make', '-f', str(makefile), '-j' + str(jobs)]
     build.run([*command, 'all'], cwd=directory, env=environment)
