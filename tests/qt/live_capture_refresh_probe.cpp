@@ -113,25 +113,30 @@ public:
     Controls controls{&background};
     QThreadPool pool;
     QFutureWatcher<Result> consumer;
-    QTimer heartbeat;
+    QTimer heartbeat, startup;
     Sockets baseline, previewSockets, refreshedSockets;
     QString path, failure;
     quint64 request{}, refresh{}, sourceId{}, generation{}, witness{};
     QSize extent;
     unsigned preparedCount{}, readyCount{}, beats{};
     bool oldSocketsClosed{}, claimed{}, consumerReturned{}, stopped{}, expired{};
+    bool backgroundExposed{}, controlsExposed{};
     Result result;
 
     explicit Probe(QString output) : path(std::move(output))
     {
         pool.setMaxThreadCount(1);
         background.setWindowTitle(QStringLiteral("huhucapture real refresh background"));
-        background.showFullScreen(); controls.show();
+        background.showFullScreen();
         heartbeat.setInterval(10);
         connect(&heartbeat, &QTimer::timeout, this, [this] { ++beats; }); heartbeat.start();
         connect(&source, &Capture::LiveCaptureSource::initialized, this,
             [this](const Capture::Capability& capability, const Capture::Failure& error) {
                 if (error || !capability.canRequest()) { fail(error.detail); return; }
+                if (!background.windowHandle() || !background.windowHandle()->isExposed() ||
+                    !controls.windowHandle() || !controls.windowHandle()->isExposed()) {
+                    fail(QStringLiteral("The native witness windows lost exposure before authorization")); return;
+                }
                 baseline = sockets();
                 request = source.request(background.windowHandle());
                 if (!request) fail(QStringLiteral("The original native authorization was not admitted"));
@@ -211,7 +216,25 @@ public:
             });
         connect(&source, &Capture::LiveCaptureSource::shutdownFinished, this, [this] { finish(); });
         QTimer::singleShot(45000, this, [this] { expired = true; fail(QStringLiteral("The actual refresh and drain exceeded its independent deadline")); });
-        QTimer::singleShot(0, &source, &Capture::LiveCaptureSource::initialize);
+        // Do not map the transient tool while the fullscreen parent is still
+        // negotiating its initial surface. Start authorization only after both
+        // windows separately report native exposure. Exposure is not proof of
+        // compositor pixels: the unchanged first captured witness is required.
+        startup.setInterval(10);
+        connect(&startup, &QTimer::timeout, this, [this] {
+            if (!backgroundExposed) {
+                if (!background.windowHandle() || !background.windowHandle()->isExposed()) return;
+                backgroundExposed = true;
+                controls.show();
+                return;
+            }
+            if (!background.windowHandle() || !background.windowHandle()->isExposed() ||
+                !controls.windowHandle() || !controls.windowHandle()->isExposed()) return;
+            controlsExposed = true;
+            startup.stop();
+            source.initialize();
+        });
+        startup.start();
     }
     Result consume(Core::LiveSourceConsumer handle)
     {
@@ -247,6 +270,7 @@ public:
     void fail(QString reason)
     {
         if (failure.isEmpty()) failure = reason.isEmpty() ? QStringLiteral("The actual live source failed") : std::move(reason);
+        startup.stop();
         if (refresh) source.cancelRefresh(refresh);
         if (request) source.cancel(request);
         source.shutdown();
@@ -264,6 +288,7 @@ public:
             result.terminal.reason == Core::FrameSourceEnd::Stopped && !source.isCurrent(sourceId, generation);
         record({{"event", "result"}, {"mode", "capture"}, {"passed", passed}, {"failure", failure},
             {"sameAuthorizationIdentity", result.identity}, {"preparations", int(preparedCount)}, {"refreshTerminals", int(readyCount)},
+            {"backgroundExposed", backgroundExposed}, {"controlsExposed", controlsExposed},
             {"initialVisibleControlPixels", qint64(witness)}, {"firstFrameWrongPixels", qint64(result.wrong)},
             {"actualFirstLeaseChecked", result.firstLease}, {"oldProducerSocketsClosedBeforeClaim", oldSocketsClosed},
             {"producerSocketsReleasedAfterDrain", noProducerSockets}, {"consumerReturned", consumerReturned},

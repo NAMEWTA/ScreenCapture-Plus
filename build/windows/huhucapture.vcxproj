@@ -226,6 +226,7 @@
     <ClInclude Include="..\..\src\core\Startup.h" />
     <ClInclude Include="..\..\src\editor\ToolSettings.h" />
     <ClInclude Include="..\..\src\core\RecordingResult.h" />
+    <ClInclude Include="..\..\src\core\RecordingTime.h" />
     <ClInclude Include="..\..\src\core\ReleaseVersion.h" />
     <ClInclude Include="..\..\src\core\ScrollStitch.h" />
     <ClInclude Include="..\..\src\editor\History.h" />

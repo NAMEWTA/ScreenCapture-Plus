@@ -4,6 +4,7 @@
 // demux_decode.c adaptation. Copyright (c) 2012 Stefano Sabatini, MIT;
 // exact source and full notice are retained in third_party/ffmpeg-examples.
 #include "core/RecordingResult.h"
+#include "core/RecordingTime.h"
 
 #include <QFile>
 #include <QJsonObject>
@@ -112,10 +113,14 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
     require(sink.lastSubmitted >= 0 && sink.lastSubmittedDuration > 0 &&
         sink.lastSubmittedDuration <= (std::numeric_limits<std::int64_t>::max)() - sink.lastSubmitted,
         "The real final submitted sample has a valid bounded interval");
-    require(sink.captured == result.framesWritten && sink.captureEnd > 0 &&
-        sink.submittedDuration == sink.captureEnd &&
-        sink.lastSubmitted + sink.lastSubmittedDuration == sink.captureEnd,
-        "Every captured sample must be submitted and the input intervals must end at the actual observed stop");
+    require(sink.captured == result.framesWritten && sink.captureEnd > sink.lastSubmitted,
+        "Every captured sample must be submitted and the actual final source interval must be positive");
+    const auto tail = Core::recordingTailTime(sink.lastSubmitted,
+        sink.captureEnd - sink.lastSubmitted, static_cast<std::int32_t>(fps));
+    require(tail && tail->originalEnd == sink.captureEnd &&
+        sink.submittedDuration == tail->targetEnd &&
+        sink.lastSubmitted + sink.lastSubmittedDuration == sink.submittedDuration,
+        "The final submitted sample must cover the observed stop to its first legal nominal-FPS boundary");
     Input input; input.open(path);
     const auto timeBase = input.format->streams[0]->time_base;
     require(timeBase.num > 0 && timeBase.den > 0, "Read a positive actual output time base");
@@ -159,19 +164,20 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
     const auto decodedLast = av_rescale_q(lastPts, timeBase, hundredNs);
     const auto decodedEnd = av_rescale_q(lastEnd, timeBase, hundredNs);
     const auto inputEnd = sink.lastSubmitted + sink.lastSubmittedDuration;
-    // Retained MF frame-rate conversion maps the actual input interval onto
-    // whole output slots. The e23 and 8e native artifacts prove both upward
-    // and downward rounding; demanding only ceil(inputEnd) was not its actual
-    // contract. Require the exact nearest whole cadence, not an arbitrary
-    // millisecond tolerance or permission to lose a complete output frame.
+    // The input is now deliberately aligned to the first whole output slot
+    // that covers the original capture interval. Independently calculate its
+    // exact nominal cadence with FFmpeg. A missing or extra whole output
+    // frame remains a failure; the actual capture interval must not be cut.
     const auto expectedSlots = av_rescale_q(inputEnd, hundredNs, cadence);
     const auto expectedEnd = av_rescale_q(expectedSlots, cadence, hundredNs);
     if (std::llabs(decodedLast - sink.lastEncoded) > 1 || expectedSlots <= 0 ||
+        inputEnd != expectedEnd || decodedEnd < sink.captureEnd ||
         decoded != static_cast<std::uint64_t>(expectedSlots) || std::llabs(decodedEnd - expectedEnd) > 1) {
-        throw std::runtime_error("The complete MF output must match its actual encoded stage and nearest nominal-FPS tail slot: "
+        throw std::runtime_error("The complete MF output must match its actual encoded stage and cover the aligned nominal-FPS tail slot: "
             "decoded=" + std::to_string(decoded) + ", expectedSlots=" + std::to_string(expectedSlots) +
             ", decodedLast100ns=" + std::to_string(decodedLast) + ", mfLastEncoded100ns=" + std::to_string(sink.lastEncoded) +
             ", decodedEnd100ns=" + std::to_string(decodedEnd) + ", submittedEnd100ns=" + std::to_string(inputEnd) +
+            ", captureEnd100ns=" + std::to_string(sink.captureEnd) +
             ", quantizedSubmittedEnd100ns=" + std::to_string(expectedEnd));
     }
     return {{QStringLiteral("framesDecoded"), static_cast<qint64>(decoded)},
@@ -184,6 +190,7 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
         {QStringLiteral("expectedOutputSlots"), static_cast<qint64>(expectedSlots)},
         {QStringLiteral("quantizedSubmittedEnd100ns"), static_cast<qint64>(expectedEnd)},
         {QStringLiteral("tailRounding100ns"), static_cast<qint64>(decodedEnd - inputEnd)},
+        {QStringLiteral("tailExtension100ns"), static_cast<qint64>(inputEnd - sink.captureEnd)},
         {QStringLiteral("nominalFps"), static_cast<qint64>(fps)},
         {QStringLiteral("contiguousTimeline"), true}};
 }

@@ -24,8 +24,10 @@ struct RecordingSinkStatistics {
     std::int64_t lastReceived{}, lastEncoded{}, lastProcessed{};
     std::int64_t lastSubmitted{}, lastSubmittedDuration{};
     std::uint32_t queuedBytes{};
-    // Captured samples are held until the next capture (or observed stop)
-    // supplies their actual end. Successful input intervals cover [0, captureEnd).
+    // Captured samples are held until the next capture (or observed stop).
+    // Successful input intervals cover [0, submittedDuration); captureEnd is
+    // the unmodified actual stop. Only the final sample may extend to the
+    // first rounded nominal-FPS boundary at or after captureEnd.
     std::uint64_t captured{};
     std::int64_t submittedDuration{}, captureEnd{};
 };

@@ -98,8 +98,11 @@ desktop lock. No compositor runtime is added to the application.
 
 `live_capture_refresh_probe` is independent of the existing dynamic
 capture/resize/daemon-loss probe. It first displays a separate conspicuous
-magenta/black control and verifies at least 1,000 actual magenta pixels in the
-authorized preview. After hiding it, the test checks **every pixel of the exact
+magenta/black control. It waits for the fullscreen parent's native exposure
+before showing the transient tool, then waits for both windows' exposure before
+requesting authorization. This is only fixture readiness, not a presentation
+fence: it still verifies at least 1,000 actual magenta pixels in the authorized
+preview. After hiding it, the test checks **every pixel of the exact
 first replacement lease** against the displayed background. It does not select
 a later queue frame to conceal stale controls.
 

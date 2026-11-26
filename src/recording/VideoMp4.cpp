@@ -1,6 +1,7 @@
 #include "recording/VideoMp4.h"
 #include "platform/windows/RecordingControls.h"
 #include "core/MediaClock.h"
+#include "core/RecordingTime.h"
 #include "core/PixelBuffer.h"
 #include "platform/windows/AudioFormat.h"
 #include "platform/windows/ComApartment.h"
@@ -2579,8 +2580,22 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     // still preserve this last valid, unsubmitted image. Never repeat a failed
     // video submission/transform or clear the original capture/encoding error.
     if (pendingVideoSample && !pendingVideoSubmissionAttempted) {
-        const auto tailResult = submitPendingVideo(captureEnd);
-        if (FAILED(tailResult)) dp.result.fail(RecordingStage::Encode, tailResult);
+        // Keep the real stop timestamp separately. MF's nominal-FPS conversion
+        // may otherwise discard a partial final slot. Reuse the bounded tail
+        // rule from the shared migration: extend only this unsubmitted sample
+        // to the first rounded cadence boundary at or after the observed stop.
+        // All earlier input intervals remain contiguous and unmodified.
+        if (pendingVideoTime < 0 || captureEnd <= pendingVideoTime) {
+            dp.result.fail(RecordingStage::Encode, MF_E_INVALID_TIMESTAMP);
+        } else {
+            const auto tail = HuhuCapture::Core::recordingTailTime(
+                pendingVideoTime, captureEnd - pendingVideoTime, dp.fps);
+            if (!tail) dp.result.fail(RecordingStage::Encode, E_INVALIDARG);
+            else {
+                const auto tailResult = submitPendingVideo(tail->targetEnd);
+                if (FAILED(tailResult)) dp.result.fail(RecordingStage::Encode, tailResult);
+            }
+        }
     }
     pendingVideoSample.Release();
     if (pSinkWriter) {

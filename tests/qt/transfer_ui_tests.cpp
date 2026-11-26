@@ -303,6 +303,7 @@ void contracts(const QString& pictures)
     host.dispatch(); waitFor([&] { return host.finished; }, "Actual media preparation and service admission complete");
     require(bool(host.last), "The host submits actual prepared media after view destruction");
     const auto offer = received.wait(transfer::EventKind::ReceiveOffer);
+    const auto offerObservedAt = std::chrono::steady_clock::now();
     require(sender.hasActiveTransfers() && receiver.hasActiveTransfers(),
         "The same service read model keeps an actual awaiting-confirmation transfer active after its task view closes");
     require(!host.histories.front().expired(), "The service retains the real source lease while confirmation is pending");
@@ -314,6 +315,33 @@ void contracts(const QString& pictures)
     }
     auto prompt = std::make_unique<ui::ReceivePrompt>(receiver, offer, receiverArchive->directory());
     prompt->setTranslator(translate); show(*prompt);
+    if (prompt->selectedFiles().size() != 1 || prompt->answered()) {
+        QJsonArray matchingEvents;
+        const auto session = offer.data.value(QStringLiteral("sessionId")).toString();
+        for (const auto& event : received.values) {
+            if (event.generation != offer.generation ||
+                event.data.value(QStringLiteral("sessionId")).toString() != session) continue;
+            matchingEvents.append(QJsonObject{
+                {QStringLiteral("kind"), static_cast<int>(event.kind)},
+                {QStringLiteral("status"), event.status},
+                {QStringLiteral("request"), QString::number(static_cast<qulonglong>(event.request))},
+                {QStringLiteral("localStatus"), event.data.value(QStringLiteral("localStatus"))}});
+        }
+        const QJsonObject diagnostic{
+            {QStringLiteral("elapsedSinceObservedOfferMs"), static_cast<qint64>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - offerObservedAt).count())},
+            {QStringLiteral("offeredCount"), offer.data.value(QStringLiteral("files")).toArray().size()},
+            {QStringLiteral("selectedCount"), prompt->selectedFiles().size()},
+            {QStringLiteral("answered"), prompt->answered()},
+            {QStringLiteral("decisionPending"), prompt->decisionPending()},
+            {QStringLiteral("receiveAcceptEnabled"), child<QPushButton>(*prompt, "receiveAccept")->isEnabled()},
+            {QStringLiteral("receiverState"), static_cast<int>(receiver.state())},
+            {QStringLiteral("receiverActive"), receiver.hasActiveTransfers()},
+            {QStringLiteral("matchingEvents"), matchingEvents}};
+        std::cerr << "Receive prompt diagnostics: "
+            << QJsonDocument(diagnostic).toJson(QJsonDocument::Compact).constData() << '\n';
+    }
     require(prompt->selectedFiles().size() == 1 && !prompt->answered(), "Only real offered supported media is selectable");
     save(*prompt, pictures, QStringLiteral("lan-receive-en.png"));
     click(*child<QPushButton>(*prompt, "receiveAccept"));

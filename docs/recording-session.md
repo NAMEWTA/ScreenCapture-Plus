@@ -103,8 +103,11 @@ Microsoft 的[媒体样本合同](https://learn.microsoft.com/en-us/windows/win3
 
 现有 Windows 后端只暂持一个已经采集、独占缓冲的 `IMFSample`。下一张图像到达
 时，以同一 `MediaClock` 的真实采样时间闭合并提交前一张；停止循环时，在音频
-停止和 writer 排空之前记录真实停止点，闭合最后一张。这个变化增加一个样本
-引用而不再复制像素，仍使用既有 DXGI / GDI、30 FPS、帧率转换及编码器。下一次
+停止和 writer 排空之前记录真实停止点。复用 #7 中的
+[`recordingTailTime`](../src/core/RecordingTime.h) 规则：最后一张尚未提交的图像
+延长至覆盖实际停止点的首个标称 FPS 整帧边界，延长小于一帧；此前样本和真实
+停止点保持不变，不额外采集或修改像素。这个变化增加一个样本引用而不再复制
+像素，仍使用既有 DXGI / GDI、30 FPS、帧率转换及编码器。下一次
 采集、帧准备或音频写入失败时，仍可提交尚未尝试的有效待处理图像以保留恢复
 文件；实际失败的视频转换或提交不重试，首个失败仍保留。全部有效输入提交后，
 继续使用原有同步
@@ -114,14 +117,16 @@ Microsoft 的[媒体样本合同](https://learn.microsoft.com/en-us/windows/win3
 输入区间总时长、实际停止点，以及 MF 自身 received / encoded / processed 数据。
 [`recording_timeline.h`](../tests/qt/recording_timeline.h) 要求：
 
-- 捕获数、提交数和 MF received 相等；输入区间连续覆盖从首帧到实际停止点，最后
-  PTS 加 duration 必须精确等于该停止点。
+- 捕获数、提交数和 MF received 相等；输入区间连续覆盖从首帧到实际停止点，
+  最后 PTS 加 duration 必须精确等于覆盖实际停止点的首个标称 FPS 边界；
+  真实停止点与对齐后的提交末端分别记录。
 - MF encoded、processed 与完整解码帧数相等；末次接收等于末次提交，排队字节为零；
   逐个解码帧具有从零开始的连续标称 FPS 时间轴，最后解码 PTS 匹配 MF 实测值。
-- 保留完整输出槽数等于输入末端在标称 FPS 上最近整数槽数的现有断言。官方
+- 完整输出槽数必须精确等于对齐后输入末端的标称 FPS 槽数；实际解码结束点
+  必须覆盖原始停止点。官方
   [时间戳与时长规则](https://learn.microsoft.com/windows/win32/medfound/time-stamps-and-durations)
-  没有保证这个具体 FRC 算法，因此它仍是待真实结果裁决的探针条件，不能通过
-  放宽为任意一帧容差宣告成功。
+  不保证具体 FRC 算法，因此新的生产者尾区间及严格断言仍待 Windows 原生
+  复验，不能以纯整数测试代替真实录制，也不放宽为任意一帧容差。
 
 阶段数量不同本身并不证明编码尾帧丢失。此前
 [e23 的实际结果](https://github.com/NAMEWTA/huhucapture/actions/runs/45596538455/job/139150279329)
@@ -145,7 +150,8 @@ Microsoft 的[媒体样本合同](https://learn.microsoft.com/en-us/windows/win3
 backend 统计序列化，并在检查恢复文件前，将其原字节保存到本轮专属目录的
 非隐藏诊断副本。副本排他创建，逐字节复制并核对 SHA256，保存收据前重新
 核对原文件身份、长度与 revision；原恢复文件保持原位。复制与 owner 统计
-只补全失败证据，不改变产品录制、时间轴断言或 artifact 的全局隐藏文件规则。
+只补全当时的失败证据，不改变 artifact 的全局隐藏文件规则。上述历史失败仍然
+有效；新的尾区间实现必须用新构建和真实录制重新验收。
 这项取证改动仍须新的 Windows CI 实际执行。
 
 四音源、长时同步、实体桌面和最终产品旅程仍按 P12 单独验收。
