@@ -275,6 +275,65 @@ class HeaderPathTests(unittest.TestCase):
                     BUNDLE.extract_tar(archive,root/kind,path_profile=HEADERS['SOURCE'])
 
 
+@unittest.skipUnless(sys.platform=='linux', 'Runtime dependency checkout executes on the native Linux producer')
+class RuntimeGitCheckoutTests(unittest.TestCase):
+    def test_real_runtime_restore_keeps_original_blobs_and_records_policy_before_fetch(self):
+        with tempfile.TemporaryDirectory(prefix='runtime-git-input-') as value:
+            root=Path(value);upstream=root/'upstream';upstream.mkdir()
+            def git(directory,*arguments,data=None):
+                return subprocess.run(['git','-c','core.hooksPath='+os.devnull,'-C',str(directory),*arguments],
+                    input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                    env=BUNDLE.git_environment(),check=True).stdout
+            git(upstream,'init','--quiet')
+            files={'.gitattributes':b'* text eol=lf\n*.vcproj* text eol=crlf\n*.cmd text eol=crlf\n',
+                   'build/VS2008/fullbench/fullbench.vcproj':b'<Project>original LF bytes</Project>\n',
+                   'original-crlf.cmd':b'@echo off\r\necho original CRLF\r\n'}
+            for name,data in files.items():
+                blob=git(upstream,'hash-object','-w','--stdin',data=data).decode().strip()
+                git(upstream,'update-index','--add','--cacheinfo','100644,'+blob+','+name)
+            git(upstream,'-c','user.name=Runtime checkout fixture','-c','user.email=runtime-fixture@example.invalid',
+                'commit','--quiet','-m','Actual original source-byte fixture')
+            commit=git(upstream,'rev-parse','HEAD').decode().strip()
+            original_index=git(upstream,'ls-files','--stage')
+            workspace=root/'workspace';workspace.mkdir()
+            for name in ('sources','source-inputs','downloads','checkouts'):(workspace/name).mkdir()
+            runtime_bundle=BUILDER['bundle'];original_command=runtime_bundle.git_command
+            observed=[]
+            def local_fixture_transport(directory,*arguments):
+                command=original_command(directory,*arguments)
+                if 'fetch' in arguments:
+                    # Only this offline test enables its real local Git transport.
+                    # The production HTTPS source validation and commands are unchanged.
+                    observed.append(BUILDER['CHECKOUT']['verify_policy'](directory))
+                    self.assertEqual(git(directory,'ls-files','--stage'),b'')
+                    self.assertEqual(git(directory,'for-each-ref','--format=%(refname)'),b'')
+                    index=command.index('fetch');command[index:index]=['-c','protocol.file.allow=always']
+                return command
+            recorder=BUILDER['API']['ExecutionLog'](workspace/'control','linux',ROOT/'scripts/build-appimage-runtime.py')
+            with mock.patch.object(runtime_bundle,'git_command',side_effect=local_fixture_transport):
+                item=BUILDER['restore_input']('native-source-fixture',{'repository':upstream.as_uri(),'commit':commit},
+                                               workspace,recorder,BUILDER['clean_environment']())
+            checkout=Path(item['collection']['directory'])
+            original=BUNDLE.read_json(item['manifest']['path'])
+            policy=original['sourceCheckout']
+            self.assertEqual(len(observed),1)
+            for name,data in files.items():
+                self.assertEqual((checkout/name).read_bytes(),data)
+                self.assertEqual((item['directory']/name).read_bytes(),data)
+            self.assertEqual(git(upstream,'ls-files','--stage'),original_index)
+            self.assertEqual(git(upstream,'rev-parse','HEAD').decode().strip(),commit)
+            BUILDER['HELPER']['verify_checkout_policy'](checkout,policy)
+            runtime_bundle.compare_checkout(checkout,item['files'],commit)
+            attributes=checkout/'.git/info/attributes'
+            attributes.write_bytes(attributes.read_bytes()+b'# changed policy\n')
+            with self.assertRaisesRegex(ValueError,'policy is missing or changed'):
+                BUILDER['HELPER']['verify_checkout_policy'](checkout,policy)
+            attributes.write_bytes(BUILDER['CHECKOUT']['ATTRIBUTES'])
+            retained=Path(policy['retainedPolicy']['path']);retained.write_bytes(retained.read_bytes()+b'# changed evidence\n')
+            with self.assertRaisesRegex(ValueError,'build evidence changed'):
+                BUILDER['HELPER']['verify_checkout_policy'](checkout,policy)
+
+
 @unittest.skipUnless(sys.platform=='linux' and shutil.which('patch') and shutil.which('sh'),
                      'Canonical patch replay requires the real native GNU patch and POSIX shell')
 class CanonicalPatchReplayTests(unittest.TestCase):

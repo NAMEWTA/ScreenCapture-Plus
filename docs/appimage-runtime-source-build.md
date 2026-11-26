@@ -43,6 +43,23 @@ The actual build compares the patch bytes and canonical SHA1 records with the
 restored original musl-cross-make source. It preserves the complete original
 archives and Git checkouts for later source collection.
 
+All Git inputs use the shared `original-git-blob-bytes-v1` checkout profile.
+Before the first fetch/checkout, each new owned repository gets the exact
+`info/attributes` policy from `build/package/source_checkout.py`. This preserves
+original LF and CRLF blob bytes and disables working-tree text/filter/encoding
+conversions without modifying upstream attributes or the index. In particular,
+zstd's original `*.vcproj*`, `*.rc`, `*.bat` and `*.cmd` attributes request CRLF
+checkout even when `core.autocrlf=false`; ordinary checkout therefore need not
+equal the original Git objects required by source collection.
+
+The real runtime producer retains both the installed policy and the helper
+bytes before fetching. Each Git input manifest binds those materials. Final
+runtime validation checks the policy and retained copies again, then compares
+the original checkout to its exact source manifest. Existing populated
+repositories or changed policies fail. The collector's original byte comparison
+is unchanged; this is the explicit original-blob source-build profile, not a
+claim that normal Git checkout conversions were reproduced.
+
 ## Exact original toolchain patch application
 
 Only the three locked musl/GCC/binutils archives use the named

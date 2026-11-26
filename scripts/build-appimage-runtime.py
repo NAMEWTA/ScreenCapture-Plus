@@ -23,6 +23,7 @@ HELPER = runpy.run_path(str(ROOT / 'build/package/appimage_runtime.py'))
 API, bundle = HELPER['API'], HELPER['bundle']
 PATCHES = HELPER['PATCHES']
 HEADERS = HELPER['HEADERS']
+CHECKOUT = HELPER['CHECKOUT']
 TARGET = 'x86_64-linux-musl'
 TOOLCHAIN_INPUTS = ('appimage-toolchain-build', 'appimage-gcc', 'appimage-binutils', 'appimage-musl',
                     'appimage-gmp', 'appimage-mpc', 'appimage-mpfr', 'appimage-linux-headers')
@@ -77,6 +78,7 @@ def fetch_archive(pin, path, recorder, environment):
 def restore_input(name, pin, workspace, recorder, environment, *, original_archive=None):
     directory = workspace / 'sources' / name
     patch_replay = None
+    source_checkout = None
     if 'sourceArchive' in pin:
         archive = Path(original_archive) if original_archive is not None else workspace / 'downloads' / (name + '-' + pin['sourceArchive']['url'].split('/')[-1])
         if original_archive is None:
@@ -107,8 +109,11 @@ def restore_input(name, pin, workspace, recorder, environment, *, original_archi
         checkout = workspace / 'checkouts' / name
         checkout.mkdir()
         git_env = bundle.git_environment()
-        for arguments in (('init', '--quiet'), ('config', 'core.autocrlf', 'false'),
-                          ('remote', 'add', 'origin', pin['repository']),
+        for arguments in (('init', '--quiet'), ('config', 'core.autocrlf', 'false')):
+            recorder.run(bundle.git_command(checkout, *arguments), cwd=checkout, env=git_env)
+        CHECKOUT['install_policy'](checkout)
+        source_checkout = CHECKOUT['retain_policy'](checkout, recorder)
+        for arguments in (('remote', 'add', 'origin', pin['repository']),
                           ('-c', 'protocol.https.allow=always', 'fetch', '--depth=1', '--no-tags', 'origin', pin['commit']),
                           ('checkout', '--detach', 'FETCH_HEAD')):
             recorder.run(bundle.git_command(checkout, *arguments), cwd=checkout, env=git_env)
@@ -122,11 +127,13 @@ def restore_input(name, pin, workspace, recorder, environment, *, original_archi
         bundle.require(bundle.git(checkout, 'rev-parse', 'HEAD').decode().strip() == pin['commit'] and
                        not bundle.git(checkout, 'status', '--porcelain').strip(), 'The original Git source is not the exact clean input')
         _, files = bundle.export_git(checkout, pin['commit'], directory)
+        HELPER['verify_checkout_policy'](checkout, source_checkout)
         collection = {'id': name, 'directory': str(checkout)}
     source_hash = bundle.tree_digest(files)
     record = workspace / 'source-inputs' / (name + '.json')
     API['write_new'](record, {'id': name, 'pin': pin, 'sourceTreeSha256': source_hash, 'files': files,
-                            **({'patchReplay': patch_replay} if patch_replay else {})})
+                            **({'patchReplay': patch_replay} if patch_replay else {}),
+                            **({'sourceCheckout': source_checkout} if source_checkout else {})})
     recorder.retain_record(record)
     return {'id': name, 'directory': directory, 'files': files, 'sourceTreeSha256': source_hash,
             'manifest': descriptor(record), 'collection': collection, 'pin': pin}
@@ -525,6 +532,7 @@ def build_runtime(options):
               'buildComplete': False, 'staticClosureComplete': False, 'correspondingSourceComplete': False, 'failures': [],
               'scope': 'A new static PIE runtime from complete actual source producers; not reproduction of the old official asset',
               'configurationDifferences': ['GCC 9.4.0/musl 1.2.6 source-built static target toolchain replaces floating Alpine/Clang inputs',
+                  'Git sources use original Git blob bytes, retaining original LF/CRLF and disabling working-tree conversions before first checkout',
                   'Every canonical cross-make patch is retained; target shared toolchain libraries are disabled',
                   'Original fuse 3.15.0 patch and squashfuse 0.5.2 retained; zstd 1.5.6, zlib 1.3.1 and mimalloc 2.1.7 are exact new Git sources',
                   'Real compressed extraction/AppRun execution is checked; this does not establish a FUSE desktop mount or complete application release']}

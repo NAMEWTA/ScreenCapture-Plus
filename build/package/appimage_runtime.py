@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 API = runpy.run_path(str(ROOT / 'build/package/source_receipts.py'))
 PATCHES = runpy.run_path(str(ROOT / 'build/package/toolchain_patches.py'))
 HEADERS = runpy.run_path(str(ROOT / 'build/package/linux_header_paths.py'))
+CHECKOUT = runpy.run_path(str(ROOT / 'build/package/source_checkout.py'))
 bundle = API['bundle']
 SOURCE_IDS = {'appimage-toolchain-build', 'appimage-musl', 'appimage-gcc', 'appimage-binutils',
               'appimage-gmp', 'appimage-mpc', 'appimage-mpfr', 'appimage-linux-headers',
@@ -24,7 +25,8 @@ STATIC_IDS = {'appimage-musl', 'appimage-gcc', 'appimage-fuse', 'appimage-squash
 PRODUCERS = ('scripts/build-appimage-runtime.py', 'build/package/appimage_runtime.py',
              'build/package/source_receipts.py', 'scripts/create-source-bundle.py',
              'build/package/toolchain_patches.py', 'third_party/appimage/toolchain-patches/cowpatch.sh',
-             'third_party/appimage/toolchain-patches/upstream.json', 'build/package/linux_header_paths.py')
+             'third_party/appimage/toolchain-patches/upstream.json', 'build/package/linux_header_paths.py',
+             'build/package/source_checkout.py')
 
 
 def profile():
@@ -78,6 +80,16 @@ def file_identity(path):
 
 def source_inventory(component, pin, directory):
     return HEADERS['source_inventory'](component, pin, directory, bundle.__dict__)
+
+
+def verify_checkout_policy(checkout, retained):
+    policy = CHECKOUT['verify_policy'](checkout)
+    bundle.require(all(retained.get(key) == value for key, value in policy.items()) and
+                   file_identity(checked_record(retained['retainedPolicy'])) ==
+                       {key:policy[key] for key in ('size','sha256')} and
+                   file_identity(checked_record(retained['retainedHelper'])) ==
+                       file_identity(ROOT / 'build/package/source_checkout.py'),
+                   'The original runtime Git checkout policy or retained implementing code changed')
 
 
 def producer_identity():
@@ -276,6 +288,10 @@ def validate_report(directory, report):
                        'An actual source input manifest changed')
         bundle.require(source_inventory(name, pin, directory / 'sources' / name) == original['files'],
                        'The original runtime source input bytes changed')
+        if 'sourceArchive' not in pin:
+            checkout = directory / 'checkouts' / name
+            verify_checkout_policy(checkout, original['sourceCheckout'])
+            bundle.compare_checkout(checkout, original['files'], pin['commit'])
     receipts = {}
     executions, receipt_records = {}, {}
     for item in report['receipts']:

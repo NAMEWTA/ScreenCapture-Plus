@@ -36,6 +36,7 @@ jobs:
         run: |
           python tests/appimage_runtime_tests.py -v
           python tests/source_receipts_tests.py -v
+          python tests/source_checkout_tests.py -v
       - name: Restore unchanged original reviewed packaging tools and source assets
         run: python scripts/restore-packaging-tools.py --platform linux --output .deps/runtime-packaging-tools
       - name: Build every runtime, musl, CRT and compiler-support input from fixed source
