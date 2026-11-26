@@ -21,6 +21,7 @@ materials = importlib.util.module_from_spec(specification)
 specification.loader.exec_module(materials)
 qt_materials = materials.module('huhucapture_qt_materials_tests', ROOT / 'build/package/qt_materials.py')
 rust_materials = materials.module('huhucapture_rust_materials_tests', ROOT / 'build/package/rust_materials.py')
+native_materials = materials.module('huhucapture_native_materials_tests', ROOT / 'scripts/collect-native-source-materials.py')
 
 
 def host_library():
@@ -75,6 +76,62 @@ class ProjectNotices(unittest.TestCase):
             for name in inventory['files']:
                 retained = installed / 'licenses/project' / Path(name).relative_to('third_party')
                 self.assertEqual(retained.read_bytes(), (ROOT / name).read_bytes(), name)
+
+
+class NativeSourceIndex(unittest.TestCase):
+    def test_existing_crlf_blob_is_preserved_but_real_changes_are_rejected(self):
+        # Reproduce the actual FFmpeg Windows false mismatch without fetching
+        # dependencies or using an unrelated generated build receipt.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / 'source'
+            source.mkdir()
+
+            def git(*args):
+                return native_materials.git(list(args), cwd=source)
+
+            git('-c', 'init.templateDir=', 'init', '--quiet')
+            git('config', 'core.autocrlf', 'false')
+            repository = 'https://example.invalid/ffmpeg.git'
+            git('remote', 'add', 'origin', repository)
+            for name in ('LICENSE.md', 'COPYING.LGPLv2.1', 'COPYING.GPLv3'):
+                (source / name).write_bytes(b'Fixture notice\n')
+            (source / '.gitignore').write_bytes(b'ignored.tmp\n')
+            fixture = source / 'wavpack-cuesheet-tags'
+            fixture.write_bytes(b'artist=original\r\ntitle=fixture\r\n')
+            ordinary = source / 'ordinary.txt'
+            ordinary.write_bytes(b'normal\ntext\n')
+            git('add', '-A')
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'source fixture')
+            package = {'repository': repository, 'commit': git('rev-parse', 'HEAD')}
+            expected = git('rev-parse', 'HEAD^{tree}')
+            git('config', 'core.autocrlf', 'true')
+            ordinary.write_bytes(b'normal\r\ntext\r\n')
+
+            def collect(label):
+                output, source_output = root / (label + '-notices'), root / (label + '-sources')
+                output.mkdir()
+                source_output.mkdir()
+                return native_materials.archive_source('ffmpeg', source, package, output, source_output, {})
+
+            controls = {name: (source / '.git' / name).read_bytes()
+                        for name in ('HEAD', 'config', 'index')}
+            result = collect('original')
+            self.assertEqual(result['patchedTree'], expected)
+            self.assertTrue(result['originalWorktreeAndIndexUnchanged'])
+            self.assertEqual(fixture.read_bytes(), b'artist=original\r\ntitle=fixture\r\n')
+            self.assertEqual(ordinary.read_bytes(), b'normal\r\ntext\r\n')
+
+            fixture.write_bytes(b'artist=modified\r\ntitle=fixture\r\n')
+            with self.assertRaisesRegex(ValueError, 'changes beyond the exact ordered locked patches'):
+                collect('modified')
+            fixture.write_bytes(b'artist=original\r\ntitle=fixture\r\n')
+            (source / 'ignored.tmp').write_bytes(b'unexpected build output')
+            with self.assertRaisesRegex(ValueError, 'Untracked files in native source'):
+                collect('extra')
+            self.assertEqual(controls, {name: (source / '.git' / name).read_bytes()
+                                        for name in controls})
 
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Real ELF and dpkg checks run on Linux')
@@ -269,7 +326,7 @@ def main():
                         help='Actual SDK; defaults to QT_ROOT_DIR from the original runner')
     parser.add_argument('--cargo-metadata', type=Path, help='Actual native build cargo-metadata.json, not a generated fixture')
     options = parser.parse_args()
-    classes = [ProjectNotices, ElfInputs]
+    classes = [ProjectNotices, NativeSourceIndex, ElfInputs]
     if options.without_dpkg:
         print('NOT RUN: actual dpkg owner/source-version/notice validation was explicitly excluded.', flush=True)
     else:

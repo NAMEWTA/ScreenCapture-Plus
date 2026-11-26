@@ -293,7 +293,12 @@ def archive_source(family, source, package, output, source_output, inputs):
         others = git(['ls-files', '--others', '-z'], cwd=source, git_dir=owned, index=actual_index, binary=True)
         require(not others, 'Untracked files in native source (including ignored files): ' +
                 others.decode('utf-8', errors='replace').replace('\0', ', ')[:2048])
-        git(['add', '--renormalize', '--', '.'], cwd=source, git_dir=owned, index=actual_index, conversion=conversion)
+        # The fresh index is seeded with the exact patched blobs. Ordinary
+        # Git add uses that index's existing-CRLF protection under autocrlf;
+        # --renormalize deliberately bypasses it and can change an unchanged
+        # upstream fixture (FFmpeg tests/ref/fate/wavpack-cuesheet-tags).
+        # Keep the original checkout's conversion semantics, not a forced
+        # migration of its text attributes. Exact tree equality remains mandatory.
         git(['add', '-A', '--', '.'], cwd=source, git_dir=owned, index=actual_index, conversion=conversion)
         actual_tree = git(['write-tree'], cwd=source, git_dir=owned, index=actual_index)
         if actual_tree != expected_tree:

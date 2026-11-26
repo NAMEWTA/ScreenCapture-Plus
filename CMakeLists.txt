@@ -618,9 +618,10 @@ if(HUHUCAPTURE_BUILD_APP)
         target_compile_definitions(huhucapture PRIVATE
             HUHU_VERSION_MAJOR=${PROJECT_VERSION_MAJOR} HUHU_VERSION_MINOR=${PROJECT_VERSION_MINOR}
             HUHU_VERSION_PATCH=${PROJECT_VERSION_PATCH} HUHU_VERSION_REVISION=0)
-        # The same per-monitor awareness used by the retained native product.
-        # Qt's actual screen bindings still own per-screen coordinate conversion.
-        set_target_properties(huhucapture PROPERTIES VS_DPI_AWARE "PerMonitor")
+        # VS_DPI_AWARE PerMonitor only supplies the legacy DPI declaration.
+        # Embed the explicit Windows 10 per-monitor-v2 manifest via the native
+        # manifest tool. Do not weaken the capture backend's actual DPI check.
+        target_sources(huhucapture PRIVATE resources/qt/application.manifest)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(huhucapture PRIVATE huhucapture_x11_recording huhucapture_live_recording)
     endif()

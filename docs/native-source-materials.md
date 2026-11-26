@@ -53,7 +53,12 @@ python scripts/collect-native-source-materials.py `
 收集器创建自己的临时 bare Git 仓库，只通过 Git 的共享对象机制读取原 checkout
 已存在的对象。它在独立索引中读取固定提交并逐个执行 `git apply --cached`，取得
 预期补丁后 tree；第二个独立索引从该 tree 开始，读取原工作目录的实际内容。
-新增补丁文件即使匹配 `.gitignore` 也属于预期 tree，不会漏验。
+新增补丁文件即使匹配 `.gitignore` 也属于预期 tree，不会漏验。实际索引使用普通
+`git add -A`，保留 Git 对原索引已含 CRLF blob 的保护，而不使用强制
+`--renormalize`（它会将固定 FFmpeg 中本来就含 CRLF 的
+`tests/ref/fate/wavpack-cuesheet-tags` 误改为 LF）。原工作文件、规范 tree 及
+档案逐 blob 的相等要求仍保持不变；回归测试同时覆盖实际内容修改及额外 ignored
+文件的拒绝。
 
 原 source 目录不应承载编译输出，现有 builder 都在兄弟 build 目录编译。
 因此源码检查还使用不应用 ignore 规则的 `git ls-files --others`，拒绝所有额外
