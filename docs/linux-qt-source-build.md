@@ -64,6 +64,11 @@ working-tree-encoding 内容转换，原 LF 和原 CRLF 分别保持原始字节
 producer records 保留 policy 和 helper，构建前后核验且不修补旧输入；严格的
 Git blob 比较仍保持不变。这是明确记录的新源码构建配置，不代表重现原 SDK。
 
+Qttools 同时通过共享恢复入口读取固定父 tree 中的 qlitehtml gitlink 和原始
+`.gitmodules`，逐层恢复官方子仓库、保持原始字节并保留 Git 对象与真实命令记录。
+嵌套子提交来自各级原 tree；其他地址或不完整 checkout 失败。关闭 Assistant
+不省略这部分完整来源，详见 [Windows 入口的共享源码恢复规则](windows-qt-source-build.md#固定输入和真实执行)。
+
 ## 六个真实来源生产者
 
 | 顺序 | 固定源码 | 主要实际输出 |

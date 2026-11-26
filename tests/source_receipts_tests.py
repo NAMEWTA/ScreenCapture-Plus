@@ -282,6 +282,189 @@ class SourceReceiptsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'approval and complete'):
             source_plan['relocate_plan']({**plan, 'complete': True}, self.root)
 
+    def recorded_linuxdeploy(self, *, break_chain=False):
+        pin = bundle.read_json(ROOT / 'build/package/dependencies.lock.json')['tools']['linuxdeploy']
+        configured = os.environ.get('HUHUCAPTURE_TEST_LINUXDEPLOY')
+        linuxdeploy = Path(configured) if configured else ROOT / 'artifacts/packaging-tools/linuxdeploy' / pin['name']
+        if not linuxdeploy.is_file() and not configured:
+            self.skipTest('The exact locked linuxdeploy image is required; set HUHUCAPTURE_TEST_LINUXDEPLOY')
+        self.assertEqual(receipts['identity'](linuxdeploy), {key: pin[key] for key in ('size', 'sha256')})
+        for tool in ('cc', 'objcopy', 'readelf'):
+            self.assertIsNotNone(shutil.which(tool), 'The actual ELF chain requires ' + tool)
+        linuxdeploy = linuxdeploy.resolve(strict=True)
+        producer = self.producer()
+        original = self.prefix / 'probe'
+        compile_command = [shutil.which('cc'), '-g', '-Wl,-rpath,/original-receipt-rpath',
+                           str(self.source / 'source.c'), '-o', str(original)]
+        producer.run(compile_command, cwd=self.root)
+        plan = producer.finish()
+        collected = self.root / 'observed-collected'; collected.mkdir()
+        collector = bundle.Collector({'buildReceipts': [plan]}, self.root, collected)
+        collector.platform = 'linux'; collector.lock = {'qtMigration': {}}
+        collector.components = {'fixture': {'sourceTreeSha256': producer.source_hash}}
+        collector.collect_receipts()
+        self.assertEqual(collector.gaps, [])
+        stage = self.root / 'observed-stage'; (stage / 'payloads').mkdir(parents=True)
+        (stage / 'work').mkdir()
+        installed = self.root / 'empty-installed'; installed.mkdir()
+        package = source_plan['package']; transforms = package.lineage_api()
+        execution = receipts['ExecutionLog'](stage / 'executions', 'linux', package.__file__)
+        recorder = transforms.Recorder(stage, installed, execution, bundle)
+        appdir = stage / 'payloads/appimage'
+        executable = appdir / 'usr/bin/probe'
+        # An owned real linuxdeploy plugin adds read-only observations. The
+        # negative case really replaces the file between recorded operations;
+        # it never manufactures a copy event or a successful receipt.
+        plugins = self.root / 'plugins'; plugins.mkdir()
+        plugin = plugins / 'linuxdeploy-plugin-observe'
+        text = '#!/bin/sh\nset -eu\nif [ "${1-}" = "--plugin-api-version" ]; then printf "0\\n"; exit 0; fi\n'
+        if break_chain:
+            text += shlex.join([shutil.which('cp'), str(original), str(executable)]) + '\n'
+        text += '"$PATCHELF" --print-rpath ' + shlex.quote(str(executable)) + '\n'
+        if break_chain:
+            text += '"$PATCHELF" --set-rpath /later-observed-rpath ' + shlex.quote(str(executable)) + '\n'
+            text += '"$PATCHELF" --print-rpath ' + shlex.quote(str(executable)) + '\n'
+        plugin.write_text(text, encoding='utf-8', newline='\n'); plugin.chmod(0o755)
+        execution.retain_record(plugin)
+        environment = {**os.environ, 'APPIMAGE_EXTRACT_AND_RUN': '1', 'NO_STRIP': '1',
+                       'PATH': str(plugins) + os.pathsep + os.environ.get('PATH', '')}
+        first = len(execution.commands)
+        environment = recorder.patchelf_environment(linuxdeploy, environment, execution.run)
+        execution.run([linuxdeploy, '--appdir', appdir, '--executable', original, '--plugin', 'observe'],
+                      cwd=stage, env=environment)
+        native_commands = list(range(first, len(execution.commands)))
+        recorder.collect_patchelf()
+        recorder.mutation(executable, [shutil.which('objcopy'), '--strip-debug', executable],
+                          lambda arguments: execution.run(arguments, cwd=stage), operation='objcopy-strip-debug')
+        stdout, _ = execution.run([executable], cwd=stage, capture=True)
+        self.assertEqual(stdout.strip(), 'actual receipt fixture')
+        dynamic = subprocess.check_output([shutil.which('readelf'), '-d', str(executable)], text=True)
+        self.assertNotIn('/original-receipt-rpath', dynamic)
+        self.assertNotEqual(bundle.digest(original), bundle.digest(executable))
+        files = bundle.inventory(stage / 'payloads')
+        descriptor = recorder.finish({}, files)
+        raw = execution.raw_record({'installedInput': recorder.original},
+                                   {'files': files, 'fileTransformations': descriptor})
+        journal = {'buildIdentity': {}, 'fileTransformations': descriptor,
+                   'deploymentStages': [{'operation': 'native-deployment', 'commands': native_commands}]}
+        recorded = bundle.read_json(raw)
+        observed = transforms.validate(stage, journal, recorded, bundle)
+        return {'stage': stage, 'files': files, 'journal': journal, 'recorded': recorded, 'observed': observed,
+                'transforms': transforms, 'collector': collector, 'producer': producer, 'plan': plan,
+                'original': original, 'target': 'appimage/usr/bin/probe', 'compileCommand': compile_command}
+
+    @unittest.skipIf(os.name == 'nt', 'Actual linuxdeploy/patchelf/ELF capture runs on Linux')
+    def test_first_observed_linuxdeploy_input_requires_one_original_producer_and_every_real_step(self):
+        result = self.recorded_linuxdeploy()
+        stage, files, observed = result['stage'], result['files'], result['observed']
+        transforms, collector, target = result['transforms'], result['collector'], result['target']
+        original_receipts = json.loads(json.dumps(collector.receipts))
+        self.assertEqual(observed['origins'], {}, 'The deployed file was never an installed input')
+        first = observed['observedOrigins'][target]['input']
+        self.assertEqual(first['kind'], 'observed-input')
+        self.assertEqual(first['sha256'], bundle.digest(result['original']))
+        self.assertEqual(first['sequence'], 0)
+        bound = transforms.bind_observed_inputs(observed, collector.receipts)
+        expected = {'transformation': 'packaging', 'output': target,
+                    'input': {'receipt': 'fixture', 'output': 'probe'}}
+        mapping, unresolved = source_plan['proposed_mapping'](stage / 'payloads', files, {}, collector.receipts, [],
+                                                            transformations={'packaging': bound})
+        self.assertEqual(mapping[target], expected)
+        self.assertNotIn(target, {entry['path'] for entry in unresolved})
+        collector.source_transformations = {'packaging': bound}
+        final = next(entry for entry in files if entry['path'] == target)
+        ancestry, root_input = collector.original_mapping(expected, final)
+        self.assertEqual(ancestry, expected['input'])
+        self.assertEqual(root_input['sha256'], bundle.digest(result['original']))
+        self.assertEqual(collector.original_mapping(expected['input'], final), (None, None),
+                         'An explicit direct mapping must not bypass the observed boundary')
+        self.assertEqual(collector.receipts, original_receipts)
+        # Binding cannot invent a producer, or preserve a stale earlier binding.
+        missing = transforms.bind_observed_inputs(bound, {})
+        self.assertNotIn(target, missing['origins'])
+        mapping, unresolved = source_plan['proposed_mapping'](stage / 'payloads', files, {}, {}, [],
+                                                            transformations={'packaging': missing})
+        self.assertNotIn(target, mapping)
+        self.assertIn(target, {entry['path'] for entry in unresolved})
+        # A second real compile produces identical bytes under a different
+        # output name. Basename agreement cannot disambiguate original builds.
+        second_prefix = self.root / 'second-prefix'; second_prefix.mkdir()
+        other = receipts['NativeBuild'](self.root / 'second-receipt', 'linux', __file__,
+                                       'second-fixture', self.source, self.pin, second_prefix)
+        command = result['compileCommand'][:-1] + [str(second_prefix / 'different-output-name')]
+        other.run(command, cwd=self.root)
+        other_plan = other.finish()
+        self.assertEqual(bundle.digest(second_prefix / 'different-output-name'), bundle.digest(result['original']))
+        second_stage = self.root / 'two-producers'; second_stage.mkdir()
+        two = bundle.Collector({'buildReceipts': [result['plan'], other_plan]}, self.root, second_stage)
+        two.platform = 'linux'; two.lock = {'qtMigration': {}}
+        two.components = {'fixture': {'sourceTreeSha256': result['producer'].source_hash},
+                          'second-fixture': {'sourceTreeSha256': other.source_hash}}
+        two.collect_receipts(); self.assertEqual(two.gaps, [])
+        ambiguous = transforms.bind_observed_inputs(observed, two.receipts)
+        self.assertNotIn(target, ambiguous['origins'])
+        mapping, _ = source_plan['proposed_mapping'](stage / 'payloads', files, {}, two.receipts, [],
+                                                    transformations={'packaging': ambiguous})
+        self.assertNotIn(target, mapping)
+        two.source_transformations = {'packaging': ambiguous}
+        self.assertEqual(two.original_mapping(expected, final), (None, None))
+        # These deliberately changed consumers are negative test inputs. The
+        # retained actual nested commands and logs are never rewritten.
+        proof_path = stage / 'file-transformations.json'; saved = proof_path.read_bytes()
+        proof = json.loads(saved)
+        operations = [event['operation'] for event in proof['events']]
+        self.assertEqual(operations[:2], ['patchelf-set-rpath', 'patchelf-print-rpath'])
+        def validate_changed(changed):
+            proof_path.write_bytes(bundle.canonical(changed))
+            pointer = {'path': 'file-transformations.json', **bundle.descriptor(proof_path)}
+            record = json.loads(json.dumps(result['recorded']))
+            record['outputs']['fileTransformations'] = pointer
+            return transforms.validate(stage, {**result['journal'], 'fileTransformations': pointer}, record, bundle)
+        try:
+            changed = json.loads(saved)
+            changed['events'] = [event for event in changed['events'] if event['operation'] != 'patchelf-print-rpath']
+            with self.assertRaisesRegex(ValueError, 'observation was omitted'):
+                validate_changed(changed)
+            changed = json.loads(saved); changed['events'][0], changed['events'][1] = changed['events'][1], changed['events'][0]
+            with self.assertRaisesRegex(ValueError, 'complete ordered original'):
+                validate_changed(changed)
+            changed = json.loads(saved); changed['events'][0]['before']['sha256'] = '0' * 64
+            with self.assertRaisesRegex(ValueError, 'complete ordered original'):
+                validate_changed(changed)
+            changed = json.loads(saved); changed['events'] = changed['events'][:-1]
+            incomplete = validate_changed(changed)
+            self.assertNotIn(target, transforms.bind_observed_inputs(incomplete, collector.receipts)['origins'])
+            changed = json.loads(saved); changed['schemaVersion'] = 1
+            changed['events'] = [event for event in changed['events'] if event['operation'] != 'patchelf-print-rpath']
+            legacy = validate_changed(changed)
+            self.assertEqual(legacy['observedPaths'], [], 'Older evidence cannot acquire a new observed root')
+            self.assertNotIn(target, legacy['origins'])
+        finally:
+            proof_path.write_bytes(saved)
+        changed_range = json.loads(json.dumps(result['journal']))
+        changed_range['deploymentStages'][0]['commands'] = [0]
+        with self.assertRaisesRegex(ValueError, 'successful locked-image deployment command'):
+            transforms.validate(stage, changed_range, result['recorded'], bundle)
+
+    @unittest.skipIf(os.name == 'nt', 'Actual linuxdeploy/patchelf/ELF capture runs on Linux')
+    def test_observed_input_cannot_restart_after_an_actual_unrecorded_replacement(self):
+        result = self.recorded_linuxdeploy(break_chain=True)
+        observed, target, transforms = result['observed'], result['target'], result['transforms']
+        self.assertIn(target, observed['observedPaths'])
+        self.assertNotIn(target, observed['observedOrigins'])
+        records = [bundle.read_json(path) for path in sorted((result['stage'] / 'executions/patchelf').glob('*.json'))]
+        self.assertEqual([row['operation'] for row in records],
+                         ['patchelf-set-rpath', 'patchelf-print-rpath', 'patchelf-set-rpath', 'patchelf-print-rpath'])
+        self.assertEqual(records[1]['before']['sha256'], bundle.digest(result['original']))
+        self.assertEqual(records[2]['before']['sha256'], bundle.digest(result['original']))
+        self.assertNotEqual(records[0]['after'], records[1]['before'])
+        bound = transforms.bind_observed_inputs(observed, result['collector'].receipts)
+        self.assertNotIn(target, bound['origins'], 'Matching a producer again must not repair a broken earlier chain')
+        mapping, unresolved = source_plan['proposed_mapping'](result['stage'] / 'payloads', result['files'], {},
+            result['collector'].receipts, [], transformations={'packaging': bound})
+        self.assertNotIn(target, mapping)
+        self.assertIn(target, {entry['path'] for entry in unresolved})
+
     def test_changed_original_source_cannot_receive_a_build_receipt(self):
         producer = self.producer()
         producer.run([sys.executable, '-c', 'from pathlib import Path; Path("made.txt").write_bytes(b"actual output")'], cwd=self.prefix)

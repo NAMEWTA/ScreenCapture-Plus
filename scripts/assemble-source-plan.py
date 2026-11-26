@@ -129,6 +129,28 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
         if entry['type'] == 'symlink':
             mapping[name] = {'linkTarget': entry['target']}
             continue
+        observers = [(identifier, item) for identifier, item in (transformations or {}).items()
+                     if name in item.get('observedPaths', [])]
+        if observers:
+            candidates = []
+            for identifier, item in observers:
+                bound = item['origins'].get(name)
+                if bound is None:
+                    continue
+                bundle.require(bound['input'].get('kind') == 'observed-input' and
+                               all(bound['output'][field] == entry[field] for field in ('path', 'size', 'sha256')),
+                               'First observed transformation input differs from the verified final bytes')
+                producer = bound['producer']
+                if name in applications and not any(source['id'] == 'huhucapture'
+                        for source in receipts[producer['receipt']]['sources']):
+                    continue
+                candidates.append({'transformation': identifier, 'output': name, 'input': producer})
+            if len(candidates) == 1:
+                mapping[name] = candidates[0]
+            else:
+                unresolved.append({'path': name, 'reason': 'first observed input has no unique continuous source build origin',
+                                   'candidateCount': len(candidates), 'candidates': candidates[:8]})
+            continue
         key = (entry['size'], entry['sha256'])
         candidates = output_index.get(key, [])
         if name in applications:

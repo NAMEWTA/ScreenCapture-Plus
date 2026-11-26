@@ -454,9 +454,12 @@ def collect(system_sources, series, output, project):
         # files; do not turn an empty stderr into invented text to satisfy it.
         files = sorted([path for path in output.rglob('*') if path.is_file() and path.stat().st_size] +
                        [output / 'launchpad-build-records.json'])
+        # This fragment adds materials only. The plan's optional buildIdentity
+        # means a path to the actual application identity file, not the identity
+        # object retained in this collection's original report.
         plan = {'schemaVersion': 1, 'platform': 'linux', 'project': str(Path(project).resolve()),
-                'buildIdentity': build, 'materials': [{'id': 'launchpad-record-' + str(index), 'path': str(path)}
-                                                     for index, path in enumerate(files)]}
+                'materials': [{'id': 'launchpad-record-' + str(index), 'path': str(path)}
+                              for index, path in enumerate(files)]}
         write_json(output / 'materials-plan.json', plan)
         write_json(output / 'launchpad-build-records.json', report)
         return report

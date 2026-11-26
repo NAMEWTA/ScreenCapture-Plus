@@ -103,9 +103,11 @@ class WindowsQtBuilderTests(unittest.TestCase):
         source = self.root / 'qttools'
         recorder = mock.Mock()
         checked = mock.Mock()
+        restored = mock.Mock()
         environment = {'GIT_CONFIG_NOSYSTEM': '1'}
         with mock.patch.object(bundle, 'git', side_effect=[pin['tagObject'].encode(), pin['commit'].encode()]), \
                 mock.patch.dict(build['restore_tools'].__globals__, {'checked_checkout': checked}), \
+                mock.patch.dict(build['SUBMODULES'], {'restore': restored}), \
                 mock.patch.dict(build['CHECKOUT'], {'install_policy': mock.Mock(), 'retain_policy': mock.Mock()}):
             build['restore_tools'](source, pin, recorder, environment)
         commands = [call.args[0] for call in recorder.run.call_args_list]
@@ -124,6 +126,7 @@ class WindowsQtBuilderTests(unittest.TestCase):
         for call in recorder.run.call_args_list:
             self.assertEqual(call.kwargs, {'cwd': source, 'env': environment})
         checked.assert_called_once_with(source, pin)
+        restored.assert_called_once_with(source, pin, recorder, environment)
         self.assertNotIn('protocol.https.allow=always', bundle.git_command(source, 'status', '--porcelain'))
 
 

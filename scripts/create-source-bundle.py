@@ -1072,7 +1072,8 @@ class Collector:
                     "Original package transformations belong to another source/build identity")
             journal = read_json(stage / "transformations.json")
             execution = read_json(stage / "executions/build-execution.json")
-            bound = helper.lineage_api().validate(stage, journal, execution, helper.source_inventory_api())
+            lineage = helper.lineage_api()
+            bound = lineage.validate(stage, journal, execution, helper.source_inventory_api())
             project = {entry["path"]: entry for entry in self.components["huhucapture"]["files"]}
             for producer in bound["producerSources"]:
                 source = project.get(producer["path"])
@@ -1085,6 +1086,10 @@ class Collector:
                 files = extract_tar(self.stage / material["path"], Path(temporary), "huhucapture-sources")
                 require(files == journal["executionInventory"],
                         "Retained packaging execution archive differs from the original per-file evidence")
+            bound = lineage.bind_observed_inputs(bound, self.receipts)
+            for name in bound["observedPaths"]:
+                if name not in bound["origins"]:
+                    self.gap(identifier + ": " + bound["unresolved"][name] + ": " + name)
             originals = ["prepared.json", "transformations.json", "file-transformations.json", "installed-input-inventory.json"]
             originals += [entry["path"] for entry in journal["deploymentStages"]]
             retained = []
@@ -1098,9 +1103,13 @@ class Collector:
                 "scope": "Observed final-file transformations; each mapping must retain its separately verified original source/build receipt"}
 
     def original_mapping(self, origin, entry):
+        name = entry["path"]
+        observed = any(name in item.get("observedPaths", []) for item in self.source_transformations.values())
+        if observed and set(origin) != {"transformation", "output", "input"}:
+            self.gap("deployment: observed native input requires its uniquely bound original producer: " + name)
+            return None, None
         if set(origin) != {"transformation", "output", "input"}:
             return origin, entry
-        name = entry["path"]
         require(origin["output"] == name and isinstance(origin["input"], dict) and
                 set(origin["input"]) in ({"receipt", "output"}, {"component", "path"}),
                 "Derived deployment mapping must retain exactly one original source/build origin")
@@ -1111,6 +1120,11 @@ class Collector:
             return None, None
         require(all(bound["output"][key] == entry[key] for key in ("path", "size", "sha256")),
                 "Derived deployed file differs from the actual final transformation output")
+        if observed:
+            require(name in transformation.get("observedPaths", []) and
+                    bound["input"].get("kind") == "observed-input" and
+                    set(origin["input"]) == {"receipt", "output"} and origin["input"] == bound.get("producer"),
+                    "Observed native input is not bound to its unique independently verified original build output")
         return origin["input"], {"type": "file", **bound["input"]}
 
     def collect_deployment(self):

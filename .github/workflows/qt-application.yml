@@ -298,6 +298,7 @@ jobs:
         run: |
           python scripts/restore-packaging-tools.py --platform linux --output artifacts/packaging-tools
           python tests/package_metadata_tests.py
+          HUHUCAPTURE_TEST_LINUXDEPLOY="$GITHUB_WORKSPACE/artifacts/packaging-tools/linuxdeploy/linuxdeploy-x86_64.AppImage" python tests/source_receipts_tests.py
           intent=()
           if [ "$RELEASE_CANDIDATE" = true ]; then
             test "$GITHUB_REF" = refs/heads/main

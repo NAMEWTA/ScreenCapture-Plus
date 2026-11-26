@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 API = runpy.run_path(str(ROOT / 'build/package/source_receipts.py'))
 bundle = API['bundle']
 CHECKOUT = runpy.run_path(str(ROOT / 'build/package/source_checkout.py'))
+SUBMODULES = runpy.run_path(str(ROOT / 'build/package/source_submodules.py'))
 CONFIGURATIONS = ('RelWithDebInfo', 'Debug')
 
 
@@ -99,6 +100,8 @@ def checked_checkout(source, pin):
     CHECKOUT['verify_policy'](source)
     bundle.require(not bundle.git(source, 'status', '--porcelain', '--untracked-files=normal').strip(),
                    'Qt source checkout is not clean')
+    if pin['repository'] in SUBMODULES['REVIEWED_ORIGINS']:
+        SUBMODULES['verify'](source, pin)
 
 
 def restore_tools(source, pin, recorder, environment, *, component='Qttools'):
@@ -119,6 +122,8 @@ def restore_tools(source, pin, recorder, environment, *, component='Qttools'):
     bundle.require(bundle.git(source, 'rev-parse', tag).decode().strip() == pin['tagObject'] and
                    bundle.git(source, 'rev-parse', tag + '^{commit}').decode().strip() == pin['commit'],
                    'The real ' + component + ' release tag object differs from the reviewed lock')
+    if pin['repository'] in SUBMODULES['REVIEWED_ORIGINS']:
+        SUBMODULES['restore'](source, pin, recorder, environment)
     checked_checkout(source, pin)
 
 

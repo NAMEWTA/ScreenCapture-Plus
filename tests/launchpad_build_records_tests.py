@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import tempfile
@@ -294,6 +295,14 @@ class OriginalPackageTests(Fixture):
         self.assertNotIn('buildReceipts', plan)
         self.assertNotIn('sources', plan)
         self.assertNotIn('sourceBuildReceipt', json.dumps(plan))
+        assembler = runpy.run_path(str(ROOT / 'scripts/assemble-source-plan.py'))
+        relocated = assembler['relocate_plan'](plan, output)
+        merged = assembler['merge_plans']([
+            {'schemaVersion': 1, 'platform': 'linux', 'project': str(ROOT),
+             'buildIdentity': str(self.root / 'actual-build-identity.json')}, relocated])
+        self.assertEqual(merged['buildIdentity'], str(self.root / 'actual-build-identity.json'))
+        self.assertEqual(merged['materials'], sorted(relocated['materials'], key=lambda row: row['id']))
+        self.assertEqual(result['buildIdentity'], self.original['buildIdentity'])
         for material in plan['materials']:
             self.assertGreater(Path(material['path']).stat().st_size, 0)
         for field, path in (('changesfile_url', self.changes), ('buildinfo_url', self.buildinfo), ('build_log_url', self.log)):

@@ -1,11 +1,12 @@
 """Record and verify file ancestry at actual package transformation boundaries.
 
-Only an original installed file can start a chain. Newly deployed files and any
-unrecorded intermediate change remain unbound. Source/build receipts are kept
-by the caller; this journal records copying and mutation, never compilation.
+Installed inputs keep their original ancestry. The first real patchelf
+observation can also identify a new input, but only a separate verified build
+receipt can bind it to source. An interrupted chain cannot start again.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -126,15 +127,15 @@ class Recorder:
             hook['records'].append({'path': path.relative_to(self.execution.directory).as_posix(),
                                     **file_identity(self.api, path)})
             self.api.require(record['exitCode'] == 0, 'A failed patchelf call cannot create a transformation chain')
-            if record['operation'] == 'patchelf-set-rpath':
+            if record['path'] is not None:
                 before = {'domain': 'payload', 'path': record['path'], **record['before']}
                 after = {'domain': 'payload', 'path': record['path'], **record['after']}
-                self.add('patchelf-set-rpath', before, after, position=record['parentCommandIndex'],
+                self.add(record['operation'], before, after, position=record['parentCommandIndex'],
                          record=path.relative_to(self.execution.directory).as_posix())
 
     def finish(self, identity, files):
         self.api.require(self.api.inventory(self.installed) == self.original, 'The original package input changed')
-        value = {'schemaVersion': 1, 'kind': 'huhucapture-packaging-file-transformations',
+        value = {'schemaVersion': 2, 'kind': 'huhucapture-packaging-file-transformations',
                  'buildIdentity': identity, 'installedRoot': str(self.installed), 'payloadRoot': str(self.payloads),
                  'installedInput': self.original, 'files': files, 'producerSources': self.producers,
                  'patchelfHooks': self.hooks, 'events': self.events}
@@ -154,7 +155,8 @@ def validate(stage, transformations, execution, api):
             execution.get('outputs', {}).get('fileTransformations') == specification,
             'Original per-file packaging transformation evidence is missing or changed')
     value = api.read_json(stage / 'file-transformations.json')
-    require(value.get('schemaVersion') == 1 and value.get('kind') == 'huhucapture-packaging-file-transformations' and
+    require(type(value.get('schemaVersion')) is int and value['schemaVersion'] in (1, 2) and
+            value.get('kind') == 'huhucapture-packaging-file-transformations' and
             value.get('buildIdentity') == transformations['buildIdentity'] and
             value.get('installedInput') == execution['inputs']['installedInput'] and
             value.get('files') == execution['outputs']['files'] and api.inventory(stage / 'payloads') == value['files'],
@@ -177,6 +179,7 @@ def validate(stage, transformations, execution, api):
     native_stages = [item for item in transformations.get('deploymentStages', []) if item['operation'] == 'native-deployment']
     native_deployment = bool(native_stages)
     require(len(hooks) == (1 if native_deployment else 0), 'Original patchelf hook evidence is missing')
+    all_observations = value['schemaVersion'] == 2
     nested = {}
     for hook in hooks:
         configuration = api.read_json(retained(hook['configuration']))
@@ -223,6 +226,10 @@ def validate(stage, transformations, execution, api):
             require(isinstance(requested, list) and requested[:-1] == arguments[1:-1] and
                     Path(record['workingDirectory']).is_absolute() and
                     isinstance(requested[-1], str), 'The original requested patchelf arguments are missing')
+            inside = Path(record['absolutePath']).is_relative_to(Path(value['payloadRoot']))
+            require((record['path'] is None and not inside) or (record['path'] is not None and
+                    record['absolutePath'] == str(Path(value['payloadRoot']) / api.relative(record['path']))),
+                    'Actual patchelf observation has an inconsistent canonical payload path')
             if record['operation'] == 'patchelf-print-rpath':
                 require(len(arguments) == 3 and arguments[1] == '--print-rpath' and record['before'] == record['after'],
                         'A read-only patchelf call changed bytes or has different arguments')
@@ -231,14 +238,17 @@ def validate(stage, transformations, execution, api):
                         arguments[1] == '--set-rpath' and isinstance(arguments[2], str) and
                         record['absolutePath'] == str(Path(value['payloadRoot']) / api.relative(record['path'])),
                         'Unreviewed or out-of-payload native ELF transformation')
+            if record['path'] is not None and (all_observations or record['operation'] == 'patchelf-set-rpath'):
                 nested[item['path']] = record
     original = {item['path']: item for item in value['installedInput'] if item['type'] == 'file'}
     states, uncertain, used, previous = {}, {}, set(), -1
+    seen_paths, observed_paths, poisoned = set(), set(), set()
+    nested_order = list(nested)
     def byte_identity(item):
         require(isinstance(item, dict) and type(item.get('size')) is int and item['size'] > 0 and
                 api.HEX64.fullmatch(item.get('sha256', '')), 'A file-transform boundary lacks its exact actual bytes')
         return {key: item[key] for key in ('size', 'sha256')}
-    def current(point):
+    def current(point, observation=None):
         name = api.relative(point['path']); identity = byte_identity(point)
         if point['domain'] == 'installed':
             candidate = original.get(name)
@@ -247,8 +257,19 @@ def validate(stage, transformations, execution, api):
             return {'input': {'path': name, **identity}, 'current': identity}
         require(point['domain'] == 'payload', 'Unknown file-transform input domain')
         candidate = states.get(name)
+        first = name not in seen_paths
+        seen_paths.add(name)
+        if name in poisoned:
+            return None
         if candidate is not None and candidate['current'] == identity:
             return candidate
+        if first and candidate is None and observation is not None and all_observations:
+            observed_paths.add(name)
+            return {'input': {'kind': 'observed-input', 'path': name, **identity,
+                             'record': observation['record'], 'sequence': observation['sequence'],
+                             'commandIndex': observation['commandIndex']}, 'current': identity}
+        if name in observed_paths:
+            poisoned.add(name)
         uncertain[name] = 'A newly deployed file or an unrecorded change has no original-input ancestry'
         return None
     for event in value['events']:
@@ -257,19 +278,25 @@ def validate(stage, transformations, execution, api):
         previous = position
         require(after['domain'] == 'payload', 'A packaging transformation cannot rewrite original inputs')
         destination = api.relative(after['path']); output_identity = byte_identity(after)
-        ancestor = current(before)
+        observation = None
+        if operation in ('patchelf-set-rpath', 'patchelf-print-rpath'):
+            record = nested.get(event['record'])
+            require(record is not None and event['record'] not in used and
+                    event['record'] == nested_order[len(used)] and operation == record['operation'] and
+                    position == record['parentCommandIndex'] and record['path'] == destination and
+                    record['before'] == byte_identity(before) and record['after'] == output_identity,
+                    'File ancestry differs from the complete ordered original patchelf observations')
+            used.add(event['record'])
+            observation = {'record': event['record'], 'sequence': record['sequence'], 'commandIndex': position}
+        ancestor = current(before, observation)
         if operation == 'copy':
             require(byte_identity(before) == output_identity, 'A recorded copy changed file bytes')
         else:
             require(before['domain'] == 'payload' and before['path'] == after['path'],
                     'A recorded in-place transformation moved an unrecorded input')
             absolute = str(Path(value['payloadRoot']) / destination)
-            if operation == 'patchelf-set-rpath':
-                record = nested.get(event['record'])
-                require(record is not None and event['record'] not in used and position == record['parentCommandIndex'] and
-                        record['path'] == destination and record['before'] == byte_identity(before) and
-                        record['after'] == output_identity, 'File ancestry differs from the original actual patchelf call')
-                used.add(event['record'])
+            if operation in ('patchelf-set-rpath', 'patchelf-print-rpath'):
+                pass  # Both observations were bound to their original records above.
             elif operation in ('objcopy-strip-debug', 'objcopy-add-debuglink'):
                 index = event['commandIndex']
                 require(type(index) is int and index == position and index < len(commands) and
@@ -302,16 +329,51 @@ def validate(stage, transformations, execution, api):
                         'Generated desktop action differs from the actual recorded source/recipe')
             else:
                 raise ValueError('Unknown file-transform operation; no source ancestry can be inferred')
-        if ancestor is None:
+        if before['domain'] == 'payload' and before['path'] in observed_paths:
+            observed_paths.add(destination)
+            if before['path'] in poisoned:
+                poisoned.add(destination)
+        seen_paths.add(destination)
+        if ancestor is None or destination in poisoned:
             states.pop(destination, None)
         else:
             states[destination] = {'input': ancestor['input'], 'current': output_identity}
-    require(used == set(nested), 'A real mutating patchelf call was omitted from source ancestry validation')
+    require(used == set(nested), 'A real patchelf observation was omitted from source ancestry validation')
     final = {item['path']: item for item in value['files'] if item['type'] == 'file' and item['size']}
-    origins = {}
+    origins, observed = {}, {}
     for name, state in states.items():
         if name in final and state['current'] == byte_identity(final[name]):
-            origins[name] = {'input': state['input'], 'output': {'path': name, **state['current']}}
+            target = observed if state['input'].get('kind') == 'observed-input' else origins
+            target[name] = {'input': state['input'], 'output': {'path': name, **state['current']}}
         elif name in final:
             uncertain[name] = 'Final bytes changed after the last recorded transformation'
-    return {'origins': origins, 'unresolved': uncertain, 'producerSources': value['producerSources']}
+    return {'origins': origins, 'observedOrigins': observed,
+            'observedPaths': sorted(observed_paths & set(final)),
+            'unresolved': uncertain, 'producerSources': value['producerSources']}
+
+
+def bind_observed_inputs(observations, receipts):
+    """Bind first observed bytes only to one independently verified producer.
+
+    The caller must validate receipts first. No source blob, filename heuristic,
+    or declaration of a copied path can replace a matching actual build output.
+    """
+    result = copy.deepcopy(observations)
+    outputs = {}
+    for identifier, receipt in receipts.items():
+        for output in receipt['outputs']:
+            outputs.setdefault((output['size'], output['sha256']), []).append(
+                {'receipt': identifier, 'output': output['path']})
+    for name in observations['observedPaths']:
+        result['origins'].pop(name, None)
+        candidate = observations['observedOrigins'].get(name)
+        if candidate is None:
+            result['unresolved'][name] = 'The first observed input lost its continuous recorded transformation chain'
+            continue
+        matches = outputs.get((candidate['input']['size'], candidate['input']['sha256']), [])
+        if len(matches) == 1:
+            result['origins'][name] = {**candidate, 'producer': matches[0]}
+        else:
+            result['unresolved'][name] = ('No independently verified original build output matches the first observation'
+                                         if not matches else 'The first observation matches multiple distinct original build outputs')
+    return result

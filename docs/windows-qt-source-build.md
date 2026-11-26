@@ -52,6 +52,31 @@ Qttools 源由新空 workspace 中的受控 Git 操作取得，完整 commit 与
 origin 精确匹配；脚本不 reset、clean 或修补这些原输入。所有 source build receipts
 使用同一 `source_receipts.py`，在配置前和构建结束后独立核对源树。
 
+Qttools 的固定 tree 还包含 `src/assistant/qlitehtml` gitlink，指向
+`180e3ebb22bb8d82a9bfe88bba46da8c28c9f2a2`。关闭 Assistant 构建不改变完整
+原始源码的范围。[该提交的原 `.gitmodules`](https://github.com/qt/qttools/blob/2bcebd46216b38bf66775a5d42b7f72c6501e686/.gitmodules)
+指定 `https://code.qt.io/playground/qlitehtml.git`。
+`build/package/source_submodules.py` 在 Qttools 第一次检出后，读取同一固定
+父提交的原 gitlink 和 `.gitmodules` blob，恢复其原始子仓库。后续子提交仍只能
+来自已固定父 tree；不跟踪分支，也不预填尚未读取的子提交 SHA。
+
+允许的官方仓库关系仅为 Qttools → qlitehtml →
+`https://code.qt.io/qt/qttools-litehtml.git`；后一地址也见
+[Qt 开发者对官方仓库的说明](https://lists.qt-project.org/pipermail/interest/2025-December/040397.html)。
+实际 `.gitmodules` 出现其他地址、未声明的 gitlink、重复路径或不匹配的
+checkout 时立即失败，不能用任意同名镜像代替。原生 runner 留存实际 commit /
+tree 原始对象、完整 gitlink 列表、`.gitmodules` 原件、逐层 fetch / checkout
+命令和结果。每个新子仓库在首次 checkout 前安装同一原始字节 policy，并在
+整个构建结束后再次验证；既有目录或输入不会被覆盖。
+
+离线 `tests/source_submodules_tests.py` 用真实 Git 对象和本地 fixture transport
+验证多层固定提交恢复、原 LF/CRLF、完整 source export、原始证据留存，以及
+地址、commit、policy 和既有输入异常时的拒绝。它不代表官方网络恢复或 Qt
+原生编译已经通过；实际官方子树、嵌套对象和工具运行结果由 CI 保留。
+标准相对 URL 按 [Git 的仓库目录规则](https://git-scm.com/docs/git-submodule)
+解析后仍须精确匹配这些官方地址，原地址与解析结果同时保留；上游 branch 字段
+仅作原始元数据记录，不能代替 parent tree 中的完整 commit。
+
 ### 原始 Git 字节的检出配置
 
 此源码构建采用 `original-git-blob-bytes-v1`：在全新独立 Git 仓库第一次
