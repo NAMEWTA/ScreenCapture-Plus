@@ -81,6 +81,7 @@ void WinSetting::layout()
         contentWidth = width;
         content->setWidth(width);
     }
+    if (content && menuIndex == 2) static_cast<WinSettingAbout*>(content)->setContentMetrics(width, compact);
     Ling::WinBase::layout();
 }
 

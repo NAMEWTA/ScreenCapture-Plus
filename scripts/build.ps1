@@ -6,6 +6,10 @@ param(
     [switch] $SkipRestore
 )
 . (Join-Path $PSScriptRoot 'BuildCommon.ps1')
+$productVersion = Get-ProductVersion
+if ($Version -and ((Get-ReleaseVersion $Version) -join '.') -cne "$productVersion.0") {
+    throw "Release $Version does not match build/version.json ($productVersion)."
+}
 Initialize-WindowsToolchain
 if (-not $SkipRestore) { & (Join-Path $PSScriptRoot 'restore.ps1') }
 
@@ -57,11 +61,6 @@ if ($nativeMatch) {
 
 $arguments = @((Join-Path $RepoRoot 'huhucapture.slnx'), '/m', '/nologo', '/verbosity:minimal',
     "/p:Configuration=$Configuration", '/p:Platform=x64', "/bl:$ArtifactsRoot/build-$Configuration.binlog")
-if ($Version) {
-    $parts = Get-ReleaseVersion $Version
-    $arguments += @("/p:VersionMajor=$($parts[0])", "/p:VersionMinor=$($parts[1])",
-        "/p:VersionPatch=$($parts[2])", "/p:VersionRevision=$($parts[3])")
-}
 & MSBuild.exe @arguments
 Assert-NativeSuccess 'Building huhucapture'
 $executable = Join-Path $ArtifactsRoot "bin/x64/$Configuration/huhucapture.exe"

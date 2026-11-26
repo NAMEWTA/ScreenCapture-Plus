@@ -54,6 +54,13 @@
     <ResourceCompile Include="..\..\resources\Resource.rc" />
     <Image Include="..\..\resources\logo.ico" />
     <None Include="..\..\resources\iconfont.ttf" />
+    <ClInclude Include="..\..\src\platform\windows\LegacyUpdateTask.h" />
+    <ClInclude Include="..\..\src\platform\FileCommitter.h" />
+    <ClInclude Include="..\..\src\platform\FileIdentity.h" />
+    <ClInclude Include="..\..\src\core\UpdatePolicy.h" />
+    <ClInclude Include="..\..\src\core\UpdateManifest.h" />
+    <ClInclude Include="..\..\src\core\UpdatePackageHeader.h" />
+    <ClInclude Include="..\..\src\core\ReleasePackage.h" />
     <ClInclude Include="..\..\resources\Version.h" />
   </ItemGroup>
   <ItemGroup>
@@ -67,6 +74,15 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\src\platform\windows\LegacyUpdateTask.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileIdentity.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\app\App.cpp" />
     <ClCompile Include="..\..\src\app\main.cpp" />
     <ClCompile Include="..\..\src\capture\CapLong.cpp" />

@@ -8,3 +8,9 @@
 *.md text eol=lf
 # Existing language resources are UTF-16; preserve their exact encoding/bytes.
 Lang/*.json -text
+
+# The single version source and generated inputs are byte-checked on both hosts.
+build/version.json text eol=lf
+build/windows/Version.props.in text eol=lf
+build/windows/Version.props text eol=lf
+VERSION text eol=lf

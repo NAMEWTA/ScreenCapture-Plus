@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "legacy-windows-bridge",
+  "tag": "v0.0.6",
+  "notes": "releases/v0.0.6.md",
+  "previousRelease": "v0.0.5"
+}
