@@ -384,9 +384,25 @@ relative path, size, SHA256 and mode. Original receipts and their executed paths
 remain byte-for-byte unchanged. Missing workspaces are explicitly reported;
 the index has no build-success field.
 
+The fixed packaging probe creates `.DirIcon -> runtime-probe.svg` in its
+`probe/AppDir`, and extraction preserves the same link under
+`probe/extract/squashfs-root`. These two exact locations retain their original
+link text, target-text hash and `lstat` identity in `knownProbeLinks`; the links
+are not followed or copied as files. Each target must be the unchanged regular
+112-byte SVG written by the producer, and its actual bytes are retained normally.
+This preserves the full payload inventory through ordinary-file artifact
+transport, including after relocation. Unknown links, other targets, changed
+icon bytes, directory aliases and changes during copying still fail.
+
+After restoring the fixed tools, the standalone workflow runs a real minimal
+AppImage packaging/extraction regression for this representation, with original
+receipts preserved and failure/tamper cases checked. That fixture uses the old
+official runtime only to verify retention; the new runtime still requires its
+independent full source build, link and execution checks.
+
 Files are limited to 64 MiB each, with at most 20,000 files and 256 MiB including
-the index. Exceeding a bound, selected links, changed input bytes or a changed
-copy fails retention. Unselected library aliases are not traversed. The index
+the index. Exceeding a bound, an unrecognized selected link, changed input bytes
+or a changed copy fails retention. Unselected library aliases are not traversed. The index
 is written only after the complete selected set and both sides of every copy
 have been rechecked. These diagnostic materials help inspect a failed or
 successful run when the complete archive exceeds a retrieval interface's size
