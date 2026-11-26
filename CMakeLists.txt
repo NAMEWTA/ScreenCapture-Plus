@@ -30,6 +30,9 @@ if(BUILD_TESTING)
     add_test(NAME source_receipts COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/source_receipts_tests.py")
     set_tests_properties(source_receipts PROPERTIES TIMEOUT 90)
+    add_test(NAME appimage_runtime_source COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/appimage_runtime_tests.py")
+    set_tests_properties(appimage_runtime_source PROPERTIES TIMEOUT 90)
     add_test(NAME application_receipts COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/application_receipts_tests.py")
     set_tests_properties(application_receipts PROPERTIES TIMEOUT 90)

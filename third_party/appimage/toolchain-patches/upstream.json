@@ -1,0 +1,137 @@
+{
+  "repository": "https://github.com/richfelker/musl-cross-make.git",
+  "commit": "5e8042e63de29f8473fc3b0b831a587ba284e1a8",
+  "scope": "Original upstream patches retained verbatim; source build uses the documented litecross entry with separately pinned archives.",
+  "patches": [
+    {
+      "path": "third_party/appimage/toolchain-patches/binutils-2.44/0001-j2.diff",
+      "upstreamPath": "patches/binutils-2.44/0001-j2.diff",
+      "blob": "95fde006f903c0450ead6dca2c034826f49c3f36"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/binutils-2.44/0002-sh-fdpic-pr31619.diff",
+      "upstreamPath": "patches/binutils-2.44/0002-sh-fdpic-pr31619.diff",
+      "blob": "9c57f39744a91f26ce74fc25308dc91d83b46999"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/binutils-2.44/0003-riscv-pie-symbol-binding.diff",
+      "upstreamPath": "patches/binutils-2.44/0003-riscv-pie-symbol-binding.diff",
+      "blob": "5de39defa233a05e40ddc0082ae2ce54e250d6f4"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/binutils-2.44/0004-s390x-pie-symbol-binding.diff",
+      "upstreamPath": "patches/binutils-2.44/0004-s390x-pie-symbol-binding.diff",
+      "blob": "6cfbf1e6d0b203f6fc878240c87e22c6a934a10b"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0001-ssp_nonshared.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0001-ssp_nonshared.diff",
+      "blob": "b00ca709108506f58c8d88bd9efed21787c79584"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0002-posix_memalign.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0002-posix_memalign.diff",
+      "blob": "7f67f3d7c7853109d6049a205a03719c4c8b56aa"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0003-libatomic-test-fix.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0003-libatomic-test-fix.diff",
+      "blob": "71a19e8d0ae34a8fd660027840c0ff9380f2b862"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0004-libgomp-test-fix.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0004-libgomp-test-fix.diff",
+      "blob": "a560f7be4bcb1f67f84b2698da06c6aa3198b132"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0005-libitm-test-fix.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0005-libitm-test-fix.diff",
+      "blob": "3abddbc47565877cd45459a3bdb42b7006c304ae"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0006-libvtv-test-fix.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0006-libvtv-test-fix.diff",
+      "blob": "060cc5814f4db41e35f38ec3b11fd5940a98d429"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0007-j2.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0007-j2.diff",
+      "blob": "71c4bac239359f4015f72472cf193ba3b90cbf5c"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0008-s390x-muslldso.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0008-s390x-muslldso.diff",
+      "blob": "d385f25f77bdffee6857eb9f9e36d14ebe86378d"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0009-microblaze-pr65649.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0009-microblaze-pr65649.diff",
+      "blob": "e733b5c63a049973999fd791c0ab09223f3104f3"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0010-ldbl128-config.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0010-ldbl128-config.diff",
+      "blob": "04b88a0c2b040b82b6b0d6dd0e864f85546d2726"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0011-m68k.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0011-m68k.diff",
+      "blob": "79a15d161b38077aef7d3699a3d3696a58762577"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0012-static-pie.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0012-static-pie.diff",
+      "blob": "3e89ebc8d13689612f6935b551373c433ee6f580"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0013-invalid-tls-model.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0013-invalid-tls-model.diff",
+      "blob": "ac2d56bcf89609f95e7b872386a189c3ca6e4406"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0014-fix-gthr-weak-refs-for-libgcc.patch",
+      "upstreamPath": "patches/gcc-9.4.0/0014-fix-gthr-weak-refs-for-libgcc.patch",
+      "blob": "56291a2093aa0cab54cd9491a4c246175ed22b32"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0015-riscv-tls-copy-relocs.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0015-riscv-tls-copy-relocs.diff",
+      "blob": "566be719eae9a9378b5e0f2b756155fb52e5d47f"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0016-libstdc++-futex-time64.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0016-libstdc++-futex-time64.diff",
+      "blob": "08f6261d1e820bf68b11a37636d77be10dde41ba"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0018-m68k-sqrt.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0018-m68k-sqrt.diff",
+      "blob": "5d46272eb20a87228562c741c00ef2fa0e0e6301"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0019-broken-builtin-memcmp.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0019-broken-builtin-memcmp.diff",
+      "blob": "84d8b3a9e1de512facd68bed3a0a948352eb57e0"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0020-sh-fdpic-pr114641.diff",
+      "upstreamPath": "patches/gcc-9.4.0/0020-sh-fdpic-pr114641.diff",
+      "blob": "988528e84351773e573ba5008f921fed19ac81db"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/musl-1.2.6/cve-2026-107891.diff",
+      "upstreamPath": "patches/musl-1.2.6/cve-2026-107891.diff",
+      "blob": "3e27612c90a6eed83ffb77ad36c5ec0a38acf97d"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/musl-1.2.6/cve-2026-40200.diff",
+      "upstreamPath": "patches/musl-1.2.6/cve-2026-40200.diff",
+      "blob": "992d3ab4103616308c82fa5e0e841a30092be7e5"
+    },
+    {
+      "path": "third_party/appimage/toolchain-patches/musl-1.2.6/cve-2026-6042.diff",
+      "upstreamPath": "patches/musl-1.2.6/cve-2026-6042.diff",
+      "blob": "9b39420ea3c5103e1bdc43f18438f3b35366e8ce"
+    }
+  ]
+}

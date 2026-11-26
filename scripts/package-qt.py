@@ -65,6 +65,64 @@ def execution_api():
     return module
 
 
+def runtime_source_api():
+    path = ROOT/'build/package/appimage_runtime.py'
+    module = types.ModuleType('huhucapture_actual_appimage_runtime')
+    module.__file__ = str(path)
+    exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+    return module
+
+
+def select_source_runtime(directory, workspace, paths, execution):
+    """Use only a complete actual producer; retain the official tool pins too."""
+    api = runtime_source_api()
+    directory = directory.resolve(strict=True)
+    report, runtime, notice = api.verify_build(directory)
+    destination = workspace/'source-runtime'
+    destination.mkdir()
+    chosen, license_file = destination/'runtime-x86_64', destination/'LICENSE.runtime-sources'
+    copy_exclusive(runtime, chosen); chosen.chmod(0o755)
+    copy_exclusive(notice, license_file)
+    execution.retain_record(directory/'build-info.json')
+    execution.retain_record(ROOT/'build/package/appimage_runtime.py')
+    execution.retain_record(next(item['receipt']['path'] for item in report['receipts'] if item['id']=='appimage-runtime'))
+    paths['appimageRuntime'], paths['appimageRuntimeLicense'] = chosen, license_file
+    return {'schemaVersion':1, 'kind':'huhucapture-source-built-runtime-selection',
+            'directory':str(directory), 'buildInfo':meta.descriptor(directory/'build-info.json'),
+            'runtime':meta.descriptor(chosen), 'notice':meta.descriptor(license_file),
+            'runtimeCommit':report['runtimeCommit'], 'runtimePath':'work/source-runtime/runtime-x86_64',
+            'noticePath':'work/source-runtime/LICENSE.runtime-sources'}
+
+
+def verify_runtime_selection(stage, selection, execution):
+    if selection is None:
+        return
+    meta.require(selection.get('schemaVersion')==1 and selection.get('kind')=='huhucapture-source-built-runtime-selection' and
+                 selection.get('runtimePath')=='work/source-runtime/runtime-x86_64' and
+                 selection.get('noticePath')=='work/source-runtime/LICENSE.runtime-sources',
+                 'Unknown or escaped source-built runtime selection')
+    api = runtime_source_api()
+    directory = Path(selection['directory'])
+    report, runtime, notice = api.verify_build(directory)
+    chosen, copied_notice = stage/selection['runtimePath'], stage/selection['noticePath']
+    meta.require(selection['buildInfo']==meta.descriptor(directory/'build-info.json') and
+                 selection['runtimeCommit']==report['runtimeCommit'] and
+                 meta.descriptor(chosen)==selection['runtime']==meta.descriptor(runtime) and
+                 meta.descriptor(copied_notice)==selection['notice']==meta.descriptor(notice),
+                 'The selected runtime/notice no longer matches its exact actual source-build output')
+    index = selection['commandIndex']
+    meta.require(type(index) is int and 0<=index<len(execution['commands']), 'Runtime embedding command is missing')
+    command, actual = execution['commands'][index], execution['executions'][index]
+    image = stage/'artifacts'/selection['artifactName']
+    lock = meta.json_read(ROOT/'build/package/dependencies.lock.json')['tools']['appimagetool']
+    meta.require(Path(selection['artifactName']).name==selection['artifactName'] and
+                 command[1:]==['--runtime-file', str(chosen), '--comp', 'zstd', '--mksquashfs-opt', '-processors',
+                     '--mksquashfs-opt', '1', str(stage/'payloads/appimage'), str(image)] and
+                 all(actual['tool'][key]==lock[key] for key in ('size','sha256')) and
+                 selection['embedding']==api.runtime_embedding(chosen,image),
+                 'Final AppImage is not the exact source runtime with its recorded fixed-packager transformation')
+
+
 def run(arguments, *, cwd=None, env=None, capture=False):
     if _execution_log is not None:
         # The shared producer recorder writes actual tool bytes, argv, exit
@@ -468,6 +526,7 @@ def prepare(args):
     output=stage/'artifacts'; output.mkdir()
     workspace=stage/'work'; workspace.mkdir()
     packages, extra_assets, transforms, deployment_stages = [], [], [], []
+    runtime_selection = None
     execution=execution_api().ExecutionLog(stage/'executions',platform,Path(__file__).resolve())
     execution.retain_record(ROOT/'build/package/dependencies.lock.json')
     execution.retain_record(stage/'installed-input-inventory.json')
@@ -476,6 +535,7 @@ def prepare(args):
     _file_lineage=lineage
     try:
         if platform == 'windows':
+            meta.require(getattr(args,'appimage_runtime_build',None) is None, 'A Linux runtime source build cannot select Windows packaging inputs')
             portable=payloads/'portable-zip'; copy_package_tree(installed,portable); marker(portable,'portable-zip')
             installer=payloads/'installer'; copy_package_tree(installed,installer); marker(installer,'installer')
             meta.audit_tree(portable,'portable-zip',development=args.development)
@@ -492,6 +552,11 @@ def prepare(args):
         else:
             meta.require(args.tools is not None and args.qmake is not None, 'Linux requires verified pinned packaging tools and the matching Qt qmake')
             paths,provenance=verify_tools(args.tools,workspace/'tools')
+            if getattr(args,'appimage_runtime_build',None) is not None:
+                runtime_selection=select_source_runtime(args.appimage_runtime_build,workspace,paths,execution)
+                provenance.append({'name':'appimageRuntimeSourceBuild',
+                    'runtimeCommit':runtime_selection['runtimeCommit'],
+                    'runtime':runtime_selection['runtime'], 'buildInfo':runtime_selection['buildInfo']})
             qmake=args.qmake.resolve()
             meta.require(run([qmake,'-query','QT_VERSION'],capture=True).strip() == build['qtVersion'], 'Packager Qt SDK does not match the actual binary')
             appdir=payloads/'appimage'; first_command=len(execution.commands)
@@ -513,7 +578,11 @@ def prepare(args):
             extra_assets.append(meta.descriptor(symbol_path))
             deb_path=output/meta.asset_name(version,'deb'); linux_deb(appdir,deb_path,workspace,version,payloads/'deb')
             image_path=output/meta.asset_name(version,'appimage')
+            runtime_command=len(execution.commands)
             run([paths['appimagetool'],'--runtime-file',paths['appimageRuntime'],'--comp','zstd','--mksquashfs-opt','-processors','--mksquashfs-opt','1',appdir,image_path],env=environment)
+            if runtime_selection is not None:
+                runtime_selection.update(commandIndex=runtime_command,artifactName=image_path.name,
+                    embedding=runtime_source_api().runtime_embedding(paths['appimageRuntime'],image_path))
             meta.require(meta.machine(image_path) == 'linux', 'AppImage has the wrong outer runtime architecture')
             with image_path.open('rb') as stream:
                 stream.seek(8); meta.require(stream.read(3)==b'AI\x02','AppImage type-2 magic is missing')
@@ -541,7 +610,8 @@ def prepare(args):
         {'buildIdentity':{key:value for key,value in build.items() if key != 'packagingTools'},
          'installedInput':original},
         {'deploymentTreeSha256':collector.tree_digest(files),'files':files,'products':products,
-         'artifacts':[*packages,*extra_assets],'deploymentStages':deployment_stages,'fileTransformations':file_transformations})
+         'artifacts':[*packages,*extra_assets],'deploymentStages':deployment_stages,'fileTransformations':file_transformations,
+         'runtimeSelection':runtime_selection})
     meta.json_write(stage/'transformations.json',{'schemaVersion':1, 'kind':'huhucapture-package-transformations',
         'buildIdentity':{key:value for key,value in build.items() if key != 'packagingTools'},
         'installedInput':meta.descriptor(stage/'installed-input-inventory.json'),
@@ -550,11 +620,13 @@ def prepare(args):
         'executionInventory':collector.inventory(stage/'executions'),
         'deploymentStages':deployment_stages,
         'fileTransformations':file_transformations,
+        'runtimeSelection':runtime_selection,
         'deploymentTreeSha256':collector.tree_digest(files), 'products':products,
         'artifacts':[*packages,*extra_assets]})
     prepared={'schemaVersion':1,'kind':'huhucapture-prepared-packages',
               'intent':'development' if args.development else 'release','build':build,
               'minimumSystem':args.minimum_system,'products':products,
+              'runtimeSelection':runtime_selection,
               'packages':packages,'additionalAssets':extra_assets,
               'deployment':{'files':files,'treeSha256':collector.tree_digest(files),'products':products},
               'transformations':meta.descriptor(stage/'transformations.json')}
@@ -649,6 +721,12 @@ def verify_prepared(stage: Path):
     meta.require(meta.descriptor(stage/'transformations.json')==prepared['transformations'],
                  'Actual packaging transformation records changed')
     transformations,recorded=verify_transformations(stage,build['platform'])
+    selection=prepared.get('runtimeSelection')
+    meta.require(transformations.get('runtimeSelection')==selection and
+                 recorded['outputs'].get('runtimeSelection')==selection and
+                 (selection is None or build['platform']=='linux'),
+                 'Original runtime selection differs from the frozen packaging execution')
+    verify_runtime_selection(stage,selection,recorded)
     original=meta.json_read(stage/'installed-input-inventory.json',32*1024*1024)
     identity={key:value for key,value in build.items() if key != 'packagingTools'}
     meta.require(transformations.get('buildIdentity')==identity and
@@ -922,6 +1000,8 @@ def main():
             pack.add_argument('--source-bundle',type=Path);pack.add_argument('--source-manifest',type=Path)
         pack.add_argument('--minimum-system',required=True)
         pack.add_argument('--tools',type=Path);pack.add_argument('--qmake',type=Path);pack.add_argument('--symbols',type=Path)
+        pack.add_argument('--appimage-runtime-build',type=Path,
+            help='Completed native runtime source-build workspace; verifies every actual source/static input and output before selecting it')
         pack.add_argument('--nsis-installer',type=Path,help='Exact reviewed NSIS 3.11 distribution, extracted without executing setup')
         pack.add_argument('--development',action='store_true',help='Explicit non-release intent; never promotable to a formal release')
     finish=commands.add_parser('finalize',help='Verify frozen payloads and complete sources, then write platform metadata without repacking')

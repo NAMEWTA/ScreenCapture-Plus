@@ -158,6 +158,21 @@ def tree_digest(files):
     return hashlib.sha256(canonical(files)).hexdigest()
 
 
+def recognizable_source(identifier, pin, files):
+    if any(Path(entry['path']).suffix.lower() in ('.c', '.cc', '.cpp', '.h', '.hpp', '.rs', '.ts', '.s')
+           for entry in files if entry['type'] == 'file'):
+        return True
+    # Canonical musl-cross-make consists of build scripts and patches. Retain
+    # the complete exact Git source; do not invent a C file or silently omit
+    # the build system used to produce the compiler/CRT/static libraries.
+    if identifier == 'appimage-toolchain-build' and pin and pin.get('repository') == \
+            'https://github.com/richfelker/musl-cross-make.git' and \
+            pin.get('commit') == '5e8042e63de29f8473fc3b0b831a587ba284e1a8':
+        names = {entry['path'] for entry in files if entry['type'] == 'file' and entry['size']}
+        return {'Makefile', 'litecross/Makefile', 'LICENSE', 'cowpatch.sh'} <= names
+    return False
+
+
 def git_environment():
     environment = os.environ.copy()
     for key in tuple(environment):
@@ -798,8 +813,7 @@ class Collector:
             path = self.retain(identifier + "-source-sbom", item["sourceSbom"])
             verify_source_spdx(path, destination)
             provenance["sourceSbom"] = self.materials[identifier + "-source-sbom"]
-        if not any(Path(entry["path"]).suffix.lower() in (".c", ".cc", ".cpp", ".h", ".hpp", ".rs", ".ts", ".s")
-                   for entry in files if entry["type"] == "file"):
+        if not recognizable_source(identifier, pin, files):
             self.gap(identifier + ": archive/checkout has no recognizable native/module source files")
         self.component(identifier, provenance, files, None if identifier in COMMON | LINUX else item.get("family"))
 

@@ -93,6 +93,276 @@
       }
     }
   },
+  "runtimeSourceBuild": {
+    "schemaVersion": 1,
+    "target": "x86_64-linux-musl",
+    "configuration": "New native static PIE from original source; not the previous official asset bytes",
+    "sources": {
+      "appimage-musl": {
+        "version": "1.2.6",
+        "archivePrefix": "musl-1.2.6",
+        "sourceArchive": {
+          "url": "https://musl.libc.org/releases/musl-1.2.6.tar.gz",
+          "sha256": "d585fd3b613c66151fc3249e8ed44f77020cb5e6c1e635a616d3f9f82460512a",
+          "maximumBytes": 268435456,
+          "sha1": "d52bd74e07ae3d4057787585753580fc7479289f"
+        },
+        "crossMakeHashFile": "hashes/musl-1.2.6.tar.gz.sha1",
+        "patches": [
+          {
+            "path": "third_party/appimage/toolchain-patches/musl-1.2.6/cve-2026-107891.diff",
+            "sha256": "ab830244eaf83dbe3add94587dc8ebe0c8255d0e77f24784690b67a01725b003"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/musl-1.2.6/cve-2026-40200.diff",
+            "sha256": "6822766bc6d7fd21cae56c957533055712b2238656a05cd9641d2e0bcfe85a12"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/musl-1.2.6/cve-2026-6042.diff",
+            "sha256": "444fa70e52ca158fb7d4bad560637790bbf8f72e80b82fff840dd66fa83091e3"
+          }
+        ]
+      },
+      "appimage-gcc": {
+        "version": "9.4.0",
+        "archivePrefix": "gcc-9.4.0",
+        "sourceArchive": {
+          "url": "https://ftp.gnu.org/gnu/gcc/gcc-9.4.0/gcc-9.4.0.tar.xz",
+          "sha256": "c95da32f440378d7751dd95533186f7fc05ceb4fb65eb5b85234e6299eb9838e",
+          "maximumBytes": 268435456,
+          "sha1": "bf6d6480fb32e5a28dac849449f533a84d4e6547"
+        },
+        "crossMakeHashFile": "hashes/gcc-9.4.0.tar.xz.sha1",
+        "patches": [
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0001-ssp_nonshared.diff",
+            "sha256": "151fbaab62688fb06f852ce25214e0fa2ad7489b469d545e1308ecb4e6414f65"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0002-posix_memalign.diff",
+            "sha256": "f06020d013c78e0ea25cd5ada1d939d00bb378fe9010cc55341a4e4f9d3637f6"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0003-libatomic-test-fix.diff",
+            "sha256": "64bc767ac9183c26f3732ad39a397bddd1d4946730adad023c021474d97e47b8"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0004-libgomp-test-fix.diff",
+            "sha256": "93ba376c0161b78d07524ce9f76586f7020b14ddc5512096667897996b4c420f"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0005-libitm-test-fix.diff",
+            "sha256": "339b78ba62588fe537d0e4e115a41c1c92ac25e21eddefc914dde223589a14be"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0006-libvtv-test-fix.diff",
+            "sha256": "67a00cf9a5135dbe742bc154346d6bc7a1d7b51988512832bbc2cf73ca53a00b"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0007-j2.diff",
+            "sha256": "cbd148ea2dc5ee9c93a2566d03aa72a82b189bf1b1f17cd41ad6e24556050f30"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0008-s390x-muslldso.diff",
+            "sha256": "e6356702c0500336bb784773c3b16672a2f42626a3f3d9d996a1feca2b4552ef"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0009-microblaze-pr65649.diff",
+            "sha256": "74fbb826962f286ad7d7ebef76abba3753d9f0934936c6f1870a3fa94b30b8d4"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0010-ldbl128-config.diff",
+            "sha256": "ff1c9835da41b0cb0b92a8a02f8f88069fdac8895cfdeaa61d20e8481b6b4dc1"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0011-m68k.diff",
+            "sha256": "57be14fb92c38a0e5554dcfaa2d8fbbd3757170b7387cd6a0bc12c38df03bcf1"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0012-static-pie.diff",
+            "sha256": "ff631c4442871af7ef126deb0c2fd7071eae1b9418f63f970a11a2f77fcfe200"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0013-invalid-tls-model.diff",
+            "sha256": "62c995fd88fc3713938a1e76facc9ba28f05b61e59e0d20ad9685afbef66a0a7"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0014-fix-gthr-weak-refs-for-libgcc.patch",
+            "sha256": "3cee94397ff90d7f360d16b3fb803a805fcf5c70c765e9567f49f5b87070c137"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0015-riscv-tls-copy-relocs.diff",
+            "sha256": "f401cdebd3dc85f1ce102ffc34682cdd493696f69d8c63091289af88c88abe4e"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0016-libstdc++-futex-time64.diff",
+            "sha256": "d8821de7a70a7054e0334da812972ab1a92642d610aaaa023d342568b265b270"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0018-m68k-sqrt.diff",
+            "sha256": "dd0662ab722400e36bcc59a8f5b00fe7a8184d8c01858e169c493eb66179eb6e"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0019-broken-builtin-memcmp.diff",
+            "sha256": "1cb2b0e0d2d108348f93951c770260c9b0229dd7949277e888ba3e479ed1aaae"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0020-sh-fdpic-pr114641.diff",
+            "sha256": "29037ce2782f2af2aa0225326a1c645538139f3feaa1c238037699edc12f78f2"
+          }
+        ]
+      },
+      "appimage-binutils": {
+        "version": "2.44",
+        "archivePrefix": "binutils-2.44",
+        "sourceArchive": {
+          "url": "https://ftp.gnu.org/gnu/binutils/binutils-2.44.tar.gz",
+          "sha256": "0cdd76777a0dfd3dd3a63f215f030208ddb91c2361d2bcc02acec0f1c16b6a2e",
+          "maximumBytes": 268435456,
+          "sha1": "568ba0a286cf79520572c1597a203c1aafd462de"
+        },
+        "crossMakeHashFile": "hashes/binutils-2.44.tar.gz.sha1",
+        "patches": [
+          {
+            "path": "third_party/appimage/toolchain-patches/binutils-2.44/0001-j2.diff",
+            "sha256": "cf5d7590bfe6cb9a21bed0515cb28749928f2e6ecab85b227bade2436197bb3e"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/binutils-2.44/0002-sh-fdpic-pr31619.diff",
+            "sha256": "aeaeace7761824ab126506330e72e2ffdf205440af83d485b04d6fa403f7168d"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/binutils-2.44/0003-riscv-pie-symbol-binding.diff",
+            "sha256": "2581d2080b98c7d3d94783efb45ac17b3aba29e51c11eed8a0e5eba6877d8560"
+          },
+          {
+            "path": "third_party/appimage/toolchain-patches/binutils-2.44/0004-s390x-pie-symbol-binding.diff",
+            "sha256": "15f00d52ead1717f9efb1ab8fb3559a81aeb623018576344d3bb3b58747ab420"
+          }
+        ]
+      },
+      "appimage-gmp": {
+        "version": "6.3.0",
+        "archivePrefix": "gmp-6.3.0",
+        "sourceArchive": {
+          "url": "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
+          "sha256": "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898",
+          "maximumBytes": 268435456,
+          "sha1": "b4043dd2964ab1a858109da85c44de224384f352"
+        },
+        "crossMakeHashFile": "hashes/gmp-6.3.0.tar.xz.sha1"
+      },
+      "appimage-mpfr": {
+        "version": "4.2.2",
+        "archivePrefix": "mpfr-4.2.2",
+        "sourceArchive": {
+          "url": "https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz",
+          "sha256": "b67ba0383ef7e8a8563734e2e889ef5ec3c3b898a01d00fa0a6869ad81c6ce01",
+          "maximumBytes": 268435456,
+          "sha1": "a63a264b273a652e27518443640e69567da498ce"
+        },
+        "crossMakeHashFile": "hashes/mpfr-4.2.2.tar.xz.sha1"
+      },
+      "appimage-mpc": {
+        "version": "1.3.1",
+        "archivePrefix": "mpc-1.3.1",
+        "sourceArchive": {
+          "url": "https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz",
+          "sha256": "ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8",
+          "maximumBytes": 268435456,
+          "sha1": "bac1c1fa79f5602df1e29e4684e103ad55714e02"
+        },
+        "crossMakeHashFile": "hashes/mpc-1.3.1.tar.gz.sha1"
+      },
+      "appimage-linux-headers": {
+        "version": "4.19.88-2",
+        "archivePrefix": "linux-headers-4.19.88-2",
+        "sourceArchive": {
+          "url": "https://ftp.barfooze.de/pub/sabotage/tarballs/linux-headers-4.19.88-2.tar.xz",
+          "sha256": "dc7abf734487553644258a3822cfd429d74656749e309f2b25f09f4282e05588",
+          "maximumBytes": 268435456,
+          "sha1": "9794861f8ec91398d07694fe8a5651f9a466b967"
+        },
+        "crossMakeHashFile": "hashes/linux-headers-4.19.88-2.tar.xz.sha1"
+      },
+      "appimage-fuse": {
+        "version": "3.15.0",
+        "archivePrefix": "fuse-3.15.0",
+        "sourceArchive": {
+          "url": "https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz",
+          "sha256": "70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0",
+          "maximumBytes": 268435456
+        },
+        "patches": [
+          {
+            "path": "third_party/appimage/libfuse-mount.patch",
+            "sha256": "1c7fd9e26717545a476b226b083a9f9d05676c180edbd71a04bbd8a73599dc44"
+          }
+        ]
+      },
+      "appimage-squashfuse": {
+        "version": "0.5.2",
+        "archivePrefix": "squashfuse-0.5.2",
+        "sourceArchive": {
+          "url": "https://github.com/vasi/squashfuse/archive/0.5.2.tar.gz",
+          "sha256": "db0238c5981dabbd80ee09ae15387f390091668ca060a7bc38047912491443d3",
+          "maximumBytes": 268435456
+        }
+      },
+      "appimage-toolchain-build": {
+        "repository": "https://github.com/richfelker/musl-cross-make.git",
+        "commit": "5e8042e63de29f8473fc3b0b831a587ba284e1a8"
+      },
+      "appimage-mimalloc": {
+        "repository": "https://github.com/microsoft/mimalloc.git",
+        "commit": "8c532c32c3c96e5ba1f2283e032f69ead8add00f",
+        "tag": "v2.1.7",
+        "tagObject": "7c5c43f58b51baace21fadaeed24fdfeb2977ed0"
+      },
+      "appimage-zstd": {
+        "repository": "https://github.com/meta/zstd.git",
+        "commit": "794ea1b0afca0f020f4e57b6732332231fb23c70",
+        "tag": "v1.5.6",
+        "tagObject": "35016bc1c0b9a2f7121b7ecc312100aad7d9f2ad"
+      },
+      "appimage-zlib": {
+        "repository": "https://github.com/madler/zlib.git",
+        "commit": "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf",
+        "tag": "v1.3.1",
+        "tagObject": "925af44f3cde53c6b076611c297850091b5dc7bb"
+      }
+    },
+    "toolchainConfiguration": {
+      "common": [
+        "--disable-nls"
+      ],
+      "gcc": [
+        "--disable-libquadmath",
+        "--disable-decimal-float",
+        "--disable-libitm",
+        "--disable-fixed-point",
+        "--disable-lto",
+        "--without-isl",
+        "--disable-shared"
+      ],
+      "musl": [
+        "--disable-shared"
+      ]
+    },
+    "runtimeLinkProfile": [
+      "-std=gnu99",
+      "-Os",
+      "-D_FILE_OFFSET_BITS=64",
+      "-fPIE",
+      "-ffunction-sections",
+      "-fdata-sections",
+      "-Wl,--gc-sections",
+      "-static",
+      "-Wall",
+      "-Werror",
+      "-static-pie"
+    ]
+  },
   "windowsTools": {
     "nsis": {
       "version": "3.11",
