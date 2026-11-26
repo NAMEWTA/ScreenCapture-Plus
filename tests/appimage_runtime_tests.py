@@ -198,6 +198,72 @@ class NativeFileTests(unittest.TestCase):
         subprocess.run(['ar','rcsT',thin,self.object], check=True, capture_output=True)
         with self.assertRaisesRegex(ValueError,'complete regular'): HELPER['archive_members'](thin)
 
+    def test_only_the_exact_optional_eh_not_found_result_avoids_a_file_lookup(self):
+        prefix = self.root/'installed'; prefix.mkdir()
+        archive = prefix/'libgcc.a'
+        subprocess.run(['ar','rcs',archive,self.object], check=True, capture_output=True)
+        installed = {'libgcc.a': {**HELPER['file_identity'](archive), 'component':'actual-fixture-copy'}}
+        self.assertIsNone(HELPER['compiler_file_result']('libgcc_eh.a','libgcc_eh.a',prefix,installed))
+        result = HELPER['compiler_file_result']('libgcc.a',str(archive),prefix,installed)
+        self.assertEqual(result['producerOutput'],'libgcc.a')
+        for name,reported in (('libgcc.a','libgcc.a'),('rcrt1.o','rcrt1.o'),
+                              ('libgcc_eh.a','other.a'),('libgcc_eh.a','lib/libgcc_eh.a')):
+            with self.assertRaisesRegex(ValueError,'owned installed file'):
+                HELPER['compiler_file_result'](name,reported,prefix,installed)
+        with self.assertRaisesRegex(ValueError,'escaped'):
+            HELPER['compiler_file_result']('libgcc.a',str(self.object),prefix,installed)
+        separate = prefix/'libgcc_eh.a'; shutil.copyfile(archive,separate)
+        installed[separate.name] = {**HELPER['file_identity'](separate), 'component':'actual-fixture-copy'}
+        self.assertIsNotNone(HELPER['compiler_file_result']('libgcc_eh.a',str(separate),prefix,installed))
+        separate.write_bytes(separate.read_bytes()+b'changed actual input')
+        with self.assertRaisesRegex(ValueError,'matching actual installation'):
+            HELPER['compiler_file_result']('libgcc_eh.a',str(separate),prefix,installed)
+
+    def test_real_static_relink_accounts_for_all_copied_inputs_and_archive_members(self):
+        # These are actual host compiler outputs copied into a fixture prefix,
+        # not a claim that the target musl compiler has been built locally.
+        prefix = self.root/'copied-host-inputs'; prefix.mkdir()
+        (prefix/'alias').mkdir()
+        installed, arguments = {}, []
+        for index,path in enumerate(HELPER['link_loads'](self.map.read_text())):
+            if path == self.object:
+                arguments.append(path)
+                continue
+            copied = prefix/(str(index)+'-'+path.name)
+            shutil.copyfile(path,copied)
+            installed[copied.name] = {**HELPER['file_identity'](copied), 'component':'actual-fixture-copy'}
+            arguments.append(prefix/'alias'/('..')/copied.name if copied.suffix=='.a' else copied)
+        map_path, binary = self.root/'copied.map', self.root/'copied-probe'
+        subprocess.run(['gcc','-static-pie','-nostdlib','-Wl,--start-group',*arguments,'-Wl,--end-group',
+                        '-Wl,-Map='+str(map_path),'-o',binary], check=True, capture_output=True)
+        subprocess.run([binary], check=True, capture_output=True)
+        HELPER['inspect_elf'](binary,marked=False)
+        records = HELPER['toolchain_probe_inputs'](map_path,self.object,prefix,installed)
+        self.assertEqual({item['path'] for item in records},{str(path.resolve()) for path in arguments})
+        archives = [item for item in records if item['path'].endswith('.a')]
+        self.assertTrue(archives)
+        self.assertIn('/alias/../',map_path.read_text())
+        self.assertTrue(any(item['membersMentionedInMap'] for item in archives))
+        for item in archives:
+            self.assertEqual(item['members'],HELPER['archive_members'](Path(item['path'])))
+        removed = next(iter(installed)); missing = dict(installed); del missing[removed]
+        with self.assertRaisesRegex(ValueError,'matching actual installation'):
+            HELPER['toolchain_probe_inputs'](map_path,self.object,prefix,missing)
+        with self.assertRaisesRegex(ValueError,'outside its actual new installation'):
+            HELPER['toolchain_probe_inputs'](self.map,self.object,prefix,installed)
+
+    @unittest.skipUnless(shutil.which('g++'), 'The exception probe requires a real C++ compiler')
+    def test_real_exception_fixture_unwinds_and_its_host_inputs_are_not_target_evidence(self):
+        source = ROOT/'build/package/toolchain-eh-probe.cpp'
+        obj, binary, map_path = self.root/'exception.o', self.root/'exception', self.root/'exception.map'
+        subprocess.run(['g++',*HELPER['EH_COMPILE_FLAGS'],'-c',source,'-o',obj],check=True,capture_output=True)
+        subprocess.run(['g++','-static-pie',obj,'-Wl,-Map='+str(map_path),'-o',binary],check=True,capture_output=True)
+        HELPER['inspect_elf'](binary,marked=False)
+        subprocess.run([binary],check=True,capture_output=True)
+        prefix = self.root/'empty-target'; prefix.mkdir()
+        with self.assertRaisesRegex(ValueError,'outside its actual new installation'):
+            HELPER['toolchain_probe_inputs'](map_path,obj,prefix,{})
+
     def test_real_link_map_lists_crt_and_compiler_archives_and_unowned_inputs_fail(self):
         loads = HELPER['link_loads'](self.map.read_text())
         self.assertIn(self.object, loads)

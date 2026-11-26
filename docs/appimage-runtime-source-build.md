@@ -178,7 +178,7 @@ tamper checks explicitly, so this integration test cannot skip for a missing
 input:
 
 ```sh
-HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE=.deps/appimage-runtime-source/downloads/linux-headers-4.19.88-2.tar.xz \
+HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE=.deps/appimage-runtime-source/downloads/appimage-linux-headers-linux-headers-4.19.88-2.tar.xz \
   python tests/appimage_runtime_tests.py -v
 ```
 
@@ -216,6 +216,36 @@ command preserves its actual return code and logs, and no successful receipt is
 created for that failed producer. A final report claims build completion only
 after independent evidence validation succeeds.
 
+## Actual compiler support and exception handling
+
+The locked GCC 9.4.0 archive's `libgcc/Makefile.in` places `LIB2ADDEH` objects
+inside `libgcc.a` when shared target libraries are disabled. A separately named
+`libgcc_eh.a` is therefore not a universal installation requirement. The
+producer preserves the actual `-print-file-name` command and output for every
+queried support file. Only the exact unchanged `libgcc_eh.a` not-found response
+can mean that this separate archive is absent. Required CRT/libc/libgcc queries
+and any resolved EH archive still have to match the newly installed producer
+output, including its exact bytes and recorded installation owner.
+
+The installed target C++ compiler then compiles the original
+`build/package/toolchain-eh-probe.cpp`, links it as static PIE with a full GNU
+link map and trace, and executes it. The probe throws across a separate stack
+frame, checks the caught value, and requires that frame's destructor to have
+run. Its actual `LOAD` inputs must all be the probe object or unchanged outputs
+of this same new toolchain installation. Every archive is retained by identity
+and complete member inventory, with member mentions from the actual link map.
+Those observations preserve the original `bin/../lib/...` LOAD spellings while
+binding them to canonical installed identities. They do not infer unwinder
+placement from a library name or assert that every mentioned section survives.
+
+`toolchain-source-receipt/probe/toolchain-probe.json` binds the original source,
+object, executable, queries, map, input inventories and successful commands.
+Independent runtime verification checks it again against the real toolchain
+receipt. The original GCC Makefile and generated libgcc configuration are also
+retained. Failure to compile, link, execute, or account for any input still
+prevents a successful producer receipt. This compiler probe supplements the
+separate complete final runtime link closure; it is not part of the product.
+
 ## What the evidence establishes
 
 The successful workspace contains:
@@ -224,6 +254,7 @@ The successful workspace contains:
 | --- | --- |
 | `sources/`, `checkouts/`, `downloads/`, `source-inputs/` | Complete original inputs, source pins, per-file bytes and source-tree hashes |
 | `toolchain-source-receipt/` | Actual canonical toolchain commands, configuration records, logs and installation phase inventories |
+| `toolchain-source-receipt/probe/` | Actual target static-PIE exception execution, complete probe link inputs and compiler support queries |
 | `appimage-*-source-receipt/` | Actual separate static library producer records and outputs |
 | `runtime-source-receipt/` | Actual compile, link, strip, marker, native probe and output records |
 | `runtime-link.map` | The actual GNU link map, also accompanied by recorded linker trace output |
@@ -238,8 +269,8 @@ The successful workspace contains:
 All linker `LOAD` files must be regular static archives or objects inside an
 actual producer's recorded output. No host library is accepted by name. The
 toolchain receipt assigns installed outputs to the real musl/GCC/binutils/header
-installation commands and their before/after inventories. Thus CRT files and
-`libgcc.a`, `libgcc_eh.a`, or an actually selected `libatomic.a` have source
+installation commands and their before/after inventories. Thus every actually
+selected CRT file, `libgcc.a`, separate `libgcc_eh.a`, or `libatomic.a` has source
 ownership and hashes. Every actual archive member is hashed, including members
 not retained by section garbage collection. Link-map member mentions are
 recorded separately, without claiming every mentioned section survives.
@@ -263,6 +294,33 @@ for the field write.
 
 The probe covers compressed extraction and AppRun execution. It does not prove
 a FUSE desktop mount, screen capture, or the complete product's native behavior.
+
+### Separate bounded diagnostics
+
+The complete original source/build archive remains required. The standalone
+workflow additionally uploads `appimage-runtime-diagnostics-<sha>` from:
+
+```sh
+python scripts/retain-appimage-runtime-diagnostics.py \
+  --workspace .deps/appimage-runtime-source \
+  --output artifacts/appimage-runtime-diagnostics
+```
+
+This independent snapshot keeps original control/producer records, configuration,
+logs, the actual probe files, and selected complete compiler/libc/C++ archives
+and CRT objects. It does not copy the entire source tree or large compiler
+executables. `diagnostics.json` maps every original absolute path to its retained
+relative path, size, SHA256 and mode. Original receipts and their executed paths
+remain byte-for-byte unchanged. Missing workspaces are explicitly reported;
+the index has no build-success field.
+
+Files are limited to 64 MiB each, with at most 20,000 files and 256 MiB including
+the index. Exceeding a bound, selected links, changed input bytes or a changed
+copy fails retention. Unselected library aliases are not traversed. The index
+is written only after the complete selected set and both sides of every copy
+have been rechecked. These diagnostic materials help inspect a failed or
+successful run when the complete archive exceeds a retrieval interface's size
+limit; they never replace its full original source and build evidence.
 
 ## Select the actual result in packaging
 

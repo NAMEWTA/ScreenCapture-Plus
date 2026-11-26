@@ -38,6 +38,7 @@ jobs:
           python tests/source_receipts_tests.py -v
           python tests/source_checkout_tests.py -v
           python tests/source_bundle_tests.py -v
+          python tests/runtime_diagnostics_tests.py -v
       - name: Restore unchanged original reviewed packaging tools and source assets
         run: python scripts/restore-packaging-tools.py --platform linux --output .deps/runtime-packaging-tools
       - name: Build every runtime, musl, CRT and compiler-support input from fixed source
@@ -100,5 +101,20 @@ jobs:
           name: appimage-runtime-source-${{ github.sha }}
           path: artifacts/runtime-validation/
           compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain bounded original runtime diagnostics separately
+        if: always()
+        run: |
+          python scripts/retain-appimage-runtime-diagnostics.py \
+            --workspace .deps/appimage-runtime-source \
+            --output artifacts/appimage-runtime-diagnostics
+      - name: Upload original runtime queries, configuration and probe evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: appimage-runtime-diagnostics-${{ github.sha }}
+          path: artifacts/appimage-runtime-diagnostics/
+          compression-level: 6
           if-no-files-found: error
           retention-days: 14
