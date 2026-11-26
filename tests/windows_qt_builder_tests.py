@@ -83,6 +83,25 @@ class WindowsQtBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'release commit/tag object'):
             build['module_pins'](lock)
 
+    def test_module_tools_search_current_build_dlls_and_preserve_the_isolated_base_path(self):
+        reference = self.root / 'reference SDK'
+        workspace = self.root / 'new owned workspace'
+        prefix = workspace / 'install'
+        inherited = {'PATH': os.pathsep.join([str(reference / 'bin'), '/compiler tools', '/system tools']),
+                     'QT_ROOT_DIR': str(reference)}
+        with mock.patch.dict(os.environ, inherited):
+            base = build['clean_environment'](reference, prefix)
+        original = dict(base)
+        for module in ('qtbase', 'qtsvg', 'qttools', 'qttranslations'):
+            directory = workspace / (module + '-build')
+            actual = build['module_environment'](base, directory)
+            self.assertEqual(actual['PATH'], str(directory / 'bin') + os.pathsep + original['PATH'])
+            self.assertEqual(actual['PATH'].split(os.pathsep)[:2], [str(directory / 'bin'), str(prefix / 'bin')])
+            self.assertNotIn(str(reference / 'bin'), actual['PATH'].split(os.pathsep))
+            self.assertEqual({key: value for key, value in actual.items() if key != 'PATH'},
+                             {key: value for key, value in original.items() if key != 'PATH'})
+            self.assertEqual(base, original)
+
     def test_native_command_preserves_argument_boundaries_and_dynamic_crt_pair(self):
         source = self.root / 'sources with spaces/qtbase'
         target = self.root / 'new prefix'

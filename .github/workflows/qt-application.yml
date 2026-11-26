@@ -428,6 +428,50 @@ jobs:
           path: artifacts/packages/linux/
           if-no-files-found: error
           retention-days: 14
+      - name: Preserve independently downloadable Linux build diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qt-application-linux-diagnostics
+          path: |
+            .deps/qt-runtime-linux/build-info.json
+            .deps/qt-runtime-linux/icu-build/config.log
+            .deps/qt-runtime-linux/icu-build/config.status
+            .deps/qt-runtime-linux/icu-build/icudefs.mk
+            .deps/qt-runtime-linux/source-plan-fragment.json
+            .deps/qt-runtime-linux/control/*.json
+            .deps/qt-runtime-linux/control/logs/
+            .deps/qt-runtime-linux/*-source-receipt/*.json
+            .deps/qt-runtime-linux/*-source-receipt/logs/
+            .deps/qt-runtime-linux/*-build/CMakeCache.txt
+            .deps/qt-runtime-linux/*-build/CMakeFiles/CMakeConfigureLog.yaml
+            artifacts/qt-module-sources/restore-info.json
+            artifacts/qt-module-sources/*.git.log
+            artifacts/native-build-sources/execution/*.json
+            artifacts/native-build-sources/execution/logs/
+            artifacts/native-rust/build-info.json
+            artifacts/native-rust/source-execution/*.json
+            artifacts/native-rust/source-execution/logs/
+            artifacts/application-source-receipt/*.json
+            artifacts/application-source-receipt/logs/
+            artifacts/source-plan/linux/*.json
+            artifacts/source-complete/linux/*.json
+            artifacts/system-source-linux/system-sources.json
+            artifacts/launchpad-build-records-linux/*.json
+            artifacts/launchpad-build-records-linux.*.log
+            artifacts/launchpad-build-records-linux.exit-code.txt
+            artifacts/packages/linux-prepared/prepared.json
+            artifacts/packages/linux-prepared/source-deployment-inventory.json
+            artifacts/packages/linux-prepared/transformations.json
+            artifacts/packages/linux-prepared/executions/*.json
+            artifacts/packages/linux-prepared/executions/logs/
+            artifacts/cmake/application-linux/CMakeCache.txt
+            artifacts/cmake/application-linux/Testing/Temporary/
+            artifacts/cmake/application-runtime/CMakeCache.txt
+            artifacts/cmake/application-runtime/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: true
       - name: Preserve actual evidence and clearly marked development artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -776,6 +820,43 @@ jobs:
           path: artifacts/packages/windows/
           if-no-files-found: error
           retention-days: 14
+      - name: Preserve independently downloadable Windows build diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qt-application-windows-diagnostics
+          path: |
+            .deps/qt-runtime-windows/build-info.json
+            .deps/qt-runtime-windows/source-plan-fragment.json
+            .deps/qt-runtime-windows/control/*.json
+            .deps/qt-runtime-windows/control/logs/
+            .deps/qt-runtime-windows/*-source-receipt/*.json
+            .deps/qt-runtime-windows/*-source-receipt/logs/
+            .deps/qt-runtime-windows/*-build/CMakeCache.txt
+            .deps/qt-runtime-windows/*-build/CMakeFiles/CMakeConfigureLog.yaml
+            artifacts/qt-module-sources/restore-info.json
+            artifacts/qt-module-sources/*.git.log
+            artifacts/native-build-sources/execution/*.json
+            artifacts/native-build-sources/execution/logs/
+            artifacts/native-rust/build-info.json
+            artifacts/native-rust/source-execution/*.json
+            artifacts/native-rust/source-execution/logs/
+            artifacts/application-source-receipt/*.json
+            artifacts/application-source-receipt/logs/
+            artifacts/source-plan/windows/*.json
+            artifacts/source-complete/windows/*.json
+            artifacts/packages/windows-prepared/prepared.json
+            artifacts/packages/windows-prepared/source-deployment-inventory.json
+            artifacts/packages/windows-prepared/transformations.json
+            artifacts/packages/windows-prepared/executions/*.json
+            artifacts/packages/windows-prepared/executions/logs/
+            artifacts/cmake/application-windows/CMakeCache.txt
+            artifacts/cmake/application-windows/Testing/Temporary/
+            artifacts/cmake/application-runtime/CMakeCache.txt
+            artifacts/cmake/application-runtime/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: true
       - name: Preserve actual Windows results and development artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

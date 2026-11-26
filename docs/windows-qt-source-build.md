@@ -126,6 +126,18 @@ Qttools 只请求 Linguist 所需工具，关闭 QDoc、Designer、Assistant 等
 环境中旧 Qt 的 CMake 路径、插件路径及 host/toolchain 覆盖不参与新构建，后续模块
 只从新前缀解析 Qt；没有向原 SDK 目录写入。
 
+每个模块的配置、构建和安装命令还将该模块的 `build/bin` 放在受控 `PATH`
+首位，其后保留新的 `install/bin` 和原有编译器 / 系统路径。Qt 的
+[工具输出规则](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/cmake/QtToolHelpers.cmake)
+会将非主配置工具放入 `bin/Debug`，而匹配的 `Qt6Cored.dll` 位于 `bin`；
+[Windows DLL 搜索](https://learn.microsoft.com/windows/win32/dlls/dynamic-link-library-search-order)
+不会自动包含可执行文件的父目录。这样 Debug 的 `rcc` 在其依赖尚未安装时，
+可以加载本轮刚构建的库，不需要借用原 SDK 或更改动态 CRT。该路径只作用于
+当前模块的真实命令，不修改调用者环境；逐命令执行记录保留实际 `PATH`。
+`PATH` 是既有 schema 的可选执行环境字段，只记录本次子进程实际收到的值。
+旧记录中缺失的搜索路径保持未知，原 receipt / 执行记录及其哈希保持原样；
+环境字段增加本身不改变对应源码完整性的判定。
+
 每个 `<module>-source-receipt/` 保存配置前完整源清单、实际工具身份、命令参数、
 逐命令退出码/stdout/stderr、CMake/Ninja 配置和成功后产生的文件哈希。共享前缀
 只把本轮新生成或改变的文件计入该模块输出。配置选定的实际安装前缀也必须与

@@ -243,6 +243,16 @@ Windows 把 `--probe` 指向对应配置目录的 `.exe`。辅助脚本清除开
 
 完整发布前需要另外记录：从本次真实完整包运行的新下载器本地 HTTP 测试、同 SHA 双平台构建测试、干净 Windows 的安装/升级/卸载及 CRT 独立性、Ubuntu/Kubuntu 实际安装和 Portal/Wayland/X11 用户旅程、包内所有动态依赖和许可对应源码审核。Qt 首版进入 latest 后再跑真实 GitHub latest 下载烟测。原有单 EXE 更新器的桥接发行与跳过桥接的手动迁移说明依旧是独立门槛，不能由本文件或一次打包成功代替。
 
+## 单独取得构建诊断
+
+完整应用工作流另外上传 `qt-application-linux-diagnostics` 与
+`qt-application-windows-diagnostics`，保留本次实际 Qt / 原生 / 应用命令记录、
+日志、CMake 配置、源码计划与包装阶段报告。它们不包含完整源码归档或开发包，
+便于在完整证据包很大时单独定位失败；没有生成的记录不会补写为成功。
+原有 `qt-application-linux` / `qt-application-windows` 完整产物仍独立保留，
+正式来源核验、包验证和发布只使用各自要求的完整原始材料。诊断产物本身
+不能替代对应源码、生产者输出或完整 stage。
+
 ## 官方实现依据
 
 - [Qt CMake 部署运行依赖](https://doc.qt.io/qt-6/qt-deploy-runtime-dependencies.html)
