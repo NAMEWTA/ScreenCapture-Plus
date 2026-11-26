@@ -235,6 +235,18 @@ def probe_toolchain(build, prefix, installed, queries, environment):
     return path
 
 
+def toolchain_configuration(prefix, inputs, options):
+    # GNU Make expands these words directly into the configure shell command.
+    # A target-flags assignment containing spaces must remain one argument.
+    lines = ['TARGET = ' + TARGET, 'OUTPUT = ' + str(prefix),
+             'COMMON_CONFIG = ' + shlex.join(options['common']), 'GCC_CONFIG = ' + shlex.join(options['gcc']),
+             'MUSL_CONFIG = ' + shlex.join(options['musl'])]
+    for variable, component in (('GCC', 'gcc'), ('BINUTILS', 'binutils'), ('MUSL', 'musl'),
+                                ('GMP', 'gmp'), ('MPC', 'mpc'), ('MPFR', 'mpfr'), ('LINUX', 'linux-headers')):
+        lines.append(variable + '_SRCDIR = ' + str(inputs['appimage-' + component]['directory']))
+    return '\n'.join(lines) + '\n'
+
+
 def build_toolchain(workspace, inputs, specification, environment, jobs):
     directory, prefix = workspace / 'toolchain-build', workspace / 'toolchain'
     directory.mkdir()
@@ -245,15 +257,14 @@ def build_toolchain(workspace, inputs, specification, environment, jobs):
                   [inputs[name] for name in TOOLCHAIN_INPUTS], prefix)
     for program in ('gcc', 'g++', 'make', 'ar', 'as', 'ld', 'ranlib', 'awk', 'sed', 'perl', 'sh'):
         build.observe_tool(program, environment)
-    options = specification['toolchainConfiguration']
-    lines = ['TARGET = ' + TARGET, 'OUTPUT = ' + str(prefix),
-             'COMMON_CONFIG = ' + ' '.join(options['common']), 'GCC_CONFIG = ' + ' '.join(options['gcc']),
-             'MUSL_CONFIG = ' + ' '.join(options['musl'])]
-    for variable, component in (('GCC', 'gcc'), ('BINUTILS', 'binutils'), ('MUSL', 'musl'),
-                                ('GMP', 'gmp'), ('MPC', 'mpc'), ('MPFR', 'mpfr'), ('LINUX', 'linux-headers')):
-        lines.append(variable + '_SRCDIR = ' + str(inputs['appimage-' + component]['directory']))
     config = directory / 'config.mak'
-    config.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    config.write_text(toolchain_configuration(prefix, inputs, specification['toolchainConfiguration']), encoding='utf-8')
+    # Preserve the actual requested configuration and its original upstream
+    # rules even if a later library build or the target probe fails.
+    build.retain_record(config)
+    for name in ('configure.ac', 'configure', 'libgcc/Makefile.in',
+                 'libstdc++-v3/configure.ac', 'libstdc++-v3/configure'):
+        build.retain_record(inputs['appimage-gcc']['directory'] / name)
     makefile = inputs['appimage-toolchain-build']['directory'] / 'litecross/Makefile'
     command = ['make', '-f', str(makefile), '-j' + str(jobs)]
     build.run([*command, 'all'], cwd=directory, env=environment)
@@ -289,10 +300,10 @@ def build_toolchain(workspace, inputs, specification, environment, jobs):
                        'The actual new compiler selected an external compiler/linker program: ' + name)
         build.observe_tool(path, environment)
     probe = probe_toolchain(build, prefix, installed, queries, environment)
-    records = [config, directory / 'obj_musl/config.mak']
+    records = [directory / 'obj_musl/config.mak']
     records += sorted(directory.glob('obj_*/config.log')) + sorted(directory.glob('obj_*/config.status'))
-    records += [inputs['appimage-gcc']['directory'] / 'libgcc/Makefile.in']
-    records += [directory / 'obj_gcc' / TARGET / 'libgcc' / name for name in ('Makefile', 'config.log', 'config.status')]
+    records += [directory / 'obj_gcc' / TARGET / library / name
+                for library in ('libgcc', 'libstdc++-v3') for name in ('Makefile', 'config.log', 'config.status')]
     plan, report, receipt = build.finish(records, output_owners=owners)
     report['toolchainProbe'] = descriptor(probe)
     HELPER['verify_toolchain_probe'](report['toolchainProbe'], HELPER['verify_execution'](report['execution']), prefix, installed)

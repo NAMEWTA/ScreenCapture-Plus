@@ -21,6 +21,15 @@ MAX_TOTAL = 256 * 1024**2
 MAX_FILES = 20000
 TARGET = 'x86_64-linux-musl'
 INDEX = 'diagnostics.json'
+MUSL_MAKEFILE_LINK = 'toolchain-build/obj_musl/Makefile'
+MUSL_SOURCE_LINK = 'toolchain-build/src_musl'
+MUSL_SOURCE = 'sources/appimage-musl'
+# Original musl 1.2.6 files in the fixed source manifest. Its unchanged configure
+# creates ../src_musl/Makefile; canonical litecross links src_musl to MUSL_SRCDIR.
+MUSL_FILES = {
+    'Makefile': {'size': 7515, 'sha256': '55962ce997212ed323f1fc19e26a8a220d65f2d9025d82fadafc2e170db8d6d2'},
+    'configure': {'size': 26407, 'sha256': 'aa6574f8049f80f3b0a464bc20ab377a57bc0d3464478ac7ccb500f10002cd78'},
+}
 CONFIG_FILES = ('config.log', 'config.status', 'config.mak', 'configure.log', 'Makefile',
                 'CMakeCache.txt', 'build.ninja', 'compile_commands.json', 'install_manifest.txt',
                 'CMakeFiles/CMakeConfigureLog.yaml', 'CMakeFiles/CMakeError.log',
@@ -72,10 +81,46 @@ def digest(path):
     return value.hexdigest()
 
 
-def selected_files(workspace):
+def original_link(path):
+    ordinary(path.parent)
+    before = path.lstat()
+    require(stat.S_ISLNK(before.st_mode), 'The known musl configuration relation is not a symlink')
+    target = os.readlink(path)
+    require(signature(path.lstat()) == signature(before), 'Original configuration link changed')
+    return {'originalPath': str(path), 'target': target, 'identity': list(signature(before)),
+            'targetSha256': hashlib.sha256(os.fsencode(target)).hexdigest()}
+
+
+def musl_makefile_relation(workspace):
+    link = original_link(workspace / MUSL_MAKEFILE_LINK)
+    source_link = original_link(workspace / MUSL_SOURCE_LINK)
+    source = workspace / MUSL_SOURCE
+    require(link['target'] == '../src_musl/Makefile' and source_link['target'] in
+            (str(source), os.path.relpath(source, (workspace / MUSL_SOURCE_LINK).parent)),
+            'Unknown or escaped musl configuration source link')
+    for name, expected in MUSL_FILES.items():
+        path = source / name
+        info = ordinary(path)
+        require(info is not None and stat.S_ISREG(info.st_mode) and info.st_size == expected['size'] and
+                digest(path) == expected['sha256'], 'Known musl configuration source bytes changed')
+    return {'profile': 'musl-1.2.6-configure-makefile', 'link': link, 'sourceDirectoryLink': source_link,
+            'targetOriginalPath': str(source / 'Makefile'), 'targetPath': 'materials/' + MUSL_SOURCE + '/Makefile',
+            'configurePath': 'materials/' + MUSL_SOURCE + '/configure',
+            'meaning': 'Observed original two-link relation; only the fixed regular Makefile/configure bytes are copied.'}
+
+
+def selected_files(workspace, linked_records=None):
     selected = {}
+    linked_records = [] if linked_records is None else linked_records
 
     def add(path):
+        if path.relative_to(workspace).as_posix() == MUSL_MAKEFILE_LINK and path.is_symlink():
+            relation = musl_makefile_relation(workspace)
+            require(not linked_records, 'Duplicate musl configuration link observation')
+            linked_records.append(relation)
+            for name in MUSL_FILES:
+                add(workspace / MUSL_SOURCE / name)
+            return
         info = ordinary(path)
         if info is None:
             return
@@ -109,6 +154,11 @@ def selected_files(workspace):
     for name in ('build-info.json', 'source-plan-fragment.json', 'runtime-link.map',
                  'runtime-link-closure.json', 'toolchain-probe.json'):
         add(workspace / name)
+    # Original final runtime outputs are small enough to retain directly. Do not
+    # infer them from the embedded probe image or substitute descriptors for bytes.
+    for name in ('runtime.o', 'runtime.unstripped', 'runtime-x86_64',
+                 'runtime-x86_64.debug', 'LICENSE.runtime-sources'):
+        add(workspace / 'install' / name)
     for name in ('control', 'source-inputs', 'probe'):
         tree(workspace / name)
     for path in sorted(workspace.iterdir()):
@@ -135,10 +185,11 @@ def selected_files(workspace):
     def static_input(path):
         return (fnmatch.fnmatchcase(path.name, 'libgcc*.a') or
                 re.fullmatch(r'(?:S|r)?crt[^/]*\.o', path.name) is not None or
-                path.name in ('libc.a', 'libm.a', 'libstdc++.a'))
+                path.name in ('libc.a', 'libm.a', 'libstdc++.a', 'libatomic.a'))
 
     for name in ('lib', 'lib64', TARGET + '/lib', TARGET + '/lib64'):
         tree(workspace / 'toolchain' / name, static_input)
+    tree(workspace / 'libraries/lib', lambda path: path.suffix == '.a')
     return sorted(selected.values())
 
 
@@ -192,6 +243,28 @@ def verify_retained(output, report):
                 require(name not in actual, 'Case-colliding retained diagnostic')
                 actual.add(name)
     require(actual == expected, 'Retained diagnostic inventory differs from the original index')
+    links = report.get('knownSourceLinks', [])
+    require(len(links) <= 1, 'Duplicate known diagnostic source link')
+    for relation in links:
+        workspace = Path(report['workspace'])
+        source = workspace / MUSL_SOURCE
+        link, alias = relation['link'], relation['sourceDirectoryLink']
+        require(relation['profile'] == 'musl-1.2.6-configure-makefile' and
+                link['originalPath'] == str(workspace / MUSL_MAKEFILE_LINK) and link['target'] == '../src_musl/Makefile' and
+                alias['originalPath'] == str(workspace / MUSL_SOURCE_LINK) and alias['target'] in
+                (str(source), os.path.relpath(source, (workspace / MUSL_SOURCE_LINK).parent)) and
+                relation['targetOriginalPath'] == str(source / 'Makefile') and
+                relation['targetPath'] == 'materials/' + MUSL_SOURCE + '/Makefile' and
+                relation['configurePath'] == 'materials/' + MUSL_SOURCE + '/configure',
+                'Retained musl configuration link relationship changed')
+        require(all(item['targetSha256'] == hashlib.sha256(os.fsencode(item['target'])).hexdigest()
+                    for item in (link, alias)), 'Retained original link text changed')
+        indexed = {item['path']: item for item in report['files']}
+        for name, original in MUSL_FILES.items():
+            item = indexed.get('materials/' + MUSL_SOURCE + '/' + name)
+            require(item is not None and item['originalPath'] == str(source / name) and
+                    all(item[key] == original[key] for key in ('size', 'sha256')),
+                    'Retained musl link target or configure differs from its fixed original source')
 
 
 def retain(workspace, output):
@@ -200,7 +273,8 @@ def retain(workspace, output):
     require(original is None or stat.S_ISDIR(original.st_mode), 'Original runtime workspace is not a directory')
     require(ordinary(output) is None and not output.is_relative_to(workspace) and not workspace.is_relative_to(output),
             'Use a new diagnostic output directory separate from the original workspace')
-    paths = selected_files(workspace) if original is not None else []
+    linked_records = []
+    paths = selected_files(workspace, linked_records) if original is not None else []
     snapshots = [(path, ordinary(path)) for path in paths]
     require(all(info is not None and 0 <= info.st_size <= MAX_FILE for _, info in snapshots),
             'An original diagnostic exceeds the per-file size limit')
@@ -212,11 +286,13 @@ def retain(workspace, output):
         name = 'materials/' + path.relative_to(workspace).as_posix()
         actual = copy_original(path, output / name, signature(info))
         files.append({'originalPath': str(path), 'path': name, **actual})
-    require((ordinary(workspace) is None) if original is None else selected_files(workspace) == paths,
+    current_links = []
+    require((ordinary(workspace) is None) if original is None else
+            (selected_files(workspace, current_links) == paths and current_links == linked_records),
             'Original diagnostic selection changed')
     report = {'schemaVersion': 1, 'kind': 'huhucapture-runtime-diagnostics', 'workspace': str(workspace),
               'state': 'workspace-absent' if original is None else ('materials-retained' if files else 'no-selected-materials'),
-              'files': files, 'materialBytes': total,
+              'files': files, 'knownSourceLinks': linked_records, 'materialBytes': total,
               'limits': {'perFileBytes': MAX_FILE, 'totalBytes': MAX_TOTAL, 'fileCount': MAX_FILES},
               'scope': 'Exact original diagnostics only; no build, static closure or corresponding-source success is asserted. '
                        'Original receipts are unchanged; the separately retained complete evidence remains required.'}
@@ -226,6 +302,8 @@ def retain(workspace, output):
     for item, (path, info) in zip(files, snapshots):
         require(signature(ordinary(path)) == signature(info) and digest(path) == item['sha256'],
                 'Original diagnostic changed before index publication')
+    require(not linked_records or musl_makefile_relation(workspace) == linked_records[0],
+            'Original musl configuration link changed before index publication')
     with (output / INDEX).open('xb') as stream:
         stream.write(data)
     return report
