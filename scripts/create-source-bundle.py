@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -114,10 +115,26 @@ def ensure_parents(root, path):
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def inventory(root):
+def header_path_api():
+    return runpy.run_path(str(Path(__file__).resolve().parents[1] / "build/package/linux_header_paths.py"))
+
+
+def path_entries(profile):
+    return header_path_api()["entries"](profile) if profile is not None else {}
+
+
+def check_unique_path(name, names, reviewed):
+    previous = names.setdefault(name.casefold(), set())
+    require(name not in previous and (not previous or name in reviewed and previous <= reviewed.keys()),
+            f"Duplicate or case-colliding source/archive path: {name}")
+    previous.add(name)
+
+
+def inventory(root, *, path_profile=None):
     root = Path(root)
     require(root.is_dir() and not root.is_symlink(), f"Source directory is missing or linked: {root}")
-    result, total, names = [], 0, set()
+    result, total, names = [], 0, {}
+    reviewed = path_entries(path_profile)
     for folder, directories, files in os.walk(root, followlinks=False):
         directories.sort()
         for name in list(directories):
@@ -127,8 +144,7 @@ def inventory(root):
         for name in sorted(files):
             path = Path(folder) / name
             key = relative(path.relative_to(root).as_posix())
-            require(key.casefold() not in names, f"Case-colliding source path: {key}")
-            names.add(key.casefold())
+            check_unique_path(key, names, reviewed)
             info = path.lstat()
             if stat.S_ISLNK(info.st_mode):
                 target = checked_link(key, os.readlink(path))
@@ -141,6 +157,9 @@ def inventory(root):
                 item = {"path": key, "type": "file", "size": info.st_size,
                         "sha256": digest(path), "mode": 0o755 if info.st_mode & 0o111 else 0o644}
             total += item["size"]
+            if key in reviewed:
+                require(all(item.get(field) == value for field, value in reviewed[key].items()),
+                        "A case-distinct Linux header differs from its exact original file: " + key)
             require(total <= MAX_TREE and len(result) < MAX_FILES, "Source input exceeds collection bounds")
             result.append(item)
     for item in result:
@@ -156,6 +175,21 @@ def inventory(root):
 
 def tree_digest(files):
     return hashlib.sha256(canonical(files)).hexdigest()
+
+
+def recognizable_source(identifier, pin, files):
+    if any(Path(entry['path']).suffix.lower() in ('.c', '.cc', '.cpp', '.h', '.hpp', '.rs', '.ts', '.s')
+           for entry in files if entry['type'] == 'file'):
+        return True
+    # Canonical musl-cross-make consists of build scripts and patches. Retain
+    # the complete exact Git source; do not invent a C file or silently omit
+    # the build system used to produce the compiler/CRT/static libraries.
+    if identifier == 'appimage-toolchain-build' and pin and pin.get('repository') == \
+            'https://github.com/richfelker/musl-cross-make.git' and \
+            pin.get('commit') == '5e8042e63de29f8473fc3b0b831a587ba284e1a8':
+        names = {entry['path'] for entry in files if entry['type'] == 'file' and entry['size']}
+        return {'Makefile', 'litecross/Makefile', 'LICENSE', 'cowpatch.sh'} <= names
+    return False
 
 
 def git_environment():
@@ -311,10 +345,11 @@ def export_git(directory, commit, destination, patches=()):
             "sourceTreeSha256": tree_digest(files), "submodules": submodules}, files
 
 
-def extract_tar(archive, destination, prefix=""):
+def extract_tar(archive, destination, prefix="", *, path_profile=None):
     if prefix:
         relative(prefix)
-    names, total = set(), 0
+    names, total, count = {}, 0, 0
+    reviewed = path_entries(path_profile)
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, "r:*") as stream:
         for member in stream:
@@ -328,9 +363,11 @@ def extract_tar(archive, destination, prefix=""):
                 require(name.startswith(prefix + "/"), "Source archive has an entry outside the selected root")
                 name = name[len(prefix) + 1:]
             relative(name)
-            require(name.casefold() not in names, f"Duplicate or case-colliding archive path: {name}")
-            names.add(name.casefold())
-            require(len(names) <= MAX_FILES and member.size <= MAX_FILE, "Source archive exceeds bounds")
+            check_unique_path(name, names, reviewed)
+            count += 1
+            require(count <= MAX_FILES and member.size <= MAX_FILE, "Source archive exceeds bounds")
+            if name in reviewed:
+                require(member.isfile(), "A case-distinct Linux header must remain an original regular file")
             path = destination / name
             ensure_parents(destination, path)
             if member.isdir():
@@ -347,10 +384,10 @@ def extract_tar(archive, destination, prefix=""):
                     shutil.copyfileobj(source, output, 1024 * 1024)
                 require(path.stat().st_size == member.size, f"Truncated source archive entry: {name}")
                 path.chmod(0o755 if member.mode & 0o111 else 0o644)
-    return inventory(destination)
+    return inventory(destination, path_profile=path_profile)
 
 
-def copy_verified_tree(source, destination, expected):
+def copy_verified_tree(source, destination, expected, *, path_profile=None):
     destination.mkdir(parents=True)
     for item in expected:
         path = destination / item["path"]
@@ -360,7 +397,8 @@ def copy_verified_tree(source, destination, expected):
         else:
             shutil.copyfile(source / item["path"], path)
             path.chmod(item["mode"])
-    require(inventory(destination) == expected and inventory(source) == expected,
+    require(inventory(destination, path_profile=path_profile) == expected and
+            inventory(source, path_profile=path_profile) == expected,
             "Source files changed while they were retained")
 
 
@@ -527,8 +565,8 @@ def validate_cargo_config(path, packages):
     return "\n".join(lines).encode()
 
 
-def make_archive(root, archive, epoch):
-    files = inventory(root)
+def make_archive(root, archive, epoch, *, path_profile=None):
+    files = inventory(root, path_profile=path_profile)
     with archive.open("xb") as raw, gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0, compresslevel=6) as zipped:
         with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as tar:
             for item in files:
@@ -542,10 +580,10 @@ def make_archive(root, archive, epoch):
                     info.size = item["size"]
                     with (root / item["path"]).open("rb") as source:
                         tar.addfile(info, source)
-    require(inventory(root) == files, "Collected source tree changed during archiving")
+    require(inventory(root, path_profile=path_profile) == files, "Collected source tree changed during archiving")
     # Reopen and hash every archived entry, not merely the gzip header.
     with tempfile.TemporaryDirectory(prefix="huhucapture-source-verify-") as temp:
-        actual = extract_tar(archive, Path(temp), "huhucapture-sources")
+        actual = extract_tar(archive, Path(temp), "huhucapture-sources", path_profile=path_profile)
         require(actual == files, "Written source archive differs from the verified collected tree")
     return descriptor(archive)
 
@@ -732,10 +770,14 @@ class Collector:
         identifier = item["id"]
         require(IDENTIFIER.fullmatch(identifier) and identifier not in self.components,
                 "Duplicate or invalid source component")
+        require("patchApplication" not in item, "A collection plan cannot override the locked patch application recipe")
+        require("sourcePathProfile" not in item and "path_profile" not in item,
+                "A collection plan cannot choose a source path exception")
         if item.get("kind") == "debian-source":
             return self.collect_debian_source(item)
         destination = self.sources / identifier
         pin = self.pins.get(identifier)
+        header_profile = header_path_api()["source_profile"](identifier, pin or {}, self.platform)
         source_input = item.get("archive") if item.get("kind") == "tar" else item.get("directory")
         if not source_input or not self.path(source_input).exists():
             self.gap(identifier + ": real source checkout/archive is missing")
@@ -755,6 +797,9 @@ class Collector:
             patches.append(retained)
             patch_records.append({"path": self.materials[f"{identifier}-patch-{index}"]["path"], "sha256": patch["sha256"]})
         if item.get("kind", "git") == "git":
+            require(header_profile is None, "The Linux header path exception requires the exact original tar archive")
+            require(not pin or "patchApplication" not in pin,
+                    "The original toolchain patch recipe requires its exact source archive")
             commit = pin["commit"] if pin else item.get("commit")
             require(not pin or item.get("commit", commit) == commit, "Plan overrides a locked Git revision")
             provenance, files = export_git(self.path(item["directory"]), commit, destination, patches)
@@ -768,12 +813,30 @@ class Collector:
                     "Source archive has no matching exact source pin")
             retained = self.retain(identifier + "-original-archive", str(archive))
             require(digest(retained) == expected, "Source archive changed while being retained")
-            files = extract_tar(retained, destination, item.get("prefix", ""))
+            files = extract_tar(retained, destination, item.get("prefix", ""), path_profile=header_profile)
             pristine = tree_digest(files)
-            apply_patches(destination, patches)
-            files = inventory(destination)
+            replay_material = None
+            if pin and "patchApplication" in pin:
+                helper = runpy.run_path(str(Path(__file__).resolve().parents[1] / "build/package/toolchain_patches.py"))
+                actual = helper["apply"](identifier, destination, patches, pin, self.exported_project, globals())
+                with tempfile.TemporaryDirectory(prefix="original-patch-replay-") as temporary:
+                    record = Path(temporary) / "patch-replay.json"
+                    record.write_bytes(canonical(actual))
+                    self.retain(identifier + "-patch-replay", str(record))
+                replay_material = self.materials[identifier + "-patch-replay"]
+            else:
+                apply_patches(destination, patches)
+            files = inventory(destination, path_profile=header_profile)
             provenance = {"kind": "tar", "archiveSha256": expected,
                           "pristineTreeSha256": pristine, "sourceTreeSha256": tree_digest(files)}
+            if replay_material:
+                provenance["patchReplay"] = replay_material
+            if header_profile:
+                require(tree_digest(files) == pin["sourcePathProfile"]["sourceTreeSha256"],
+                        "The complete original Linux header archive tree differs from its pin")
+                provenance["sourcePathProfile"] = pin["sourcePathProfile"]
+                self.retain("original-linux-header-path-policy",
+                            str(Path(__file__).resolve().parents[1] / "build/package/linux_header_paths.py"))
             exact_pin = expected
         else:
             raise ValueError("Unsupported source type; supply real Git sources or a pinned source tar archive")
@@ -798,8 +861,7 @@ class Collector:
             path = self.retain(identifier + "-source-sbom", item["sourceSbom"])
             verify_source_spdx(path, destination)
             provenance["sourceSbom"] = self.materials[identifier + "-source-sbom"]
-        if not any(Path(entry["path"]).suffix.lower() in (".c", ".cc", ".cpp", ".h", ".hpp", ".rs", ".ts", ".s")
-                   for entry in files if entry["type"] == "file"):
+        if not recognizable_source(identifier, pin, files):
             self.gap(identifier + ": archive/checkout has no recognizable native/module source files")
         self.component(identifier, provenance, files, None if identifier in COMMON | LINUX else item.get("family"))
 
@@ -1258,6 +1320,21 @@ class Collector:
         require(inventory(directory) == actual, "Final deployed tree changed during source mapping validation")
         return {"treeSha256": tree_digest(actual), "files": actual, "products": products}
 
+    def archive_path_profile(self):
+        helper = header_path_api()
+        identifier = helper["COMPONENT"]
+        component = self.components.get(identifier)
+        if component is None:
+            return None
+        pin = self.pins[identifier]
+        helper["source_profile"](identifier, pin, self.platform)
+        require(component["path"] == "sources/" + identifier and
+                component["source"].get("archiveSha256") == helper["ARCHIVE_SHA256"] and
+                component["source"].get("sourcePathProfile") == helper["PROFILE_RECORD"] and
+                helper["source_inventory"](identifier, pin, self.sources / identifier, globals()) == component["files"],
+                "Source archiving requires the unchanged complete original Linux header component")
+        return helper["BUNDLE"]
+
     def finish(self):
         require(self.plan.get("schemaVersion") == 1 and "complete" not in self.plan and
                 "approved" not in self.plan, "Completeness is computed; a plan cannot assert approval/completeness")
@@ -1322,7 +1399,7 @@ def collect(plan_path, output):
         output.mkdir()
         archive_name, manifest_name = source_output_names(report["version"], report["platform"])
         archive = output / archive_name
-        report["archive"] = make_archive(stage, archive, collector.epoch)
+        report["archive"] = make_archive(stage, archive, collector.epoch, path_profile=collector.archive_path_profile())
         report["sourceInventory"] = {"path": "huhucapture-sources/source-inventory.json",
                                      "sha256": digest(stage / "source-inventory.json")}
         (output / manifest_name).write_bytes(canonical(report))

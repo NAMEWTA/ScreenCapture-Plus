@@ -107,10 +107,21 @@ def configure_command(name, source, build, prefix, python):
 def cmake_values(path):
     values = {}
     for line in Path(path).read_text(encoding='utf-8').splitlines():
-        match = re.fullmatch(r'([^/#:][^:]*):[^=]+=(.*)', line)
+        if not line or line.startswith(('#', '//')):
+            continue
+        # CMake quotes cache keys containing a colon, including Qt's imported
+        # target names. Parse these first, using cmState::ParseCacheEntry's
+        # typed entry and trailing-value rules rather than splitting that name.
+        value = r'(.*[^\r\t ]|[\r\t ]*)[\r\t ]*'
+        match = re.fullmatch(r'"([^"]*)":([^=]*)=' + value, line)
+        if match is None:
+            match = re.fullmatch(r'([^=:]*):([^=]*)=' + value, line)
         if match:
             bundle.require(match[1] not in values, 'Duplicate CMake cache entry: ' + match[1])
-            values[match[1]] = match[2]
+            entry = match[3]
+            if len(entry) >= 2 and entry.startswith("'") and entry.endswith("'"):
+                entry = entry[1:-1]
+            values[match[1]] = entry
     return values
 
 
