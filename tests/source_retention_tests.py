@@ -250,7 +250,8 @@ class SourceRetentionTests(unittest.TestCase):
         original_bytes = metadata_path.read_bytes()
         self.assertEqual(retention.source_cache_metadata(receipt, actual), prepared)
         self.assertEqual(metadata_path.read_bytes(), original_bytes)
-        self.assertIn("/vendor/", actual["packages"][0]["manifest_path"])
+        self.assertEqual(Path(actual["packages"][0]["manifest_path"]),
+                         self.root / ".deps/native-build-sources/vendor/alpha/Cargo.toml")
         actual["resolve"]["nodes"][0]["features"] = ["different-feature"]
         with self.assertRaisesRegex(ValueError, "differs from the actual vendored build graph"):
             self.retention("changed-graph").source_cache_metadata(receipt, actual)

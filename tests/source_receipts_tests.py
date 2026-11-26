@@ -182,7 +182,7 @@ class SourceReceiptsTests(unittest.TestCase):
         executable = payload / 'probe'
         def run(arguments):
             return execution.run(arguments, cwd=stage)
-        debug = stage / 'work/probe.debug'; debug.parent.mkdir()
+        debug = stage / 'work/debug/probe.debug'; debug.parent.mkdir(parents=True)
         debug_index = run([shutil.which('objcopy'), '--only-keep-debug', executable, debug])
         recorder.mutation(executable, [shutil.which('objcopy'), '--strip-debug', executable], run,
                           operation='objcopy-strip-debug')
@@ -198,6 +198,7 @@ class SourceReceiptsTests(unittest.TestCase):
         shutil.copyfile(executable, new_library)
         recorder.mutation(new_library, [shutil.which('objcopy'), '--strip-debug', new_library], run,
                           operation='objcopy-strip-debug')
+        (payload / 'probe-alias').symlink_to('probe')
         files = bundle.inventory(stage / 'payloads')
         descriptor = recorder.finish({}, files)
         raw = execution.raw_record({'installedInput': recorder.original}, {'files': files, 'fileTransformations': descriptor})
@@ -218,6 +219,18 @@ class SourceReceiptsTests(unittest.TestCase):
         self.assertEqual(ancestry, {'receipt': 'fixture', 'output': 'probe'})
         self.assertEqual(root_input['sha256'], bundle.digest(original))
         self.assertEqual(collector.receipts, original_receipts, 'Transformations must preserve all original source/static receipts')
+        # The journal keeps its real original absolute paths. Revalidation must
+        # read the retained files at the new location, including debug inputs,
+        # when the old stage and original installed prefix no longer exist.
+        relocated = self.root / 'relocated-stage'
+        stage.rename(relocated)
+        self.prefix.rename(self.root / 'original-prefix-moved')
+        self.assertFalse(stage.exists())
+        self.assertFalse(self.prefix.exists())
+        stage = relocated
+        executable = stage / 'payloads' / target
+        self.assertEqual(transforms.validate(stage, journal, recorded, bundle), bound)
+        self.assertEqual((executable.parent / 'probe-alias').resolve(strict=True), executable)
         failed = json.loads(json.dumps(recorded)); failed['executions'][0]['exitCode'] = 23
         with self.assertRaisesRegex(ValueError, 'successful execution'):
             transforms.validate(stage, journal, failed, bundle)
