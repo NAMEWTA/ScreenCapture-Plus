@@ -207,6 +207,34 @@ class Build(API['ExecutionLog']):
         return plan, report, value
 
 
+def probe_toolchain(build, prefix, installed, queries, environment):
+    directory = build.directory / 'probe'
+    directory.mkdir()
+    source, obj = directory / 'exception.cpp', directory / 'exception.o'
+    binary, map_path = directory / 'exception-probe', directory / 'exception.map'
+    source.write_bytes((ROOT / 'build/package/toolchain-eh-probe.cpp').read_bytes())
+    cxx = prefix / 'bin' / (TARGET + '-g++')
+    commands = {}
+    commands['compile'] = build.run([cxx, *HELPER['EH_COMPILE_FLAGS'], '-c', source, '-o', obj],
+                                     cwd=directory, env=environment)
+    commands['link'] = build.run([cxx, '-static-pie', obj, '-Wl,-Map=' + str(map_path), '-Wl,-t', '-o', binary],
+                                  cwd=directory, env=environment)
+    HELPER['inspect_elf'](binary, marked=False)
+    actual_inputs = HELPER['toolchain_probe_inputs'](map_path, obj, prefix, installed)
+    commands['run'] = build.run([binary], cwd=directory, env=environment)
+    for path in (source, obj, binary, map_path):
+        build.retain_record(path)
+    report = {'schemaVersion': 1, 'kind': 'huhucapture-static-toolchain-eh-probe',
+              'source': descriptor(source), 'object': descriptor(obj), 'binary': descriptor(binary),
+              'map': descriptor(map_path), 'commands': commands, 'queries': queries, 'inputs': actual_inputs,
+              'scope': 'Actual target static-PIE C++ throw/catch/destructor execution and complete linker inputs; '
+                       'the archive containing unwinder objects is observed, not inferred from a library name'}
+    path = directory / 'toolchain-probe.json'
+    API['write_new'](path, report)
+    build.retain_record(path)
+    return path
+
+
 def build_toolchain(workspace, inputs, specification, environment, jobs):
     directory, prefix = workspace / 'toolchain-build', workspace / 'toolchain'
     directory.mkdir()
@@ -242,20 +270,32 @@ def build_toolchain(workspace, inputs, specification, environment, jobs):
     actual, _ = build.run([compiler, '-print-sysroot'], cwd=directory, env=environment, capture=True)
     sysroot = Path(actual.strip()).resolve(strict=True)
     bundle.require(sysroot == prefix / TARGET, 'The actual new compiler selected an external sysroot')
-    for name in ('libgcc.a', 'libgcc_eh.a', 'crtbeginS.o', 'crtendS.o', 'rcrt1.o', 'crti.o', 'crtn.o', 'libc.a'):
+    installed = {entry['path']: {**entry, 'component': owners[entry['path']]}
+                 for entry in build.output_inventory() if entry['type'] == 'file'}
+    queries = []
+    for name in HELPER['TOOLCHAIN_FILES']:
+        index = len(build.commands)
         actual, _ = build.run([compiler, '-print-file-name=' + name], cwd=directory, env=environment, capture=True)
-        path = Path(actual.strip()).resolve(strict=True)
-        bundle.require(path.is_relative_to(prefix) and path.is_file() and path.relative_to(prefix).as_posix() in owners,
-                       'A compiler support archive or CRT object has no actual new producer output: ' + name)
+        observed = {'requested': name, 'reported': actual.strip(), 'commandIndex': index,
+                    'file': HELPER['compiler_file_result'](name, actual.strip(), prefix, installed)}
+        queries.append(observed)
+        query_path = build.directory / ('compiler-query-' + name + '.json')
+        API['write_new'](query_path, observed)
+        build.retain_record(query_path)
     for name in ('ld', 'as', 'cc1', 'cc1plus', 'collect2'):
         actual, _ = build.run([compiler, '-print-prog-name=' + name], cwd=directory, env=environment, capture=True)
         path = Path(actual.strip()).resolve(strict=True)
         bundle.require(path.is_relative_to(prefix) and path.is_file() and path.relative_to(prefix).as_posix() in owners,
                        'The actual new compiler selected an external compiler/linker program: ' + name)
         build.observe_tool(path, environment)
+    probe = probe_toolchain(build, prefix, installed, queries, environment)
     records = [config, directory / 'obj_musl/config.mak']
     records += sorted(directory.glob('obj_*/config.log')) + sorted(directory.glob('obj_*/config.status'))
+    records += [inputs['appimage-gcc']['directory'] / 'libgcc/Makefile.in']
+    records += [directory / 'obj_gcc' / TARGET / 'libgcc' / name for name in ('Makefile', 'config.log', 'config.status')]
     plan, report, receipt = build.finish(records, output_owners=owners)
+    report['toolchainProbe'] = descriptor(probe)
+    HELPER['verify_toolchain_probe'](report['toolchainProbe'], HELPER['verify_execution'](report['execution']), prefix, installed)
     return prefix, sysroot, owners, plan, report, receipt
 
 
@@ -434,7 +474,7 @@ def collect_link_inputs(map_path, owners, inputs):
             record['members'] = HELPER['archive_members'](path)
             # A GNU link map also lists discarded sections. This field describes
             # observed member mentions, not a claim that all their sections survived.
-            record['membersMentionedInMap'] = sorted(set(re.findall(re.escape(str(path)) + r'\(([^)]+)\)', text)))
+            record['membersMentionedInMap'] = HELPER['archive_member_mentions'](text, path)
             bundle.require(set(record['membersMentionedInMap']) <= {item['name'] for item in record['members']},
                            'The actual link map names a member absent from its retained archive')
         result.append(record)

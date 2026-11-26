@@ -26,7 +26,10 @@ PRODUCERS = ('scripts/build-appimage-runtime.py', 'build/package/appimage_runtim
              'build/package/source_receipts.py', 'scripts/create-source-bundle.py',
              'build/package/toolchain_patches.py', 'third_party/appimage/toolchain-patches/cowpatch.sh',
              'third_party/appimage/toolchain-patches/upstream.json', 'build/package/linux_header_paths.py',
-             'build/package/source_checkout.py')
+             'build/package/source_checkout.py', 'build/package/toolchain-eh-probe.cpp')
+TOOLCHAIN_FILES = ('libgcc.a', 'libgcc_eh.a', 'crtbeginS.o', 'crtendS.o',
+                   'rcrt1.o', 'crti.o', 'crtn.o', 'libc.a')
+EH_COMPILE_FLAGS = ['-std=c++11', '-O2', '-fPIE', '-fexceptions', '-fno-inline']
 
 
 def profile():
@@ -96,6 +99,113 @@ def producer_identity():
     return {name: file_identity(ROOT / name) for name in PRODUCERS}
 
 
+def compiler_file_result(name, reported, prefix, installed):
+    """Only GCC's exact not-found result for the optional split EH archive is absent."""
+    bundle.require(name in TOOLCHAIN_FILES, 'Unknown compiler support query')
+    if name == 'libgcc_eh.a' and reported == name:
+        return None
+    path = Path(reported)
+    bundle.require(path.is_absolute(), 'Compiler support query did not resolve an owned installed file: ' + name)
+    path = path.resolve(strict=True)
+    prefix = Path(prefix).resolve(strict=True)
+    bundle.require(path.is_relative_to(prefix), 'Compiler support query escaped the new target toolchain: ' + name)
+    relative = path.relative_to(prefix).as_posix()
+    expected = installed.get(relative)
+    bundle.require(expected is not None and file_identity(path) ==
+                   {key: expected[key] for key in ('size', 'sha256')},
+                   'Compiler support query has no matching actual installation output: ' + name)
+    return {'path': str(path), **file_identity(path), 'producerOutput': relative, 'component': expected['component']}
+
+
+def toolchain_probe_inputs(map_path, object_path, prefix, installed):
+    """Inventory every actual LOAD, without predicting the unwinder's archive name."""
+    map_path, object_path = Path(map_path), Path(object_path).resolve(strict=True)
+    prefix = Path(prefix).resolve(strict=True)
+    text = map_path.read_text(encoding='utf-8')
+    records = []
+    for path in link_loads(text):
+        identity = file_identity(path)
+        if path == object_path:
+            record = {'kind': 'probe-object', 'path': str(path), **identity}
+        else:
+            bundle.require(path.is_relative_to(prefix), 'Toolchain probe linked an input outside its actual new installation')
+            relative = path.relative_to(prefix).as_posix()
+            owner = installed.get(relative)
+            bundle.require(owner is not None and identity == {key: owner[key] for key in ('size', 'sha256')},
+                           'Toolchain probe input has no matching actual installation output')
+            record = {'kind': 'installed', 'path': str(path), **identity,
+                      'producerOutput': relative, 'component': owner['component']}
+            if path.suffix == '.a':
+                record['members'] = archive_members(path)
+                record['membersMentionedInMap'] = archive_member_mentions(text, path)
+                bundle.require(set(record['membersMentionedInMap']) <= {entry['name'] for entry in record['members']},
+                               'Toolchain probe map names a member absent from its actual archive')
+        records.append(record)
+    bundle.require(any(item['kind'] == 'probe-object' for item in records), 'Toolchain probe map omitted its actual object')
+    return records
+
+
+def verify_toolchain_probe(record, execution, prefix, installed):
+    probe = bundle.read_json(checked_record(record))
+    prefix = Path(prefix).resolve(strict=True)
+    bundle.require(probe.get('schemaVersion') == 1 and probe.get('kind') == 'huhucapture-static-toolchain-eh-probe',
+                   'The source-built compiler has no actual static exception probe')
+    source, obj, binary, map_path = (checked_record(probe[key]) for key in ('source', 'object', 'binary', 'map'))
+    directory = source.parent
+    bundle.require(all(path.parent == directory for path in (obj, binary, map_path)) and
+                   file_identity(source) == file_identity(ROOT / 'build/package/toolchain-eh-probe.cpp'),
+                   'Toolchain exception probe source or output locations changed')
+    compiler = prefix / 'bin/x86_64-linux-musl-gcc'
+    cxx = prefix / 'bin/x86_64-linux-musl-g++'
+    def actual_program(path):
+        path = Path(path).resolve(strict=True)
+        identity = file_identity(path)
+        if path != binary:
+            bundle.require(path.is_relative_to(prefix), 'Toolchain probe executed a program outside its new installation')
+            owner = installed.get(path.relative_to(prefix).as_posix())
+            bundle.require(owner is not None and identity == {key: owner[key] for key in ('size', 'sha256')},
+                           'Toolchain probe program differs from its actual installation output')
+        return {'path': str(path), **identity}
+    observed = execution['executions']
+    queries = probe.get('queries', [])
+    bundle.require([item.get('requested') for item in queries] == list(TOOLCHAIN_FILES),
+                   'Original compiler support queries are incomplete')
+    for item in queries:
+        index = item['commandIndex']
+        bundle.require(type(index) is int and 0 <= index < len(observed), 'A compiler query has no actual execution')
+        actual = observed[index]
+        bundle.require(actual['exitCode'] == 0 and actual['arguments'] ==
+                       [str(compiler), '-print-file-name=' + item['requested']] and
+                       actual['tool'] == actual_program(compiler) and
+                       Path(actual['stdout']).read_text(encoding='utf-8').strip() == item['reported'] and
+                       item['file'] == compiler_file_result(item['requested'], item['reported'], prefix, installed),
+                       'A compiler support query differs from its original executed result')
+    expected = {
+        'compile': [str(cxx), *EH_COMPILE_FLAGS, '-c', str(source), '-o', str(obj)],
+        'link': [str(cxx), '-static-pie', str(obj), '-Wl,-Map=' + str(map_path), '-Wl,-t', '-o', str(binary)],
+        'run': [str(binary)],
+    }
+    bundle.require(set(probe.get('commands', {})) == set(expected), 'Toolchain probe command evidence is incomplete')
+    indices = [item['commandIndex'] for item in queries] + [probe['commands'][name] for name in ('compile', 'link', 'run')]
+    bundle.require(all(type(index) is int for index in indices) and indices == sorted(set(indices)),
+                   'Toolchain probe queries, compilation, linking and execution are not in their actual order')
+    for name, arguments in expected.items():
+        index = probe['commands'][name]
+        bundle.require(type(index) is int and 0 <= index < len(observed), 'A toolchain probe command has no original execution')
+        actual = observed[index]
+        bundle.require(actual['exitCode'] == 0 and actual['arguments'] == arguments and actual['cwd'] == str(directory) and
+                       actual['tool'] == actual_program(arguments[0]),
+                       'Toolchain exception compile/link/run differs from its actual successful command')
+    inspect_elf(binary, marked=False)
+    actual_inputs = toolchain_probe_inputs(map_path, obj, prefix, installed)
+    bundle.require(probe.get('inputs') == actual_inputs, 'Toolchain probe does not preserve every actual static link input')
+    included = {item['path'] for item in actual_inputs}
+    query_files = {item['requested']: item['file'] for item in queries}
+    bundle.require(all(query_files[name]['path'] in included for name in ('libgcc.a', 'libc.a')),
+                   'Toolchain exception probe omitted actual target compiler/libc support')
+    return probe
+
+
 def archive_members(path):
     """Read actual regular archive member bytes, including GNU/BSD long names."""
     data = Path(path).read_bytes()
@@ -154,6 +264,17 @@ def link_loads(map_text):
         if resolved not in paths:
             paths.append(resolved)
     return paths
+
+
+def archive_member_mentions(map_text, path):
+    # GCC commonly spells its own paths as bin/../lib/gcc/.... Preserve those
+    # actual LOAD spellings when matching member observations after resolving
+    # the input's installation identity; never lose them through normalization.
+    path = Path(path).resolve(strict=True)
+    aliases = [name for name in re.findall(r'^LOAD (.+)$', map_text, re.MULTILINE)
+               if Path(name).resolve(strict=True) == path]
+    return sorted({member for name in aliases
+                   for member in re.findall(re.escape(name) + r'\(([^)\r\n]+)\)', map_text)})
 
 
 def inspect_elf(path, *, marked=True):
@@ -340,6 +461,10 @@ def validate_report(directory, report):
         installation_owners.update({entry['path']: component for entry in changed if entry['type'] == 'file'})
     bundle.require(receipts['appimage-toolchain']['outputOwners'] == installation_owners,
                    'Compiler support/CRT ownership differs from actual source installation')
+    installed = {entry['path']: {**entry, 'component': installation_owners[entry['path']]}
+                 for entry in receipts['appimage-toolchain']['outputs']}
+    verify_toolchain_probe(receipt_records['appimage-toolchain']['toolchainProbe'],
+                           executions['appimage-toolchain'], receipt_records['appimage-toolchain']['prefix'], installed)
     closure_path = checked_record(report['linkClosure'])
     closure = bundle.read_json(closure_path)
     map_path = checked_record(closure['map'])
@@ -366,7 +491,7 @@ def validate_report(directory, report):
                            'A compiler support input was assigned to another original source producer')
         if path.suffix == '.a':
             bundle.require(item.get('members') == archive_members(path), 'Actual static archive member bytes changed')
-            bundle.require(item.get('membersMentionedInMap') == sorted(set(re.findall(re.escape(str(path)) + r'\(([^)]+)\)', map_text))),
+            bundle.require(item.get('membersMentionedInMap') == archive_member_mentions(map_text, path),
                            'Static archive member observations differ from the actual link map')
     runtime_receipt = receipts['appimage-runtime']
     static = [{key: item[key] for key in ('id', 'component', 'sourceTreeSha256', 'size', 'sha256')} for item in actual_inputs]
