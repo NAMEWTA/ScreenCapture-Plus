@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: qt-application-${{ github.ref }}
+  group: qt-application-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

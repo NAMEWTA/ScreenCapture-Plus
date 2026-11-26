@@ -245,6 +245,12 @@ Windows 把 `--probe` 指向对应配置目录的 `.exe`。辅助脚本清除开
 
 ## 单独取得构建诊断
 
+完整应用源码构建按 ref 和实际提交 SHA 使用独立的
+[Actions 并发分组](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)。
+新提交的修复可以开始验证，先前提交的长时间原生构建也能完成并留下真实结果。
+同一 PR、同一提交的重复运行仍可取消前一次运行；main 正式候选的准入、
+同 SHA 聚合以及独立发布锁保持原有要求。每一份结果仍只属于自己的提交。
+
 完整应用工作流另外上传 `qt-application-linux-diagnostics` 与
 `qt-application-windows-diagnostics`，保留本次实际 Qt / 原生 / 应用命令记录、
 日志、CMake 配置、源码计划与包装阶段报告。它们不包含完整源码归档或开发包，

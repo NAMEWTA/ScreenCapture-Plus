@@ -2,6 +2,7 @@
 """Real file/process retention contracts; these do not simulate a runtime build."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -96,6 +97,43 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
         subprocess.run([str(self.output / 'materials' / program.relative_to(self.workspace))], check=True)
         api.verify_retained(self.output, report)
 
+    @unittest.skipUnless(all(shutil.which(name) for name in ('cc', 'ar', 'objcopy')),
+                         'Requires actual compiler, archive and object tools')
+    def test_original_final_runtime_and_library_bytes_are_copied_directly(self):
+        # Genuine host compiler outputs exercise retention only. They are not
+        # presented as a target toolchain build or as an AppImage runtime.
+        source = self.write('runtime-source-receipt/probe/diagnostic.c', b'int main(void) { return 0; }\n')
+        install, libraries = self.workspace / 'install', self.workspace / 'libraries/lib'
+        install.mkdir(); libraries.mkdir(parents=True)
+        obj, unstripped = install / 'runtime.o', install / 'runtime.unstripped'
+        binary, debug = install / 'runtime-x86_64', install / 'runtime-x86_64.debug'
+        archive = libraries / 'libdiagnostic-fixture.a'
+        atomic = self.workspace / 'toolchain/x86_64-linux-musl/lib/libatomic.a'
+        atomic.parent.mkdir(parents=True)
+        subprocess.run(['cc', '-g', '-c', str(source), '-o', str(obj)], check=True, capture_output=True)
+        subprocess.run(['ar', 'crs', str(archive), str(obj)], check=True, capture_output=True)
+        subprocess.run(['ar', 'crs', str(atomic), str(obj)], check=True, capture_output=True)
+        subprocess.run(['cc', '-g', str(obj), '-o', str(unstripped)], check=True, capture_output=True)
+        subprocess.run(['objcopy', '--only-keep-debug', str(unstripped), str(debug)], check=True, capture_output=True)
+        subprocess.run(['objcopy', '--strip-debug', str(unstripped), str(binary)], check=True, capture_output=True)
+        subprocess.run([str(binary)], check=True, capture_output=True)
+        notice = self.write('install/LICENSE.runtime-sources', b'Diagnostic fixture notice, not a target runtime build.\n')
+        (libraries / 'unrelated.so').symlink_to(archive)
+        expected = {str(path): path.read_bytes() for path in (obj, unstripped, binary, debug, archive, atomic, notice)}
+        report = api.retain(self.workspace, self.output)
+        indexed = {item['originalPath']: item for item in report['files']}
+        self.assertTrue(set(expected) <= set(indexed))
+        for original, data in expected.items():
+            retained = self.output / indexed[original]['path']
+            self.assertEqual(retained.read_bytes(), data)
+            self.assertEqual(hashlib.sha256(data).hexdigest(), indexed[original]['sha256'])
+        subprocess.run([str(self.output / 'materials/install/runtime-x86_64')], check=True, capture_output=True)
+        api.verify_retained(self.output, report)
+        shutil.rmtree(self.output)
+        (libraries / 'liblinked.a').symlink_to(archive)
+        with self.assertRaisesRegex(ValueError, 'Linked diagnostic path'):
+            api.retain(self.workspace, self.output)
+
     def test_missing_workspace_does_not_claim_build_success_or_overwrite(self):
         self.workspace.rmdir()
         report = api.retain(self.workspace, self.output)
@@ -136,6 +174,53 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
         shutil.rmtree(self.output)
         (selected.parent / 'libgcc_eh.a').symlink_to(selected)
         with self.assertRaisesRegex(ValueError, 'Linked diagnostic path'):
+            api.retain(self.workspace, self.output)
+
+    @unittest.skipUnless(shutil.which('cc'), 'Original configure requires a real C compiler')
+    def test_actual_original_musl_configure_link_is_retained_without_following_other_links(self):
+        configured = os.environ.get('HUHUCAPTURE_TEST_MUSL_SOURCE')
+        original = Path(configured) if configured else ROOT / '.deps/appimage-runtime-source/sources/appimage-musl'
+        if not configured and not original.is_dir():
+            self.skipTest('Restore original musl sources or set HUHUCAPTURE_TEST_MUSL_SOURCE')
+        self.assertTrue(original.is_dir())
+        for name, expected in api.MUSL_FILES.items():
+            data = (original / name).read_bytes()
+            self.assertEqual(len(data), expected['size'])
+            self.assertEqual(hashlib.sha256(data).hexdigest(), expected['sha256'])
+        source = self.workspace / api.MUSL_SOURCE
+        shutil.copytree(original, source, symlinks=True)
+        build = self.workspace / 'toolchain-build'
+        obj = build / 'obj_musl'; obj.mkdir(parents=True)
+        alias = build / 'src_musl'; alias.symlink_to(source, target_is_directory=True)
+        arguments = ['../src_musl/configure', '--disable-shared',
+                     '--prefix=' + str(self.workspace / 'toolchain/x86_64-linux-musl'), 'CC=cc']
+        actual = subprocess.run(arguments, cwd=obj, capture_output=True, check=False)
+        self.assertEqual(actual.returncode, 0, actual.stderr.decode(errors='replace'))
+        self.write('control/logs/original-configure.stdout.log', actual.stdout)
+        self.write('control/logs/original-configure.stderr.log', actual.stderr)
+        link = obj / 'Makefile'
+        self.assertEqual(os.readlink(link), '../src_musl/Makefile')
+        report = api.retain(self.workspace, self.output)
+        relation = report['knownSourceLinks'][0]
+        self.assertEqual(relation['link']['target'], os.readlink(link))
+        self.assertEqual(relation['sourceDirectoryLink']['target'], os.readlink(alias))
+        self.assertEqual((self.output / relation['targetPath']).read_bytes(), (source / 'Makefile').read_bytes())
+        self.assertFalse((self.output / 'materials' / api.MUSL_MAKEFILE_LINK).exists())
+        api.verify_retained(self.output, report)
+        relation['link']['target'] = '../../escape/Makefile'
+        with self.assertRaisesRegex(ValueError, 'relationship changed'):
+            api.verify_retained(self.output, report)
+        shutil.rmtree(self.output)
+        link.unlink(); link.symlink_to('../../escape/Makefile')
+        with self.assertRaisesRegex(ValueError, 'Unknown or escaped'):
+            api.retain(self.workspace, self.output)
+        link.unlink(); link.symlink_to('../src_musl/Makefile')
+        alias.unlink(); alias.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'Unknown or escaped'):
+            api.retain(self.workspace, self.output)
+        alias.unlink(); alias.symlink_to(source, target_is_directory=True)
+        (source / 'Makefile').write_bytes(b'changed target bytes')
+        with self.assertRaisesRegex(ValueError, 'source bytes changed'):
             api.retain(self.workspace, self.output)
 
     def test_size_limits_and_concurrent_original_changes_fail_without_an_index(self):
