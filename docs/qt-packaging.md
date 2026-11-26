@@ -253,6 +253,11 @@ Windows 把 `--probe` 指向对应配置目录的 `.exe`。辅助脚本清除开
 正式来源核验、包验证和发布只使用各自要求的完整原始材料。诊断产物本身
 不能替代对应源码、生产者输出或完整 stage。
 
+Linux 另上传 `qt-appimage-runtime-diagnostics`，复用
+`retain-appimage-runtime-diagnostics.py` 留存真实工具链查询、所选静态库 / CRT、
+异常展开探针及原执行记录。原 workspace 尚未创建时明确报告该状态；存在的
+原材料需通过逐件复制核对和大小预算，不能因完整证据较大而改写原记录。
+
 ## 官方实现依据
 
 - [Qt CMake 部署运行依赖](https://doc.qt.io/qt-6/qt-deploy-runtime-dependencies.html)

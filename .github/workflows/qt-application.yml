@@ -308,6 +308,7 @@ jobs:
           dpkg-query -W > artifacts/appimage-runtime-source-linux/host-packages.txt
           uname -a > artifacts/appimage-runtime-source-linux/host-kernel.txt
           python tests/appimage_runtime_tests.py
+          python tests/runtime_diagnostics_tests.py
           python scripts/build-appimage-runtime.py --tools artifacts/packaging-tools --workspace .deps/appimage-runtime-source --jobs 2
           HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE="$GITHUB_WORKSPACE/.deps/appimage-runtime-source/downloads/appimage-linux-headers-linux-headers-4.19.88-2.tar.xz" python tests/appimage_runtime_tests.py HeaderPathTests.test_actual_archive_keeps_external_license_texts_separate_and_native_gaps_open -v
       - name: Prepare the final Linux payloads and actual native candidate packages
@@ -419,6 +420,21 @@ jobs:
               subprocess.run(['tar','--zstd','-cf',str(output/'runtime-build-evidence.tar.zst'),
                               '--verbatim-files-from','-T',str(listing)], check=True)
           PY
+      - name: Retain bounded original AppImage runtime diagnostics separately
+        if: always()
+        run: |
+          python scripts/retain-appimage-runtime-diagnostics.py \
+            --workspace .deps/appimage-runtime-source \
+            --output artifacts/appimage-runtime-diagnostics
+      - name: Upload original AppImage runtime queries and probe evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qt-appimage-runtime-diagnostics
+          path: artifacts/appimage-runtime-diagnostics/
+          compression-level: 6
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain the verified formal linux candidate
         id: candidate
         if: ${{ success() && inputs.release_candidate }}
