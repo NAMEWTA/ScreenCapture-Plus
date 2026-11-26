@@ -214,7 +214,7 @@ def selected_files(workspace, linked_records=None, probe_links=None):
     def static_input(path):
         return (fnmatch.fnmatchcase(path.name, 'libgcc*.a') or
                 re.fullmatch(r'(?:S|r)?crt[^/]*\.o', path.name) is not None or
-                path.name in ('libc.a', 'libm.a', 'libstdc++.a', 'libatomic.a'))
+                path.name in ('libc.a', 'libm.a', 'libpthread.a', 'librt.a', 'libstdc++.a', 'libatomic.a'))
 
     for name in ('lib', 'lib64', TARGET + '/lib', TARGET + '/lib64'):
         tree(workspace / 'toolchain' / name, static_input)
