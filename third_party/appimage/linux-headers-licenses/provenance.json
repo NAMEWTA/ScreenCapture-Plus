@@ -1,0 +1,499 @@
+{
+  "schemaVersion": 1,
+  "kind": "huhucapture-external-linux-header-license-provenance",
+  "profile": "linux-headers-4.19.88-2-licenses-v1",
+  "component": "appimage-linux-headers",
+  "meaning": "Separate original upstream license material. None of these files is inserted into or represented as present in the original header archive. This records original declarations and texts, not a conclusion that all file-specific licensing questions or native-build requirements are resolved.",
+  "archive": {
+    "name": "linux-headers-4.19.88-2.tar.xz",
+    "size": 1081424,
+    "sha256": "dc7abf734487553644258a3822cfd429d74656749e309f2b25f09f4282e05588",
+    "filesAndLinks": 1443,
+    "gitTree": "a614e98307d77de8b1ac75d432b84f1b74a664b7",
+    "sourceTreeSha256": "c0f1c4e0a7d96e99bc8dd3202229a74f47137b2e147afd68205065c520ab1004"
+  },
+  "headers": {
+    "repository": "https://github.com/sabotage-linux/kernel-headers.git",
+    "tag": "v4.19.88-2",
+    "commit": "22bba0124dfe2728ef5b4555baa1ae0960492665",
+    "tree": "3b730748865433e4b88ef134e991afc73983913c",
+    "commitObject": "tree 3b730748865433e4b88ef134e991afc73983913c\nparent 67f079bfab98ac004b6dcdd63c077d825e12fa57\nauthor rofl0r <rofl0r@users.noreply.github.com> 1691519685 +0000\ncommitter rofl0r <rofl0r@users.noreply.github.com> 1691519685 +0000\n\nUPDATE.sh: add riscv\n",
+    "distributionRule": "The original create-dist.sh removes the three top-level *.sh files. Every retained archive path, Git blob and mode matches the fixed tag; there are no extra or changed archive files.",
+    "omittedFromArchive": [
+      {
+        "path": "sabotage/UPDATE.sh",
+        "upstreamPath": "UPDATE.sh",
+        "gitBlob": "fc7b5089dc64f94a4b19708925cf3eb57b54ceb3",
+        "gitMode": "100755",
+        "size": 1557,
+        "sha256": "db988c0ff0626729980fdc6561414475288567e75e9f4ec5567705ec383db87f"
+      },
+      {
+        "path": "sabotage/create-dist.sh",
+        "upstreamPath": "create-dist.sh",
+        "gitBlob": "7f7ca50db56df581b6b201b2d9da065663a3b273",
+        "gitMode": "100755",
+        "size": 494,
+        "sha256": "c8d44128d8bc3700d71aab53b7dff44e82d33af1aedb620d6f1fe7bc9fc12707"
+      },
+      {
+        "path": "sabotage/test.sh",
+        "upstreamPath": "test.sh",
+        "gitBlob": "92c33a237e6abefbb2de53cb1a29a851d05d1727",
+        "gitMode": "100644",
+        "size": 216,
+        "sha256": "afa3b82bb7efc0200544709cdab5835cdc4918098d4743932f749c45f77e30e1"
+      }
+    ]
+  },
+  "kernel": {
+    "repository": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git",
+    "retrievalMirror": "https://github.com/gregkh/linux",
+    "tag": "v4.19.88",
+    "tagObject": "3e6fe78287d743d48c7964301855331187750891",
+    "tagObjectBytes": "object fb683b5e3f53a73e761952735736180939a313df\ntype commit\ntag v4.19.88\ntagger Greg Kroah-Hartman <gregkh@linuxfoundation.org> 1575535105 +0100\n\nThis is the 4.19.88 stable release\n-----BEGIN PGP SIGNATURE-----\n\niQIzBAABCAAdFiEEZH8oZUiU471FcZm+ONu9yGCSaT4FAl3owgEACgkQONu9yGCS\naT43zw//SS1As83XXuHr4mdWIVDjXo6RMJ6Ib7YbRi/uhBmQuUuGVFcqGxUIA9Kl\neSXu5Kt8TNmInzHq9AMYgegrELAEwPD2XfptALGDwiUHonQuiFaqOQn/bltJOm1L\nPsG15A7+/gFhuhPJDp2ZfNBmZGdpXdIwD27oUDqF1XD64dMa/HPbFUVgxWn3HHkd\nsm0J6Ez0eNA+BmLnHXYDiSaEYIiwvy1nN6XpyIfOyb2Tz6kPoe0vVWU00Cmy8KAU\nEIWB+TBRunspgMsShL5Cl1MSFOxf9QOmgnZxcrODAQfb1TbLMACB1FGMjK4nLm+3\nwPlSnC7L49ARl/pvmN5NOUrjHi8S8qq/Od9QW+UIckRI6KzOU832h99v4gFuHjSC\nKFiLi5K9+uTIMgNOETmINBiKKUcUzYXYVajvm4tuAUq3HO8wy6jeALtt34OiJZQZ\nDV8wyBdL9NDUFqBymFaMFA4Us/fGIREzvPgI0E0jth2ANuLFLtScrnStuWv8buwJ\nJT3V9xCxHZtZ3Ctevx/Jp6OaQtnbSnWjMjrO0UDzZ6N7+g5UKmh9/R3xL6sBpFVU\nVu49J+qWU3VmbY3EIulel+yARNe7xS4ExK185JmNzpYFyOpXum14FHhhtQ6xNSeu\ndRqyITI0KYP7jWtBDKCgVAWF5jC9gHP1ksrHSZMhyGrv1dC1XZM=\n=KnJW\n-----END PGP SIGNATURE-----\n",
+    "commit": "fb683b5e3f53a73e761952735736180939a313df",
+    "commitObject": "tree 34ac23abda5a735b6557032d556b41b7101a39e7\nparent 04748841f7a02ec6ff07fadfc5d1f8e24e61946d\nauthor Greg Kroah-Hartman <gregkh@linuxfoundation.org> 1575534096 +0100\ncommitter Greg Kroah-Hartman <gregkh@linuxfoundation.org> 1575534096 +0100\n\nLinux 4.19.88\n",
+    "tree": "34ac23abda5a735b6557032d556b41b7101a39e7",
+    "trees": [
+      {
+        "sha": "34ac23abda5a735b6557032d556b41b7101a39e7",
+        "type": "tree",
+        "entries": [
+          {
+            "path": ".clang-format",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "1d5da22e0ba50c72dc3396995dbae42af131c90e"
+          },
+          {
+            "path": ".cocciconfig",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "43967c6b20151ee126db08e24758e3c789bcb844"
+          },
+          {
+            "path": ".get_maintainer.ignore",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "cca6d870f7a57499ffd8be4b3abacaf9fccde9c1"
+          },
+          {
+            "path": ".gitattributes",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "89c411b5ce6bb081976d7efb48c2158bb4b2bb86"
+          },
+          {
+            "path": ".gitignore",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "97ba6b79834c6d20d9612e6b383fc5c69d196e48"
+          },
+          {
+            "path": ".mailmap",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "285e09645b31485d7bc314fb1fa7d055ec50fb46"
+          },
+          {
+            "path": "COPYING",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "da4cb28febe66172a9fdf1a235525ae6c00cde1d"
+          },
+          {
+            "path": "CREDITS",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "5befd2d714d0037548bed049a979dc4fcee1d300"
+          },
+          {
+            "path": "Documentation",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "2369a9105cddf4b17dd6a6f913a863f9ed3697eb"
+          },
+          {
+            "path": "Kbuild",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "00530420548225a8b26a36f504d9aa00468ddb42"
+          },
+          {
+            "path": "Kconfig",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "48a80beab6853d1461f277229625aa066d75a4e7"
+          },
+          {
+            "path": "LICENSES",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "c3533ded839ca0ded6d65c2a1fe98a12d8ab80a6"
+          },
+          {
+            "path": "MAINTAINERS",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "d735500d3dadd150bb6303f3eeb61b9ade940ad7"
+          },
+          {
+            "path": "Makefile",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "f9ebb74e8e43f617b2dd575020fe9d787ef079bc"
+          },
+          {
+            "path": "README",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "2c927ccbd97055c71cda2fccc1eaa8b12b93374a"
+          },
+          {
+            "path": "arch",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "f01c74d8838ab292bb12a6fe8e91302dbc3a8e64"
+          },
+          {
+            "path": "block",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "5cb88db8938531e997dfac45b66c3f5adeb2c90c"
+          },
+          {
+            "path": "certs",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "030166d6d65ca0f58f651205d48a1ca58a07f2c4"
+          },
+          {
+            "path": "crypto",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "75a6795f9f95466f9f47d9e96027b3249abf754f"
+          },
+          {
+            "path": "drivers",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "dc206ad86abaef41d0983d812fcfea1b4af6a918"
+          },
+          {
+            "path": "firmware",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "0e0560d2cbbfaf890620b824586b17a82ca076fb"
+          },
+          {
+            "path": "fs",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "1a644dc5290087b78ea7706875769a82955f2d7d"
+          },
+          {
+            "path": "include",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "7ffb8b1e03d3fb63526e96924f3c49a5d8da3c1f"
+          },
+          {
+            "path": "init",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "0d07065f48b6cb919131e5a237bc3654a779a79e"
+          },
+          {
+            "path": "ipc",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "ea38a5630dcceb3ffd4f82cb7919e8cdf4dcba3c"
+          },
+          {
+            "path": "kernel",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "30c86a5563ab961c3d873ea30aaa92e76412ef33"
+          },
+          {
+            "path": "lib",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "2088f90f99407b6c84cdc42b44712b72129ecd84"
+          },
+          {
+            "path": "mm",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "09ce01fa4e72764752e0ade13272017ebc7628f7"
+          },
+          {
+            "path": "net",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "46f795e7d3ebd781a4485dd572b44b6dfd79d8d2"
+          },
+          {
+            "path": "samples",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "01bb0ba55a155eabed2fb6488d3fa92b7003dc5b"
+          },
+          {
+            "path": "scripts",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "7962cc62b20e0ddff60e4bde317bab2c943c22b7"
+          },
+          {
+            "path": "security",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "18b671c73e7dabc8c38b34b7401cd395a6ef8fe2"
+          },
+          {
+            "path": "sound",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "f3f8f0a6cb9757c617b75a4c93ce33fffff014f0"
+          },
+          {
+            "path": "tools",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "255551a9eb923ce0d8a35aac06167f8d07a97666"
+          },
+          {
+            "path": "usr",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "b0d96343eefe5812b81bdf5db7837e8d5c41c218"
+          },
+          {
+            "path": "virt",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "96506cca65854878bb702234f90c16efd390bccf"
+          }
+        ]
+      },
+      {
+        "sha": "c3533ded839ca0ded6d65c2a1fe98a12d8ab80a6",
+        "type": "tree",
+        "entries": [
+          {
+            "path": "exceptions",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "266e0aac382185b5bde575bd11e235c03a23e078"
+          },
+          {
+            "path": "other",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "bc3b65a4336f0ed29fa19d07c49bf6cf9690806a"
+          },
+          {
+            "path": "preferred",
+            "mode": "040000",
+            "type": "tree",
+            "sha": "46546f409697adccffb64640e24352b9ea3d2f8f"
+          }
+        ]
+      },
+      {
+        "sha": "46546f409697adccffb64640e24352b9ea3d2f8f",
+        "type": "tree",
+        "entries": [
+          {
+            "path": "BSD-2-Clause",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "da366e2ce50be9b4ec250cad773677bee7fc1d9d"
+          },
+          {
+            "path": "BSD-3-Clause",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "34c7f057c8d5441314c339ba574a9c6224ce0f80"
+          },
+          {
+            "path": "BSD-3-Clause-Clear",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "e53b56092b9051d212e5a380ae54967a88e5c88a"
+          },
+          {
+            "path": "GPL-2.0",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "ff0812fd89cc41fc1b1ed6732a621057d30ed2ad"
+          },
+          {
+            "path": "LGPL-2.0",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "957d798fe0372dd6194f219ccf157707fc6140e6"
+          },
+          {
+            "path": "LGPL-2.1",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "27bb4342a3e8dedd312a044ec3e59e295ac5e4d2"
+          },
+          {
+            "path": "MIT",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "f33a68ceb3ea00a533d2331a091ec7f2580bb4df"
+          }
+        ]
+      },
+      {
+        "sha": "bc3b65a4336f0ed29fa19d07c49bf6cf9690806a",
+        "type": "tree",
+        "entries": [
+          {
+            "path": "Apache-2.0",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "7cd903f573e53f2e05f2da52762bed4def6f0fbf"
+          },
+          {
+            "path": "CDDL-1.0",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "195a1687930a7f7e2d7256b0407f7ff487c43a0e"
+          },
+          {
+            "path": "GPL-1.0",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "3a4fa969e4c293641c4460c0525c0759aedcf10d"
+          },
+          {
+            "path": "Linux-OpenIB",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "1ad85f6b3a89bad3759dad18daadf9217ec0bc4e"
+          },
+          {
+            "path": "MPL-1.1",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "568b6049efe6739fec170a4cb1266ec5f88916ba"
+          },
+          {
+            "path": "X11",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "fe4353fd000090d76a123e9ea0fe854c87cb9733"
+          }
+        ]
+      },
+      {
+        "sha": "266e0aac382185b5bde575bd11e235c03a23e078",
+        "type": "tree",
+        "entries": [
+          {
+            "path": "Linux-syscall-note",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "9abdad71fafdf29de61157bfa9a31e244a32f5b8"
+          }
+        ]
+      }
+    ],
+    "licenseTexts": [
+      {
+        "path": "linux/COPYING",
+        "upstreamPath": "COPYING",
+        "gitBlob": "da4cb28febe66172a9fdf1a235525ae6c00cde1d",
+        "gitMode": "100644",
+        "size": 423,
+        "sha256": "ee5808b032a67f587d3541099d46de34f5bec8cd5976114ba07f1299ee6001ff"
+      },
+      {
+        "path": "linux/LICENSES/preferred/BSD-2-Clause",
+        "upstreamPath": "LICENSES/preferred/BSD-2-Clause",
+        "gitBlob": "da366e2ce50be9b4ec250cad773677bee7fc1d9d",
+        "gitMode": "100644",
+        "size": 1641,
+        "sha256": "6313108c23efffa36948f8b2cff1560a5935373b527b0e1a837cc77e6ed1bacd"
+      },
+      {
+        "path": "linux/LICENSES/preferred/BSD-3-Clause",
+        "upstreamPath": "LICENSES/preferred/BSD-3-Clause",
+        "gitBlob": "34c7f057c8d5441314c339ba574a9c6224ce0f80",
+        "gitMode": "100644",
+        "size": 1845,
+        "sha256": "7a83b1aeb460458db9a4bd521d7f237c45b1650f6e60ea5ffc71e49472454de3"
+      },
+      {
+        "path": "linux/LICENSES/preferred/GPL-2.0",
+        "upstreamPath": "LICENSES/preferred/GPL-2.0",
+        "gitBlob": "ff0812fd89cc41fc1b1ed6732a621057d30ed2ad",
+        "gitMode": "100644",
+        "size": 18729,
+        "sha256": "f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79"
+      },
+      {
+        "path": "linux/LICENSES/preferred/LGPL-2.0",
+        "upstreamPath": "LICENSES/preferred/LGPL-2.0",
+        "gitBlob": "957d798fe0372dd6194f219ccf157707fc6140e6",
+        "gitMode": "100644",
+        "size": 26246,
+        "sha256": "b62fa9feac8de9899cd1738f5845cedbad9ca2acd8056513b77666c9ba1ef600"
+      },
+      {
+        "path": "linux/LICENSES/preferred/LGPL-2.1",
+        "upstreamPath": "LICENSES/preferred/LGPL-2.1",
+        "gitBlob": "27bb4342a3e8dedd312a044ec3e59e295ac5e4d2",
+        "gitMode": "100644",
+        "size": 27413,
+        "sha256": "0b9a4febcdee6de55872501d5c1a8f5d8b0d1650cd4d5351995ceb22e889f8ca"
+      },
+      {
+        "path": "linux/LICENSES/preferred/MIT",
+        "upstreamPath": "LICENSES/preferred/MIT",
+        "gitBlob": "f33a68ceb3ea00a533d2331a091ec7f2580bb4df",
+        "gitMode": "100644",
+        "size": 1372,
+        "sha256": "323c587d0ccf10e376f8bf9a7f31fb4ca6078105194b42e0b1e0ee2bc9bde71f"
+      },
+      {
+        "path": "linux/LICENSES/other/CDDL-1.0",
+        "upstreamPath": "LICENSES/other/CDDL-1.0",
+        "gitBlob": "195a1687930a7f7e2d7256b0407f7ff487c43a0e",
+        "gitMode": "100644",
+        "size": 19249,
+        "sha256": "ef667e77bee4a571bfa1c145caee67c4f81b29d4484b81bf73dafe1a89f3923e"
+      },
+      {
+        "path": "linux/LICENSES/other/GPL-1.0",
+        "upstreamPath": "LICENSES/other/GPL-1.0",
+        "gitBlob": "3a4fa969e4c293641c4460c0525c0759aedcf10d",
+        "gitMode": "100644",
+        "size": 13022,
+        "sha256": "79270bf7a89e1c6bee5d578f920f330b61db2ff3b800cf095a1cc5cb34367ccd"
+      },
+      {
+        "path": "linux/LICENSES/other/Linux-OpenIB",
+        "upstreamPath": "LICENSES/other/Linux-OpenIB",
+        "gitBlob": "1ad85f6b3a89bad3759dad18daadf9217ec0bc4e",
+        "gitMode": "100644",
+        "size": 1317,
+        "sha256": "8ae20d34c2a74c85ae2760dd0034baf18e44bee3289b9b3a4fe46768b4ea2cd6"
+      },
+      {
+        "path": "linux/LICENSES/exceptions/Linux-syscall-note",
+        "upstreamPath": "LICENSES/exceptions/Linux-syscall-note",
+        "gitBlob": "9abdad71fafdf29de61157bfa9a31e244a32f5b8",
+        "gitMode": "100644",
+        "size": 1258,
+        "sha256": "8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f"
+      }
+    ]
+  }
+}

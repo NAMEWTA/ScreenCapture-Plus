@@ -31,13 +31,17 @@ def archive_descriptor(path):
     return {'name': path.name, 'size': path.stat().st_size, 'sha256': api.digest(path)}
 
 
-def stage_roots(platform):
+def stage_roots(platform, *, runtime_selection=None):
     api.require(platform in ('linux', 'windows'), 'Unknown original stage platform')
+    api.require(runtime_selection is None or platform == 'linux',
+                'A source runtime selection requires the original Linux stage')
     result = ['prepared.json', 'transformations.json', 'file-transformations.json',
               'installed-input-inventory.json', 'source-deployment-inventory.json',
               'executions', 'payloads', 'artifacts']
     if platform == 'linux':
         result += ['linuxdeploy-output-inventory.json', 'linux-stripped-inventory.json', 'work/debug']
+        if runtime_selection is not None:
+            result.append('work/source-runtime')
     return result
 
 
@@ -156,7 +160,7 @@ def retain(stage, output):
     api.require(not output.exists() and not output.is_relative_to(stage) and not stage.is_relative_to(output),
                 'Retain into a new output directory separate from the original stage')
     prepared = package.verify_prepared(stage)
-    roots = stage_roots(prepared['build']['platform'])
+    roots = stage_roots(prepared['build']['platform'], runtime_selection=prepared.get('runtimeSelection'))
     original = selected_inventory(stage, roots)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='retain-package-stage-', dir=output.parent) as temporary:

@@ -36,6 +36,9 @@ if(BUILD_TESTING)
     add_test(NAME source_checkout COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/source_checkout_tests.py")
     set_tests_properties(source_checkout PROPERTIES TIMEOUT 90)
+    add_test(NAME appimage_runtime_source COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/appimage_runtime_tests.py")
+    set_tests_properties(appimage_runtime_source PROPERTIES TIMEOUT 90)
     add_test(NAME source_submodules COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/source_submodules_tests.py")
     set_tests_properties(source_submodules PROPERTIES TIMEOUT 90)

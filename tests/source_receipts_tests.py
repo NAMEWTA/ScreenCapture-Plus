@@ -159,6 +159,21 @@ class SourceReceiptsTests(unittest.TestCase):
             producer.raw_record({}, {})
         self.assertFalse((producer.directory / 'source-build-receipt.json').exists())
 
+    def test_actual_child_loader_search_path_is_retained_without_normalization(self):
+        producer = self.producer()
+        environment = os.environ.copy()
+        environment['PATH'] = os.pathsep.join([str(self.root / 'module-build/bin'),
+                                              str(self.prefix / 'bin'), environment.get('PATH', '')])
+        expected = environment['PATH']
+        stdout, stderr = producer.run([sys.executable, '-c', 'import os,sys; sys.stdout.write(os.environ["PATH"])'],
+                                      cwd=self.root, env=environment, capture=True)
+        self.assertEqual(stdout, expected)
+        self.assertEqual(stderr, '')
+        record = bundle.read_json(producer.directory / 'execution-0.json')
+        self.assertEqual(record['environment']['PATH'], stdout)
+        self.assertEqual(record['exitCode'], 0)
+        self.assertEqual(environment['PATH'], expected)
+
     @unittest.skipIf(os.name == 'nt', 'The actual cc/objcopy source ancestry chain runs on Linux')
     def test_real_compilation_copy_objcopy_chain_retains_original_receipt_and_rejects_unrecorded_bytes(self):
         for tool in ('cc', 'objcopy'):

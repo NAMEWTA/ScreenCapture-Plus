@@ -63,6 +63,16 @@ def clean_environment(reference, prefix):
     return environment
 
 
+def module_environment(environment, directory):
+    # Qt places secondary-configuration tools in bin/Debug but the matching
+    # DLLs in bin. Windows does not search an executable's parent directory.
+    # Keep this module's newly built DLLs ahead of the new installed prefix;
+    # preserve the already isolated base PATH without reintroducing the SDK.
+    result = dict(environment)
+    result['PATH'] = str(directory / 'bin') + os.pathsep + environment['PATH']
+    return result
+
+
 def configure_command(name, source, build, prefix, python):
     arguments = ['cmake', '-S', str(source), '-B', str(build), '-G', 'Ninja Multi-Config',
                  '-DCMAKE_CONFIGURATION_TYPES=' + ';'.join(CONFIGURATIONS),
@@ -237,23 +247,24 @@ def build(options):
         for name in ('qtbase', 'qtsvg', 'qttools', 'qttranslations'):
             source = tools_source if name == 'qttools' else sources / name
             directory = workspace / (name + '-build')
+            build_environment = module_environment(environment, directory)
             recorder = API['NativeBuild'](workspace / (name + '-source-receipt'), 'windows', __file__,
                                            name, source, pins[name], prefix)
             recorder.retain_record(lock_path)
             recorder.retain_record(baseline)
             CHECKOUT['retain_policy'](source, recorder)
             for program in ('cl', 'link', 'lib', 'ninja', 'reuse', sys.executable):
-                recorder.observe_tool(program, environment)
+                recorder.observe_tool(program, build_environment)
             command = configure_command(name, source, directory, prefix, Path(sys.executable).resolve())
-            configuration = recorder.run(command, cwd=workspace, env=environment)
+            configuration = recorder.run(command, cwd=workspace, env=build_environment)
             cache = (directory / 'CMakeCache.txt').read_text(encoding='utf-8')
             installed = re.findall(r'^CMAKE_INSTALL_PREFIX:PATH=(.*)$', cache, re.MULTILINE)
             bundle.require(len(installed) == 1 and Path(installed[0]).resolve() == prefix,
                            'Qt configure selected a different installation prefix')
             for variant in CONFIGURATIONS:
                 recorder.run(['cmake', '--build', str(directory), '--config', variant, '--parallel', str(options.jobs)],
-                             cwd=workspace, env=environment)
-                recorder.run(['cmake', '--install', str(directory), '--config', variant], cwd=workspace, env=environment)
+                             cwd=workspace, env=build_environment)
+                recorder.run(['cmake', '--install', str(directory), '--config', variant], cwd=workspace, env=build_environment)
             CHECKOUT['verify_policy'](source)
             plan = recorder.finish(configure_index=configuration, configuration_files=configuration_records(directory))
             report['sourceModules'].append({'id': name, 'repository': pins[name]['repository'],

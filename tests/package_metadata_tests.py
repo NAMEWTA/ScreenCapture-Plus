@@ -36,6 +36,99 @@ def nsis_layout_fixture(root):
 
 
 class MetadataBoundaries(unittest.TestCase):
+    @unittest.skipIf(os.name=='nt', 'The actual AppImage copy/relocation contract requires Linux')
+    def test_actual_runtime_copy_and_embedding_survive_stage_relocation(self):
+        # Use fixed official runtime/tool bytes only for the packaging boundary.
+        # They are not a successful local source-runtime build or a product.
+        self.assertNotIn('work/source-runtime',retention.stage_roots('linux'))
+        self.assertNotIn('work/source-runtime',retention.stage_roots('windows'))
+        with self.assertRaisesRegex(ValueError,'original Linux stage'):
+            retention.stage_roots('windows',runtime_selection={})
+        roots=retention.stage_roots('linux',runtime_selection={})
+        self.assertIn('work/source-runtime',roots)
+        configured=os.environ.get('HUHUCAPTURE_TEST_PACKAGING_TOOLS')
+        tools=Path(configured) if configured else ROOT/'artifacts/packaging-tools'
+        lock=metadata.json_read(ROOT/'build/package/dependencies.lock.json')['tools']
+        inputs={name:tools/name/lock[name]['name'] for name in ('appimagetool','appimageRuntime')}
+        if not configured and not all(path.is_file() for path in inputs.values()):
+            self.skipTest('Restore the fixed real packaging tools or set HUHUCAPTURE_TEST_PACKAGING_TOOLS')
+        for name,path in inputs.items():
+            self.assertEqual({key:metadata.descriptor(path)[key] for key in ('size','sha256')},
+                             {key:lock[name][key] for key in ('size','sha256')})
+        license_input=tools/'appimageRuntime/LICENSE'
+        self.assertEqual({key:metadata.descriptor(license_input)[key] for key in ('size','sha256')},
+                         {key:lock['appimageRuntime']['licenseRecord'][key] for key in ('size','sha256')})
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);stage=root/'original-stage';stage.mkdir()
+            original=root/'official-fixture-inputs';original.mkdir()
+            runtime=original/'runtime-x86_64';notice=original/'LICENSE.runtime-sources'
+            packager.copy_exclusive(inputs['appimageRuntime'],runtime)
+            packager.copy_exclusive(license_input,notice)
+            material=stage/'work/source-runtime';material.mkdir(parents=True)
+            chosen=material/runtime.name;copied_notice=material/notice.name
+            packager.copy_exclusive(runtime,chosen);chosen.chmod(0o755)
+            packager.copy_exclusive(notice,copied_notice)
+            appdir=stage/'payloads/appimage';(appdir/'usr/bin').mkdir(parents=True)
+            probe=appdir/'usr/bin/retention-probe'
+            probe.write_text('#!/bin/sh\nprintf "actual retained runtime probe\\n"\n');probe.chmod(0o755)
+            (appdir/'AppRun').symlink_to('usr/bin/retention-probe')
+            (appdir/'retention-probe.desktop').write_text('[Desktop Entry]\nType=Application\nName=Retention probe\n'
+                'Exec=retention-probe\nIcon=retention-probe\nCategories=Utility;\n')
+            packager.copy_exclusive(ROOT/'assets/brand/huhucapture-icon.svg',appdir/'retention-probe.svg')
+            (stage/'artifacts').mkdir();image=stage/'artifacts/retention-probe.AppImage'
+            execution=packager.execution_api().ExecutionLog(stage/'executions','linux',packager.__file__)
+            environment={**os.environ,'APPIMAGE_EXTRACT_AND_RUN':'1','ARCH':'x86_64'}
+            index=execution.run([inputs['appimagetool'],'--runtime-file',chosen,'--comp','zstd',
+                '--mksquashfs-opt','-processors','--mksquashfs-opt','1',appdir,image],cwd=root,env=environment)
+            stdout,_=execution.run([image],cwd=root,env=environment,capture=True)
+            self.assertEqual(stdout,'actual retained runtime probe\n')
+            selection={'runtimePath':'work/source-runtime/runtime-x86_64',
+                'noticePath':'work/source-runtime/LICENSE.runtime-sources',
+                'runtime':metadata.descriptor(chosen),'notice':metadata.descriptor(copied_notice),
+                'commandIndex':index,'artifactName':image.name,
+                'embedding':packager.runtime_source_api().runtime_embedding(chosen,image)}
+            raw=execution.raw_record({}, {'runtimeSelection':selection})
+            recorded=metadata.json_read(raw)
+            packager._verify_runtime_packaging(stage,selection,recorded,runtime,notice)
+            # The public admission path must still reject these official fixture
+            # inputs: there are no original local source-build records here.
+            with self.assertRaises(ValueError):
+                packager.verify_runtime_selection(stage,{**selection,'schemaVersion':1,
+                    'kind':'huhucapture-source-built-runtime-selection','directory':str(original)},recorded)
+            roots=[name for name in roots if name in ('executions','payloads','artifacts','work/source-runtime')]
+            unused=stage/'work/cpack-output';unused.mkdir()
+            (unused/'scratch').write_text('Unreferenced CPack scratch\n')
+            selected=retention.selected_inventory(stage,roots)
+            archive=root/'runtime-packaging-stage.tar.gz'
+            descriptor=retention.write_archive(stage,roots,archive,selected)
+            restored=root/'relocated-stage';retention.extract_archive(archive,restored,descriptor)
+            shutil.rmtree(stage)
+            self.assertEqual(retention.selected_inventory(restored,roots),selected)
+            self.assertEqual(metadata.json_read(restored/'executions/build-execution.json'),recorded)
+            self.assertFalse((restored/'work/cpack-output').exists())
+            self.assertTrue((restored/'payloads/appimage/AppRun').is_symlink())
+            self.assertTrue((restored/selection['runtimePath']).stat().st_mode & 0o111)
+            packager._verify_runtime_packaging(restored,selection,recorded,runtime,notice)
+            # Do not rewrite historical command paths to the extraction root.
+            altered=json.loads(json.dumps(recorded))
+            altered['commands'][index]=[argument.replace(str(stage),str(restored))
+                                        for argument in altered['commands'][index]]
+            altered['executions'][index]['arguments']=altered['commands'][index]
+            with self.assertRaisesRegex(ValueError,'fixed-packager transformation'):
+                packager._verify_runtime_packaging(restored,selection,altered,runtime,notice)
+            for key in ('runtimePath','noticePath','artifactName'):
+                with self.subTest(path=key),self.assertRaises(ValueError):
+                    packager._verify_runtime_packaging(restored,{**selection,key:'../escaped'},recorded,runtime,notice)
+            for path in (restored/selection['runtimePath'],restored/selection['noticePath'],
+                         restored/'artifacts'/image.name):
+                saved=path.read_bytes();path.write_bytes(saved+b'changed actual material\n')
+                with self.subTest(material=path.name),self.assertRaises(ValueError):
+                    packager._verify_runtime_packaging(restored,selection,recorded,runtime,notice)
+                path.write_bytes(saved)
+            (restored/selection['noticePath']).unlink()
+            with self.assertRaises(ValueError):
+                packager._verify_runtime_packaging(restored,selection,recorded,runtime,notice)
+
     @unittest.skipIf(os.name=='nt', 'The real ELF/debug transformation contract requires Linux binutils')
     def test_original_transformation_stages_logs_and_success_status_are_bound(self):
         # Build and strip a tiny real ELF. This tests retained execution evidence

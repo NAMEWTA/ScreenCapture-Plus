@@ -8,6 +8,8 @@ import hashlib
 import os
 from pathlib import Path
 import runpy
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -126,10 +128,42 @@ class LinuxQtBuilderTests(unittest.TestCase):
 
     def test_cache_cannot_hide_duplicate_entries_behind_later_values(self):
         directory, _, _ = self.configuration_fixture()
-        with (directory / 'CMakeCache.txt').open('a', encoding='utf-8') as stream:
-            stream.write('QT_FEATURE_icu:BOOL=OFF\n')
+        path = directory / 'CMakeCache.txt'
+        original = path.read_text(encoding='utf-8')
+        for name in ('QT_FEATURE_icu', '"QT_FEATURE_icu"'):
+            with self.subTest(name=name):
+                path.write_text(original + name + ':BOOL=OFF\n', encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'Duplicate CMake cache entry'):
+                    build['cmake_values'](path)
+
+    def test_real_cmake_cache_retains_distinct_quoted_target_names_and_values(self):
+        cmake = shutil.which(os.environ.get('HUHU_CMAKE', 'cmake'))
+        if cmake is None:
+            self.skipTest('Real CMake is required to generate the cache-format regression')
+        source, directory = self.root / 'cache source', self.root / 'cache build'
+        source.mkdir()
+        (source / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.25)
+project(cache_format NONE)
+set("QT_QMAKE_LIB_OF_TARGET_GLIB2::GIO" "gio" CACHE INTERNAL "Original target name")
+set("QT_QMAKE_LIB_OF_TARGET_GLIB2::GLIB2" "glib" CACHE INTERNAL "Original target name")
+set("QT_QMAKE_LIB_OF_TARGET_GLIB2::GOBJECT" "gobject" CACHE INTERNAL "Original target name")
+set(QT_FEATURE_icu ON CACHE BOOL "Required capability")
+set(CONTRACT_VALUE "first:part=second part " CACHE STRING "Keep the complete value")
+''', encoding='utf-8')
+        subprocess.run([cmake, '-S', str(source), '-B', str(directory)],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        path = directory / 'CMakeCache.txt'
+        original = path.read_text(encoding='utf-8')
+        self.assertIn('"QT_QMAKE_LIB_OF_TARGET_GLIB2::GIO":INTERNAL=gio', original)
+        values = build['cmake_values'](path)
+        for name, value in (('GIO', 'gio'), ('GLIB2', 'glib'), ('GOBJECT', 'gobject')):
+            self.assertEqual(values['QT_QMAKE_LIB_OF_TARGET_GLIB2::' + name], value)
+        self.assertEqual(values['QT_FEATURE_icu'], 'ON')
+        self.assertEqual(values['CONTRACT_VALUE'], 'first:part=second part ')
+        with path.open('a', encoding='utf-8') as stream:
+            stream.write('"QT_QMAKE_LIB_OF_TARGET_GLIB2::GIO":INTERNAL=other\n')
         with self.assertRaisesRegex(ValueError, 'Duplicate CMake cache entry'):
-            build['cmake_values'](directory / 'CMakeCache.txt')
+            build['cmake_values'](path)
 
     def test_source_configuration_keeps_argument_boundaries_and_native_icu_binding(self):
         source, prefix = self.root / 'sources with spaces', self.root / 'new prefix'

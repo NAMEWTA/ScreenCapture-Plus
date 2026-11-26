@@ -21,7 +21,9 @@ COLLECTOR = ROOT / 'scripts/create-source-bundle.py'
 bundle = types.ModuleType('huhucapture_source_receipt_bundle')
 bundle.__file__ = str(COLLECTOR)
 exec(compile(COLLECTOR.read_bytes(), str(COLLECTOR), 'exec'), bundle.__dict__)
-ENVIRONMENT = ('CC', 'CXX', 'AR', 'LD', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS',
+ENVIRONMENT = ('CC', 'CXX', 'AR', 'AS', 'LD', 'NM', 'RANLIB', 'STRIP', 'OBJCOPY',
+               'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'PWD', 'PATH', 'LC_ALL', 'LANG',
+               'GCC_EXEC_PREFIX', 'COMPILER_PATH', 'CONFIG_SITE', 'CONFIG_SHELL',
                'PKG_CONFIG_PATH', 'PKG_CONFIG_LIBDIR', 'CMAKE_PREFIX_PATH', 'QT_ROOT_DIR',
                'LD_LIBRARY_PATH', 'LIBRARY_PATH', 'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH',
                'PKG_CONFIG_SYSROOT_DIR', 'LD_PRELOAD', 'ICU_ROOT',

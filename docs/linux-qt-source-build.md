@@ -98,6 +98,12 @@ Linguist，不引入 QDoc、Designer、Assistant 等额外应用。
 版本化 ICU 73.2 文件及所有后续模块的 `Qt6*_DIR` 都指向新前缀；不能只因为
 命令行写了 `ON` 就记录相应能力已生效。
 
+缓存解析遵循 CMake 的
+[`cmState::ParseCacheEntry`](https://github.com/Kitware/CMake/blob/v4.4.3/Source/cmState.cxx)
+带类型条目语法。Qt 导入目标产生的 `GLIB2::GIO` 等名称使用双引号保留完整键，
+不能在名称中的冒号处截断。解码后真正相同的键仍报错，不允许后面的值覆盖
+前面的配置证据；回归检查直接调用 CMake 生成原始缓存。
+
 新构建仍会与原 SDK 的厂商编译器、构建路径和部分可选系统集成不同。报告保留
 实际 feature cache 和这些差异，不把当前配置伪称为旧 SDK 配置。五个 Qt 模块
 均启用 Qt 原生源 SPDX 生成及验证，并逐文件核对安装输出与生成 SPDX 的完整

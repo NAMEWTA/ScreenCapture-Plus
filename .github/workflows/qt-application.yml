@@ -102,7 +102,7 @@ jobs:
   linux:
     needs: fixtures
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
     env:
       AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
       CARGO_BUILD_JOBS: 2
@@ -134,6 +134,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config nasm dbus libglib2.0-dev libglib2.0-dev-bin libwayland-dev libwayland-bin libxkbcommon-dev libxkbcommon-x11-dev libgl-dev libegl-dev libxcb1-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb-shape0-dev libxcb-xtest0-dev libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0 fonts-noto-cjk xvfb xauth x11-utils patchelf zstd squashfs-tools libssl-dev ca-certificates
           sudo apt-get install --no-install-recommends -y build-essential git cmake binutils libdbus-1-dev libatspi2.0-dev zlib1g-dev libzstd-dev libbrotli-dev libfontconfig1-dev libfreetype-dev libgtk-3-dev libx11-dev libx11-xcb-dev libxext-dev libxrender-dev libxfixes-dev libxi-dev libsm-dev libice-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-icccm4-dev libxcb-image0-dev libxcb-render0-dev libxcb-render-util0-dev libxcb-sync-dev libxcb-util-dev libxcb-xkb-dev libxcb-xinerama0-dev libgbm-dev libdrm-dev libvulkan-dev wayland-protocols
+          sudo apt-get install --no-install-recommends -y autoconf automake libtool curl texinfo bison flex gawk patch xz-utils
       - uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
         with:
           version: '6.12.1'
@@ -292,20 +293,34 @@ jobs:
           shutil.copytree(source/'notices', target)
           shutil.copyfile(source/'rust-toolchain-materials.json', target/'rust-toolchain-materials.json')
           PY
-      - name: Prepare the final Linux payloads and actual native candidate packages
-        id: prepared
+      - name: Restore the reviewed Linux packaging tools and validate actual transformation evidence
+        id: packaging_tools
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
         run: |
           python scripts/restore-packaging-tools.py --platform linux --output artifacts/packaging-tools
-          python tests/package_metadata_tests.py
+          HUHUCAPTURE_TEST_PACKAGING_TOOLS="$GITHUB_WORKSPACE/artifacts/packaging-tools" python tests/package_metadata_tests.py
           HUHUCAPTURE_TEST_LINUXDEPLOY="$GITHUB_WORKSPACE/artifacts/packaging-tools/linuxdeploy/linuxdeploy-x86_64.AppImage" python tests/source_receipts_tests.py
+      - name: Build the AppImage runtime and every static input from fixed original source
+        id: appimage_runtime
+        if: ${{ !cancelled() && steps.packaging_tools.outcome == 'success' }}
+        run: |
+          mkdir -p artifacts/appimage-runtime-source-linux
+          dpkg-query -W > artifacts/appimage-runtime-source-linux/host-packages.txt
+          uname -a > artifacts/appimage-runtime-source-linux/host-kernel.txt
+          python tests/appimage_runtime_tests.py
+          python scripts/build-appimage-runtime.py --tools artifacts/packaging-tools --workspace .deps/appimage-runtime-source --jobs 2
+          HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE="$GITHUB_WORKSPACE/.deps/appimage-runtime-source/downloads/appimage-linux-headers-linux-headers-4.19.88-2.tar.xz" python tests/appimage_runtime_tests.py HeaderPathTests.test_actual_archive_keeps_external_license_texts_separate_and_native_gaps_open -v
+      - name: Prepare the final Linux payloads and actual native candidate packages
+        id: prepared
+        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' && steps.appimage_runtime.outcome == 'success' }}
+        run: |
           intent=()
           if [ "$RELEASE_CANDIDATE" = true ]; then
             test "$GITHUB_REF" = refs/heads/main
           else
             intent+=(--development)
           fi
-          python scripts/package-qt.py prepare --installed artifacts/install/linux --stage artifacts/packages/linux-prepared --minimum-system 'Ubuntu 24.04 amd64' --tools artifacts/packaging-tools --qmake "$QT_ROOT_DIR/bin/qmake" "${intent[@]}"
+          python scripts/package-qt.py prepare --installed artifacts/install/linux --stage artifacts/packages/linux-prepared --minimum-system 'Ubuntu 24.04 amd64' --tools artifacts/packaging-tools --qmake "$QT_ROOT_DIR/bin/qmake" --appimage-runtime-build .deps/appimage-runtime-source "${intent[@]}"
       - name: Retain and independently reverify the exact prepared Linux stage
         if: ${{ !cancelled() && steps.prepared.outcome == 'success' }}
         run: python scripts/retain-package-stage.py --stage artifacts/packages/linux-prepared --output artifacts/package-stage-linux
@@ -330,7 +345,7 @@ jobs:
         if: ${{ !cancelled() && steps.prepared.outcome == 'success' && steps.ubuntu_build_records.outcome == 'success' }}
         run: |
           python scripts/collect-native-build-plans.py --output artifacts/native-source-plan-linux
-          python scripts/assemble-source-plan.py --inputs artifacts/native-build-sources/source-plan.json --inputs .deps/qt-runtime-linux/source-plan-fragment.json --inputs artifacts/native-source-plan-linux/source-plan-fragment.json --inputs artifacts/system-source-linux/source-plan.json --inputs artifacts/launchpad-build-records-linux/materials-plan.json --receipt-plan artifacts/application-source-receipt/receipt-plan.json --stage artifacts/packages/linux-prepared --output artifacts/source-plan/linux
+          python scripts/assemble-source-plan.py --inputs artifacts/native-build-sources/source-plan.json --inputs .deps/qt-runtime-linux/source-plan-fragment.json --inputs artifacts/native-source-plan-linux/source-plan-fragment.json --inputs .deps/appimage-runtime-source/source-plan-fragment.json --inputs artifacts/system-source-linux/source-plan.json --inputs artifacts/launchpad-build-records-linux/materials-plan.json --receipt-plan artifacts/application-source-receipt/receipt-plan.json --stage artifacts/packages/linux-prepared --output artifacts/source-plan/linux
       - name: Finalize exact Linux bytes with the required source-completeness boundary
         id: packages
         if: ${{ !cancelled() && steps.prepared.outcome == 'success' }}
@@ -375,6 +390,35 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           include-hidden-files: true
+      - name: Retain the actual AppImage source-build inputs and successful or failed records
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          root = Path('.deps/appimage-runtime-source')
+          selected = []
+          if root.is_dir():
+              fixed = {'sources','source-inputs','checkouts','downloads','control','toolchain','libraries','install',
+                       'probe','squashfuse-generated','build-info.json','source-plan-fragment.json',
+                       'runtime-link.map','runtime-link-closure.json'}
+              selected = [str(path) for path in root.iterdir()
+                          if path.name in fixed or path.name.endswith('-source-receipt')]
+              for path in root.rglob('*'):
+                  if not path.is_file() or any(path.is_relative_to(Path(parent)) for parent in selected):
+                      continue
+                  if path.name in {'config.log','config.status','config.mak','configure.log','CMakeCache.txt',
+                                   'build.ninja','rules.ninja','compile_commands.json','install_manifest.txt',
+                                   'meson-log.txt','intro-buildoptions.json','intro-buildsystem_files.json'}:
+                      selected.append(str(path))
+          if Path('artifacts/packaging-tools').is_dir(): selected.append('artifacts/packaging-tools')
+          output = Path('artifacts/appimage-runtime-source-linux'); output.mkdir(parents=True,exist_ok=True)
+          if selected:
+              listing = output/'retained-inputs.txt'
+              listing.write_text('\n'.join(sorted(selected))+'\n')
+              subprocess.run(['tar','--zstd','-cf',str(output/'runtime-build-evidence.tar.zst'),
+                              '--verbatim-files-from','-T',str(listing)], check=True)
+          PY
       - name: Retain the verified formal linux candidate
         id: candidate
         if: ${{ success() && inputs.release_candidate }}
@@ -401,6 +445,7 @@ jobs:
             artifacts/launchpad-build-records-linux.stdout.log
             artifacts/launchpad-build-records-linux.stderr.log
             artifacts/launchpad-build-records-linux.exit-code.txt
+            artifacts/appimage-runtime-source-linux/
             artifacts/native-source-plan-linux/
             artifacts/application-source-receipt/
             artifacts/native-build-sources/execution/

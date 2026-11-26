@@ -187,13 +187,17 @@ python3 scripts/retain-package-stage.py \
 
 Windows 使用同一入口与自己的 stage/output。该步骤先调用原 `verify_prepared`，
 再把原始 JSON、完整 `payloads`、`artifacts`、`executions` 以及 Linux 的两份中间
-清单和 `work/debug` 保存到 tar.gz，保留文件权限、符号链接与空日志。不保留不被
+清单和 `work/debug` 保存到 tar.gz；选用实际源码构建的 runtime 时，还保留
+`work/source-runtime` 中原样复制的 runtime 与许可。归档保留文件权限、符号链接与空日志。不保留不被
 复核引用的 CPack、再次解包或工具展开副本。随后安全解出到新目录，逐项比对原始
 字节、权限和链接，并真实再次调用 `verify_prepared`。只有全部通过才输出
 `huhucapture-v<version>-<platform>-<architecture>-prepared-stage.tar.gz` 与
 `package-stage-retention.json`。报告绑定归档 SHA256、原 prepared 文件及完整保留
 清单；原 development/release intent 和全部 JSON 保持原字节。此保留记录不替代
 来源完整性或发布门禁，上游源码、构建收据与静态输入仍按各生产者另外完整保留。
+迁移后验证使用保留执行记录中的原准备目录来核对当时的命令参数，并读取当前目录
+中的实际复制件与 AppImage 字节，不改写历史路径。源码 runtime 的外部构建目录仍须
+在原记录位置完整可用，并通过原 `verify_build`；仅保留包装目录不能替代这一构建证据。
 
 来源档案和清单分别命名为 `huhucapture-vX.Y.Z-<platform>-<architecture>-sources.tar.gz` 与 `...-source-manifest.json`。Windows 为 `windows-x64`，Linux 为 `linux-amd64`，避免两端不同内容共用一个名字。至少覆盖 huhucapture、Qt、gifski、LocalSend、FFmpeg、Rust vendor；Linux 另含 libportal、PipeWire、x264 和 AppImage runtime 及其实际静态闭包。需要保留实际补丁、构建参数、原许可、输出映射和重建方法，URL 不是对应源码。
 
