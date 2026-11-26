@@ -45,6 +45,10 @@ jobs:
         env:
           HUHUCAPTURE_TEST_APPIMAGE_RUNTIME_ARCHIVE: ${{ github.workspace }}/.deps/runtime-packaging-tools/appimageRuntime/source.tar.gz
         run: python tests/appimage_runtime_tests.py RuntimePortablePathTests -v
+      - name: Check actual AppImage probe icon retention with fixed original tools
+        env:
+          HUHUCAPTURE_TEST_PACKAGING_TOOLS: ${{ github.workspace }}/.deps/runtime-packaging-tools
+        run: python tests/runtime_diagnostics_tests.py RuntimeDiagnosticsTests.test_actual_packaging_probe_icon_links_survive_retention_and_relocation -v
       - name: Build every runtime, musl, CRT and compiler-support input from fixed source
         run: |
           python scripts/build-appimage-runtime.py \

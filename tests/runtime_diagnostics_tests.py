@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Real file/process retention contracts; these do not simulate a runtime build."""
 import hashlib
+import copy
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import sys
@@ -145,6 +147,99 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
         self.workspace.mkdir()
         with self.assertRaisesRegex(ValueError, 'separate'):
             api.retain(self.workspace, self.workspace / 'nested')
+
+    @unittest.skipUnless(sys.platform == 'linux', 'The real AppImage packaging/extraction regression runs on Linux')
+    def test_actual_packaging_probe_icon_links_survive_retention_and_relocation(self):
+        configured = os.environ.get('HUHUCAPTURE_TEST_PACKAGING_TOOLS')
+        tools = Path(configured) if configured else ROOT / '.deps/runtime-packaging-tools'
+        if not configured and not tools.is_dir():
+            self.skipTest('Restore fixed packaging tools or set HUHUCAPTURE_TEST_PACKAGING_TOOLS')
+        lock = json.loads((ROOT / 'build/package/dependencies.lock.json').read_text())
+        selected = {}
+        for key in ('appimageRuntime', 'appimagetool'):
+            pin = lock['tools'][key]
+            path = tools / key / pin['name']
+            self.assertEqual(path.stat().st_size, pin['size'])
+            self.assertEqual(api.digest(path), pin['sha256'])
+            selected[key] = path
+        builder = runpy.run_path(str(ROOT / 'scripts/build-appimage-runtime.py'))
+        recorder = builder['API']['ExecutionLog'](self.workspace / 'control', 'linux',
+                                                   ROOT / 'scripts/build-appimage-runtime.py')
+        # Use the real fixed official runtime/tool only to reproduce probe icon
+        # creation, extraction and retention. This is not a source-runtime build.
+        probe_path = builder['probe_runtime'](recorder, self.workspace, selected['appimageRuntime'],
+                                               selected['appimagetool'], builder['clean_environment']())
+        recorder.raw_record({'scope': 'Official-tool diagnostic regression, not a source-built runtime'},
+                            {'probe': builder['descriptor'](probe_path)})
+        original_payload = builder['bundle'].inventory(self.workspace / 'probe/AppDir')
+        self.assertEqual(original_payload, builder['bundle'].inventory(self.workspace / 'probe/extract/squashfs-root'))
+        for name in api.PROBE_ICON_LINKS:
+            path = self.workspace / name
+            self.assertTrue(path.is_symlink())
+            self.assertEqual(os.readlink(path), api.PROBE_ICON_TARGET)
+        report = api.retain(self.workspace, self.output)
+        self.assertEqual(len(report['knownProbeLinks']), 2)
+        self.assertNotIn('buildComplete', report)
+        api.verify_retained(self.output, report)
+        for base in ('probe/AppDir', 'probe/extract/squashfs-root'):
+            prefix = 'materials/' + base + '/'
+            retained_payload = [{'path':item['path'][len(prefix):], 'type':'file',
+                'size':item['size'], 'sha256':item['sha256'], 'mode':0o755 if item['mode'] & 0o111 else 0o644}
+                for item in report['files'] if item['path'].startswith(prefix)]
+            relation = next(item for item in report['knownProbeLinks']
+                            if item['link']['originalPath'] == str(self.workspace / base / '.DirIcon'))
+            link = relation['link']
+            retained_payload.append({'path':'.DirIcon', 'type':'symlink', 'target':link['target'],
+                                     'size':len(os.fsencode(link['target'])), 'sha256':link['targetSha256'], 'mode':0o777})
+            self.assertEqual(sorted(retained_payload, key=lambda item:item['path']), original_payload)
+            self.assertFalse((self.output / prefix / '.DirIcon').exists())
+            self.assertEqual((self.output / relation['targetPath']).read_bytes(),
+                             (self.workspace / base / api.PROBE_ICON_TARGET).read_bytes())
+
+        for key, changed_value in (('target', '../escape.svg'), ('originalPath', str(self.workspace / 'other/.DirIcon'))):
+            changed = copy.deepcopy(report)
+            changed['knownProbeLinks'][0]['link'][key] = changed_value
+            with self.assertRaisesRegex(ValueError, 'relationship changed'):
+                api.verify_retained(self.output, changed)
+        changed = copy.deepcopy(report)
+        changed['knownProbeLinks'][0]['targetFile']['sha256'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'fixed original bytes'):
+            api.verify_retained(self.output, changed)
+        changed = copy.deepcopy(report)
+        changed['knownProbeLinks'][0]['targetPath'] = 'materials/elsewhere.svg'
+        with self.assertRaisesRegex(ValueError, 'fixed original bytes'):
+            api.verify_retained(self.output, changed)
+
+        relocated = self.root / 'relocated'
+        shutil.copytree(self.output, relocated)
+        shutil.rmtree(self.output)
+        api.verify_retained(relocated, report)
+        link = self.workspace / api.PROBE_ICON_LINKS[0]
+        link.unlink(); link.symlink_to('../escape.svg')
+        with self.assertRaisesRegex(ValueError, 'Unknown or escaped'):
+            api.retain(self.workspace, self.output)
+        self.assertFalse(self.output.exists())
+        link.unlink(); link.symlink_to(api.PROBE_ICON_TARGET)
+        target = link.parent / api.PROBE_ICON_TARGET; original_icon = target.read_bytes()
+        target.write_bytes(original_icon.replace(b'#333', b'#444'))
+        with self.assertRaisesRegex(ValueError, 'icon bytes changed'):
+            api.retain(self.workspace, self.output)
+        target.write_bytes(original_icon)
+        other = link.with_name('unknown-icon-link'); link.rename(other)
+        with self.assertRaisesRegex(ValueError, 'Linked diagnostic path'):
+            api.retain(self.workspace, self.output)
+        other.rename(link)
+        real_copy = api.copy_original
+        def changed_link(source, destination, expected):
+            result = real_copy(source, destination, expected)
+            if source == target:
+                link.unlink(); link.symlink_to('../escape.svg')
+            return result
+        with mock.patch.object(api, 'copy_original', changed_link), self.assertRaisesRegex(ValueError, 'Unknown or escaped'):
+            api.retain(self.workspace, self.output)
+        self.assertFalse((self.output / api.INDEX).exists())
+        shutil.rmtree(self.workspace)
+        api.verify_retained(relocated, report)
 
     def test_selected_links_are_rejected_and_source_links_are_not_traversed(self):
         self.write('build-info.json', b'original')

@@ -30,6 +30,10 @@ MUSL_FILES = {
     'Makefile': {'size': 7515, 'sha256': '55962ce997212ed323f1fc19e26a8a220d65f2d9025d82fadafc2e170db8d6d2'},
     'configure': {'size': 26407, 'sha256': 'aa6574f8049f80f3b0a464bc20ab377a57bc0d3464478ac7ccb500f10002cd78'},
 }
+PROBE_ICON_LINKS = ('probe/AppDir/.DirIcon', 'probe/extract/squashfs-root/.DirIcon')
+PROBE_ICON_TARGET = 'runtime-probe.svg'
+# Exact ordinary SVG written by build-appimage-runtime.py's fixed probe.
+PROBE_ICON_FILE = {'size': 112, 'sha256': '3ab2ca88fa397435f675faf227a1f509363b4bc6d0fc5800a98fa9a72414016c'}
 CONFIG_FILES = ('config.log', 'config.status', 'config.mak', 'configure.log', 'Makefile',
                 'CMakeCache.txt', 'build.ninja', 'compile_commands.json', 'install_manifest.txt',
                 'CMakeFiles/CMakeConfigureLog.yaml', 'CMakeFiles/CMakeError.log',
@@ -84,7 +88,7 @@ def digest(path):
 def original_link(path):
     ordinary(path.parent)
     before = path.lstat()
-    require(stat.S_ISLNK(before.st_mode), 'The known musl configuration relation is not a symlink')
+    require(stat.S_ISLNK(before.st_mode), 'Known diagnostic relation is not a symlink')
     target = os.readlink(path)
     require(signature(path.lstat()) == signature(before), 'Original configuration link changed')
     return {'originalPath': str(path), 'target': target, 'identity': list(signature(before)),
@@ -109,11 +113,36 @@ def musl_makefile_relation(workspace):
             'meaning': 'Observed original two-link relation; only the fixed regular Makefile/configure bytes are copied.'}
 
 
-def selected_files(workspace, linked_records=None):
+def probe_icon_relation(workspace, relative):
+    require(relative in PROBE_ICON_LINKS, 'Unknown runtime probe icon location')
+    path = workspace / relative
+    link = original_link(path)
+    require(link['target'] == PROBE_ICON_TARGET, 'Unknown or escaped runtime probe icon link')
+    target = path.parent / PROBE_ICON_TARGET
+    info = ordinary(target)
+    require(info is not None and stat.S_ISREG(info.st_mode) and info.st_size == PROBE_ICON_FILE['size'] and
+            digest(target) == PROBE_ICON_FILE['sha256'], 'Original runtime probe icon bytes changed')
+    return {'profile': 'runtime-source-probe-icon-v1', 'link': link,
+            'targetOriginalPath': str(target),
+            'targetPath': 'materials/' + target.relative_to(workspace).as_posix(),
+            'targetFile': dict(PROBE_ICON_FILE),
+            'meaning': 'Original fixed payload icon link metadata; only its ordinary target bytes are copied.'}
+
+
+def selected_files(workspace, linked_records=None, probe_links=None):
     selected = {}
     linked_records = [] if linked_records is None else linked_records
+    probe_links = [] if probe_links is None else probe_links
 
     def add(path):
+        relative = path.relative_to(workspace).as_posix()
+        if relative in PROBE_ICON_LINKS and path.is_symlink():
+            relation = probe_icon_relation(workspace, relative)
+            require(not any(item['link']['originalPath'] == str(path) for item in probe_links),
+                    'Duplicate original runtime probe icon link')
+            probe_links.append(relation)
+            add(path.parent / PROBE_ICON_TARGET)
+            return
         if path.relative_to(workspace).as_posix() == MUSL_MAKEFILE_LINK and path.is_symlink():
             relation = musl_makefile_relation(workspace)
             require(not linked_records, 'Duplicate musl configuration link observation')
@@ -265,6 +294,32 @@ def verify_retained(output, report):
             require(item is not None and item['originalPath'] == str(source / name) and
                     all(item[key] == original[key] for key in ('size', 'sha256')),
                     'Retained musl link target or configure differs from its fixed original source')
+    probe_links = report.get('knownProbeLinks', [])
+    require(len(probe_links) <= len(PROBE_ICON_LINKS), 'Too many known runtime probe links')
+    indexed = {item['path']: item for item in report['files']}
+    observed = set()
+    for relation in probe_links:
+        workspace = Path(report['workspace'])
+        link = relation['link']
+        locations = {str(workspace / name): name for name in PROBE_ICON_LINKS}
+        original = link['originalPath']
+        require(original in locations and original not in observed and
+                relation['profile'] == 'runtime-source-probe-icon-v1' and link['target'] == PROBE_ICON_TARGET and
+                link['targetSha256'] == hashlib.sha256(os.fsencode(PROBE_ICON_TARGET)).hexdigest(),
+                'Retained runtime probe icon relationship changed')
+        observed.add(original)
+        identity = link['identity']
+        require(len(identity) == 6 and all(type(value) is int for value in identity) and
+                stat.S_ISLNK(identity[2]) and identity[3] == len(os.fsencode(PROBE_ICON_TARGET)),
+                'Retained original probe link identity changed')
+        target = Path(locations[original]).parent / PROBE_ICON_TARGET
+        expected_path = 'materials/' + target.as_posix()
+        item = indexed.get(expected_path)
+        require(relation['targetOriginalPath'] == str(workspace / target) and
+                relation['targetPath'] == expected_path and relation['targetFile'] == PROBE_ICON_FILE and
+                item is not None and item['originalPath'] == str(workspace / target) and
+                all(item[key] == PROBE_ICON_FILE[key] for key in ('size', 'sha256')),
+                'Retained runtime probe icon target differs from its fixed original bytes')
 
 
 def retain(workspace, output):
@@ -273,8 +328,8 @@ def retain(workspace, output):
     require(original is None or stat.S_ISDIR(original.st_mode), 'Original runtime workspace is not a directory')
     require(ordinary(output) is None and not output.is_relative_to(workspace) and not workspace.is_relative_to(output),
             'Use a new diagnostic output directory separate from the original workspace')
-    linked_records = []
-    paths = selected_files(workspace, linked_records) if original is not None else []
+    linked_records, probe_links = [], []
+    paths = selected_files(workspace, linked_records, probe_links) if original is not None else []
     snapshots = [(path, ordinary(path)) for path in paths]
     require(all(info is not None and 0 <= info.st_size <= MAX_FILE for _, info in snapshots),
             'An original diagnostic exceeds the per-file size limit')
@@ -286,13 +341,14 @@ def retain(workspace, output):
         name = 'materials/' + path.relative_to(workspace).as_posix()
         actual = copy_original(path, output / name, signature(info))
         files.append({'originalPath': str(path), 'path': name, **actual})
-    current_links = []
+    current_links, current_probe_links = [], []
     require((ordinary(workspace) is None) if original is None else
-            (selected_files(workspace, current_links) == paths and current_links == linked_records),
+            (selected_files(workspace, current_links, current_probe_links) == paths and
+             current_links == linked_records and current_probe_links == probe_links),
             'Original diagnostic selection changed')
     report = {'schemaVersion': 1, 'kind': 'huhucapture-runtime-diagnostics', 'workspace': str(workspace),
               'state': 'workspace-absent' if original is None else ('materials-retained' if files else 'no-selected-materials'),
-              'files': files, 'knownSourceLinks': linked_records, 'materialBytes': total,
+              'files': files, 'knownSourceLinks': linked_records, 'knownProbeLinks': probe_links, 'materialBytes': total,
               'limits': {'perFileBytes': MAX_FILE, 'totalBytes': MAX_TOTAL, 'fileCount': MAX_FILES},
               'scope': 'Exact original diagnostics only; no build, static closure or corresponding-source success is asserted. '
                        'Original receipts are unchanged; the separately retained complete evidence remains required.'}
@@ -304,6 +360,10 @@ def retain(workspace, output):
                 'Original diagnostic changed before index publication')
     require(not linked_records or musl_makefile_relation(workspace) == linked_records[0],
             'Original musl configuration link changed before index publication')
+    for relation in probe_links:
+        relative = Path(relation['link']['originalPath']).relative_to(workspace).as_posix()
+        require(probe_icon_relation(workspace, relative) == relation,
+                'Original runtime probe icon link changed before index publication')
     with (output / INDEX).open('xb') as stream:
         stream.write(data)
     return report
