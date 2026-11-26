@@ -10,6 +10,13 @@ import subprocess
 import tomllib
 
 
+# Only this reviewed eight-file publication may use the generated-Maven
+# binding. Updating the crate, any file classification, or either upstream
+# identity requires another source review, not a plan-provided exception.
+ANDROID_NOTICE_BINDING = 'rustls-android-0.1.1-authored-and-archive-match'
+ANDROID_NOTICE_PROFILE_SHA256 = '626da512f0af24ae2ef41d30e6a70ddcf414a4ae4b9b54f331b7b5117b3c6217'
+
+
 def file_digest(path):
     value = hashlib.sha256()
     with path.open('rb') as stream:
@@ -79,6 +86,49 @@ def original_notice_reviews(api):
     return path, identity, entries
 
 
+def reviewed_android_publication(api, crate, review):
+    """Bind separately retained notices to one unchanged original publication.
+
+    Two authored files match the source commit. Cargo generated one manifest;
+    Maven generated five files, including the AAR found byte-for-byte in the
+    later official archive. Neither match establishes the original build or
+    upload commit. The complete reviewed record, including those limitations,
+    is fixed here so this cannot become a general generated-file exemption.
+    """
+    encoded = json.dumps(review, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    api.meta.require(hashlib.sha256(encoded).hexdigest() == ANDROID_NOTICE_PROFILE_SHA256,
+                     'Android notice binding differs from the fixed original publication review')
+    expected = {entry['path']: entry for entry in review['publishedFiles']}
+    actual = list(crate.rglob('*'))
+    api.meta.require(crate.is_dir() and not crate.is_symlink() and
+                     not any(path.is_symlink() for path in actual) and
+                     {path.relative_to(crate).as_posix() for path in actual if not path.is_dir()} ==
+                     {*expected, '.cargo-checksum.json'},
+                     'Android notice binding requires the unchanged eight-file publication')
+    for name, entry in expected.items():
+        path = crate / api.meta.safe_relative(name)
+        api.meta.require(path.is_file() and path.resolve().is_relative_to(crate.resolve()) and
+                         path.stat().st_size == entry['size'],
+                         'Android published file is missing, linked or has changed size: ' + name)
+        data = path.read_bytes()
+        api.meta.require(hashlib.sha256(data).hexdigest() == entry['sha256'] and
+                         hashlib.sha1(b'blob ' + str(len(data)).encode('ascii') + b'\0' + data).hexdigest() ==
+                         entry['gitBlobSha1'], 'Android published file bytes differ: ' + name)
+    for name in ('Cargo.toml', 'Cargo.toml.orig'):
+        package = tomllib.loads((crate / name).read_text(encoding='utf-8'))['package']
+        api.meta.require(package.get('name') == review['name'] and package.get('version') == review['version'] and
+                         package.get('license') == review['declaredLicense'] and
+                         package.get('repository') == review['declaredRepository'] and
+                         package.get('authors', []) == review['authors'],
+                         'Android notice binding changes the original package declaration')
+    return {'publicationGeneratedFiles': review['publicationGeneratedFiles'],
+            'publishedFiles': review['publishedFiles'], 'upstreamTree': review['upstreamTree'],
+            'upstreamLicenseLinks': review['upstreamLicenseLinks'], 'packagingRecipe': review['packagingRecipe'],
+            'buildProvenanceRecorded': False, 'externalLicenseTexts': True,
+            'fixedPublicationReviewSha256': ANDROID_NOTICE_PROFILE_SHA256,
+            'licenseTextScope': review['licenseTextScope']}
+
+
 def reviewed_crate_notices(api, crate, locked, declaration, checksum_path, review, review_identity, output):
     """Supplement notices without changing Cargo's immutable vendor directory.
 
@@ -93,7 +143,10 @@ def reviewed_crate_notices(api, crate, locked, declaration, checksum_path, revie
                      'Original crate notice review differs from the exact Cargo source: ' + crate.name)
     commit = review['upstreamCommit']
     api.meta.require(re.fullmatch(r'[0-9a-f]{40}', commit), 'Original crate notice review lacks an exact commit')
-    binding = review['bindingType']
+    binding, additional_provenance = review['bindingType'], {}
+    if (review['name'], review['version']) == ('rustls-platform-verifier-android', '0.1.1'):
+        api.meta.require(binding == ANDROID_NOTICE_BINDING,
+                         'The fixed Android publication requires its dedicated notice binding type')
     if binding == 'cargo-vcs-and-authored-files-match':
         vcs = api.meta.json_read(crate / '.cargo_vcs_info.json', 16384)
         api.meta.require(vcs.get('git', {}).get('sha1') == commit and
@@ -103,6 +156,8 @@ def reviewed_crate_notices(api, crate, locked, declaration, checksum_path, revie
     elif binding == 'cargo-lock-git-revision-and-files-match':
         api.meta.require(locked['source'].startswith('git+') and locked['source'].endswith('#' + commit),
                          'Original Git crate revision differs from its notice review: ' + crate.name)
+    elif binding == ANDROID_NOTICE_BINDING:
+        additional_provenance = reviewed_android_publication(api, crate, review)
     else:
         api.meta.require(binding == 'all-published-files-match-upstream-commit' and
                          locked['source'].startswith('registry+') and review['publicationCommitRecorded'] is False,
@@ -165,7 +220,7 @@ def reviewed_crate_notices(api, crate, locked, declaration, checksum_path, revie
                      'publicationCommitRecorded': review['publicationCommitRecorded'],
                      'reviewFile': review_identity, 'cargoChecksumFileSha256': review['cargoChecksumFileSha256'],
                      'selectedLicense': review.get('selectedLicense'), 'authors': review.get('authors', []),
-                     'sourceManifest': review.get('sourceManifest'),
+                     'sourceManifest': review.get('sourceManifest'), **additional_provenance,
                      'scope': 'Exact Cargo notice/source binding; standard-license selections are explicitly labeled; no combined-source closure'}
 
 

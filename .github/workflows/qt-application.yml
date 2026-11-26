@@ -177,6 +177,7 @@ jobs:
           pkg-config --modversion Qt6Core Qt6Gui Qt6Widgets
           rustup toolchain install 1.97.1 --profile minimal
           python scripts/prepare-native-build-sources.py --output artifacts/native-build-sources
+          HUHUCAPTURE_TEST_NATIVE_SOURCE_PLAN=artifacts/native-build-sources/source-plan.json python tests/source_bundle_tests.py SourceBundleTests.test_exact_android_publication_retains_external_notices_and_rejects_tampering -v
           python scripts/build-native-rust.py --source-plan artifacts/native-build-sources/source-plan.json
           python scripts/build-portal.py
           python scripts/build-pipewire.py
@@ -648,6 +649,9 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python scripts/prepare-native-build-sources.py --output artifacts/native-build-sources
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:HUHUCAPTURE_TEST_NATIVE_SOURCE_PLAN = 'artifacts/native-build-sources/source-plan.json'
+          python tests/source_bundle_tests.py SourceBundleTests.test_exact_android_publication_retains_external_notices_and_rejects_tampering -v
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python scripts/build-native-rust.py --source-plan artifacts/native-build-sources/source-plan.json
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

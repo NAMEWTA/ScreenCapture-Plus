@@ -262,8 +262,10 @@ def build_toolchain(workspace, inputs, specification, environment, jobs):
     # Preserve the actual requested configuration and its original upstream
     # rules even if a later library build or the target probe fails.
     build.retain_record(config)
-    for name in ('configure.ac', 'configure', 'libgcc/Makefile.in',
-                 'libstdc++-v3/configure.ac', 'libstdc++-v3/configure'):
+    for name in ('configure.ac', 'configure', 'Makefile.in', 'libgcc/Makefile.in',
+                 'libstdc++-v3/configure.ac', 'libstdc++-v3/configure',
+                 'libstdc++-v3/libsupc++/Makefile.am', 'libstdc++-v3/libsupc++/Makefile.in',
+                 'libiberty/cp-demangle.c'):
         build.retain_record(inputs['appimage-gcc']['directory'] / name)
     makefile = inputs['appimage-toolchain-build']['directory'] / 'litecross/Makefile'
     command = ['make', '-f', str(makefile), '-j' + str(jobs)]

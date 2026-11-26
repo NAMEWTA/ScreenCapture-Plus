@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "scope": "Exact additional notices for Cargo-verified package bytes; explicitly selected standard-license text is identified separately and original metadata is retained",
   "correspondingSourceComplete": false,
-  "sourceReview": "The original Windows/Linux 24f vendor inventories match each other. Commit binding compares every authored file, mapping Cargo.toml.orig and external readmes; Cargo generated manifests/locks are retained separately. GNU import-library files exactly match the upstream 2018 commit named Publish 0.3.4; the original crates contain no publication VCS record, so this is content equivalence and does not assert the upload commit. No later same-version tag is substituted.",
+  "sourceReview": "The original Windows/Linux 24f vendor inventories match each other. Commit binding compares every authored file, mapping Cargo.toml.orig and external readmes; Cargo generated manifests/locks are retained separately. GNU import-library files exactly match the upstream 2018 commit named Publish 0.3.4; the original crates contain no publication VCS record, so this is content equivalence and does not assert the upload commit. No later same-version tag is substituted. The Android 0.1.1 record separately identifies its two matched authored files, one Cargo manifest and five generated Maven files; it does not assert that all published files came from one Git tree or that the publication/build commit is known.",
   "crates": [
     {
       "name": "asn1-rs-impl",
@@ -300,6 +300,141 @@
           "gitBlobSha1": "79c8b7c4a1dabcfbc718b7fe6d43b1892f9850cd",
           "size": 3733,
           "sha256": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111"
+        }
+      ]
+    },
+    {
+      "name": "rustls-platform-verifier-android",
+      "version": "0.1.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f",
+      "cargoChecksumFileSha256": "638264c987fef9d6e1672c7095f31601164f2cfdf258230e5ad0201e1f70913d",
+      "declaredLicense": "MIT OR Apache-2.0",
+      "declaredRepository": "https://github.com/rustls/rustls-platform-verifier",
+      "authors": [],
+      "upstreamRepository": "https://github.com/rustls/rustls-platform-verifier",
+      "upstreamCommit": "da3d9c36f48fb9f8f97e94f132fdab67ab0fc75b",
+      "upstreamTree": "6acf2992ff34138c5eae21b77f0567f2e356def1",
+      "pathInVcs": "android-release-support",
+      "bindingType": "rustls-android-0.1.1-authored-and-archive-match",
+      "matchedPublishedFileCount": 2,
+      "cargoGeneratedFiles": [
+        "Cargo.toml"
+      ],
+      "publicationGeneratedFiles": [
+        "maven/pom.xml",
+        "maven/rustls/rustls-platform-verifier/0.1.1/_remote.repositories",
+        "maven/rustls/rustls-platform-verifier/0.1.1/rustls-platform-verifier-0.1.1.aar",
+        "maven/rustls/rustls-platform-verifier/0.1.1/rustls-platform-verifier-0.1.1.pom",
+        "maven/rustls/rustls-platform-verifier/maven-metadata-local.xml"
+      ],
+      "publicationCommitRecorded": false,
+      "buildProvenanceRecorded": false,
+      "publishedFiles": [
+        {
+          "path": "Cargo.toml",
+          "size": 962,
+          "sha256": "34de6835ef5df615acadc4071bb9d38565b23fbe5a9087a7cf30cc7ccfe02a20",
+          "gitBlobSha1": "2995083190165d7eecb36da304da6e7e8acbaad5",
+          "origin": "cargo-generated"
+        },
+        {
+          "path": "Cargo.toml.orig",
+          "size": 661,
+          "sha256": "06142c21559d66a76c8740d8c505a2f7ed9078c45e7baee49dac58a131362640",
+          "gitBlobSha1": "4d2bdceb7244e182257f0f52f2e07acda75c3c67",
+          "origin": "authored-source",
+          "upstreamPath": "android-release-support/Cargo.toml"
+        },
+        {
+          "path": "maven/pom.xml",
+          "size": 551,
+          "sha256": "5468629ab3793f4768c0527b8ecca25219a00b5d9503d1ad657cc664c87e9081",
+          "gitBlobSha1": "70e940abfa49b15085f0e3272821ef551bb6500e",
+          "origin": "maven-generated"
+        },
+        {
+          "path": "maven/rustls/rustls-platform-verifier/0.1.1/_remote.repositories",
+          "size": 214,
+          "sha256": "df2cae67b1175c951353c484a675f9b56a57634e26b1b6cb38ddd74bd180c1ba",
+          "gitBlobSha1": "10f04b1aaf188831597efa6da5d770ca2c06ce0e",
+          "origin": "maven-generated"
+        },
+        {
+          "path": "maven/rustls/rustls-platform-verifier/0.1.1/rustls-platform-verifier-0.1.1.aar",
+          "size": 9287,
+          "sha256": "667292cadd8fa589229dd0f716541236a761f29b774930868d218175633830fd",
+          "gitBlobSha1": "8acc8b5fe0b36db4fb45ad8ac4a8f8c3b24fc0c5",
+          "origin": "maven-generated",
+          "officialArchiveMatch": {
+            "repository": "https://github.com/rustls/rustls-platform-verifier",
+            "commit": "a9c4a842e44e41b0ff0ef0ec12486853ce81f34c",
+            "path": "android-release-support/maven/org/rustls/rustls-platform-verifier/0.1.1/rustls-platform-verifier-0.1.1.aar",
+            "gitBlobSha1": "8acc8b5fe0b36db4fb45ad8ac4a8f8c3b24fc0c5",
+            "scope": "Later upstream archive of the same published AAR bytes; not an original build or upload record"
+          }
+        },
+        {
+          "path": "maven/rustls/rustls-platform-verifier/0.1.1/rustls-platform-verifier-0.1.1.pom",
+          "size": 551,
+          "sha256": "5468629ab3793f4768c0527b8ecca25219a00b5d9503d1ad657cc664c87e9081",
+          "gitBlobSha1": "70e940abfa49b15085f0e3272821ef551bb6500e",
+          "origin": "maven-generated"
+        },
+        {
+          "path": "maven/rustls/rustls-platform-verifier/maven-metadata-local.xml",
+          "size": 310,
+          "sha256": "151ab31e01d7ad176b02f2b9104d86450a383c4c16281e12eb87ed39ad6bf660",
+          "gitBlobSha1": "f125b40845daef17acaa4eb7867dee423683bfca",
+          "origin": "maven-generated"
+        },
+        {
+          "path": "src/lib.rs",
+          "size": 6327,
+          "sha256": "d24acbec7495ccbbe7a3760bad1e7a80cb8fa7e2e8a05831798261c749e86c73",
+          "gitBlobSha1": "97fb79ada326479f4311fb0b7663bb1a258c3977",
+          "origin": "authored-source",
+          "upstreamPath": "android-release-support/src/lib.rs"
+        }
+      ],
+      "upstreamLicenseLinks": [
+        {
+          "path": "android-release-support/LICENSE-APACHE",
+          "mode": "120000",
+          "target": "../LICENSE-APACHE",
+          "gitBlobSha1": "965b606f331b51d566b46025f9ff311a7aad0c12"
+        },
+        {
+          "path": "android-release-support/LICENSE-MIT",
+          "mode": "120000",
+          "target": "../LICENSE-MIT",
+          "gitBlobSha1": "76219eb72e8524f15c21ec93b9b2592da49b5460"
+        }
+      ],
+      "packagingRecipe": {
+        "repository": "https://github.com/rustls/rustls-platform-verifier",
+        "commit": "da3d9c36f48fb9f8f97e94f132fdab67ab0fc75b",
+        "path": "ci/package_android_release.sh",
+        "gitBlobSha1": "91b06eac5d67e45f81d5e0521902af99b86699fe",
+        "scope": "Original recipe explains generated Maven inputs; no claim that this recipe was run for the retained AAR"
+      },
+      "licenseTextScope": "External unmodified root license texts reached by the crate source license symlinks. The exact published manifest and documentation match the recorded source commit, but the crate has no .cargo_vcs_info.json. Cargo and Maven generated files remain separately identified. The later official archive establishes only AAR content equality. This notice binding is not an AAR build receipt, complete corresponding source, or a determination of Windows/Linux deployment scope.",
+      "notices": [
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/rustls-platform-verifier-android-0.1.1/LICENSE-APACHE",
+          "upstreamPath": "LICENSE-APACHE",
+          "gitBlobSha1": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+          "size": 11357,
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "inputKind": "project-original",
+          "inputPath": "third_party/rust-notices/rustls-platform-verifier-android-0.1.1/LICENSE-MIT",
+          "upstreamPath": "LICENSE-MIT",
+          "gitBlobSha1": "9964122648c6348a3c8e61d6d46a87d5942d036c",
+          "size": 1066,
+          "sha256": "1c7cf76689c837a68ed8d704994e52a0f2940c087958f860d17f3186afbdcc0c"
         }
       ]
     },

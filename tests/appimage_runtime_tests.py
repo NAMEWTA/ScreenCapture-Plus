@@ -127,6 +127,7 @@ class ProfileTests(unittest.TestCase):
     def test_real_make_preserves_the_target_flags_configure_argument(self):
         _, _, profile = HELPER['profile']()
         options = profile['toolchainConfiguration']
+        self.assertIn('CFLAGS_FOR_TARGET=-g -O2 -fPIC', options['gcc'])
         self.assertIn('CXXFLAGS_FOR_TARGET=-g -O2 -fPIC', options['gcc'])
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -283,33 +284,37 @@ class NativeFileTests(unittest.TestCase):
             HELPER['toolchain_probe_inputs'](map_path,obj,prefix,{})
 
     @unittest.skipUnless(shutil.which('g++'), 'The static C++ archive fixture requires a real C++ compiler')
-    def test_real_cpp_static_archive_requires_pic_for_static_pie(self):
-        source, main = self.root / 'library.cpp', self.root / 'main.cpp'
-        source.write_text('const char *library_message() { return "original-static-library"; }\n')
-        main.write_text('extern const char *library_message();\n'
-                        'int main() { return library_message()[0] == \'o\' ? 0 : 1; }\n')
-        main_object = self.root / 'main.o'
-        subprocess.run(['g++', '-fPIE', '-c', main, '-o', main_object], check=True, capture_output=True)
-        obj, archive, binary = self.root / 'library.o', self.root / 'library.a', self.root / 'library-probe'
-        subprocess.run(['g++', '-g', '-O2', '-fno-pic', '-fno-pie', '-c', source, '-o', obj],
-                       check=True, capture_output=True)
-        subprocess.run(['ar', 'rcs', archive, obj], check=True, capture_output=True)
-        failed = subprocess.run(['g++', '-static-pie', main_object, archive, '-o', binary], capture_output=True, text=True)
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertIn('R_X86_64_32', failed.stderr)
+    def test_real_c_and_cpp_static_archives_require_pic_for_static_pie(self):
         _, _, profile = HELPER['profile']()
-        assignment = next(item for item in profile['toolchainConfiguration']['gcc']
-                          if item.startswith('CXXFLAGS_FOR_TARGET='))
-        subprocess.run(['g++', *shlex.split(assignment.split('=', 1)[1]), '-c', source, '-o', obj],
-                       check=True, capture_output=True)
-        subprocess.run(['ar', 'rcs', archive, obj], check=True, capture_output=True)
-        map_path = self.root / 'library.map'
-        subprocess.run(['g++', '-static-pie', main_object, archive, '-Wl,-Map=' + str(map_path), '-o', binary],
-                       check=True, capture_output=True)
-        HELPER['inspect_elf'](binary, marked=False)
-        subprocess.run([binary], check=True, capture_output=True)
-        self.assertIn(archive, HELPER['link_loads'](map_path.read_text()))
-        self.assertEqual(HELPER['archive_members'](archive)[0]['sha256'], BUNDLE.digest(obj))
+        for compiler, extension, variable in (('gcc', 'c', 'CFLAGS_FOR_TARGET'), ('g++', 'cpp', 'CXXFLAGS_FOR_TARGET')):
+            with self.subTest(language=extension):
+                directory = self.root / extension; directory.mkdir()
+                source, main = directory / ('library.' + extension), directory / ('main.' + extension)
+                source.write_text('const char *library_message(void) { return "original-static-library"; }\n')
+                main.write_text('extern const char *library_message(void);\n'
+                                'int main(void) { return library_message()[0] == \'o\' ? 0 : 1; }\n')
+                main_object = directory / 'main.o'
+                subprocess.run([compiler, '-fPIE', '-c', main, '-o', main_object], check=True, capture_output=True)
+                obj, archive, binary = directory / 'library.o', directory / 'library.a', directory / 'library-probe'
+                subprocess.run([compiler, '-g', '-O2', '-fno-pic', '-fno-pie', '-c', source, '-o', obj],
+                               check=True, capture_output=True)
+                subprocess.run(['ar', 'rcs', archive, obj], check=True, capture_output=True)
+                failed = subprocess.run([compiler, '-static-pie', main_object, archive, '-o', binary],
+                                        capture_output=True, text=True)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn('R_X86_64_32', failed.stderr)
+                assignment = next(item for item in profile['toolchainConfiguration']['gcc']
+                                  if item.startswith(variable + '='))
+                subprocess.run([compiler, *shlex.split(assignment.split('=', 1)[1]), '-c', source, '-o', obj],
+                               check=True, capture_output=True)
+                subprocess.run(['ar', 'rcs', archive, obj], check=True, capture_output=True)
+                map_path = directory / 'library.map'
+                subprocess.run([compiler, '-static-pie', main_object, archive, '-Wl,-Map=' + str(map_path), '-o', binary],
+                               check=True, capture_output=True)
+                HELPER['inspect_elf'](binary, marked=False)
+                subprocess.run([binary], check=True, capture_output=True)
+                self.assertIn(archive, HELPER['link_loads'](map_path.read_text()))
+                self.assertEqual(HELPER['archive_members'](archive)[0]['sha256'], BUNDLE.digest(obj))
 
     def test_real_link_map_lists_crt_and_compiler_archives_and_unowned_inputs_fail(self):
         loads = HELPER['link_loads'](self.map.read_text())

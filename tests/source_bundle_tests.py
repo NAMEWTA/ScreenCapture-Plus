@@ -400,6 +400,104 @@ class SourceBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Git administrative data"):
             bundle.extract_tar(archive, self.root / "unsafe", "crate-1.0.0")
 
+    def test_exact_android_publication_retains_external_notices_and_rejects_tampering(self):
+        # Consume the actual Cargo-produced files when source preparation has
+        # run, or explicitly supplied original cache paths for an offline replay.
+        # No archive, vendor checksum, publication record or build is fabricated.
+        original_archive = os.environ.get('HUHUCAPTURE_TEST_ANDROID_CRATE')
+        original_vendor = os.environ.get('HUHUCAPTURE_TEST_ANDROID_VENDOR')
+        name = 'rustls-platform-verifier-android-0.1.1'
+        if not original_archive and not original_vendor:
+            plan_path = Path(os.environ.get('HUHUCAPTURE_TEST_NATIVE_SOURCE_PLAN',
+                                           str(ROOT / '.deps/native-build-sources/source-plan.json')))
+            if not plan_path.is_file() and 'HUHUCAPTURE_TEST_NATIVE_SOURCE_PLAN' not in os.environ:
+                self.skipTest('Requires the actual prepared Android crate and Cargo vendor inputs')
+            plan = bundle.read_json(plan_path)['rustVendor']
+            def input_path(value):
+                path = Path(value)
+                return path if path.is_absolute() else plan_path.parent / path
+            original_archive = input_path(plan['registryCache']) / (name + '.crate')
+            original_vendor = input_path(plan['directory']) / name
+        self.assertTrue(original_archive and original_vendor, 'Provide both actual archive and vendor paths')
+        original_archive, original_vendor = Path(original_archive), Path(original_vendor)
+        self.assertEqual(original_archive.stat().st_size, 13919)
+        self.assertEqual(bundle.digest(original_archive),
+                         'f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f')
+        before = bundle.inventory(original_vendor)
+        vendor, cache, project = (self.root / child for child in ('vendor', 'cache', 'project'))
+        vendor.mkdir(); cache.mkdir(); project.mkdir()
+        crate = vendor / name
+        shutil.copytree(original_vendor, crate, symlinks=True)
+        shutil.copyfile(original_archive, cache / original_archive.name)
+        shutil.copytree(ROOT / 'third_party/rust-notices', project / 'third_party/rust-notices')
+        review_name = 'third_party/rust-notices/upstream.json'
+        reviews = bundle.read_json(project / review_name)
+        review = next(item for item in reviews['crates'] if item['name'] == 'rustls-platform-verifier-android')
+        cargo_lock = project / 'Cargo.lock'
+        write(cargo_lock, 'version=4\n[[package]]\nname="rustls-platform-verifier-android"\nversion="0.1.1"\n'
+              'source="' + review['source'] + '"\nchecksum="' + review['registryChecksum'] + '"\n')
+        unresolved = 'contract sentinel: independent missing build/source evidence'
+
+        def collect(label, current=review):
+            value = copy.deepcopy(reviews)
+            value['crates'] = [current]
+            write_json(project / review_name, value)
+            stage = self.root / label
+            stage.mkdir()
+            collector = bundle.Collector({}, project, stage)
+            collector.exported_project, collector.cargo_lock = project, cargo_lock
+            collector.gaps.append(unresolved)
+            records = bundle.validate_vendor(vendor, cargo_lock, cache, {}, collector.gaps)
+            self.assertIn('rust-vendor:rustls-platform-verifier-android@0.1.1: no retained license/copyright text',
+                          collector.gaps)
+            collector.collect_rust_notices(vendor, records, review_name)
+            return collector, records[0]
+
+        collector, record = collect('original-publication')
+        self.assertEqual(collector.gaps, [unresolved])
+        self.assertEqual(bundle.inventory(crate), before)
+        provenance = record['noticeProvenance']
+        self.assertFalse(provenance['publicationCommitRecorded'])
+        self.assertFalse(provenance['buildProvenanceRecorded'])
+        self.assertTrue(provenance['externalLicenseTexts'])
+        self.assertEqual(len(provenance['publishedFiles']), 8)
+        self.assertEqual(provenance['matchedPublishedFileCount'], 2)
+        self.assertEqual(len(provenance['publicationGeneratedFiles']), 5)
+        self.assertEqual(len(record['supplementalNotices']), 2)
+        for notice in record['supplementalNotices']:
+            self.assertEqual(notice['origin'], 'project-original')
+            self.assertEqual((collector.stage / notice['path']).read_bytes(),
+                             (ROOT / 'third_party/rust-notices' / name / notice['source']).read_bytes())
+        for field, changed, error in (
+            ('declaredLicense', 'MIT', 'exact Cargo source'),
+            ('upstreamCommit', '0' * 40, 'fixed original publication review'),
+            ('publicationCommitRecorded', True, 'fixed original publication review'),
+            ('buildProvenanceRecorded', True, 'fixed original publication review'),
+            ('publicationGeneratedFiles', [], 'fixed original publication review'),
+            ('cargoChecksumFileSha256', '0' * 64, 'exact Cargo source')):
+            altered = copy.deepcopy(review); altered[field] = changed
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, error):
+                collect('changed-review-' + field, altered)
+        for index, binding in enumerate(('all-published-files-match-upstream-commit',
+                                         'cargo-vcs-and-authored-files-match', 'unknown-binding')):
+            altered = copy.deepcopy(review); altered['bindingType'] = binding
+            with self.subTest(binding=binding), self.assertRaisesRegex(ValueError, 'dedicated notice binding type'):
+                collect('changed-binding-' + str(index), altered)
+        for index, filename in enumerate(('Cargo.toml.orig', 'src/lib.rs',
+                                          'maven/rustls/rustls-platform-verifier/0.1.1/rustls-platform-verifier-0.1.1.aar')):
+            path = crate / filename
+            data = path.read_bytes()
+            write(path, data + b'changed original publication')
+            with self.subTest(file=filename), self.assertRaisesRegex(ValueError, 'Vendored file checksum mismatch'):
+                collect('changed-published-' + str(index))
+            write(path, data)
+        license_path = project / review['notices'][0]['inputPath']
+        write(license_path, license_path.read_bytes() + b'changed original license')
+        with self.assertRaisesRegex(ValueError, 'notice bytes differ'):
+            collect('changed-license')
+        self.assertEqual(bundle.inventory(original_vendor), before)
+        self.assertEqual(bundle.digest(original_archive), review['registryChecksum'])
+
     def test_registry_vendor_checks_all_retained_bytes_after_fixed_cargo_filtering(self):
         vendor, cache = self.root / "vendor", self.root / "cache"
         vendor.mkdir()
