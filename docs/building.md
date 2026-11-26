@@ -65,11 +65,11 @@ Rust 聚合库由独立验证工作流保留实际 `.a` / `.lib` 和 `build-info
 
 ## 现有 Windows 生产构建
 
-本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。唯一手写版本来源是 [build/version.json](../build/version.json)，发布意图来自 [publish.json](../releases/publish.json)。
+本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.6**，Windows 文件版本为 **0.0.6.0**，唯一手写版本来源是 [build/version.json](../build/version.json)。旧 Windows 桥接的发布意图由 [bridge-publish.json](../releases/bridge-publish.json) 单独声明；正式 Qt 发布使用 [publish.json](../releases/publish.json)，其中仍保留的 v0.0.5 声明不是本次桥接输入。源码版本和声明存在不表示发行已经公开。
 
 CMake 使用原生 JSON 解析从同一个文件设置 `PROJECT_VERSION`，生成 `app/Version.h`、Qt Windows RC、About 版本和包身份；运行时不会读取版本 JSON 或启动 Python。根目录 `VERSION` 和保留 Windows 工程的 `build/windows/Version.props` 是兼容生成文件，不再独立维护。修改 JSON 后运行 `python scripts/version_source.py --write`，普通检查使用 `python scripts/version_source.py --check`；CMake、PowerShell 构建/打包脚本和直接 Visual Studio/MSBuild 构建都会拒绝未同步的生成值。MSBuild 在编译前核对 JSON 与模板的实际 SHA256、源版本和资源分量，正常构建不依赖 Python。
 
-资源的第四段固定为零。`build.ps1 -Version`、打包及发布声明只核对版本，不覆盖资源值；不同标签或陈旧 EXE 会明确失败。版本格式为无前导零的 `MAJOR.MINOR.PATCH`，每段不超过 65535，以匹配 Windows 资源格式。修改 JSON 或兼容生成文件会触发 CMake 重新配置。迁移分支保持当前正式版本号，只有发布门槛满足后才更新版本；首个完整 Qt 重构版本的目标为 v0.1.0。
+资源的第四段固定为零。`build.ps1 -Version`、打包及发布声明只核对版本，不覆盖资源值；不同标签或陈旧 EXE 会明确失败。版本格式为无前导零的 `MAJOR.MINOR.PATCH`，每段不超过 65535，以匹配 Windows 资源格式。修改 JSON 或兼容生成文件会触发 CMake 重新配置。迁移构建使用同一版本源，当前 v0.0.6 对应 P11a 独立桥接；首个完整 Qt 重构版本的目标为 v0.1.0，其版本及正式发布声明仍须在相应发布门槛满足后更新。
 
 ## 环境与依赖决策
 
