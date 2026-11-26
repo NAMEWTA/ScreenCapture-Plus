@@ -375,7 +375,8 @@
         "CXXFLAGS_FOR_TARGET=-g -O2 -fPIC"
       ],
       "musl": [
-        "--disable-shared"
+        "--disable-shared",
+        "CFLAGS=-fPIC"
       ]
     },
     "runtimeLinkProfile": [

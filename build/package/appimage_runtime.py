@@ -67,7 +67,7 @@ def profile():
             bundle.require('patchApplication' not in pin, 'Unexpected source patch application profile')
     configuration = value['toolchainConfiguration']
     bundle.require(configuration['common'] == ['--disable-nls'] and
-                   configuration['musl'] == ['--disable-shared'] and
+                   configuration['musl'] == ['--disable-shared', 'CFLAGS=-fPIC'] and
                    configuration['gcc'] == ['--disable-libquadmath', '--disable-decimal-float',
                        '--disable-libitm', '--disable-fixed-point', '--disable-lto', '--without-isl', '--disable-shared',
                        'CFLAGS_FOR_TARGET=-g -O2 -fPIC',

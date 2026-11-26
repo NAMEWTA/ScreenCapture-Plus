@@ -233,11 +233,22 @@ one shell argument in the actual retained `config.mak`.
 
 The fixed original GCC/libstdc++ configure and Makefiles, original C demangler,
 and generated target library configuration records are retained. The original
-source bytes, host compiler flags and musl configuration are unchanged; the
-two assignments apply to GCC's target libraries. These settings address the
+source bytes and host compiler flags are unchanged; the two assignments apply
+to GCC's target libraries. These settings address the
 target C++ probe's static library link requirement; they are not evidence that the
 final C runtime has linked or run. The real target probe and final runtime
 still have to pass their complete link, ELF, input and execution checks.
+
+Musl has its separate original configure assignment `CFLAGS=-fPIC`, while
+shared libraries remain disabled. Its original configure detects PIC and uses
+the original Makefile's PIC `.lo` objects for `libc.a`, including its startup,
+allocation and other C library members. The flag supplies no optimization or
+debug override: musl retains its automatic `-O2`, additional default flags and
+the original `-O3` choice for `internal`, `malloc` and `string` components.
+The original `rcrt1` static-PIE startup rule already uses PIC and is unchanged.
+The producer retains the actual musl configure/Makefile and generated
+`obj_musl/config.mak`; all actual CRT/libc/libgcc inputs and the required target
+execution remain independently checked.
 
 The locked GCC 9.4.0 archive's `libgcc/Makefile.in` places `LIB2ADDEH` objects
 inside `libgcc.a` when shared target libraries are disabled. A separately named

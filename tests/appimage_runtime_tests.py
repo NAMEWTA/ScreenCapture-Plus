@@ -129,17 +129,20 @@ class ProfileTests(unittest.TestCase):
         options = profile['toolchainConfiguration']
         self.assertIn('CFLAGS_FOR_TARGET=-g -O2 -fPIC', options['gcc'])
         self.assertIn('CXXFLAGS_FOR_TARGET=-g -O2 -fPIC', options['gcc'])
+        self.assertEqual(options['musl'], ['--disable-shared', 'CFLAGS=-fPIC'])
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
             inputs = {name: {'directory': root / 'sources' / name} for name in BUILDER['TOOLCHAIN_INPUTS']}
             (root / 'config.mak').write_text(BUILDER['toolchain_configuration'](root / 'toolchain', inputs, options))
             capture = root / 'capture.py'
             capture.write_text('import json, sys\nfrom pathlib import Path\n'
-                               'Path("actual-arguments.json").write_text(json.dumps(sys.argv[1:]))\n')
+                               'Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]))\n')
             (root / 'Makefile').write_text('include config.mak\nall:\n\t' +
-                shlex.join([sys.executable, str(capture)]) + ' $(GCC_CONFIG)\n')
+                shlex.join([sys.executable, str(capture)]) + ' actual-gcc-arguments.json $(GCC_CONFIG)\n\t' +
+                shlex.join([sys.executable, str(capture)]) + ' actual-musl-arguments.json $(MUSL_CONFIG)\n')
             subprocess.run(['make', '--no-print-directory'], cwd=root, check=True, capture_output=True)
-            self.assertEqual(BUNDLE.read_json(root / 'actual-arguments.json'), options['gcc'])
+            self.assertEqual(BUNDLE.read_json(root / 'actual-gcc-arguments.json'), options['gcc'])
+            self.assertEqual(BUNDLE.read_json(root / 'actual-musl-arguments.json'), options['musl'])
 
     def test_real_build_system_source_is_not_misidentified_as_missing_c(self):
         _, _, profile = HELPER['profile']()
