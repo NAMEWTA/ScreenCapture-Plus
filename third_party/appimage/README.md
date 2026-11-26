@@ -34,6 +34,17 @@ sources require their full commit and original annotated tag object, including
 the peeled commit. Git object identity is the claim being made here; a tag's
 presence is not represented as signature verification.
 
+[`portable-directory-path.patch`](portable-directory-path.patch) is a project
+adaptation of the fixed type-2 runtime's MIT-licensed path handling, keeping
+the original notice and source archive. It rejects a full readlink buffer in
+the portable-directory, help and main branches, and an overlong `.home` /
+`.config` result before any directory creation, preserving the original
+valid-path, read-error and `mkdir` status behavior. The package lock binds its
+SHA256 and [`runtime-patch.json`](runtime-patch.json), which identifies the
+original file's Git blob, exact before/after bytes and complete source trees.
+Producer and collector independently replay strict `git apply`; this patch
+does not change the older official runtime asset.
+
 Original license texts remain in every complete source input. The source builder
 also produces `LICENSE.runtime-sources` by combining the original notices for
 the runtime and every final static component. It retains GCC's runtime exception

@@ -90,6 +90,16 @@
         "url": "https://raw.githubusercontent.com/AppImage/type2-runtime/dd6cebedcbddde9c82f89b011e8e1d40b6e43868/LICENSE",
         "size": 1678,
         "sha256": "aa154fc9070614bbe7921f89db11efd1dba7a1f3a41685958110e2230f9c0ca1"
+      },
+      "patches": [
+        {
+          "path": "third_party/appimage/portable-directory-path.patch",
+          "sha256": "12906683bd651bac6718119c45d67b306c9c2a47818f1b5f73e01d3decae712f"
+        }
+      ],
+      "sourcePatchReview": {
+        "path": "third_party/appimage/runtime-patch.json",
+        "sha256": "15f62b98d224b50c15adf31c5aecb7c990176d98f8be3eabd2e1ff35af77ecb6"
       }
     }
   },
