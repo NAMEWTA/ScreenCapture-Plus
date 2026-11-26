@@ -115,13 +115,20 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
         subprocess.run(['cc', '-g', '-c', str(source), '-o', str(obj)], check=True, capture_output=True)
         subprocess.run(['ar', 'crs', str(archive), str(obj)], check=True, capture_output=True)
         subprocess.run(['ar', 'crs', str(atomic), str(obj)], check=True, capture_output=True)
+        # musl installs real empty compatibility archives that still appear as
+        # linker LOAD inputs. Retain their original ar outputs, not invented
+        # bytes or only their descriptors from the final closure.
+        compatibility = [atomic.with_name(name) for name in ('libpthread.a', 'librt.a')]
+        for path in compatibility:
+            subprocess.run(['ar', 'crs', str(path)], check=True, capture_output=True)
+            self.assertEqual(path.read_bytes(), b'!<arch>\n')
         subprocess.run(['cc', '-g', str(obj), '-o', str(unstripped)], check=True, capture_output=True)
         subprocess.run(['objcopy', '--only-keep-debug', str(unstripped), str(debug)], check=True, capture_output=True)
         subprocess.run(['objcopy', '--strip-debug', str(unstripped), str(binary)], check=True, capture_output=True)
         subprocess.run([str(binary)], check=True, capture_output=True)
         notice = self.write('install/LICENSE.runtime-sources', b'Diagnostic fixture notice, not a target runtime build.\n')
         (libraries / 'unrelated.so').symlink_to(archive)
-        expected = {str(path): path.read_bytes() for path in (obj, unstripped, binary, debug, archive, atomic, notice)}
+        expected = {str(path): path.read_bytes() for path in (obj, unstripped, binary, debug, archive, atomic, notice, *compatibility)}
         report = api.retain(self.workspace, self.output)
         indexed = {item['originalPath']: item for item in report['files']}
         self.assertTrue(set(expected) <= set(indexed))
@@ -267,9 +274,13 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
         self.assertEqual([item['originalPath'] for item in report['files']], [str(selected)])
         api.verify_retained(self.output, report)
         shutil.rmtree(self.output)
-        (selected.parent / 'libgcc_eh.a').symlink_to(selected)
-        with self.assertRaisesRegex(ValueError, 'Linked diagnostic path'):
-            api.retain(self.workspace, self.output)
+        for name in ('libgcc_eh.a', 'libpthread.a', 'librt.a'):
+            with self.subTest(archive=name):
+                link = selected.parent / name
+                link.symlink_to(selected)
+                with self.assertRaisesRegex(ValueError, 'Linked diagnostic path'):
+                    api.retain(self.workspace, self.output)
+                link.unlink()
 
     @unittest.skipUnless(shutil.which('cc'), 'Original configure requires a real C compiler')
     def test_actual_original_musl_configure_link_is_retained_without_following_other_links(self):

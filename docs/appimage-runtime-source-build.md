@@ -384,6 +384,13 @@ relative path, size, SHA256 and mode. Original receipts and their executed paths
 remain byte-for-byte unchanged. Missing workspaces are explicitly reported;
 the index has no build-success field.
 
+The selected target archives include musl's `libpthread.a` and `librt.a`.
+They may be empty compatibility archives, but a linker `LOAD` still records
+them as actual inputs. Their original bytes are copied and hashed just like
+nonempty archives; a recorded size or digest cannot replace a missing file.
+The retention regression creates these empty archives with the real `ar`
+program and checks the copied bytes and rejection of linked replacements.
+
 The fixed packaging probe creates `.DirIcon -> runtime-probe.svg` in its
 `probe/AppDir`, and extraction preserves the same link under
 `probe/extract/squashfs-root`. These two exact locations retain their original
