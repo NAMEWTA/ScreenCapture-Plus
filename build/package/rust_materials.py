@@ -110,7 +110,7 @@ def reviewed_crate_notices(api, crate, locked, declaration, checksum_path, revie
     notices = []
     for entry in review['notices']:
         kind = entry['inputKind']
-        api.meta.require(kind in {'cargo-vendor', 'project-original'}, 'Unknown original crate notice input')
+        api.meta.require(kind in {'cargo-vendor', 'project-original', 'standard-license'}, 'Unknown crate notice input')
         relative = api.meta.safe_relative(entry['inputPath'])
         api.meta.require(kind == 'cargo-vendor' or relative.startswith('third_party/'),
                          'Retained upstream notice must be a reviewed third_party original')
@@ -125,18 +125,48 @@ def reviewed_crate_notices(api, crate, locked, declaration, checksum_path, revie
         git_blob = hashlib.sha1(b'blob ' + str(len(data)).encode('ascii') + b'\0' + data).hexdigest()
         api.meta.require(git_blob == entry['gitBlobSha1'], 'Original crate notice Git blob differs: ' + crate.name)
         upstream = api.meta.safe_relative(entry['upstreamPath'])
-        target = Path('notices/rust/crates') / crate.name / upstream
+        origin_repository, origin_commit = review['upstreamRepository'], commit
+        if kind == 'standard-license':
+            # This is an explicit choice from the exact crate's dual license,
+            # not a claim that upstream supplied a missing license file. Keep
+            # the original manifest/author bytes and the standard text distinct.
+            api.meta.require(declaration == 'MIT OR Apache-2.0' and review.get('selectedLicense') == 'Apache-2.0' and
+                             entry.get('spdxLicense') == 'Apache-2.0' and
+                             entry.get('standardRepository') == 'https://github.com/spdx/license-list-data' and
+                             re.fullmatch(r'[0-9a-f]{40}', entry.get('standardCommit', '')) and
+                             upstream == 'text/Apache-2.0.txt', 'Unsupported explicit standard-license selection')
+            source_manifest = review['sourceManifest']
+            manifest_name = api.meta.safe_relative(source_manifest['path'])
+            api.meta.require(manifest_name == 'Cargo.toml.orig', 'Standard license choice requires the original crate manifest')
+            manifest_path = crate / manifest_name
+            manifest_bytes = manifest_path.read_bytes()
+            api.meta.require(api.unchanged_digest(manifest_path) ==
+                             {key: source_manifest[key] for key in ('size', 'sha256')} and
+                             hashlib.sha1(b'blob ' + str(len(manifest_bytes)).encode('ascii') + b'\0' +
+                                          manifest_bytes).hexdigest() == source_manifest['gitBlobSha1'],
+                             'Original license/author declaration differs from the reviewed source manifest')
+            authored = tomllib.loads(manifest_bytes.decode('utf-8'))['package']
+            api.meta.require(authored.get('name') == review['name'] and authored.get('version') == review['version'] and
+                             authored.get('license') == declaration and authored.get('repository') == review['declaredRepository'] and
+                             authored.get('authors', []) == review['authors'],
+                             'Standard license choice changes the original crate license, authors or repository')
+            origin_repository, origin_commit = entry['standardRepository'], entry['standardCommit']
+            target = Path('notices/rust/crates') / crate.name / 'standard-license' / 'Apache-2.0.txt'
+        else:
+            target = Path('notices/rust/crates') / crate.name / upstream
         retained = api.copy_original(original, output / target)
         api.meta.require(retained == expected, 'Original crate notice changed while retaining: ' + crate.name)
         notices.append({'source': upstream, 'path': target.as_posix(), 'origin': kind,
-                        'upstreamRepository': review['upstreamRepository'], 'upstreamCommit': commit,
+                        'upstreamRepository': origin_repository, 'upstreamCommit': origin_commit,
                         'gitBlobSha1': git_blob, **retained})
     return notices, {'repository': review['upstreamRepository'], 'commit': commit, 'bindingType': binding,
                      'pathInVcs': review['pathInVcs'], 'matchedPublishedFileCount': review['matchedPublishedFileCount'],
                      'cargoGeneratedFiles': review['cargoGeneratedFiles'],
                      'publicationCommitRecorded': review['publicationCommitRecorded'],
                      'reviewFile': review_identity, 'cargoChecksumFileSha256': review['cargoChecksumFileSha256'],
-                     'scope': 'Original notice attribution to these exact Cargo bytes; no combined-source closure'}
+                     'selectedLicense': review.get('selectedLicense'), 'authors': review.get('authors', []),
+                     'sourceManifest': review.get('sourceManifest'),
+                     'scope': 'Exact Cargo notice/source binding; standard-license selections are explicitly labeled; no combined-source closure'}
 
 
 def checked_vendor(api, directory, locked, metadata, output):
@@ -295,7 +325,7 @@ def collect(api, options):
                              'Original crate notice review changed while retaining')
         for package in report['packages']:
             for notice in package['notices']:
-                if notice.get('origin') == 'project-original':
+                if notice.get('origin') in {'project-original', 'standard-license'}:
                     expected = {key: notice[key] for key in ('size', 'sha256')}
                     relative = api.meta.safe_relative(notice['path'])
                     api.meta.require(api.copy_original(output / relative, source_output / relative) == expected,

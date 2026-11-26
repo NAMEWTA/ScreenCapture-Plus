@@ -1,13 +1,17 @@
-#include "capture/ScrollCaptureSession.h"
-#include "services/capture/LiveCaptureSource.h"
-#include "services/capture/ScreenCaptureService.h"
-#include "ui/qt/ScrollWindow.h"
+#include "app/ScrollController.h"
+#include "app/MediaWorkspace.h"
+#include "services/desktop/SystemClipboard.h"
+#include "services/desktop/FileRevealer.h"
+#include "services/capture/DesktopCapture.h"
 
 #include <QApplication>
 #include <QDir>
+#include <QCursor>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -19,6 +23,7 @@
 #include <QScreen>
 #include <QThread>
 #include <QToolButton>
+#include <QTemporaryDir>
 #include <QWheelEvent>
 #include <QWindow>
 #include <algorithm>
@@ -39,6 +44,9 @@
 namespace cap = HuhuCapture::Capture;
 namespace ui = HuhuCapture::UI::Qt;
 namespace core = HuhuCapture::Core;
+namespace application = HuhuCapture::Application;
+namespace desktop = HuhuCapture::Desktop;
+namespace media = HuhuCapture::Media;
 namespace {
 void require(bool condition, const char* message)
 { if (!condition) throw std::runtime_error(message); }
@@ -63,49 +71,36 @@ void unavailableAndLifetime()
 {
     require(QGuiApplication::platformName() == QStringLiteral("offscreen") ||
         QGuiApplication::platformName() == QStringLiteral("minimal"), "The negative test uses an actual unsupported QPA");
-    cap::ScreenCaptureService native;
-    cap::LiveCaptureSource live;
-    cap::ScrollCaptureSession session;
-    cap::ActionRequest request;
-    request.action = cap::Action::Scroll;
-    cap::Snapshot snapshot;
-    require(session.prepareNative(request, snapshot, native).code == cap::Failure::Code::SourceChanged,
-        "An absent native frame cannot admit scrolling or invent desktop coordinates");
-    require(session.prepareLive(request, live).code == cap::Failure::Code::SourceChanged,
-        "An absent authorized first frame cannot prepare a live selection or become a live consumer");
-    require(session.start() == 0 && !session.hasCompleteImage() && session.image().isNull(),
-        "No placeholder image or worker is produced for a rejected source");
-
-    auto* window = new ui::ScrollWindow(session);
-    QPointer<ui::ScrollWindow> guarded(window);
-    window->setExternalStopAvailable(true);
-    require(!window->canStop() && !window->stopCapture() && !window->hiddenForCapture(),
-        "An actual stop-route capability cannot invent an active or hidden capture");
-    window->setExternalStopAvailable(false);
-    unsigned outputs{}, terminals{};
-    bool shutdown{};
-    QObject::connect(window, &ui::ScrollWindow::outputRequested, &session, [&](quint64, ui::OutputIntent, const QImage&) { ++outputs; });
-    QObject::connect(&session, &cap::ScrollCaptureSession::shutdownFinished, &session, [&] { shutdown = true; });
-    QObject::connect(window, &ui::ScrollWindow::closed, &session, [&] { ++terminals; delete window; });
-    require(window->open().code == cap::Failure::Code::Busy, "A source-less view rejects presentation instead of displaying success");
-    for (const auto* button : window->findChildren<QToolButton*>()) {
-        if (button->objectName() == QStringLiteral("tool.pin") || button->objectName() == QStringLiteral("tool.save") ||
-            button->objectName() == QStringLiteral("tool.clipboard"))
-            require(!button->isEnabled(), "Output controls require a real complete captured image");
-    }
-    require(window->findChild<QLabel*>(QStringLiteral("scrollStatus"))->font().pixelSize() == 12,
-        "Status typography uses the same explicit logical-pixel size on both platforms");
-    key(*window, Qt::Key_C, Qt::ControlModifier); key(*window, Qt::Key_S, Qt::ControlModifier);
-    key(*window, Qt::Key_Return);
-    require(outputs == 0, "Keyboard shortcuts never publish an absent scrolling result");
-    key(*window, Qt::Key_Escape);
-    require(!shutdown && guarded, "Closing waits for the session's queued drain notification");
-    waitFor([&] { return !guarded; }, "A synchronous closed observer may destroy the actual shared widget");
-    require(shutdown && terminals == 1 && session.phase() == cap::ScrollPhase::Closed && !session.busy(),
-        "The view closes exactly once after the real session has drained");
-    require(session.start() == 0 && session.prepareNative(request, snapshot, native).code == cap::Failure::Code::Busy,
-        "Shutdown permanently closes admission on that session");
-    std::cout << "PASS unavailable source, real widgets/shortcuts, exact shutdown ordering and reentrant deletion\n";
+    QTemporaryDir temporary; require(temporary.isValid(), "Create an isolated archive for rejected scroll requests");
+    auto archive = std::make_shared<media::MediaArchiveService>(temporary.path() + QStringLiteral("/archive"));
+    desktop::SystemClipboard clipboard; desktop::FileRevealer revealer;
+    application::MediaWorkspace workspace(archive, clipboard, revealer);
+    QPointer<application::ScrollController> controller = new application::ScrollController(archive, workspace);
+    cap::ActionRequest request; request.action = cap::Action::Scroll;
+    require(!controller->begin(request) && !controller->busy(),
+        "An absent image cannot admit scrolling or invent an authorized frame");
+    request.image = QImage(20, 20, QImage::Format_ARGB32); request.image.fill(Qt::red);
+    request.coordinates = cap::CoordinateSpace::DesktopPixels; request.sourceRect = request.image.rect();
+    require(!controller->begin(request) && !controller->busy(),
+        "An image without verified native bindings cannot invent physical desktop coordinates");
+    controller->setExternalStopAvailable(true, QStringLiteral("available host finish action"));
+    require(!controller->finish() && !controller->busy(),
+        "An external stop-route capability cannot invent an active capture");
+    controller->setExternalStopAvailable(false); controller->activate();
+    unsigned terminals{}, outputs{};
+    QObject::connect(controller, &application::ScrollController::archiveChanged, &workspace, [&] { ++outputs; });
+    QObject::connect(controller, &application::ScrollController::shutdownFinished, &workspace, [&] {
+        ++terminals;
+        require(!controller->busy() && !controller->begin(request) && !controller->finish(),
+            "Shutdown closes admission before reporting that the actual controller drained");
+        delete controller.data();
+    });
+    controller->shutdown();
+    waitFor([&] { return !controller; }, "A synchronous terminal observer may destroy the actual shared controller");
+    const auto listed = archive->list();
+    require(terminals == 1 && outputs == 0 && !listed.failure && listed.entries.empty() && !workspace.busy(),
+        "Rejected requests create no output, placeholder view or worker and report shutdown exactly once");
+    std::cout << "PASS actual controller rejects absent/unbound sources, closes admission and tolerates synchronous shutdown deletion\n";
 }
 
 // Generated fixture is painted by a real native QWidget and scrolled only by
@@ -266,19 +261,20 @@ void actualNative(const QString& artifacts)
     waitFor([&] { return page.windowHandle() && page.windowHandle()->isExposed(); }, "Expose the real scrolling page");
     page.initializePixels();
     waitFor([&] { return page.contentPaints != 0; }, "Paint actual fixture content, excluding the initial empty-widget paint");
-    cap::ScreenCaptureService source;
-    bool initialized{}, stopped{}, moved{};
+    cap::DesktopCapture source;
+    bool initialized{}, stopped{};
     cap::Snapshot snapshot; cap::Failure sourceFailure;
-    QObject::connect(&source, &cap::ScreenCaptureService::initialized, &source, [&](const auto&, const auto& failure) {
-        sourceFailure = failure; initialized = true;
+    QObject::connect(&source, &cap::DesktopCapture::initialized, &source, [&](const auto& capability) {
+        if (!capability.canRequest()) sourceFailure = {cap::Failure::Code::Unavailable, 0, capability.reason};
+        initialized = true;
     });
-    QObject::connect(&source, &cap::ScreenCaptureService::finished, &source, [&](quint64, const auto& value, const auto& failure) {
+    QObject::connect(&source, &cap::DesktopCapture::finished, &source, [&](quint64, const auto& value, const auto& failure) {
         snapshot = value; sourceFailure = failure;
     });
-    QObject::connect(&source, &cap::ScreenCaptureService::shutdownFinished, &source, [&] { stopped = true; });
+    QObject::connect(&source, &cap::DesktopCapture::shutdownFinished, &source, [&] { stopped = true; });
     source.initialize(); waitFor([&] { return initialized; }, "Initialize the actual screenshot/input backend");
     if (sourceFailure) std::cerr << "SOURCE " << sourceFailure.detail.toStdString() << '\n';
-    require(!sourceFailure && source.capabilities().automaticScroll.canRequest(), "The actual desktop must advertise real automatic input");
+    require(!sourceFailure && source.capability().state == cap::CapabilityState::Available, "The native desktop must provide actual screenshot pixels");
     const QRect logical(20, 20, 220, 180);
     QPoint contentOrigin; QRect selected; QImage actualFirst, expectedFirst;
     QJsonObject firstEvidence, latestEvidence; QJsonArray attempts;
@@ -289,9 +285,11 @@ void actualNative(const QString& artifacts)
     do {
         const auto before = presentationState(page);
         snapshot = {}; sourceFailure = {};
-        require(source.request() != 0, "Request actual native desktop pixels");
+        const auto captureToken = source.request();
+        require(captureToken != 0, "Request actual native desktop pixels");
         waitFor([&] { return !snapshot.image.isNull() || sourceFailure; }, "Capture the actual visible page");
-        require(!sourceFailure && source.isCurrent(snapshot.sourceId, snapshot.generation), "The captured page keeps a verified current identity");
+        require(!sourceFailure && snapshot.sourceId == captureToken && snapshot.generation == captureToken,
+            "The captured page preserves the actual accepted request identity and verified native bindings");
         require(snapshot.coordinates == cap::CoordinateSpace::DesktopPixels && snapshot.desktopOrigin,
             "The native fixture has a verified physical desktop origin");
         const cap::ScreenBinding* binding{};
@@ -333,75 +331,145 @@ void actualNative(const QString& artifacts)
         {QStringLiteral("first"), firstEvidence}, {QStringLiteral("last"), latestEvidence}});
     require(actualFirst == expectedFirst,
         "The native capture equals pixels actually painted by the independent page fixture");
-    QObject::connect(&source, &cap::ScreenCaptureService::cursorMoved, &source,
-        [&](quint64, quint64, QPoint requested, QPoint actual, const cap::Failure& error) {
-            require(!error && requested == actual, "Place the real pointer inside the selected scrolling target"); moved = true;
-        });
-    source.moveCursor(snapshot.sourceId, snapshot.generation, selected.center());
-    waitFor([&] { return moved; }, "The OS confirms the actual pointer position");
+    // This prepares the independent real page fixture. The production scroll
+    // adapter itself never warps the pointer or synthesizes captured pixels.
+    const auto pointerTarget = page.mapToGlobal(logical.center());
+    QCursor::setPos(pointerTarget);
+    waitFor([&] { return QCursor::pos() == pointerTarget; }, "The actual OS pointer reaches the selected scrolling page");
+    snapshot = {}; sourceFailure = {};
+    const auto cursorCapture = source.request(); require(cursorCapture != 0, "Read back the actual cursor with the desktop pixels");
+    waitFor([&] { return !snapshot.image.isNull() || sourceFailure; }, "Verify the actual pointer in native source coordinates");
+    require(!sourceFailure && snapshot.sourceId == cursorCapture && snapshot.coordinates == cap::CoordinateSpace::DesktopPixels &&
+        snapshot.desktopOrigin && selected.contains(snapshot.cursor), "The native backend confirms the real pointer inside the selected target");
     cap::ActionRequest request;
     request.token = 1; request.action = cap::Action::Scroll; request.sourceId = snapshot.sourceId; request.generation = snapshot.generation;
     request.coordinates = snapshot.coordinates; request.sourceRect = selected; request.desktopRect = selected.translated(*snapshot.desktopOrigin);
     request.image = snapshot.image.copy(selected);
-    cap::ScrollCaptureSession session;
-    require(!session.prepareNative(request, snapshot, source), "Prepare the actual source through the production session");
-    ui::ScrollWindow window(session);
-    require(!window.open(), "Open the same production scrolling controls and start surfaces");
-    window.activate();
-    unsigned outputs{}, completed{}; bool closed{};
-    QImage output;
-    QObject::connect(&session, &cap::ScrollCaptureSession::previewChanged, &session, [&](const cap::ScrollProgress& progress) {
-        if (progress.imageSize.height() >= selected.height() + qRound(48 * page.ratio)) session.stop();
+    request.screens = snapshot.screens;
+    QTemporaryDir temporary; require(temporary.isValid(), "Create the actual scrolling output workspace");
+    auto archive = std::make_shared<media::MediaArchiveService>(temporary.path() + QStringLiteral("/archive"));
+    desktop::SystemClipboard clipboard; desktop::FileRevealer revealer;
+    application::MediaWorkspace workspace(archive, clipboard, revealer);
+    application::ScrollController controller(archive, workspace);
+    QString failure; unsigned archived{}, busyAdmissions{};
+    QObject::connect(&controller, &application::ScrollController::operationFailed, &controller, [&](const QString& value) {
+        failure = value; std::cerr << "SCROLL " << value.toStdString() << '\n';
     });
-    QObject::connect(&session, &cap::ScrollCaptureSession::finished, &session, [&](quint64, const cap::ScrollCompletion& result) {
-        if (result.failure) std::cerr << "SCROLL " << result.failure.detail.toStdString() << '\n';
-        require(session.prepareNative(request, snapshot, source).code == cap::Failure::Code::Busy,
-            "A synchronous terminal observer cannot replace a result while its callbacks are still being delivered");
-        ++completed;
+    QObject::connect(&controller, &application::ScrollController::archiveChanged, &controller, [&] { ++archived; });
+    QObject::connect(&controller, &application::ScrollController::busyChanged, &controller, [&](bool busy) {
+        if (busy) {
+            ++busyAdmissions;
+            require(!controller.begin(request), "A synchronous busy observer cannot replace the active scrolling journey");
+        }
     });
-    QObject::connect(&window, &ui::ScrollWindow::outputRequested, &window,
-        [&](quint64 token, ui::OutputIntent intent, const QImage& image) {
-            ++outputs; output = image;
-            require(intent == ui::OutputIntent::SaveAs, "Ctrl+S preserves the mature Save As intent");
-            window.completeOutput(token, ui::OutputResult::Cancelled);
-        });
-    QObject::connect(&window, &ui::ScrollWindow::closed, &window, [&] { closed = true; });
+    require(controller.begin(request, &page), "Prepare and present the actual application-owned scrolling controller");
+    QPointer<QWidget> window;
+    for (auto* candidate : QApplication::topLevelWidgets())
+        if (candidate->objectName() == QStringLiteral("scrollCaptureWindow")) { window = candidate; break; }
+    require(window && busyAdmissions == 1, "The single production controller owns its actual preview and controls");
+    auto* start = window->findChild<QToolButton*>(QStringLiteral("scrollStart"));
+    auto* stop = window->findChild<QToolButton*>(QStringLiteral("scrollStop"));
+    auto* save = window->findChild<QToolButton*>(QStringLiteral("scrollSave"));
+    auto* dimensions = window->findChild<QLabel*>(QStringLiteral("scrollDimensions"));
+    require(start && stop && save && dimensions && start->isEnabled() && !stop->isEnabled(),
+        "Only the prepared real source enables the production start control");
+    require(window->findChild<QLabel*>(QStringLiteral("scrollStatus"))->font().pixelSize() == 12,
+        "Status typography uses explicit logical pixels on both platforms");
+    for (const auto* button : {start, stop, save})
+        require(button->height() == 44 && button->iconSize() == QSize(24, 24),
+            "The production scrolling controls retain the shared 44-DIP buttons and 24-DIP icons");
+    const auto* actions = window->findChild<QWidget*>(QStringLiteral("scrollOutputActions"));
+    require(actions, "The actual scrolling output strip is present");
+    const auto buttons = actions->findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly);
+    require(buttons.size() == 4 && buttons[0]->objectName() == QStringLiteral("scrollPin") &&
+        buttons[1]->objectName() == QStringLiteral("scrollClose") && buttons[2]->objectName() == QStringLiteral("scrollSave") &&
+        buttons[3]->objectName() == QStringLiteral("scrollCopy"), "The output toolbar keeps pin, close, save and copy in the mature order");
     QWidget* startSurface{};
     const auto global = page.mapToGlobal(logical.center());
     for (auto* candidate : QApplication::topLevelWidgets())
         if (candidate->objectName() == QStringLiteral("scrollStartSurface") && candidate->geometry().contains(global)) { startSurface = candidate; break; }
-    require(startSurface, "The native region has the shared real start surface");
+    require(startSurface, "The native region keeps the production click-to-start surface");
     const QPointF local(startSurface->mapFromGlobal(global));
     QMouseEvent move(QEvent::MouseMove, local, QPointF(global), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(startSurface, &move);
-    // A component click enters the real native pipeline. Only subsequent OS
-    // wheel events can change the page; their spontaneous flag is asserted.
+    // Only this component click starts the real pipeline. All subsequent page
+    // changes must arrive as spontaneous operating-system wheel input.
     QMouseEvent release(QEvent::MouseButtonRelease, local, QPointF(global), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(startSurface, &release);
-    waitFor([&] { return completed != 0; }, "Real automatic scrolling appends and stops its actual native worker");
-    require(!session.completion().failure && page.wheels >= 2 && page.nativeWheel,
-        "Real SendInput/XTest wheel events reach the target and produce complete frames");
-    require(session.hasCompleteImage() && session.image().height() >= selected.height() + qRound(48 * page.ratio),
+    const auto displayedSize = [&] {
+        const auto pieces = dimensions->text().split(QChar(u'×'));
+        if (pieces.size() != 2) return QSize();
+        bool widthOk{}, heightOk{};
+        const int width = pieces.at(0).trimmed().toInt(&widthOk);
+        auto heightText = pieces.at(1).trimmed();
+        if (heightText.endsWith(QStringLiteral(" px"))) heightText.chop(3);
+        const int height = heightText.toInt(&heightOk);
+        return widthOk && heightOk ? QSize(width, height) : QSize();
+    };
+    waitFor([&] { return !failure.isEmpty() || displayedSize().height() >= selected.height() + qRound(48 * page.ratio); },
+        "The actual automatic worker appends independently painted page rows");
+    require(failure.isEmpty() && controller.finish(), "The host finish action stops the real active native worker");
+    waitFor([&] { return !failure.isEmpty() || (window && start->isEnabled() && !stop->isEnabled()); },
+        "The final controls restore only after the actual source and worker drain");
+    require(failure.isEmpty() && page.wheels >= 2 && page.nativeWheel,
+        "Real SendInput/XTest wheel events reach the selected target and produce complete frames");
+    const auto completedSize = displayedSize();
+    require(completedSize.width() == selected.width() && completedSize.height() >= selected.height() + qRound(48 * page.ratio),
         "The complete scrolling output contains actual appended rows");
-    auto expected = page.pixels.copy(QRect(contentOrigin, session.image().size())); expected.setDevicePixelRatio(1);
-    require(session.image() == expected, "Every accumulated output pixel equals the independent real displayed page");
-    key(window, Qt::Key_S, Qt::ControlModifier);
-    require(outputs == 1 && output == expected && session.image() == expected && !closed,
-        "Cancelled Save As retains the exact complete image for another output");
+    auto expected = page.pixels.copy(QRect(contentOrigin, completedSize)); expected.setDevicePixelRatio(1);
+    require(!controller.begin(request) && !controller.finish(),
+        "A completed journey retains its result and cannot be replaced or stopped a second time");
+    controller.activate();
+    waitFor([&] { return window && window->isActiveWindow(); }, "Activate the actual result view for its Ctrl+S shortcut");
+    key(*window, Qt::Key_S, Qt::ControlModifier);
+    waitFor([&] { return window && window->findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog")); },
+        "Ctrl+S opens the same real destination dialog as the application media workspace");
+    auto* dialog = window->findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog"));
+    require(workspace.busy() && !save->isEnabled(), "The real output stays pending until the dialog completes");
+    static_cast<QDialog*>(dialog)->reject();
+    waitFor([&] { return window && save->isEnabled() && !workspace.busy(); }, "A real cancelled Save As returns to the retained result");
+    require(archived == 0 && controller.busy() && archive->list().entries.empty() && displayedSize() == completedSize,
+        "Cancelling Save As publishes nothing and retains the complete result for another output");
     if (!artifacts.isEmpty()) {
-        QDir().mkpath(artifacts);
-        require(window.grab().save(artifacts + QStringLiteral("/scroll-window.png")), "Save the actual shared controls for visual review");
-        require(output.save(artifacts + QStringLiteral("/scroll-complete.png")), "Save the actual stitched result for review");
+        require(QDir().mkpath(artifacts) && window->grab().save(artifacts + QStringLiteral("/scroll-window.png")),
+            "Save the actual shared controls for visual review");
     }
-    window.close(); waitFor([&] { return closed; }, "Closing waits for the actual session shutdown");
-    require(!session.busy() && session.image() == expected, "Shutdown never invalidates a retained complete output image");
+    events();
+    key(*window, Qt::Key_S, Qt::ControlModifier);
+    waitFor([&] { return window && window->findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog")); },
+        "The retained image can enter the real output flow again after cancellation");
+    dialog = window->findChild<QFileDialog*>(QStringLiteral("mediaSaveAsDialog"));
+    dialog->setDirectory(temporary.path()); dialog->selectFile(QStringLiteral("scroll-output.png"));
+    static_cast<QDialog*>(dialog)->accept();
+    waitFor([&] { return !failure.isEmpty() || (!controller.busy() && !workspace.busy()); },
+        "Save As actually archives and exports the completed image before the journey closes");
+    require(failure.isEmpty() && archived == 1 && !window, "Successful real output closes only its drained scrolling view");
+    const auto listed = archive->list(); require(!listed.failure && listed.entries.size() == 1, "The shared archive contains exactly the completed scrolling result");
+    QImage output, archivedImage;
+    const auto exported = media::inspectPng(temporary.path() + QStringLiteral("/scroll-output.png"), {}, {}, &output);
+    const auto inspected = media::inspectPng(listed.entries.front().path, {}, {}, &archivedImage);
+    require(!exported.failure && !inspected.failure && output == expected && archivedImage == expected,
+        "Every archived/exported pixel after cancellation equals the independent real displayed page");
+    if (!artifacts.isEmpty())
+        require(output.save(artifacts + QStringLiteral("/scroll-complete.png")), "Retain the actual stitched output pixels for review");
+    bool controllerStopped{}, workspaceStopped{}, clipboardStopped{}, revealerStopped{};
+    QObject::connect(&controller, &application::ScrollController::shutdownFinished, &controller, [&] { controllerStopped = true; });
+    QObject::connect(&workspace, &application::MediaWorkspace::shutdownFinished, &workspace, [&] { workspaceStopped = true; });
+    QObject::connect(&clipboard, &desktop::SystemClipboard::shutdownFinished, &clipboard, [&] { clipboardStopped = true; });
+    QObject::connect(&revealer, &desktop::FileRevealer::shutdownFinished, &revealer, [&] { revealerStopped = true; });
+    controller.shutdown(); workspace.shutdown(); clipboard.shutdown(); revealer.shutdown();
+    waitFor([&] { return controllerStopped && workspaceStopped && clipboardStopped && revealerStopped; },
+        "All actual application services drain before their owners are destroyed");
+    require(QFile::exists(listed.entries.front().path) && output == expected,
+        "Closing the journey and its services never invalidates the completed durable result");
     source.shutdown(); waitFor([&] { return stopped; }, "The native source owner drains after scrolling");
-    std::cout << "PASS real native input/capture, exact page pixels, shared start/control UI, cancelled output and ordered drain\n";
+    std::cout << "PASS real native input/capture, exact archived/exported pixels, production controller/start UI, cancelled output and ordered drain\n";
 }
 }
 int main(int argc, char** argv)
 {
-    QApplication app(argc, argv);
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+    QApplication app(argc, argv); app.setQuitOnLastWindowClosed(false);
     try {
         if (app.arguments().contains(QStringLiteral("--unavailable"))) unavailableAndLifetime();
         else actualNative(app.arguments().size() > 1 ? app.arguments().at(1) : QString());

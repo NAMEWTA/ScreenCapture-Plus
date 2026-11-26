@@ -15,13 +15,7 @@
 
 [下载 v0.0.5](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
 
-> **Qt / Linux 重构正在实施：** [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 是唯一主计划。当前正式下载仍为下文的 Windows v0.0.5；根目录 CMake 已构建同一套 C++20 / Qt 6 应用、共享界面与服务，并接入双平台完整包流水线。新架构尚未通过完整桌面、设备、安装升级和性能验收，当前没有正式 Qt / Linux 发行版。实现边界、数据保护、P00–P14 状态与未验证项目见 [迁移状态](docs/qt-migration.md)。
-
-开发者可从 [Qt 应用生命周期](docs/qt-application.md)、[完整包构建](docs/qt-packaging.md) 和 [完整包更新](docs/qt-updates.md) 阅读当前实现。开发产物中的 Windows 安装包用于当前用户安装，便携 ZIP 必须整体解压；Linux DEB 用于系统包管理，AppImage 用于独立运行。Qt 运行库、平台插件、翻译和编码依赖都属于完整目录的一部分，单独取出其中的 EXE 不能作为新版分发方式。符号包用于调试，`build-info`、发行清单和 SHA256 文件用于核对来源与完整性。
-
-[实际安装验证](docs/installation-validation.md)已覆盖 Linux 两种包的原生截图拖选、正常退出、同包重装与数据保留；Windows 安装旅程仍有待修复验证的问题。跨版本升级、实体桌面与完整性能验收继续作为正式发布门槛。
-
-Qt 开发版本还提供[桌面“停止并完成”动作](docs/desktop-capture-action.md)，用于补齐 GNOME 无托盘场景；它必须验证真实已安装入口和当前实例的响应，菜单可达性与完整采集仍待真实桌面验收。[运行库与对应源码材料](docs/distribution-materials.md)单独核对 Qt、Rust 和原生依赖，完整源码产物不放进普通运行目录。这些开发能力不代表当前正式版已经支持 Linux。
+> **Qt / Linux 重构正在实施：** [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 是唯一主计划。当前正式下载仍为下文的 Windows v0.0.5；根目录 CMake 已接入统一 Qt 应用、真实平台服务及开发包验证入口；完整产品验收和正式双平台安装包发布仍未完成。应用装配与构建见 [Qt 应用](docs/qt-application.md)。实现边界、数据保护、P00–P14 状态与未验证项目见 [迁移状态](docs/qt-migration.md)。
 
 ## 截图与说明，一起保存
 
@@ -167,6 +161,8 @@ pwsh ./scripts/package.ps1
 ```
 
 程序输出到 `artifacts/bin/x64/Release/huhucapture.exe`。首次恢复依赖后可打开 `huhucapture.slnx` 调试。CI 共用这些脚本，只有完整验证通过后才会发布声明的版本。脚本覆盖范围、桌面手工验收和实际证据应分别记录，不能相互替代。
+
+产品版本只在 [build/version.json](build/version.json) 中维护。变更后运行 `python scripts/version_source.py --write` 更新兼容生成文件；普通构建、直接 MSBuild 和打包都会拒绝过期版本，运行程序不需要 Python。版本与发布声明规则见[构建与发布](docs/building.md)。
 
 | 文档 | 内容 |
 | --- | --- |

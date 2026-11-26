@@ -1,6 +1,6 @@
 #pragma once
 
-#include "platform/PrivateStorage.h"
+#include <system_error>
 
 #include <QByteArray>
 #include <QJsonArray>
@@ -29,11 +29,12 @@ struct IdentityFileDiagnostic {
     IdentityFilePhase phase{IdentityFilePhase::None};
     std::error_code error;
     int qtFileError{};
-    Platform::PrivateFileCreation creation;
 };
 
 struct IdentityResult {
     IdentityError error{IdentityError::None};
+    // Original Rust ABI status. File-system and Qt errors retain their own
+    // domains in fileDiagnostic; QFileDevice::FileError is not a Win32 status.
     int nativeStatus{};
     // The native JSON contains the private key. Never log, put in a Qt signal,
     // or retain it in a presentation snapshot. Only the app builds native config.

@@ -86,6 +86,14 @@ FrameQueueRead FrameQueue::waitNext(std::stop_token stop)
     return state_->read();
 }
 
+FrameQueueRead FrameQueue::waitUntil(MediaClock::time_point deadline, std::stop_token stop)
+{
+    std::unique_lock lock(state_->mutex);
+    state_->changed.wait_until(lock, stop, deadline, [&] { return state_->size || state_->terminal.has_value(); });
+    if (stop.stop_requested()) return {{}, {}, true};
+    return state_->read();
+}
+
 void FrameQueue::close(FrameSourceTerminal terminal, bool discardQueued)
 {
     {

@@ -54,7 +54,7 @@
 
 ## 验证入口与证据范围
 
-旧 Windows 的正常构建、Debug、真实 GUI、latest 下载和五项发行资产门槛继续保留：
+旧 Windows 的正常构建、Debug、真实 GUI、latest 下载和原裸 EXE 资产回归继续保留；旧 workflow 不再自动公开发行：
 
 ```powershell
 pwsh ./scripts/build.ps1 -Configuration Release
@@ -67,16 +67,16 @@ pwsh ./scripts/test-legacy-update.ps1 -Configuration Debug
 
 桥接 probe 链接生产 WinRT 适配与相同文件提交源码，没有模拟 HTTP 成功回调。Python 标准库 HTTP 服务发送真实旧生产 EXE 和超过 64 MiB 的明确传输夹具，验证实际字节、增量进度、工作集增量、重名、取消、异常元数据、正文边界、hash、缺依赖、路径和错误跳转。独立 GUI harness 可经过同一应用服务下载到实际 Downloads，关闭/重建页面，再输出六语和最小窗口的 PNG。产品本身没有通过 UI、CLI、环境或配置替换更新源的入口；测试 origin 只在独立 harness 里显式注入且限于字面量 loopback HTTP。
 
-**默认 ZIP 夹具不是可安装产品，测试报告会明确标出这点。** 它只覆盖流式下载和错误边界；补充完整包契约验证时，可提供受控构建的完整 Windows 包及原始 manifest / build-info：
+**默认 ZIP 夹具不是可安装产品，测试报告会明确标出这点。** 它用于 P11a 的受控完整包下载契约，结合原 Windows 生产门槛可以支持独立桥接发行；不能记为 Qt 成品、对应源码或安装验收。Qt 首发前还要提供本次真正完整 aggregate 及原始 manifest / build-info：
 
 ```powershell
 pwsh ./scripts/test-legacy-update.ps1 -Gui `
-  -RealPackageDirectory artifacts/verified-windows-package `
+  -RealPackageDirectory artifacts/release-candidate `
   -RequireRealPackage
 ```
 
-该模式直接服务同一实际资产字节，先核对文件 descriptor；不会把 `developmentOnly` 或 `sourceDirty` 改成 `false`，也不会在目录缺少真实包时当成通过。完整包下载仍不代替干净机器安装、旧配置迁移、升级与卸载的实际验收。
+该模式要求两平台最终正式 aggregate，调用同一打包验证器核对四种包、符号、computed-complete 来源、当前源 SHA/唯一版本与完整 checksum 集。随后直接服务同一实际资产字节，不会把 `developmentOnly` 或 `sourceDirty` 改成 `false`，也不会在目录缺少真实包时当成通过。报告绑定原 manifest SHA、包 SHA、实际 received/total 和 About 旅程；完整包下载仍不代替干净机器安装、旧配置迁移、升级与卸载的实际验收。
 
-按 Issue #5 §13.3/13.5，P11a 过渡发行独立使用原有 Windows 构建、五项资产与下载门槛，并用受控完整包 fixture 核对新契约；不必等待 Qt 首发或 Linux 安装验收。当前默认传输样本不能被记为这份完整包证据。Qt 双平台成品的实际安装、升级、卸载及首发 latest 烟测，仍属于 P11b/P12 的独立必要门槛。
+按 Issue #5 §13.3/13.5，P11a 过渡发行独立使用原有 Windows 构建、五项资产与下载门槛，并用受控完整包 fixture 核对新契约；不必等待 Qt 首发或 Linux 安装验收。[独立桥接入口](bridge-release.md) 核对显式声明、当前 main、同 SHA 的成功 Windows run 和原始 Debug / Release 报告，报告仍区分受控 fixture 与真正 Qt 成品。Qt 双平台成品的实际安装、升级、卸载及首发 latest 烟测属于 P11b/P12 的独立必要门槛。
 
 共享规则和包类型边界可在标准 C++20 下运行；Qt HTTP 回归也会继续运行同一规则。Windows probe、真实关于窗口、完整包契约和安装结果必须在对应环境分别记录。Linux 上纯规则或 Qt HTTP 测试成功，不能记为 Windows 桥接通过；各自未满足 Issue 对应的必要门槛时，不发布桥接版或新 Qt 正式版。

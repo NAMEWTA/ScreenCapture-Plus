@@ -34,6 +34,17 @@ def digest(path):
     return checksum.hexdigest()
 
 
+def soname_alias(path):
+    """Find the installed loader name of an actual shared ELF object."""
+    name = elf_soname(path)
+    if name is None:
+        return None
+    alias = path.with_name(name)
+    if not alias.exists() or alias.resolve() != path.resolve():
+        raise RuntimeError(f"Installed ELF SONAME does not identify its actual bytes: {alias}")
+    return alias
+
+
 def elf_soname(path, env=None):
     with path.open("rb") as stream:
         if stream.read(4) != b"\x7fELF":
@@ -313,6 +324,12 @@ def make_bundle(options):
             target.symlink_to(os.path.relpath(relocated, target.parent))
         else:
             shutil.copy2(normalized, target)
+            # A development .so link can point directly to .so.0.0.0. Retain
+            # the real loader's .so.0 alias even if no dependency in Qt itself
+            # imports this optional native module (for example XCB XTEST).
+            alias = soname_alias(normalized)
+            if alias is not None and alias != normalized:
+                copy_system(alias)
 
     for package in header_packages:
         files = package_files[package]
@@ -514,10 +531,10 @@ def restore_bundle(options):
             # Include direct -I/usr and -L/usr flags, while avoiding a partial
             # match in another absolute path. /lib is the runner's /usr merge.
             system = str(bundle / "system/usr")
-            # A variable suffix such as ${prefix}/lib is already relative to
-            # the rewritten prefix. Rewriting that suffix prepends the SDK a
-            # second time after pkg-config expands the variable.
-            after = re.sub(r"(?:(?<=-I)|(?<=-L)|(?<![A-Za-z0-9_/${}]))/(usr|lib)(?=/|\s|$)",
+            # A path after ${prefix} is already relative to the relocated
+            # prefix. Match only standalone absolute paths, not the /lib in
+            # ${prefix}/lib (which used to duplicate the complete SDK path).
+            after = re.sub(r"(?:(?<=-I)|(?<=-L)|(?<==)|(?<=[\s\"'])|^)/(usr|lib)(?=/|\s|$)",
                            lambda match: system + ("/lib" if match.group(1) == "lib" else ""), after)
         if after != before:
             before_hash = digest(path)

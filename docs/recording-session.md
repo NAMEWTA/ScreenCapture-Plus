@@ -1,157 +1,117 @@
-# 录制会话与 Windows 原生后端
+# 共享录制会话、原生来源与输出
 
-本页记录 Issue #5 P04 / P09 的实际提取边界。当前新增的是共用 Qt 录制会话、从 Ling 主窗口提取的 Windows MP4/GIF 后端及共用 GIF 编码服务；完整 Linux 录制与正式录制工具条旅程仍需接入和验收。不能把这个模块或单个探针视为 P09 完成。
+本实现对应 [Qt 迁移](qt-migration.md) 的 P09，并复用 P04 / P05 的原生采集边界。共享 Qt 界面、编码组件和真实文件测试已经接线；这不等于 P09 的长时音画同步或 P12 的双平台桌面验收完成。正式 Windows 产品在 P12 通过前继续保留。
 
-## 分工与复用
+## 一次录制由谁拥有
 
-[`RecordingSession`](../src/recording/RecordingSession.h) 只负责应用层的一次录制：任务准入、状态、停止意图、临时文件所有权、完整检查、归档和失败保留。UI 根据其信号显示准备、录制、停止、封装与归档，不参与逐帧处理。`PreparedRecording.started` 来自工作线程的单调时钟，准备成功后才用于界面计时。Qt 定时器不产生媒体时间戳。
+[`RecordingController`](../src/app/RecordingController.cpp) 为每次录制创建并持有一个 [`RecordingSession`](../src/recording/RecordingSession.cpp)，把本次来源 backend 一次性交给它；空闲控制器不保留消费 lease。[`RecordingWindow`](../src/ui/qt/RecordingWindow.cpp) 只提交开始、保存、复制、丢弃等意图，并显示会话的真实阶段。隐藏或关闭工具窗口不会析构仍在工作的录制器。应用通过托盘、主快捷键或桌面完成入口提交明确的停止意图；没有捕获风险的可见工具栏可以恢复和激活，因捕获而隐藏的工具栏在来源停止前保持隐藏，不能为了激活改变保存或丢弃意图。
 
-[`RecordingBackend.h`](../src/recording/RecordingBackend.h) 是值和所有权合同，不包含 Qt 或 Win32 类型。它接收已经独占创建、核验身份的空文件写入句柄，消费并在返回前关闭该句柄。坐标单位是虚拟桌面的物理像素，允许负原点；Qt 逻辑坐标、DPR 和被授权源坐标的转换必须在来源已经验证的接缝完成。Wayland 截图 URI 不提供全局桌面映射，不能凭 DPR 猜出 Windows 风格的全局选区。
+会话在 GUI 线程受理请求，并在一个 QtConcurrent worker 中依次执行：创建受控暂存、取得同一文件对象的写句柄、准备真实采集与编码器、采集、停止并释放原生来源、排空编码器、完成容器、关闭写句柄、完整解码校验和持久归档。worker 不等待 GUI 回调，正常停止流程不在 GUI 同步 join 录制线程。正常应用退出等待 `shutdownFinished`；Portal 来源也必须确认自己的 producer 已返回，不能仅把停止请求已经发送当成完成。
 
-Windows 的 [`runNativeMp4`](../src/platform/windows/NativeMp4Recording.cpp) 从原有 `CapVideo` 提取设备选择、COM/MF 运行期、音源选择与 HEVC→H.264 回退，继续调用现有 [`VideoMp4`](../src/recording/VideoMp4.cpp)。DXGI/D3D11 采集、WASAPI 端点、采样转换与混音、MF 编码参数保持同一实现。旧 Ling `CapVideo` 也调用这个入口，没有为 Qt 另写一套录制器。
+`Core::FrameSource::stopAndWait()` 是 worker 使用的停止屏障。PipeWire reader 先请求 producer 停止，再等其实际退出；Portal 会话所有者保持到 producer 完成以后。尚未开始消费的选择可以在 GUI 上放弃 reader，其析构只发出停止请求，不阻塞 GUI。编码器不会在仍可能访问来源资源的 producer 工作时销毁来源。
 
-默认 30 FPS、120 分钟上限、系统声默认开启和麦克风默认关闭，继续遵守 F08。帧率、音源和上限在后端入口检查。当前 MP4 入口明确拒绝 GIF 请求；没有返回占位成功。底层既有 Pause 字段不会被推导为新的可见暂停/恢复功能。
+唯一的 [`LiveFrameReader`](../src/services/capture/LiveFrameReader.cpp) 同时供录制和滚动使用，保留真实 bounded frame queue 与 producer 完成 future。首帧携带格式切换的 discontinuity 是来源初始化合同；建立本次格式后，后续 discontinuity、格式/代次变更或 Paused 都是失败。只有调用方或同一来源已经请求停止时，Stopped/Cancelled terminal 才转换为正常结束；无对应停止请求的来源关闭不能伪装成成功录制。`Idle` 只在真实 Streaming 下返回，允许静态画面按时钟持续录制。
 
-旧 Ling 展示层也使用同一原生 MP4/GIF 入口，并复用同一任务、身份核验和 GUI 错误上报路径。其停止仍使用原有同步 join；这些展示层是尚待最终迁移删除的范围，不能描述成所有旧 UI 已经异步化。新 Qt 会话不使用该展示层。GIF worker 不再打开会阻塞 stop/join 的模态错误窗口。
+会话令牌递增，旧回调不能作用于新的录制。停止意图采用第一次成功的原子选择：保存之后的重复丢弃不能反转结果，自动时限也不能与停止按钮重复发布。准备、采集、编码、finish、写入和关闭的第一个错误会保留；后续 finalize 成功不能把前面的失败洗掉。
 
-## 文件对象与媒体收尾
+## 平台路径与保留的行为
 
-媒体服务创建 staging 并提供 `StagingFile::openWriter`，平台取得该实际打开对象。MF 不再通过文件名重新打开或自行截断任意路径。桥接顺序是：
+| 路径 | 实际来源和编码 | 当前行为 |
+| --- | --- | --- |
+| Windows MP4 | 保留的 DXGI Desktop Duplication / GDI、WASAPI、Media Foundation | 优先准备 HEVC，不支持时在开始前改试 H.264；保留 MP3 音轨、44.1 kHz 双声道、192 kbps |
+| Linux X11 MP4 | 独立 XCB 连接的真实桌面像素、PipeWire 音源、固定 FFmpeg / libx264 / AAC | H.264 软件编码、48 kHz 双声道 AAC；请求的音源缺失即失败 |
+| Linux Wayland MP4 | 新 ScreenCast 授权对应的 PipeWire 帧、独立 PipeWire 音源、同一软件编码器 | 不把 Screenshot URI 或图片位置当作授权 node 或桌面坐标 |
+| 双平台 GIF | 原生 Windows / 共享 `FrameSource` 来源、同一 `GifEncoder` 与聚合 Rust 静态库里的 gifski | 最大 16 fps / 6 分钟，quality 80、fast、无限循环，无音轨 |
 
-1. `FileHandle` 持有身份核验后的原生 CRT 描述符。
-2. [`FileHandleStream`](../src/platform/windows/FileHandleStream.cpp) 用 `DuplicateHandle` 持有同一个文件对象，提供可定位的 `IStream`。
-3. 官方 `MFCreateMFByteStreamOnStream` 生成 `IMFByteStream`，交给原有 SinkWriter。
-4. 停止采集和音频 worker 后，检查 SinkWriter `Finalize`，再检查 byte stream `Flush` / `Close`，释放 COM 引用并显式关闭原始 `FileHandle`。
-5. 共用服务完整解码验证所有声明的轨道，再核验文件身份并执行无覆盖持久提交。
+MP4 默认 30 fps、最大 120 分钟；MP4 区域向内对齐到宽度 4 / 高度 2 的像素倍数，负坐标显示器使用同一几何规则，不把所选区域扩大到未选中的像素。GIF 保留原始选区尺寸。选择 GIF 会关闭系统声和麦克风，切回 MP4 不暗中重新打开音源。
 
-桥接复用 Microsoft Windows SDK 的 XmlLite FileStream 样例。新增的有界 CopyTo、64 位 Seek/SetSize、独立 Clone 游标与串行原生访问，仅用于兑现 `IStream` 的真实文件合同；没有实现第二个 MP4 封装器。文件名被外部替换时，已经打开的媒体流继续写原对象，归档服务拒绝提交被替换的路径。编码回退只在上一个 writer 已释放后重置同一个会话拥有的 staging 对象。
+Windows 原生 MP4 提取在 [`NativeMp4Recording`](../src/platform/windows/NativeMp4Recording.cpp)。它枚举真实 adapter / output，只有单个未旋转输出完整覆盖选区时使用对应 duplication；旋转、跨屏或不适用的 duplication 使用原有 GDI 像素来源，不把跨屏选区裁成一个显示器。每个录制 worker 建立自己的 COM / Media Foundation 生命周期和物理像素 DPI 范围。
 
-来源 commit、逐文件 blob、修改说明和完整 Microsoft MIT 许可在
-[`third_party/windows-sdk-stream`](../third_party/windows-sdk-stream/upstream.json)。官方桥接接口依据是
-[MFCreateMFByteStreamOnStream](https://learn.microsoft.com/windows/win32/api/mfidl/nf-mfidl-mfcreatemfbytestreamonstream)，使用公开 API，未依赖未公开的按文件句柄创建 MF 文件函数。
+旧 [`CapVideo`](../src/recording/CapVideo.cpp) 同样调用这个原生 MP4 边界，GIF 则与 Qt Windows 共用 `NativeGifRecording` 和 `GifEncoder`。新增文件已经在保留的 Windows vcxproj 和 filters 中登记，纯原生实现不依赖应用 PCH。旧工程的 `/MT` 与 Qt 目标的 `/MD` 是两条现有构建入口，不能把两种 CRT 的库混接；新 Qt / Rust 聚合仍使用迁移方案约定的同一动态 CRT。
 
-[`RecordingResult`](../src/core/RecordingResult.h) 继续保持单 writer。主媒体 worker 在音频线程终止后合并首次音频错误，结果通过 future 完成后才交给 GUI 读取。首次采集/编码错误与附加收尾错误都保留，成功 Finalize 不能覆盖已有失败。无帧且干净停止是取消；有帧且失败保留独有临时路径，不能进入成功历史。`canArchive()` 只表示后端具备完整提交候选，仍须经过共用媒体检查及持久提交。
+## 来源选择、像素和窗口位置
 
-`framesWritten` 的既有字段名表示成功提交的输入帧数，不能解释为封装后的解码帧数。MF 链中视频处理器默认按输出媒体类型转换帧率；GIF 也可能合法合帧。Windows 每次 `WriteSample` 现在持有新建且提交后不再修改的 `IMFSample` / `IMFMediaBuffer`，遵循 Microsoft [Sink Writer 示例的真实 WriteFrame 源码](https://learn.microsoft.com/windows/win32/medfound/tutorial--using-the-sink-writer-to-encode-video)，避免改写仍被异步转换/编码阶段引用的输入。输入媒体类型明确声明 progressive，30 FPS、实际单调输入 PTS 与原有转换/编码选择保持不变。
+[`FrameSource`](../src/recording/FrameSource.cpp) 将真实轮询捕获转换为两个 slot 的有界 frame pool；借用的 GDI / XCB 缓冲仅在回调返回前读取。返回给编码器的 `FrameLease` 拥有有效存储，不依赖下一次原生捕获还保留旧字节。超预算、完整帧不足、借用 span 越界或所有 slot 被占用均明确失败，不生成替代画面。
 
-同步 `Finalize` 返回后记录官方 [GetStatistics](https://learn.microsoft.com/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsinkwriter-getstatistics) 的实际 HRESULT、received / encoded / processed 数量、各阶段最后 PTS、原最后输入 PTS/时长以及排队字节。查询失败只记录实际错误，不伪造统计，不覆盖媒体错误，也不代替完整解码。Microsoft 对 [统计各阶段](https://learn.microsoft.com/windows/win32/api/mfreadwrite/ns-mfreadwrite-mf_sink_writer_statistics) 与 [默认视频帧率转换](https://learn.microsoft.com/windows/win32/medfound/mf-xvp-disable-frc) 有分别定义，不能把几个阶段默认视为一一对应。
+授权来源先取得真实首帧用于选择区域。选择时保存 source/session identity、格式代次、完整 `FrameFormat`、crop、transform 和规范化尺寸。确认外部停止入口可用并隐藏选择器、控制窗口及本进程 tooltip 后，等待这些实际 QWindow 退出 exposure，再通过 `ScreenCastSource::refresh()` 刷新同一次授权的数据连接。新首帧必须保留原选区的 identity、格式、crop、transform 和尺寸；只有此时允许冻结新的格式代次并一次性交出 reader。`refreshed` 信号返回之后才启动消费者，避免 worker 移动仍被 GUI 借用的首帧。录制时每帧检查同一合同；即使新尺寸仍容得下旧矩形，代次或裁剪变更也会要求重新选择。`FramePixels` 是共享 `FrameNormalizer::copyNormalizedBgra` 的兼容边界，统一执行源 crop 后的八种旋转 / 反射，支持带 padding 或负 stride 的 BGRA / RGBA。未知布局和当前未支持的 HDR transfer 不伪装成普通 SDR。
 
-## 全区域与实际来源
+Windows 工具窗口调用原有 `WDA_EXCLUDEFROMCAPTURE` 能力，并按真实 `RtlGetVersion` build >= 19041 限制使用、读回实际 affinity。旧 DWM 会接受数值却画黑矩形，因此不以函数返回成功代替系统版本能力判断。Linux 明确返回不支持单窗口排除。
 
-DXGI 只选择能够完整包含目标物理选区的输出，并验证实际取得输出的桌面矩形与旋转状态。不能先把跨屏矩形裁到最近显示器，再把较小视频当作原请求成功。重建 duplication 时再次验证输出，防止显示器变化后录入不同区域；恢复后的尺寸、像素格式或 HDR 输入类别改变时，明确结束为采集失败并收尾保留已有数据。已经开始的 MF 输入媒体类型不会偷偷解释另一种布局，也不会把未经验证的动态重配置记作支持。
+没有 OS 排除能力时，原生桌面选区通过已经验证的逐显示器绑定，把工具栏约束到选区外的工作区。每个绑定检查当前 QScreen 名称、几何、工作区和各轴比例。worker 在每一帧读回前后检查同一不可变控制窗口快照；Windows 读回实际 affinity / 物理边框，X11 在短 server grab 内核验真实窗口、几何和 SHAPE，再读取像素。移动、缩放、原生 ID 更换或布局变化不能仅凭开始时曾经安全就继续被接受。快照缺失会关闭帧受理，不生成黑框代替真实排除。
 
-跨输出、旋转或 duplication 准备不可用时，复用现有 GIF 使用的 GDI 全桌面像素源进入同一 MF 编码/音频链。GDI 的 top-down BGRA 直接按行写入原有 bottom-up RGB32 输入缓冲，没有新增中间整帧图像。`PreparedRecording.source` 报告实际使用的 DXGI 或 GDI；它不承诺该机的性能或 HDR 已验收。DXGI 光标坐标减去实际显示器的桌面原点，避免负坐标/第二屏使用主屏原点。
+没有安全位置时，仅在宿主已验证独立的停止入口可用后隐藏控制窗口。Wayland 的授权 source 没有可通用推导的全局坐标，始终使用隐藏与同授权刷新流程，不按桌面坐标猜测。隐藏后外部停止能力失效会停止工作并保留可恢复媒体；不会把它转换为用户的丢弃意图。刷新、source lease 和 native producer 完成是可验证的生命周期合同，不代表已证明每个 compositor 都在同一时刻完成画面呈现；Windows DWM、GNOME、Plasma 和实际 X11 捕获仍分别需要桌面像素证据。
 
-尺寸和 stride 预算在分配前复用 `pixelLayout` 检查。MP4 选区按现有四像素宽、两像素高规则向内对齐，不向外扩大极小选区。首帧等待有绝对单调截止，超时明确失败；取得真实第一帧后，既有静止画面复用仍保持原媒体时钟。设备恢复、音源四组合、跨屏和 HDR 都需要真实环境进一步验证。WASAPI 原始 PCM 队列现在共享默认 16 MiB 的待消费 payload 预算，均分给实际选择的音源；接口拒绝零预算或超过 64 MiB 的配置。`REBUFFER::PushX` 在分配前检查加法与剩余空间，超限整个包拒绝并进入现有首次音频错误通道（`ERROR_NOT_ENOUGH_QUOTA`），之后仍归还该 WASAPI 包。不会以丢样本继续录制的方式隐藏积压。每个转换后的 float 声道也按该源最多容纳的帧数限制；现有 PCM16/float32 与声道映射下，其合计 payload 不超过原始预算的两倍。此处不改变重采样、混音、采样率、帧率或正常批次大小。
+## Windows 原生末帧和时间边界
 
-这只是明确的 PCM 排队 payload 上限，不是整个进程的 RSS 硬上限：std::vector 的容量/分配器开销、当前 PopBuffer/混音工作副本以及 MF 私有内存还要实际测量。源码拒绝路径与参数 preflight 也不能代替真实音频生产、编码停滞和设备变化测试；这些仍属于长时资源门槛。
+[`VideoMp4`](../src/recording/VideoMp4.cpp) 使用相邻真实捕获时间确定连续中间样本区间，不用成功帧数除以帧率缩短慢采集的录制。每次捕获创建独立的 MF sample / buffer，像素交付后不再改写。视频路径额外保留一份尚未交给 sink writer 的样本；下一帧到来时提交前一份，因此增加的应用持有量有明确的一帧上限。已捕获的 pending 首帧不会被当成“尚无首帧”而触发超时，GIF / Framer 路径不经过这个队列。
 
-## 共用 GIF 编码与原生帧源
+离开采集循环时、等待音频线程退出之前，固定实际捕获终点 `E = captureEnd`，以它作为最后一个 pending 样本原本区间的终点。[纯时间规则](../src/core/RecordingTime.h) 在 100 ns 单位中求名义帧率边界 `B(k) = round(k * 10000000 / fps)`，选择首个不早于 `E` 的 `T`；恰好落在已舍入边界上的终点保持不动。只把仍未提交的末样本时长延长至 `T - timestamp`，随后提交一次并 finalize。原始区间不会被缩短，延长量小于相邻 CFR 边界之间的一帧；目标不会随着排空耗时或 sink statistics 反复后移，也不会在用户停止后重新捕获画面。音频的样本时钟、MP3 配置、暂停判定和录制时限的停止条件继续使用原路径，视频末尾只承担明确的帧粒度对齐。
 
-[`GifEncoder`](../src/services/media/GifEncoder.h) 复用原有 gifski 1.34.0，保持 quality 80、fast、无限循环；Qt 架构从已有唯一 Rust aggregate 调用原 C ABI，没有新增编码器或 Rust runtime。对应 commit 和实际阅读的 `c_api.rs` / `collector.rs` / `lib.rs` blob 记录在 [`third_party/gifski/upstream.json`](../third_party/gifski/upstream.json)，AGPL-3.0-or-later 许可及作者归属仍然适用。保留的原 Windows 工程在最终迁移前继续使用其原有匹配 CRT 的 gifski 构建，不能把 `/MT` 库混入 Qt `/MD` 可执行文件。
+成功计数仍只表示 `WriteSample` 已接受的输入；pending 不提前计数，失败的提交不在清理阶段重试。停止前的采集 / 音源错误先保存，末样本或 finalize 的后来结果不能覆盖它。可恢复的已有媒体仍走原来的失败保留路径。最终统计同时记录 captured、实际输入 duration 总和、captureEnd、原始 `E`、冻结的 `T`、最后成功输入区间和 MF 各阶段计数。成功路径要求每个捕获都提交一次，中间区间无缝衔接；输入总 duration 与最后输入终点都等于 `T`，而 `captureEnd == E`。
 
-编码器消费真实的空 staging writer，以 `gifski_set_write_callback` 写入同一文件描述符；它不调用会重新按路径创建文件、在失败时自行删除文件的 `gifski_set_file_output`。底层的顺序 write / flush 放在两平台 `FileOutput.cpp`，检查短写、系统错误和输出字节预算。写 callback 只传递原子首个 I/O 错误；`RecordingResult` 始终由录制 worker 单独写入。`gifski_finish` 先完成内部线程，再核对 I/O、flush 和 close，之后才能检查或归档；默认 32 GiB 输出预算与共享归档上限一致。没有帧时不启动 writer，明确保留干净取消语义，而不是吞掉真实 `INVALID_STATE` / finish 失败。
+Windows 原生 probe 使用独立 FFmpeg 有理数换算检查：`E <= T`、前一个帧边界严格早于 `E`、最终输入终点等于 `T`，并完整解码验证连续呈现时间线恰好具有 `T` 对应的输出槽数。最后输出终点与 `T` 仅允许 100 ns 有理数换算的一 tick 误差；整帧缺失或多出整帧仍失败。输入受理数、编码 / 处理数、实际 packet 数和完整解码帧数按各自阶段核对，不把输入一帧必然等于转换后输出一帧作为前提。纯整数测试只能证明舍入 / 溢出规则，不能替代实际 Windows MF 排空与桌面录制证据。
 
-输入可以是原 GDI 的借用 BGRA 行，也可以是已有 `FrameLease`。RGB 工作缓冲只分配一次，BGRA 转换继续用原 `PixelBuffer` 规则；RGBA、padding 和负 stride 按共享平面描述逐行读取。gifski 接口在返回前已复制输入，因此生产者可立即释放 lease 或复用 DIB；测试实际复用了单槽帧池验证这一点。只接受已裁剪、已归一化方向的 opaque SDR BGRA/RGBA：旋转、非完整 crop、YUV、PQ/HLG、广色域或受限范围需要先经过实际颜色/几何服务，不能直接当线性 RGB 写入 GIF。未指定颜色沿用原桌面无色彩管理的 sRGB 输入约定，不宣称完成 HDR 色彩管理。
+## 软件编码和音画时间
 
-输入帧号由编码器按序产生，时间必须从零严格递增，防止上游对乱序索引排队或静默跳过重复 PTS。完整 GIF 检查的既有 6000 帧预算移到共享常量，编码和录制准入使用同一限制。gifski 的输入通道与处理管线复用上游有界队列；这不是其量化器所有内存和进程 RSS 的硬上限，仍需长时性能实测。
+[`SoftwareMp4Recording`](../src/recording/SoftwareMp4Recording.cpp) 只编排来源、实际时间和停止，编码与文件写入由唯一的 [`Mp4Encoder`](../src/services/media/Mp4Encoder.cpp) 承担，不调用外部录屏或编码命令。共享 Linux 软件配置为 libx264、YUV420P、veryfast、CRF 18、最多两个 B 帧；排空检查保留真实重排与 AAC 尾样本，不改变 Windows MF 编码器。RGB 转 YUV 使用明确的 BT.709 矩阵和视频范围，并保留可映射的源 primaries / transfer 标签。
 
-[`runNativeGif`](../src/platform/windows/NativeGifRecording.cpp) 继续使用 GDI 全选区、默认 16 FPS 和 6 分钟上限，不强加 MP4 的像素对齐，也不裁小跨输出选区。GIF 不支持音频，请求携带音源时明确拒绝。上游最小帧延时为两厘秒，所以该接口拒绝高于 50 FPS 的请求；更高帧率与时长的组合也须符合上述完整检查预算。生产默认 16 FPS 未改变。帧间等待使用可停止的单调时钟；Save / Copy / Discard 停止捕获后仍排空已提交帧，由同一 `RecordingSession` 决定归档、删除或保留。正常取消不会通过进度 callback 截断已提交的 GIF。GDI 调用在工作线程执行，首帧截止在实际返回后检查；不能把它描述成可以强行中断阻塞的显示驱动。
+视频时间来自单调时钟，帧 duration 由下一次实际捕获时刻决定，最后一帧补至实际停止时刻。慢帧不会通过 `frame_index / fps` 压缩录制时间。当前真实 codec 测试包含每帧约 90 ms 的受控慢来源，检查 450 ms 的录制仍保留约 450 ms 的容器时间，并且所有已提交帧连同最后一帧都能完整解码。
 
-旧 `CapVideo` 的独占文件身份现在直接从 `CREATE_NEW` 返回的实际句柄读取，再按该身份重新打开；关闭创建句柄后发生的路径替换不会变成新的所有权。旧独立 `VideoGif` / cgif 已不被这个展示层调用，其源和构建项在原生接线通过回归后清理，不应被当成第二条生产业务路径继续扩展。
+[`PipeWireAudio`](../src/platform/linux/pipewire/PipeWireAudio.cpp) 为系统声音 monitor 和默认麦克风分别创建真实 PipeWire input stream；两个都请求时必须都准备成功。它不复用 ScreenCast 的受限 video remote FD 作为音频授权，不用生成的静音替代缺少的设备。输入协商为 48 kHz、双声道交错 float，固定容量队列保存 PCM；开始消费后溢出、损坏 chunk、异常 timestamp 或设备断开都作为错误传播。
 
-## 停止意图、回调和退出
+音频 stream 使用每个实际 `pw_buffer.time`，通过一次有界校准的共同 native-to-steady anchor、delay / buffered 与样本数映射到单调时间轴。精确样本网格计算 `floor(offset * 48000) + ordinal`，不把每个 ordinal 先舍入为纳秒再换回采样索引。混音读取相同时间区间，求和并限幅；只有 native GAP / EMPTY 数据能表达静音，缺失的 PCM 区间必须失败，不能以补零掩盖来源缺失。`FrameReadStatus::Idle` 只表示真实 Streaming 下的静止图像；`Paused` 明确终止采集并保留已有媒体，不能继续重复旧 lease。停止时有界地取得已经录制时间段的尾部音频，然后停止来源、排空音视频编码器并写入 trailer。原生设备时钟漂移、双来源混音、热插拔和长时同步仍需实际设备验证，受控 PCM 编码测试不覆盖这些能力。
 
-一个应用级会话同一时刻只准入一个 worker。首个 Save / Copy / Discard 通过原子选择固定；后续点击不能把正在归档的保存变为丢弃。自动到时结束与 UI 停止也竞争同一个意图选择，决定完成后不再接受迟到的改变。
+## 文件、归档、保存和恢复
 
-Save / Copy 停止后先完整收尾、关闭、检查和归档；`Completed` 表示 durable archive 已完成。之后的另存为对话框、真实文件剪贴板由共用输出服务处理，并报告自己的结果。取消另存为不会使已归档媒体丢失。Discard 则只显式清理该 staging，清理失败要保留路径并报告，不能只依靠析构中的静默清理。
+各编码器只接收 `FileHandle`，不按路径重新打开并截断。Windows [`FileHandleStream`](../src/platform/windows/FileHandleStream.cpp) 把已有身份检查后的文件对象通过 `DuplicateHandle` 包装为可寻址的 IStream，再交给正式 MF byte-stream bridge。Linux FFmpeg 使用写入 / seek 回调，GIF 使用 gifski 写入回调；实际写入、flush、finish 和 close 的错误不能被忽略。
 
-工作线程在取得 staging writer 时记录实际文件身份，编码关闭后记录最终字节数，持久提交后核对归档路径仍指向该对象，并把完整的提交后 `FileSnapshot` 放入 `SessionResult.archivedEntry`。GUI 不重新读取路径或替换这个快照；输出服务必须对该 `Entry` 申请媒体 lease，并沿用现有变更检查。重命名可能改变原生 change-time，因此不能把重命名前后的全部 revision 当作相等条件；完整检查前后的严格快照比较仍由归档服务执行。最终快照读取失败、对象被替换或字节数变化时，结果为 `RecoverableFailure`，已发布的 `archive.path` 仍保留，不能假报复制/另存为可用。这个身份接缝不宣称阻止其他进程随后改写文件；后续 lease 会核验完整快照。
+会话在调用 backend 之前记录实际打开对象的身份，完成后核对暂存对象与字节长度；完整解码和持久发布之后再次核对发布路径，并返回包含 post-publication snapshot 的 `Media::Entry`。后续 [`MediaWorkspace::outputArchived`](../src/app/MediaWorkspace.cpp) 接收这个精确 entry，不能只按路径重新列举并授权一个替换文件。
 
-实现复用 QtConcurrent / QFutureWatcher。工作线程只持有值、服务与文件 token，不等待 GUI，不调用 QWidget。准备/收尾的 queued 通知有 QObject context、弱 delivery 生命周期和任务 token；终态回调支持启动下一次录制或同步销毁原 owner。future 的结果按值移出，不通过成员共享可变的原生录制参数。
+保存和复制先形成一份完整、持久、可再次验证的归档，然后复用现有 Save As / 精确覆盖确认 / 剪贴板回执流程。取消 Save As 保留已完成的归档，输出不会再制造第二个归档。失败保留已有暂存或已发布路径，并明确告知位置；不完整文件不进入历史。显式丢弃只删除当前身份仍匹配的自有暂存。应用退出会请求停止并保留可恢复文件，不把退出转换为丢弃。
 
-正常退出必须先停止准入，再调用 `shutdown()`，保持应用和事件循环直到 `shutdownFinished`。它停止采集、取消尚未完成的完整检查，保留未提交的有帧媒体，既不假报成功也不把退出视为 Discard。意外销毁 QObject 时，不在 GUI 中 join 原生 flush；worker 仍拥有句柄和 staging，按相同规则清理/保留。这个析构兜底不能代替应用在正常退出时等待服务完成，也不能证明进程被强制终止后封装完整。
+## Windows MP3 音轨的两端完整校验
 
-## 构建与验证边界
+旧 Windows MP4 的音频默认是 MP3，新的完整解码器不能只接受 Linux 新录制的 AAC。依赖锁在两个生产 FFmpeg profile 中同时启用 `mp3float` decoder 和 `mpegaudio` parser，构建脚本检查实际 `config_components.h`，不靠配置字符串猜测功能已编入。没有新增 MP3 encoder、网络协议或运行时命令依赖。
 
-原生库继续编译 `VideoMp4.cpp`、`GdiCapture.cpp`，增加 `NativeMp4Recording.cpp` 与 `FileHandleStream.cpp`，链接已有 MF/DXGI/WASAPI 系统库及共享文件服务。新增 cpp 不使用 Ling PCH。Qt 会话独立链接 Qt6::Core、Qt6::Concurrent 和 `huhucapture_media_archive`，开启 AUTOMOC；其接口不链接到具体平台后端，后端由应用组合。
+依据固定 FFmpeg commit `946fcce07b6dcd0331c8cc609192aeff5e1924f8` 的源文件：
 
-| 检查入口 | 实际覆盖 |
-| --- | --- |
-| `tests/recording_geometry_tests.cpp` | 纯 C++ 负原点、对齐、溢出、预算与小矩形边界 |
-| `tests/platform/windows_file_stream_tests.cpp` | 真文件短读写、64 位游标、Clone、外部名称替换、原描述符关闭后的同对象存活；真实 MF stream 桥接；原生无效参数/预取消 |
-| `tests/qt/recording_admission_tests.cpp` | 真实 Qt 服务的缺少平台能力拒绝、无任务不造文件、幂等退出和同步 QObject 销毁；不提供替代采集后端 |
-| `tests/qt/recording_session_tests.cpp` | 实际原生 preflight 与文件系统失败、保留 staging、终态重入、QObject 删除和已关闭会话拒绝准入；不触碰采集设备 |
-| `tests/qt/gif_encoder_tests.cpp` | 固定 Rust 编码器与严格完整解码、padding/负 stride/单槽 lease、像素/时间轴/无限循环、真实 OS 写失败、预算失败、重命名文件对象与归档身份拒绝 |
-| `tests/qt/native_recording_probe.cpp` | 真实可见 Windows 窗口→实际 DXGI/GDI→MF MP4；保存/复制意图/丢弃、关闭与 owner 销毁；严格输入/输出阶段计数、逐帧及尾部时间轴、实际封面方向/裁剪、文件与 JSON 证据。同文件以 `HUHUCAPTURE_GIF_RECORDING_PROBE=1` 构建 GIF 探针，复用相同生命周期旅程并检查完整解码、实际像素与 16 FPS 时间轴 |
+| 文件 | Git blob | SHA-256 |
+| --- | --- | --- |
+| `libavcodec/mpegaudiodec_float.c` | `e713e9e251c181ff8756acf25dfe0bd1208fac27` | `50f02b8b43709291ca7efb8f68a21d52143461685d54c8d69957d3211bbd2113` |
+| `libavcodec/mpegaudio_parser.c` | `8c33d36dfefa29a38c54a003fed85bd5968fa7b6` | `c3ebefdce56d8ace2b13af332b4c3b47dbd66f658c2e5f1285edb58d3da68e9f` |
 
-桌面探针需真实 Windows Qt platform、可见并已经绘制的窗口，不能以 `offscreen` 替代。它通过现有 native backend 取得桌面画面，不把 QWidget::grab 的内存图像送给编码器。探针明确关闭两个音源，逐例记录实际 source / codec；复制意图只证明归档前序，不冒充真实应用中的剪贴板粘贴旅程。退出清理和事件循环心跳仅说明这次短录制的行为，不替代长时间性能验收。
+[`legacy_mp3_recording_tests`](../tests/qt/legacy_mp3_recording_tests.cpp) 在 Windows 通过实际软件 MF H.264 / MP3 编码器，向正式文件句柄 adapter 写入 51 帧视频和非零 PCM，生成有效 MP4，再复制并破坏后段实际 MP3 容器 sample 的物理字节。定位器独立采用 `NOPARSE | NOFILLIN`，逐个核验 sample 范围和独立只读 `QFile` 中的对应字节；生产检查器仍保留官方 parser 和 side-data，见 [完整检查合同](video-inspection.md#windows-mp3-的容器样本与-codec-帧)。生成过程使用 [Microsoft MP3 Audio Encoder](https://learn.microsoft.com/en-us/windows/win32/medfound/mp3-audio-encoder) 要求的 16-bit PCM 类型和 [MPEG-4 file sink](https://learn.microsoft.com/en-us/windows/win32/medfound/mpeg-4-file-sink) 支持的 MP3 sample description；不会悄悄改为 AAC。清单记录真实生成系统版本、源码 pin 和每份文件的 SHA-256。
 
-当前本地已实际以 g++14 编译运行纯 C++ 几何/完成结果测试；恢复固定 SDK 后，以 Qt6.12.1、CMake/Ninja、`-Wall -Wextra -Werror -Wpedantic` 实际编译共用会话/MOC、归档与 Linux 文件服务，并运行 `recording_admission_tests` 通过。这个测试没有替代采集后端。Windows 文件/MF 与真实 native preflight 的 Qt 会话测试已随 `6d2283f5bf640c159b065f1d4227aa0bb96282f8` 的 Windows Debug/Release 回归实际执行；桌面 MP4 的完整旅程仍需下述统计合同修正后的 CI 裁决。不得将测试设计写成已经通过。四音源、设备拔出/重选、实体混合 DPI/双屏、HDR、100 次启停、30 分钟同步、时长上限、Linux MP4/GIF 和正式 UI 旅程仍是未完成门槛。完整媒体检查的严格坏样本及系统 HEVC 封面差异见 [video-inspection.md](video-inspection.md)。
+Windows 运行 `qt_legacy_mp3_recording --generate <全新目录>`；Linux 和 Windows 都运行 `qt_legacy_mp3_recording <同一份生成物目录>`。两端必须读取相同 SHA-256 字节，完整解码有效文件的所有轨道和 51 帧视频，并拒绝后段音频损坏的版本。只生成了缩略图不算通过。此测试验证真实编码和容器 / 全轨解码，输入图案与 PCM 是明确的 codec fixture，不能用来声称桌面或麦克风采集成功。
 
-共用 GIF 测试已在本地固定 SDK 与来自实际通过 CI 的 Linux Rust aggregate 上运行通过：恢复前核对了 GitHub artifact digest、库 SHA256 及 metadata 中全部 98 个源文件指纹。测试使用明确生成的颜色帧来验证真实编码器、解码器和文件系统，没有替代编解码器或伪造写成功；它不证明桌面采集。GIF 合法合帧意味着输入帧数不必等于 GIF 图像块数；GIF 探针检查两个真实解码器的一致帧数、所有实际图像和完整时间轴，MP4 则检查下面的各阶段精确等式及完整实际时间轴。Windows GDI→共用 GIF 桌面探针已在 [workflow 45596538478 / job 139143974308](https://github.com/NAMEWTA/huhucapture/actions/runs/45596538478/job/139143974308) 实际通过（4.18 秒）；跨屏、物理 DPI 和长期录制仍未由该次短探针验收。
+## 复用和许可
 
-同一 GIF 用例也实际通过了 C++ AddressSanitizer / UndefinedBehaviorSanitizer 构建与执行；Qt 和已构建的 Rust archive 未重新插桩。LeakSanitizer 在当前受跟踪的执行环境中报 `does not work under ptrace`，没有取得泄漏检测结果；随后仅关闭该不可运行的检查，保留地址与未定义行为检查运行通过。不能据此声称 Rust 内部、整个进程或长时间录制无泄漏。
+优先保留项目已有 `VideoMp4` / `GdiCapture` / WASAPI / gifski 行为，再复用已有固定依赖：
 
-## MF 输入区间与输出阶段的验收
+- `Mp4Encoder` 的 stream setup、send/receive 和 mux API 流程参考固定 FFmpeg `doc/examples/mux.c`（Fabrice Bellard，MIT）。完整原文、原版权和既有补丁在 [`third_party/ffmpeg-examples`](../third_party/ffmpeg-examples/mp4-encoder-upstream.json)；产品添加真实帧 / PCM 来源、句柄回调、实际时间、首错保留和关闭流程，不使用示例生成媒体作为采集来源。
+- PipeWire stream 创建、SPA 格式协商和 dequeue / process / queue 流程参考固定 1.6.11 `src/examples/audio-capture.c`（Wim Taymans，MIT）。精确 commit / blob / hash、改动说明和许可在 [`third_party/pipewire-audio`](../third_party/pipewire-audio/upstream.json)。
+- `FileHandleStream` 参考 Microsoft Windows SDK XmlLite FileStream 示例；精确 source / blob、MIT 许可和身份句柄 / Clone / 64 位 seek 等改动在 [`third_party/windows-sdk-stream`](../third_party/windows-sdk-stream/upstream.json)。
+- 共享会话的发布身份检查及 admission / native-session / visible-desktop probe 延续本仓库已有实现；不引入额外第三方代码或改变仓库许可。FFmpeg / x264 / Qt / Rust 聚合各自的分发条件仍依照依赖锁及许可清单执行。
 
-Microsoft 的[媒体样本合同](https://learn.microsoft.com/en-us/windows/win32/medfound/working-with-media-samples)
-将 PTS 定义为样本开始呈现的时刻，duration 定义为它应持续呈现的时间。
-因此当前图像的持续时间必须由下一次实际采样或实际停止点确定，不能把上一次
-采样间隔再加到当前 PTS，推算一个尚未发生的末端；采样间隔变化时，后者会使
-相邻输入区间重叠或留空。
+## 验证范围
 
-现有 Windows 后端只暂持一个已经采集、独占缓冲的 `IMFSample`。下一张图像到达
-时，以同一 `MediaClock` 的真实采样时间闭合并提交前一张；停止循环时，在音频
-停止和 writer 排空之前记录真实停止点。复用 #7 中的
-[`recordingTailTime`](../src/core/RecordingTime.h) 规则：最后一张尚未提交的图像
-延长至覆盖实际停止点的首个标称 FPS 整帧边界，延长小于一帧；此前样本和真实
-停止点保持不变，不额外采集或修改像素。这个变化增加一个样本引用而不再复制
-像素，仍使用既有 DXGI / GDI、30 FPS、帧率转换及编码器。下一次
-采集、帧准备或音频写入失败时，仍可提交尚未尝试的有效待处理图像以保留恢复
-文件；实际失败的视频转换或提交不重试，首个失败仍保留。全部有效输入提交后，
-继续使用原有同步
-[`Finalize`](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsinkwriter-finalize)。
+下列目标各自承担不同证据，不能互相替代：
 
-`RecordingSinkStatistics` 和原生探针现在分别保留实际捕获数、成功提交数、连续
-输入区间总时长、实际停止点，以及 MF 自身 received / encoded / processed 数据。
-[`recording_timeline.h`](../tests/qt/recording_timeline.h) 要求：
+| 验证 | 实际覆盖 | 不覆盖 |
+| --- | --- | --- |
+| `recording_geometry` / `recording_frame` | 真实帧池、八种变换、RGBA / BGRA、负 stride、裁剪、预算、代次 / source 变化拒绝 | OS 采集和设备 |
+| `recording_time` | 末区间保留、30 / 60 fps 分数 tick 舍入、最小上取整和有符号整数边界 | MF 编码、排空和原生录制 |
+| `qt_recording_pipeline` | 实际 gifski / libx264 / AAC、完整解码、尾帧 / duration、真实文件归档、首停止意图、GUI heartbeat、恢复和异步退出 | 原生桌面和音源采集 |
+| `live_recording_tests` | 同一生产 LiveFrameReader、真实帧池/队列、gifski/libx264 完整编码解码，首 discontinuity、暂停、格式变化、请求/非请求停止及 native future/lease 排空 | Portal 授权、原生屏幕和音源 |
+| `qt_recording_admission` | 真实 QObject 生命周期、缺少 backend 的拒绝、空闲关闭和同步销毁回调 | 采集与编码 |
+| `qt_recording_session`（Windows） | 真实 native preflight 和阻塞目录失败、写句柄已关闭、暂存保留、重新开始与 owner 销毁 | 成功桌面采集 |
+| `qt_native_recording_probe`（Windows） | 真正可见的 Qt 图案窗口，经 DXGI / GDI → MF → 全文件解码与封面像素；保存、复制意图、丢弃、正常退出、owner 销毁 | 音频、实体多屏 / 混合 DPI / HDR / 长时录制 |
+| `qt_legacy_mp3_recording` | 实际 Windows MF 编码与两端同字节全轨校验、后段 MP3 损坏拒绝 | 麦克风 / 系统音源 |
+| `qt_gif_encoder` / `qt_mp4_encoder` | 同一生产纯编码服务、真实像素/PCM、完整帧和精确 AAC 尾样本、文件身份与关闭 | 桌面、权限或设备采集 |
+| 私有 PipeWire audio graph | 真实受控 daemon 和官方测试信号，系统 monitor / microphone / mix / clip / daemon-loss / source-loss 六种路径 | 物理设备、会话策略和长时漂移 |
+| PipeWire audio failure test | 实际不存在的 native endpoint、准备失败、取消、有界退出、FD 回收 | 有音设备、混音、热插拔和漂移 |
+| `qt_media_workspace` | 完成媒体复用真实 Save As、取消保留、真实字节导出、未受管路径及同路径替换对象拒绝 | 真实桌面剪贴板目标程序 |
 
-- 捕获数、提交数和 MF received 相等；输入区间连续覆盖从首帧到实际停止点，
-  最后 PTS 加 duration 必须精确等于覆盖实际停止点的首个标称 FPS 边界；
-  真实停止点与对齐后的提交末端分别记录。
-- MF encoded、processed 与完整解码帧数相等；末次接收等于末次提交，排队字节为零；
-  逐个解码帧具有从零开始的连续标称 FPS 时间轴，最后解码 PTS 匹配 MF 实测值。
-- 完整输出槽数必须精确等于对齐后输入末端的标称 FPS 槽数；实际解码结束点
-  必须覆盖原始停止点。官方
-  [时间戳与时长规则](https://learn.microsoft.com/windows/win32/medfound/time-stamps-and-durations)
-  不保证具体 FRC 算法，因此新的生产者尾区间及严格断言仍待 Windows 原生
-  复验，不能以纯整数测试代替真实录制，也不放宽为任意一帧容差。
+Windows visible-desktop probe 的参数是证据父目录，会独占创建 `run-XXXXXX` 并写入 JSON、实际 MP4 和解码 PNG。它要求真正的 `windows` Qt platform，不能把 `offscreen` 当作实际桌面通过。
 
-阶段数量不同本身并不证明编码尾帧丢失。此前
-[e23 的实际结果](https://github.com/NAMEWTA/huhucapture/actions/runs/45596538455/job/139150279329)
-是 15 submitted = 15 received、21 encoded = 21 processed = 21 decoded、排队为零；
-这区分了真实帧率转换和未写出的编码结果。
-[24f 的 Windows Debug 结果](https://github.com/NAMEWTA/huhucapture/actions/runs/45637885690/job/139293311262)
-同样显示 17 submitted = 17 received、22 encoded = 22 processed = 22 decoded、排队为零，
-原文件完整检查通过，但尾槽断言失败：输入末端为 7,500,967 ticks，输出末端为
-7,333,333 ticks，原条件要求 23 个输出槽而实际是 22 个。原产物和失败结果保留，
-没有把它归因为尚未证实的 encoder drain 丢帧。
-
-区间修复后的 `659cc9d7` [Windows 运行](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036728/job/139330761665)
-中，Debug 三项检查及全部五个录制生命周期场景通过。Release 的视频、HEVC
-检查和保存、复制、丢弃、关闭四个录制场景通过，但 owner 销毁场景仍在尾槽
-断言失败：完整解码为 21 帧，输出末端 7,000,000 ticks，实际输入末端
-7,173,920 ticks，最近整数槽条件要求 22 帧。该失败不算通过，也不能凭此前
-成功场景推断其原因。
-
-该次原产物未包含 owner 的隐藏 `.part` 恢复文件，该分支的 JSON 也尚未写出
-完整 sink statistics；因此不能声称已经重放这份失败媒体。探针现在复用同一份
-backend 统计序列化，并在检查恢复文件前，将其原字节保存到本轮专属目录的
-非隐藏诊断副本。副本排他创建，逐字节复制并核对 SHA256，保存收据前重新
-核对原文件身份、长度与 revision；原恢复文件保持原位。复制与 owner 统计
-只补全当时的失败证据，不改变 artifact 的全局隐藏文件规则。上述历史失败仍然
-有效；新的尾区间实现必须用新构建和真实录制重新验收。
-这项取证改动仍须新的 Windows CI 实际执行。
-
-四音源、长时同步、实体桌面和最终产品旅程仍按 P12 单独验收。
+固定 SDK 的 Linux 构建与组件测试可以验证上述真实库 / 文件路径。完整 P09 / P12 仍需另行记录 Windows 和 GNOME / Plasma / X11 的实际授权、光标、控制栏、四种音源组合、取消 / 权限撤销、设备热插拔、6 分钟 GIF、120 分钟上限及至少 30 分钟音画同步、资源峰值和用户关闭恢复旅程；这些未执行项保持明确的未验证状态。

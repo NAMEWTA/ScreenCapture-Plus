@@ -323,10 +323,13 @@ struct LanController::State {
 
     void publish()
     {
+        const QPointer<LanController> lifetime(owner);
         if (settingsWindow) settingsWindow->setSnapshot(snapshot());
+        if (!lifetime) return;
         const bool active = available();
         if (announcedAvailable != active) {
             announcedAvailable = active; Q_EMIT owner->availabilityChanged(active);
+            if (!lifetime) return;
         }
         Q_EMIT owner->busyChanged(busy());
     }
@@ -369,9 +372,10 @@ struct LanController::State {
         const bool changed = failureKey != key || failureStatus != status;
         failureKey = key; failureStatus = status;
         const auto message = failure();
-        if (changed && !message.isEmpty()) Q_EMIT owner->operationFailed(message);
+        const QPointer<LanController> lifetime(owner);
         if (applying.token) finishSettings(ui::DesktopResult::Failed, message);
         else publish();
+        if (lifetime && changed && !message.isEmpty()) Q_EMIT owner->operationFailed(message);
     }
 
     void maybeStart()
@@ -463,11 +467,17 @@ struct LanController::State {
             // be persisted. The localized error explicitly describes restart.
             if (!change.enabled) {
                 preferences.enabled = false; needsStart = false; discoveryTimer.stop();
+                cancellation.request_stop();
                 (void)transfers.disable();
             }
             failureKey = change.enabled ? u"lan.settingsSaveFailure" : u"lan.disableSaveFailure";
-            view->completeChange(token, ui::DesktopResult::Failed, snapshot(), failure());
-            Q_EMIT owner->operationFailed(failure()); publish(); return;
+            const auto message = failure();
+            const QPointer<LanController> lifetime(owner);
+            view->completeChange(token, ui::DesktopResult::Failed, snapshot(), message);
+            if (!lifetime) return;
+            publish();
+            if (lifetime) Q_EMIT owner->operationFailed(message);
+            return;
         }
         preferences = std::move(candidate); applying = {view, token};
         if (!preferences.enabled) cancellation.request_stop();
@@ -560,8 +570,10 @@ struct LanController::State {
             }
             return result;
         }, [this, view, token, peer, alias, capturedGeneration](WorkResult result) mutable {
+            const QPointer<LanController> lifetime(owner);
             if (result.identity.ok() && !result.identity.nativeIdentity.isEmpty()) identity = std::move(result.identity);
             else if (!result.identity.ok()) reportFailure(identityErrorKey(result.identity.error));
+            if (!lifetime) return;
             auto status = result.status;
             const auto current = transfers.viewSnapshot();
             if (!available() || !current || !current->service || current->service->generation != capturedGeneration)
@@ -571,7 +583,7 @@ struct LanController::State {
             peer = {}; // Includes an optional PIN; never retained in app history.
             result.media.clear(); // Admission transfers the only extra leases to the service.
             if (view) view->completePreparation(token, submission.status, submission.request);
-            if (!submission) Q_EMIT owner->operationFailed(presentation::status(translator, submission.status));
+            if (lifetime && !submission) Q_EMIT owner->operationFailed(presentation::status(translator, submission.status));
         });
         if (!submitted && view) view->completePreparation(token, HUHU_BUSY, 0);
     }
@@ -597,7 +609,9 @@ struct LanController::State {
 
     void consume(const Transfer::Event& event)
     {
+        const QPointer<LanController> lifetime(owner);
         if (event.kind == Transfer::EventKind::ReceiveOffer) showPrompt(event);
+        if (!lifetime) return;
         if (event.kind == Transfer::EventKind::ReceiveFinished) {
             const auto key = QString::number(static_cast<qulonglong>(event.generation)) + u'/' +
                 event.data.value(QStringLiteral("sessionId")).toString();
@@ -605,18 +619,24 @@ struct LanController::State {
         }
         if (!event.receivedFiles.empty() && std::any_of(event.receivedFiles.cbegin(), event.receivedFiles.cend(),
             [](const auto& file) { return file.published && !file.path.isEmpty(); })) Q_EMIT owner->archiveChanged();
+        if (!lifetime) return;
         if (stopping) {
             if (event.kind == Transfer::EventKind::Disabled) {
                 const auto values = prompts.values(); for (auto prompt : values) if (prompt) prompt->close();
-                finishShutdown();
             }
-            publish(); return;
+            if (!lifetime) return;
+            publish();
+            // Completion is the final observation. A QApplication host may
+            // synchronously destroy this controller once its join is complete.
+            if (lifetime) finishShutdown();
+            return;
         }
         if (event.kind == Transfer::EventKind::Enabled) {
             if (event.status == HUHU_OK) {
                 listeningPort = static_cast<quint16>(event.data.value(QStringLiteral("port")).toInt());
                 failureKey = {}; failureStatus = 0;
                 if (preferences.discovery) { discoveryTimer.start(); refreshDiscovery(); }
+                if (!lifetime) return;
                 if (applying.token) finishSettings(ui::DesktopResult::Succeeded);
             } else if (event.status == HUHU_ADDRESS_IN_USE && fallbackAttempts < 4 && !stopping && preferences.enabled) {
                 // Only a typed native AddrInUse permits an ephemeral fallback.
@@ -627,8 +647,7 @@ struct LanController::State {
         } else if (event.kind == Transfer::EventKind::Disabled) {
             listeningPort = 0; refreshRequest = 0; discoveryTimer.stop();
             const auto values = prompts.values(); for (auto prompt : values) if (prompt) prompt->close();
-            if (stopping) finishShutdown();
-            else if (!preferences.enabled) {
+            if (!preferences.enabled) {
                 if (applying.token) finishSettings(event.status == HUHU_OK ? ui::DesktopResult::Succeeded : ui::DesktopResult::Failed,
                     event.status == HUHU_OK ? QString() : presentation::status(translator, event.status));
             } else maybeStart();
@@ -639,10 +658,13 @@ struct LanController::State {
             } else if (event.status != HUHU_OK && event.status != HUHU_CANCELLED && event.status != HUHU_BUSY)
                 reportFailure({}, event.status);
         } else if (event.kind == Transfer::EventKind::ListenerFailed) {
-            needsStart = preferences.enabled && !stopping;
-            failureKey = u"lan.listenerFailed";
+            // A failed listener is not a request to spin up another runtime
+            // immediately. Keep the actual failure visible until an explicit
+            // Apply; selected-interface changes already have their own path.
+            needsStart = false;
+            reportFailure(u"lan.listenerFailed");
         }
-        publish();
+        if (lifetime) publish();
     }
 
     void finishShutdown()
@@ -687,8 +709,10 @@ bool LanController::initialize()
         QJsonValue(QJsonValue::Undefined)), state_->preferences);
     if (!state_->validConfig) { state_->reportFailure(u"lan.settingsReadFailure"); return false; }
     state_->interfaces = interfaceAddresses();
+    const QPointer<LanController> lifetime(this);
     if (state_->preferences.enabled) state_->reconfigure();
-    state_->publish(); return true;
+    if (lifetime) state_->publish();
+    return true;
 }
 
 ui::TransferWindow* LanController::openTransfers(const QVector<Media::Entry>& exactEntries)
@@ -719,7 +743,8 @@ ui::TransferWindow* LanController::openTransfers(const QVector<Media::Entry>& ex
     }
     if (!exactEntries.isEmpty()) state_->transferWindow->setMediaSelection(exactEntries);
     state_->transferWindow->show(); state_->transferWindow->raise(); state_->transferWindow->activateWindow();
-    state_->refreshDiscovery(); return state_->transferWindow;
+    const QPointer<ui::TransferWindow> view(state_->transferWindow);
+    state_->refreshDiscovery(); return view;
 }
 
 ui::TransferSettingsPanel* LanController::openSettings()
@@ -752,13 +777,19 @@ bool LanController::busy() const { return state_->busy(); }
 void LanController::shutdown()
 {
     if (state_->stopping) return;
+    const QPointer<LanController> lifetime(this);
     state_->stopping = true; state_->needsStart = false;
     if (state_->applying.token) state_->finishSettings(ui::DesktopResult::Cancelled);
+    if (!lifetime) return;
     state_->cancellation.request_stop(); state_->interfacesTimer.stop(); state_->discoveryTimer.stop();
     const auto prompts = state_->prompts.values(); for (auto prompt : prompts) if (prompt) prompt->close();
+    if (!lifetime) return;
     if (state_->transferWindow) state_->transferWindow->close();
+    if (!lifetime) return;
     if (state_->settingsWindow) state_->settingsWindow->close();
-    (void)state_->transfers.disable(); state_->publish(); state_->finishShutdown();
+    if (!lifetime) return;
+    (void)state_->transfers.disable(); state_->publish();
+    if (lifetime) state_->finishShutdown();
 }
 
 } // namespace HuhuCapture::Application

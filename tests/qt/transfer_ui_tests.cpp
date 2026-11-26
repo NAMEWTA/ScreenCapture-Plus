@@ -115,6 +115,66 @@ private:
     QMetaObject::Connection connection;
 };
 
+void diagnoseReceivePrompt(const ui::ReceivePrompt& prompt, const transfer::Event& offer,
+    transfer::TransferService& receiver, transfer::TransferService& sender,
+    transfer::RequestId sendRequest, const QJsonArray& stages)
+{
+    // This fixture creates its own PNG and TLS peers. Keep failure evidence
+    // bounded and omit paths, aliases, fingerprints, session IDs and tokens.
+    const auto selected = prompt.selectedFiles();
+    QJsonArray files;
+    const auto offered = offer.data.value(QStringLiteral("files")).toArray();
+    for (qsizetype index = 0; index < offered.size() && index < 64; ++index) {
+        const auto file = offered[index].toObject();
+        const auto id = file.value(QStringLiteral("id")).toString();
+        files.append(QJsonObject{{QStringLiteral("index"), index},
+            {QStringLiteral("fileType"), file.value(QStringLiteral("fileType")).toString().left(64)},
+            {QStringLiteral("size"), file.value(QStringLiteral("size")).toInteger(-1)},
+            {QStringLiteral("nameLength"), file.value(QStringLiteral("fileName")).toString().size()},
+            {QStringLiteral("hasFileId"), !id.isEmpty()},
+            {QStringLiteral("selected"), selected.contains(id)}});
+    }
+    QJsonArray rows;
+    const auto* tree = prompt.findChild<QTreeWidget*>(QStringLiteral("receiveFiles"));
+    if (tree) for (int index = 0; index < tree->topLevelItemCount() && index < 64; ++index) {
+        const auto* item = tree->topLevelItem(index);
+        rows.append(QJsonObject{{QStringLiteral("index"), index},
+            {QStringLiteral("enabled"), item->flags().testFlag(Qt::ItemIsEnabled)},
+            {QStringLiteral("checkable"), item->flags().testFlag(Qt::ItemIsUserCheckable)},
+            {QStringLiteral("checkState"), static_cast<int>(item->checkState(0))}});
+    }
+    auto snapshot = [&](transfer::TransferService& service, bool incoming) {
+        QJsonArray events;
+        const auto view = service.viewSnapshot();
+        if (view) for (const auto& event : view->events) {
+            if (incoming ? event.generation != offer.generation ||
+                event.data.value(QStringLiteral("sessionId")) != offer.data.value(QStringLiteral("sessionId")) :
+                event.request != sendRequest) continue;
+            events.append(QJsonObject{{QStringLiteral("kind"), static_cast<int>(event.kind)},
+                {QStringLiteral("status"), event.status},
+                {QStringLiteral("localStatus"), event.data.value(QStringLiteral("localStatus")).toInt(event.status)},
+                {QStringLiteral("httpStatus"), event.data.value(QStringLiteral("httpStatus")).toInt()},
+                {QStringLiteral("sequence"), QString::number(event.sequence)}});
+        }
+        return QJsonObject{{QStringLiteral("state"), static_cast<int>(service.state())},
+            {QStringLiteral("nativeRunning"), service.statistics().nativeRunning},
+            {QStringLiteral("events"), events}};
+    };
+    const QJsonObject evidence{{QStringLiteral("decisionTimeoutMs"), 15000},
+        {QStringLiteral("offerKind"), static_cast<int>(offer.kind)},
+        {QStringLiteral("offerFileCount"), offered.size()},
+        {QStringLiteral("selectedCount"), selected.size()},
+        {QStringLiteral("answered"), prompt.answered()},
+        {QStringLiteral("decisionPending"), prompt.decisionPending()},
+        {QStringLiteral("filesEnabled"), tree && tree->isEnabled()},
+        {QStringLiteral("files"), files}, {QStringLiteral("rows"), rows},
+        {QStringLiteral("receiver"), snapshot(receiver, true)},
+        {QStringLiteral("sender"), snapshot(sender, false)},
+        {QStringLiteral("stages"), stages}};
+    std::cerr << "Receive prompt state diagnostic: " <<
+        QJsonDocument(evidence).toJson(QJsonDocument::Compact).constData() << '\n';
+}
+
 QJsonObject enable(transfer::TransferService& service, Events& events, const QByteArray& configuration,
     const std::shared_ptr<media::MediaArchiveService>& archive)
 {
@@ -245,9 +305,9 @@ void contracts(const QString& pictures)
     ui::TransferSettingsPanel settings(sender); settings.setTranslator(translate); show(settings);
     require(!sender.statistics().nativeRunning && sender.state() == transfer::ServiceState::Disabled,
         "Opening both real views creates no runtime, listener or discovery");
-    require(!sender.hasActiveTransfers() && !receiver.hasActiveTransfers(), "Cold services certify no active transfer in their own read model");
     require(!child<QPushButton>(*window, "transferSend")->isEnabled() && !settings.requestApply(),
         "An unconnected configuration cannot invent an enabled service");
+    require(!sender.hasActiveTransfers() && !receiver.hasActiveTransfers(), "Cold services certify no active transfer in their own read model");
     const auto source = createPng(senderArchive);
     const auto senderConfiguration = identity("Sender GUI");
     const auto receiverConfiguration = identity("Receiver GUI");
@@ -297,50 +357,41 @@ void contracts(const QString& pictures)
     require(reviews == 1, "One stable selection requests one trust review");
     window->refreshLanguage(); require(window->selectedEndpoint() == selected && reviews == 1, "Refresh preserves the selected device and its verified review");
     save(*window, pictures, QStringLiteral("lan-devices-en.png"));
+    const auto confirmationStart = std::chrono::steady_clock::now();
+    QJsonArray receiveStages;
+    auto receiveStage = [&](const char* name) {
+        receiveStages.append(QJsonObject{{QStringLiteral("stage"), QString::fromLatin1(name)},
+            {QStringLiteral("elapsedMs"), static_cast<qint64>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - confirmationStart).count())}});
+    };
     confirm(*window, true); require(host.queued && window->preparationPending(), "A real confirmation queues the application-owned intent");
+    receiveStage("sendConfirmed");
     window->close(); window.reset();
+    receiveStage("senderViewDestroyed");
     require(sender.statistics().nativeRunning && host.queued, "Closing and destroying the view keeps the confirmed intent and service alive");
     host.dispatch(); waitFor([&] { return host.finished; }, "Actual media preparation and service admission complete");
+    receiveStage("sendAdmitted");
     require(bool(host.last), "The host submits actual prepared media after view destruction");
     const auto offer = received.wait(transfer::EventKind::ReceiveOffer);
-    const auto offerObservedAt = std::chrono::steady_clock::now();
+    receiveStage("offerObserved");
     require(sender.hasActiveTransfers() && receiver.hasActiveTransfers(),
         "The same service read model keeps an actual awaiting-confirmation transfer active after its task view closes");
     require(!host.histories.front().expired(), "The service retains the real source lease while confirmation is pending");
     require(senderArchive->reserveRemoval(source).failure.code == media::Error::Busy, "Active send protects original history data");
+    receiveStage("sourceLeaseChecked");
     {
-        ui::TransferWindow receiving(receiver); receiving.setTranslator(translate); show(receiving);
+        ui::TransferWindow receiving(receiver); receiving.setTranslator(translate);
+        receiveStage("taskViewConstructed"); show(receiving); receiveStage("taskViewShown");
         require(receiving.taskCount() == 1, "A late-created view restores the actual pending incoming task");
         receiving.close(); require(receiver.statistics().nativeRunning, "Closing the task view does not decline a receive");
     }
+    receiveStage("taskViewDestroyed");
     auto prompt = std::make_unique<ui::ReceivePrompt>(receiver, offer, receiverArchive->directory());
-    prompt->setTranslator(translate); show(*prompt);
+    receiveStage("promptConstructed");
+    prompt->setTranslator(translate); show(*prompt); receiveStage("promptShown");
     if (prompt->selectedFiles().size() != 1 || prompt->answered()) {
-        QJsonArray matchingEvents;
-        const auto session = offer.data.value(QStringLiteral("sessionId")).toString();
-        for (const auto& event : received.values) {
-            if (event.generation != offer.generation ||
-                event.data.value(QStringLiteral("sessionId")).toString() != session) continue;
-            matchingEvents.append(QJsonObject{
-                {QStringLiteral("kind"), static_cast<int>(event.kind)},
-                {QStringLiteral("status"), event.status},
-                {QStringLiteral("request"), QString::number(static_cast<qulonglong>(event.request))},
-                {QStringLiteral("localStatus"), event.data.value(QStringLiteral("localStatus"))}});
-        }
-        const QJsonObject diagnostic{
-            {QStringLiteral("elapsedSinceObservedOfferMs"), static_cast<qint64>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - offerObservedAt).count())},
-            {QStringLiteral("offeredCount"), offer.data.value(QStringLiteral("files")).toArray().size()},
-            {QStringLiteral("selectedCount"), prompt->selectedFiles().size()},
-            {QStringLiteral("answered"), prompt->answered()},
-            {QStringLiteral("decisionPending"), prompt->decisionPending()},
-            {QStringLiteral("receiveAcceptEnabled"), child<QPushButton>(*prompt, "receiveAccept")->isEnabled()},
-            {QStringLiteral("receiverState"), static_cast<int>(receiver.state())},
-            {QStringLiteral("receiverActive"), receiver.hasActiveTransfers()},
-            {QStringLiteral("matchingEvents"), matchingEvents}};
-        std::cerr << "Receive prompt diagnostics: "
-            << QJsonDocument(diagnostic).toJson(QJsonDocument::Compact).constData() << '\n';
+        diagnoseReceivePrompt(*prompt, offer, receiver, sender, host.last.request, receiveStages);
+        save(*prompt, pictures, QStringLiteral("lan-receive-failure.png"));
     }
     require(prompt->selectedFiles().size() == 1 && !prompt->answered(), "Only real offered supported media is selectable");
     save(*prompt, pictures, QStringLiteral("lan-receive-en.png"));

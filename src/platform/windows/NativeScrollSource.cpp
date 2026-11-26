@@ -1,5 +1,8 @@
 #include "platform/NativeScrollSource.h"
 #include "platform/windows/GdiCapture.h"
+#include "platform/windows/RecordingControls.h"
+#include <limits>
+#include <utility>
 #include <windows.h>
 
 namespace HuhuCapture::Platform {
@@ -8,16 +11,35 @@ struct NativeScrollSource::State {
     GdiCapture capture;
     HWND target{};
     std::stop_token stop;
+    std::shared_ptr<Core::CaptureControls> controls;
     std::string error;
 };
-NativeScrollSource::NativeScrollSource(int x, int y, int width, int height, std::stop_token stop) : state_(std::make_unique<State>())
-{ state_->x = x; state_->y = y; state_->width = width; state_->height = height; state_->stop = stop; }
+NativeScrollSource::NativeScrollSource(int x, int y, int width, int height, std::stop_token stop,
+    std::shared_ptr<Core::CaptureControls> controls) : state_(std::make_unique<State>())
+{ state_->x = x; state_->y = y; state_->width = width; state_->height = height; state_->stop = stop; state_->controls = std::move(controls); }
 NativeScrollSource::~NativeScrollSource() = default;
 bool NativeScrollSource::capture()
 {
     if (state_->stop.stop_requested()) { state_->error = "Scrolling capture was cancelled"; return false; }
-    if (state_->capture.capture(state_->x, state_->y, state_->width, state_->height)) return true;
-    state_->error = "Windows could not capture the scrolling region"; return false;
+    const auto right = std::int64_t{state_->x} + state_->width;
+    const auto bottom = std::int64_t{state_->y} + state_->height;
+    if (state_->width <= 0 || state_->height <= 0 || right > (std::numeric_limits<LONG>::max)() ||
+        bottom > (std::numeric_limits<LONG>::max)()) {
+        state_->error = "The scrolling rectangle is outside native pixel bounds"; return false;
+    }
+    const RECT selected{state_->x, state_->y, static_cast<LONG>(right), static_cast<LONG>(bottom)};
+    const auto snapshot = state_->controls ? state_->controls->snapshot.load(std::memory_order_acquire) : nullptr;
+    if (state_->controls && (!snapshot || FAILED(Windows::verifyRecordingControls(*snapshot, &selected)))) {
+        state_->error = "The scrolling controls are not protected before native readback"; return false;
+    }
+    if (!state_->capture.capture(state_->x, state_->y, state_->width, state_->height)) {
+        state_->error = "Windows could not capture the scrolling region"; return false;
+    }
+    if (state_->controls && (state_->controls->snapshot.load(std::memory_order_acquire) != snapshot ||
+        FAILED(Windows::verifyRecordingControls(*snapshot, &selected)))) {
+        state_->error = "The scrolling controls changed during native readback"; return false;
+    }
+    return true;
 }
 ScrollInputResult NativeScrollSource::scroll()
 {

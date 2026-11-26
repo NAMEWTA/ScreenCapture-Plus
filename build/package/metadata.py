@@ -259,7 +259,7 @@ def locked_dependencies(repository: Path, platform: str):
 
 
 def write_platform_metadata(output: Path, build: dict, files, packages, dependencies, minimum_system: str,
-                            *, development=False, source_materials=None, extra_assets=()):
+                            *, development=False, source_materials=None, extra_assets=(), deployment=None):
     base = identity(build, development=development)
     platform, arch = build['platform'], build['architecture']
     require(minimum_system and len(minimum_system.encode('utf-8')) <= 256, 'Minimum-system declaration is required')
@@ -267,12 +267,15 @@ def write_platform_metadata(output: Path, build: dict, files, packages, dependen
     require({item['packageKind'] for item in packages} == expected_kinds and len(packages) == 2, 'Both real package forms are required per platform')
     for item in packages:
         verify_artifact(output, item, item['packageKind'], base['version'])
+    require(development or (source_materials and deployment),
+            'Release metadata requires complete sources bound to the actual prepared deployment')
     result = {**base, 'platform': platform, 'architecture': arch, 'developmentOnly': development,
               'compiler': build['compiler'], 'configuration': build['configuration'], 'qtVersion': build['qtVersion'],
               'dependencyLockSha256': build['dependencyLockSha256'], 'cargoLockSha256': build['cargoLockSha256'],
               'packagingTools': build.get('packagingTools', []),
               'dependencies': dependencies, 'files': files, 'packages': packages,
-              'additionalAssets': list(extra_assets), 'sourceMaterials': source_materials}
+              'additionalAssets': list(extra_assets), 'sourceMaterials': source_materials,
+              'deployment': deployment}
     require(len(json.dumps(result).encode()) <= 8*1024*1024, 'Actual build inventory exceeds updater metadata budget')
     build_name = f'build-info-{platform}-{arch}.json'; json_write(output/build_name, result)
     build_info = descriptor(output/build_name)

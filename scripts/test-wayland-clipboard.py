@@ -248,7 +248,10 @@ def main() -> int:
                                         inputs += 1
                     status = process.wait(timeout=2)
                     process.stdout.close()
-                    if status != 0 or inputs < 4:
+                    # Initial image, archived PNG, GIF file, changed-file
+                    # rejection, Unicode text, and the final image each demand
+                    # a fresh actual input event. A partial sequence is failure.
+                    if status != 0 or inputs != 6:
                         raise RuntimeError(f"Real Wayland clipboard validation failed: exit={status}, inputs={inputs}")
             finally:
                 if process is not None:

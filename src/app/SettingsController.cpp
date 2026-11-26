@@ -61,8 +61,9 @@ struct SettingsController::State {
     std::vector<QPointer<UI::SettingsWindow>> views;
     quint64 shortcutRequest{}, viewToken{};
     bool ready{}, initialized{}, initializingShortcut{}, canOpenArchive{}, canOpenLinks{}, lanAvailable{};
-    bool stopping{}, shortcutStopped{}, shutdownNotified{}, captureActive{};
+    bool stopping{}, shortcutStopped{}, shutdownNotified{}, captureActive{}, applicationCaptureActive{};
     bool standardDialogLanguageAvailable{true};
+    bool shortcutsEnabled{true};
 
     State(Config::SettingsStore& settings, Localization::LanguageCatalog& language, QString launch)
         : store(settings), catalog(language), autoStart(launch), executable(std::move(launch)) {}
@@ -86,7 +87,7 @@ SettingsController::SettingsController(Config::SettingsStore& store, Localizatio
         refreshViews();
     });
     connect(&state_->shortcut, &Desktop::GlobalShortcut::activated, this, [this](const QString& token) {
-        if (!state_->stopping && !state_->captureActive) Q_EMIT captureRequested(token);
+        if (!state_->stopping && !state_->captureActive && !state_->applicationCaptureActive) Q_EMIT captureRequested(token);
     });
     connect(&state_->shortcut, &Desktop::GlobalShortcut::changed, this, [this] {
         if (!state_->stopping) refreshViews();
@@ -143,12 +144,13 @@ SettingsController::~SettingsController()
     }
 }
 
-bool SettingsController::initialize()
+bool SettingsController::initialize(bool enableGlobalShortcut)
 {
     Q_ASSERT(QThread::currentThread() == thread());
     if (state_->stopping) return false;
     if (state_->initialized) return state_->ready;
     state_->initialized = true;
+    state_->shortcutsEnabled = enableGlobalShortcut;
     // Failed SettingsStore::load leaves no document. Never manufacture a new
     // store or overwrite a malformed/future-schema config from this layer.
     if (state_->store.document().isEmpty()) {
@@ -168,7 +170,9 @@ bool SettingsController::initialize()
     state_->ready = true;
     state_->startup = state_->autoStart.snapshot();
     state_->shortcut.setActionDescription(QStringLiteral("huhucapture — ") + state_->catalog.text(u"shortcut.cap"));
-    state_->initializingShortcut = true; Q_EMIT busyChanged(true); state_->shortcut.initialize();
+    if (state_->shortcutsEnabled) {
+        state_->initializingShortcut = true; Q_EMIT busyChanged(true); state_->shortcut.initialize();
+    }
     refreshViews(); return true;
 }
 
@@ -216,7 +220,7 @@ UI::SettingsWindow* SettingsController::openSettings(UI::SettingsWindow::Page pa
     if (!state_->initialized) initialize();
     state_->startup = state_->autoStart.snapshot();
     const auto native = state_->shortcut.snapshot();
-    if (state_->ready && !busy() && native.portal && native.editing == Desktop::ShortcutEditing::Unavailable) {
+    if (state_->ready && state_->shortcutsEnabled && !busy() && native.portal && native.editing == Desktop::ShortcutEditing::Unavailable) {
         state_->initializingShortcut = true; Q_EMIT busyChanged(true); state_->shortcut.initialize();
     }
     if (state_->window) {
@@ -236,7 +240,8 @@ UI::SettingsWindow* SettingsController::openSettings(UI::SettingsWindow::Page pa
         if (state_->stopping) return;
         if (!active && state_->captureIdentity != window) return;
         state_->captureIdentity = active ? window : nullptr; state_->captureActive = active;
-        const auto failure = state_->shortcut.setCaptureActive(active);
+        const auto failure = state_->shortcut.setCaptureActive(active || state_->applicationCaptureActive);
+        Q_EMIT shortcutCaptureActive(active);
         if (failure) {
             if (active) window->setPage(window->page());
             Q_EMIT operationFailed(shortcutMessage(state_->catalog, failure.code));
@@ -260,7 +265,8 @@ void SettingsController::releaseView(UI::SettingsWindow* window)
     if (state_->window == window) state_->window.clear();
     if (state_->captureIdentity == window) {
         state_->captureIdentity = nullptr; state_->captureActive = false;
-        const auto failure = state_->shortcut.setCaptureActive(false);
+        const auto failure = state_->shortcut.setCaptureActive(state_->applicationCaptureActive);
+        Q_EMIT shortcutCaptureActive(false);
         if (!state_->stopping && failure) Q_EMIT operationFailed(shortcutMessage(state_->catalog, failure.code));
     }
     if (state_->requestIdentity == window && state_->shortcutRequest) state_->shortcut.cancel(state_->shortcutRequest);
@@ -340,11 +346,18 @@ void SettingsController::setApplicationVersion(const QString& version)
 void SettingsController::setUpdateSnapshot(const UI::AboutUpdateSnapshot& update)
 { state_->update = update; for (const auto& window : state_->views) if (window) window->setUpdateSnapshot(update); }
 bool SettingsController::busy() const { return state_->busy(); }
+void SettingsController::setApplicationCaptureActive(bool active)
+{
+    if (state_->stopping || state_->applicationCaptureActive == active) return;
+    state_->applicationCaptureActive = active;
+    const auto failure = state_->shortcut.setCaptureActive(active || state_->captureActive);
+    if (failure) Q_EMIT operationFailed(shortcutMessage(state_->catalog, failure.code));
+}
 bool SettingsController::captureShortcutAvailable() const
 {
     const auto binding = state_->shortcut.snapshot();
-    return state_->ready && !state_->stopping && !state_->captureActive &&
-        binding.registered && !binding.suspended;
+    return state_->ready && state_->shortcutsEnabled && !state_->stopping &&
+        !state_->captureActive && !state_->applicationCaptureActive && binding.registered && !binding.suspended;
 }
 void SettingsController::finishShutdown()
 {
@@ -357,7 +370,7 @@ void SettingsController::shutdown()
     if (std::exchange(state_->stopping, true)) return;
     for (const auto& window : state_->views) if (window) window->close();
     if (state_->shortcutRequest) state_->shortcut.cancel(state_->shortcutRequest);
-    state_->shortcut.shutdown(); finishShutdown();
+    state_->shortcut.shutdown(); state_->initializingShortcut = false; finishShutdown();
 }
 
 } // namespace HuhuCapture::Application

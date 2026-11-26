@@ -14,6 +14,7 @@ struct LiveCaptureOptions {
     bool monitors{true};
     bool windows{true};
     unsigned maximumFrameRate{30};
+    bool cursor{};
     // Two queued frames + one consumer-held frame + one producer write slot.
     // A queue cannot consume every slot or prevent the producer from replacing
     // an old frame. Pool bytes include every retained format generation.
@@ -34,6 +35,10 @@ public:
     bool busy() const noexcept;
     quint64 request(QWindow* parent, LiveCaptureOptions options = {});
     bool isCurrent(quint64 sourceId, quint64 generation) const;
+    // GUI-thread-only borrowed preview, valid until the next call that changes
+    // this source. Used synchronously to bind the existing FrameSource facade;
+    // consumers obtain ownership only through claim(), after refresh succeeds.
+    const Core::FrameLease* previewFrame(quint64 sourceId, quint64 generation) const;
     // After the caller unmaps its selection/control windows, replace the
     // preview data connection while retaining this authorization and source.
     // Every old native worker and lease is drained before a new remote opens.

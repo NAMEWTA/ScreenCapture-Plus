@@ -1,8 +1,10 @@
-#include "app/QtApplication.h"
-#include "app/CaptureWorkspace.h"
+#include "app/DesktopApplication.h"
+#include "app/SingleInstance.h"
 #include "app/LanController.h"
 #include "app/MediaWorkspace.h"
-#include "app/RecordingWorkspace.h"
+#include "app/RecordingController.h"
+#include "app/ScrollController.h"
+#include "services/capture/DesktopCapture.h"
 #include "app/SettingsController.h"
 #include "services/desktop/FileRevealer.h"
 #include "services/desktop/SystemClipboard.h"
@@ -14,6 +16,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QComboBox>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -42,6 +45,9 @@
 #include <memory>
 #include <stdexcept>
 #include <utility>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace app = HuhuCapture::Application;
 namespace core = HuhuCapture::Core;
@@ -49,6 +55,9 @@ namespace desktop = HuhuCapture::Desktop;
 namespace media = HuhuCapture::Media;
 namespace ui = HuhuCapture::UI::Qt;
 namespace localization = HuhuCapture::Localization;
+namespace capture = HuhuCapture::Capture;
+
+static void initializeResources() { Q_INIT_RESOURCE(huhucapture_ui); }
 
 namespace {
 void require(bool condition, const char* message)
@@ -106,10 +115,11 @@ void profile(const QString& directory, bool enabledLan = false)
         enabledLan ? QByteArrayLiteral("{\"_huhucapture\":{\"schema\":1},\"common\":{\"language\":\"en-US\",\"autoStart\":true},\"shortcutKey\":{\"cap\":\"Ctrl+Alt+F9\"},\"lan\":{\"enabled\":true},\"future\":\"retain\"}") :
         QByteArrayLiteral("{\"_huhucapture\":{\"schema\":1},\"common\":{\"language\":\"en-US\"},\"lan\":{\"enabled\":false},\"future\":\"retain\"}"));
 }
-void verifyDrained(app::QtApplication& host)
+void verifyDrained(app::DesktopApplication& host)
 {
-    if (const auto* value = host.findChild<app::CaptureWorkspace*>()) require(!value->busy(), "Exit waits for real capture callbacks");
-    if (const auto* value = host.findChild<app::RecordingWorkspace*>()) require(!value->busy(), "Exit waits for real recording work");
+    if (const auto* value = host.findChild<capture::DesktopCapture*>()) require(!value->busy(), "Exit waits for real capture callbacks");
+    if (const auto* value = host.findChild<app::RecordingController*>()) require(!value->busy(), "Exit waits for real recording work");
+    if (const auto* value = host.findChild<app::ScrollController*>()) require(!value->busy(), "Exit waits for real scroll work");
     if (const auto* value = host.findChild<app::MediaWorkspace*>()) require(!value->busy(), "Exit waits for real media work");
     if (const auto* value = host.findChild<desktop::SystemClipboard*>()) require(!value->busy(), "Exit waits for real clipboard work");
     if (const auto* value = host.findChild<desktop::FileRevealer*>()) require(!value->busy(), "Exit waits for actual file-manager work");
@@ -122,71 +132,77 @@ void verifyDrained(app::QtApplication& host)
 struct Observation : QObject {
     int exits{}, exitCode{-1}, errors{}, clipboardStops{};
     app::InstanceRole role{app::InstanceRole::Pending};
-    explicit Observation(app::QtApplication& host)
+    explicit Observation(app::DesktopApplication& host)
     {
-        QObject::connect(&host, &app::QtApplication::started, this, [this, &host](app::InstanceRole value) {
-            role = value;
+        QObject::connect(&host, &app::DesktopApplication::started, this, [this, &host]() {
+            role = host.findChild<app::SingleInstance*>()->role();
             if (auto* clipboard = host.findChild<desktop::SystemClipboard*>())
                 QObject::connect(clipboard, &desktop::SystemClipboard::shutdownFinished, this, [this] { ++clipboardStops; });
         });
-        QObject::connect(&host, &app::QtApplication::operationFailed, this, [this] { ++errors; });
-        QObject::connect(&host, &app::QtApplication::exitReady, this, [this, &host](int code) {
+        QObject::connect(&host, &app::DesktopApplication::operationFailed, this, [this] { ++errors; });
+        QObject::connect(&host, &app::DesktopApplication::exitReady, this, [this, &host](int code) {
+            if (const auto* instance = host.findChild<app::SingleInstance*>()) role = instance->role();
             verifyDrained(host); exitCode = code; ++exits;
         });
     }
 };
 
-void argumentContracts()
+app::DesktopApplicationPaths paths(const QString& directory)
 {
-    const auto ordinary = app::parseApplicationArguments({});
-    require(ordinary.failure.isEmpty() && !ordinary.startup.oneShot && !ordinary.startup.background &&
-        ordinary.startup.entry == core::CaptureEntry::Capture, "The real Qt CLI defaults to the inherited screenshot action");
-    for (const auto& mode : {QStringLiteral("--auto-start"), QStringLiteral("--enter=tray")})
-        require(app::parseApplicationArguments({mode}).startup.background, "Actual background CLI never requests an initial screenshot");
-    const auto independent = app::parseApplicationArguments({QStringLiteral("--auto-start"), QStringLiteral("--auto-quit"),
-        QStringLiteral("--enter=qr"), QStringLiteral("--portable-dir=/tmp/配置 profile")});
-    require(independent.failure.isEmpty() && independent.startup.oneShot && !independent.startup.background &&
-        independent.startup.entry == core::CaptureEntry::Qr && independent.portableDirectory == QStringLiteral("/tmp/配置 profile"),
-        "One-shot priority, inherited QR entry and complete Unicode profile use one production parser");
-    require(!app::parseApplicationArguments({QStringLiteral("--auto-quit=TRUE")}).startup.oneShot &&
-        !app::parseApplicationArguments({QStringLiteral("--auto-start=false"), QStringLiteral("--auto-start")}).startup.background,
-        "Qt entry retains exact legacy boolean and repeated bare-flag semantics");
-    require(!app::parseApplicationArguments({QStringLiteral("--portable-dir")}).failure.isEmpty() &&
-        !app::parseApplicationArguments({QStringLiteral("--portable-dir=")}).failure.isEmpty(),
-        "An incomplete explicit profile never silently selects another configuration");
-    for (const auto& profile : {QStringLiteral("--portable-dir"), QStringLiteral("--portable-dir=")}) {
-        for (const auto& arguments : {QStringList{profile, QStringLiteral("--action=finish-capture")},
-            QStringList{QStringLiteral("--action=finish-capture"), profile}}) {
-            const auto rejected = app::parseApplicationArguments(arguments);
-            require(!rejected.failure.isEmpty() && rejected.startup.action == core::StartupAction::FinishCapture,
-                "A malformed control profile must retain its control action and cannot open an ordinary startup dialog");
-        }
-    }
+    app::DesktopApplicationPaths result;
+    result.settingsFile = QDir(directory).filePath(QStringLiteral("config.json"));
+    result.dataDirectory = QDir(directory).filePath(QStringLiteral("data"));
+    result.runtimeDirectory = QDir(directory).filePath(QStringLiteral("runtime"));
+    result.archiveDirectory = QDir(directory).filePath(QStringLiteral("Documents/huhucapture"));
+    result.persistentExecutable = QApplication::applicationFilePath();
+    result.portableDirectory = directory;
+    require(QDir().mkpath(result.runtimeDirectory), "Create actual private runtime directory");
+    require(QFile::setPermissions(result.runtimeDirectory,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner), "Set actual private runtime permissions");
+    return result;
 }
-
-void invalidProfile(QApplication& application)
+core::StartupRequest startup(const QStringList& arguments)
 {
-    app::ApplicationOptions options; options.portableDirectory = QStringLiteral("relative-profile");
-    app::QtApplication host(application, options); Observation observed(host);
-    require(host.start(app::parseApplicationArguments({QStringLiteral("--auto-quit")}).startup), "The host owns the rejected-path error journey");
-    waitFor([&] { return window(QStringLiteral("applicationError")); }, "An invalid explicit profile has an actual visible error");
-    require(!host.findChild<app::MediaWorkspace*>() && !host.findChild<app::LanController*>(), "Invalid profile construction starts no business or LAN service");
-    acknowledgeErrors(); waitFor([&] { return observed.exits == 1; }, "The acknowledged startup failure drains and exits");
-    require(observed.exitCode == 1 && observed.errors == 1, "The actual rejected profile returns failure rather than success");
+    // This is the shared production request parser, not a second application
+    // entry point. The harness owns only its explicit isolated directory.
+    std::vector<std::u16string> storage;
+    for (const auto& value : arguments) storage.push_back(value.toStdU16String());
+    std::vector<std::u16string_view> views;
+    for (const auto& value : storage) views.emplace_back(value);
+    return core::parseStartupArguments<char16_t>(views);
 }
-
-void damagedConfiguration(QApplication& application)
+void verifyIndependentServices(app::DesktopApplication& host)
+{
+    auto* settings = host.findChild<app::SettingsController*>();
+    auto* lan = host.findChild<app::LanController*>();
+    require(settings && !settings->captureShortcutAvailable() && lan && !lan->available() &&
+        lan->service().state() == HuhuCapture::Transfer::ServiceState::Disabled &&
+        !host.findChild<QSystemTrayIcon*>() && !host.findChild<HuhuCapture::Updates::UpdateService*>(),
+        "One-shot retains shared read-only-capable UI services without a shortcut, LAN runtime, updater or tray");
+    require(host.findChildren<desktop::SystemClipboard*>().size() == 1 && host.findChildren<app::MediaWorkspace*>().size() == 1 &&
+        host.findChildren<localization::LanguageCatalog*>().size() == 1 && host.findChildren<app::SettingsController*>().size() == 1 &&
+        host.findChildren<app::LanController*>().size() == 1,
+        "Independent journeys reuse the application's one service of each kind");
+}
+void damagedConfiguration()
 {
     QTemporaryDir directory; require(directory.isValid(), "Create a real malformed-profile fixture");
-    const auto path = QDir(directory.path()).filePath(QStringLiteral("config.json"));
-    const QByteArray original("{\"common\":broken,\"media\":\"retain all data\"}"); write(path, original);
-    app::ApplicationOptions options; options.portableDirectory = directory.path();
-    app::QtApplication host(application, options); Observation observed(host);
-    require(host.start(app::parseApplicationArguments({QStringLiteral("--auto-quit")}).startup), "Start the actual damaged-config path");
-    waitFor([&] { return window(QStringLiteral("applicationError")); }, "Malformed persisted data is visibly reported");
-    require(read(path) == original && !host.findChild<app::MediaWorkspace*>(), "Startup does not replace damaged user bytes or open an unconfigured workspace");
-    acknowledgeErrors(); waitFor([&] { return observed.exits == 1; }, "Damaged configuration closes through the ordinary exit coordinator");
-    require(observed.exitCode == 1 && read(path) == original, "The error exit retains exact original configuration bytes");
+    const auto locations = paths(directory.path());
+    const QByteArray original("{\"common\":broken,\"media\":\"retain all data\"}"); write(locations.settingsFile, original);
+    app::DesktopApplication host(locations); Observation observed(host);
+    QObject::connect(&host, &app::DesktopApplication::started, &host, [&] { host.showSettings(); });
+    require(host.start(startup({QStringLiteral("--auto-quit")})), "Start the actual damaged-config path");
+    waitFor([&] { return host.ready() && window(QStringLiteral("applicationError")); }, "Malformed persisted data is visibly reported");
+    auto* settings = window(QStringLiteral("settingsWindow"));
+    auto* language = settings ? settings->findChild<QComboBox*>(QStringLiteral("settingsLanguage")) : nullptr;
+    require(host.findChild<app::MediaWorkspace*>() && settings && settings->isVisible() && language && !language->isEnabled(),
+        "The actual damaged-config host remains usable with read-only settings and its shared media workspace");
+    require(read(locations.settingsFile) == original, "Startup never replaces damaged user bytes");
+    verifyIndependentServices(host);
+    acknowledgeErrors(); settings->close(); host.requestExit();
+    waitFor([&] { return observed.exits == 1; }, "Read-only configuration closes through the ordinary exit coordinator");
+    require(observed.exitCode == 0 && read(locations.settingsFile) == original,
+        "The recoverable configuration error retains exact original bytes through normal exit");
 }
 
 class WorkerBarrier final {
@@ -205,22 +221,17 @@ private:
     int maximum_; std::shared_ptr<Gate> gate_; QFuture<void> task_; bool released_{};
 };
 
-void independentAndDrain(QApplication& application, const QString& artifacts)
+void independentAndDrain(const QString& artifacts)
 {
     QTemporaryDir directory; require(directory.isValid(), "Create an actual one-shot profile"); profile(directory.path(), true);
     const auto path = QDir(directory.path()).filePath(QStringLiteral("config.json")); const auto original = read(path);
-    app::ApplicationOptions options; options.portableDirectory = directory.path();
-    app::QtApplication host(application, options); Observation observed(host);
-    require(host.start(app::parseApplicationArguments({QStringLiteral("--auto-quit"), QStringLiteral("--auto-start")}).startup), "Start actual independent capture despite background flag");
+    app::DesktopApplication host(paths(directory.path())); Observation observed(host);
+    require(host.start(startup({QStringLiteral("--auto-quit"), QStringLiteral("--auto-start")})), "Start actual independent capture despite background flag");
     waitFor([&] { return observed.role == app::InstanceRole::Independent && window(QStringLiteral("applicationError")); },
         "The actual offscreen capture is explicitly unavailable inside the independent journey");
-    auto* capture = host.findChild<app::CaptureWorkspace*>(); auto* clipboard = host.findChild<desktop::SystemClipboard*>();
-    require(capture && clipboard && !capture->capabilities().screenshot.canRequest(), "Production capability reports a genuinely unavailable desktop source");
-    require(!host.findChild<app::SettingsController*>() && !host.findChild<app::LanController*>() && !host.findChild<QSystemTrayIcon*>() &&
-        !host.findChild<HuhuCapture::Updates::UpdateService*>(),
-        "One-shot creates no shortcut/settings controller, LAN runtime, updater or tray even when saved LAN is enabled");
-    require(host.findChildren<desktop::SystemClipboard*>().size() == 1 && host.findChildren<app::MediaWorkspace*>().size() == 1 &&
-        host.findChildren<localization::LanguageCatalog*>().size() == 1, "Independent journeys still reuse one shared application service of each kind");
+    auto* capture = host.findChild<capture::DesktopCapture*>(); auto* clipboard = host.findChild<desktop::SystemClipboard*>();
+    require(capture && clipboard && !capture->capability().canRequest(), "Production capability reports a genuinely unavailable desktop source");
+    verifyIndependentServices(host);
     require(!QFileInfo::exists(QDir(directory.path()).filePath(QStringLiteral("lan"))) && read(path) == original,
         "One-shot never generates a saved LAN identity or changes persisted startup preferences");
     render(*window(QStringLiteral("applicationError")), artifacts, QStringLiteral("application-source-unavailable"));
@@ -240,10 +251,10 @@ void independentAndDrain(QApplication& application, const QString& artifacts)
         if (received != token) return;
         require(result.failure.code == desktop::Error::Cancelled, "Application exit cancels the pending publication with its real receipt"); ++receipts;
     });
-    token = clipboard->publish(prepared.content, nullptr); require(token && clipboard->busy(), "The host now owns an unfinished actual validation future");
-    acknowledgeErrors(); host.requestQuit();
+    token = clipboard->publish(std::move(prepared.content), nullptr); require(token && clipboard->busy(), "The host now owns an unfinished actual validation future");
+    acknowledgeErrors(); host.requestExit();
     waitFor([&] { return receipts == 1; }, "Normal application shutdown settles the request receipt");
-    require(host.phase() == app::ApplicationPhase::Draining && !observed.exits && !observed.clipboardStops && clipboard->busy(),
+    require(host.shuttingDown() && !observed.exits && !observed.clipboardStops && clipboard->busy(),
         "The host keeps its dispatcher alive after cancellation while the real worker remains unfinished");
     require(fixture.reserveRemoval(entries.entries.front()).failure.code == media::Error::Busy, "The unfinished worker still protects the actual media file");
     barrier.release(); waitFor([&] { return observed.exits == 1; }, "Host exit follows actual clipboard shutdownFinished and service drain");
@@ -256,9 +267,11 @@ class Child final {
 public:
     QProcess process;
     QByteArray output;
+    int expectedExit{};
     ~Child() { if (process.state() != QProcess::NotRunning) { process.kill(); process.waitForFinished(3000); } }
-    void start(const QProcessEnvironment& environment, const QStringList& arguments)
+    void start(const QProcessEnvironment& environment, const QStringList& arguments, int code = 0)
     {
+        expectedExit = code;
         process.setProcessEnvironment(environment); process.setProcessChannelMode(QProcess::MergedChannels);
         process.start(QCoreApplication::applicationFilePath(), arguments);
         require(process.waitForStarted(3000), "Start a real independent application-host process");
@@ -266,7 +279,7 @@ public:
     void collect()
     {
         output += process.readAll(); require(output.size() <= 1024 * 1024, "Child diagnostics stay bounded");
-        if (process.state() == QProcess::NotRunning && process.exitCode() != 0)
+        if (process.state() == QProcess::NotRunning && process.exitCode() != expectedExit)
             throw std::runtime_error(std::string("Actual host child failed: ") + output.toStdString());
     }
     void until(const QByteArray& marker)
@@ -276,7 +289,7 @@ public:
     void complete()
     {
         waitFor([&] { collect(); return process.state() == QProcess::NotRunning; }, "Actual child did not drain and exit", 15000);
-        collect(); require(process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0, "Real application-host child exits normally");
+        collect(); require(process.exitStatus() == QProcess::NormalExit && process.exitCode() == expectedExit, "Real application-host child returns its documented result");
     }
 };
 
@@ -300,7 +313,15 @@ void processContracts(const QString& artifacts)
     primary.until("PRIMARY_READY");
     Child forwarded; forwarded.start(environment, {QStringLiteral("--lifecycle-child=forwarded"), profileArg});
     forwarded.complete(); require(forwarded.output.contains("FORWARDED"), "Default CLI forwards to the existing real primary without constructing business services");
-    primary.until("CAPTURE_FINISHED");
+    primary.until("CAPTURE_UNAVAILABLE");
+    const auto capturesBeforeControl = primary.output.count("CAPTURE_UNAVAILABLE");
+    Child control;
+    control.start(environment, {QStringLiteral("--lifecycle-child=control"), profileArg,
+        QStringLiteral("--action=finish-capture"), QStringLiteral("--auto-quit")}, 2);
+    control.complete(); require(control.output.contains("CONTROL_REJECTED"),
+        "A real finish child contacts the primary and rejects its absent recording/scroll owner without starting a capture");
+    primary.collect(); require(primary.output.count("CAPTURE_UNAVAILABLE") == capturesBeforeControl &&
+        primary.process.state() == QProcess::Running, "Rejected control neither launches another screenshot nor stops the primary");
     Child independent;
     independent.start(environment, {QStringLiteral("--lifecycle-child=independent"), profileArg, QStringLiteral("--auto-quit"), QStringLiteral("--auto-start")});
     independent.complete(); require(independent.output.contains("INDEPENDENT"), "Actual one-shot process bypasses the live primary and owns its own failed-source journey");
@@ -308,7 +329,12 @@ void processContracts(const QString& artifacts)
     write(marker, "stop"); primary.complete();
     require(primary.output.contains("CLIPBOARD_DRAINED") && primary.output.indexOf("CLIPBOARD_DRAINED") < primary.output.indexOf("EXIT_READY 0"),
         "The resident host observes the real clipboard barrier before its final exit");
-    std::cout << "Actual CLI child processes passed Primary/Forwarded/Independent, visible no-tray entry and asynchronous exit.\n";
+    Child absentControl;
+    absentControl.start(environment, {QStringLiteral("--lifecycle-child=control"), profileArg,
+        QStringLiteral("--action=finish-capture")}, 2);
+    absentControl.complete(); require(absentControl.output.contains("CONTROL_REJECTED"),
+        "A control-only process does not elect a new primary after the actual owner exits");
+    std::cout << "Actual host child processes passed Primary/Forwarded/Independent and control rejection, visible no-tray entry and asynchronous exit.\n";
 }
 
 int childMain(QApplication& application, const QStringList& arguments)
@@ -316,40 +342,45 @@ int childMain(QApplication& application, const QStringList& arguments)
     const auto expected = argument(arguments, QStringLiteral("--lifecycle-child="));
     const auto stopPath = argument(arguments, QStringLiteral("--lifecycle-stop="));
     const auto artifacts = argument(arguments, QStringLiteral("--lifecycle-artifacts="));
-    const auto parsed = app::parseApplicationArguments(arguments.mid(1)); require(parsed.failure.isEmpty(), "Child uses complete production CLI arguments");
-    app::ApplicationOptions options; options.portableDirectory = parsed.portableDirectory;
-    app::QtApplication host(application, options);
-    int result = 2; bool sawRole{}, clipboardDrained{};
-    QObject::connect(&host, &app::QtApplication::operationFailed, &host, [&](const QString& message) {
+    const auto profileDirectory = argument(arguments, QStringLiteral("--portable-dir="));
+    require(QFileInfo(profileDirectory).isAbsolute() && QFileInfo(profileDirectory).isDir(), "Child receives its actual isolated profile directory");
+    require(expected == QStringLiteral("primary") || expected == QStringLiteral("forwarded") ||
+        expected == QStringLiteral("independent") || expected == QStringLiteral("control"), "Unknown lifecycle child role is rejected");
+    const auto request = startup(arguments.mid(1));
+    app::DesktopApplication host(paths(profileDirectory));
+    int result = 3; bool sawOwner{}, clipboardDrained{};
+    QObject::connect(&host, &app::DesktopApplication::operationFailed, &host, [&](const QString& message) {
+        require(expected != QStringLiteral("control"), "A control child never opens an ordinary error dialog");
+        auto* source = host.findChild<capture::DesktopCapture*>();
+        if (expected == QStringLiteral("primary") && source && !source->capability().canRequest() &&
+            message == source->capability().reason) std::cout << "CAPTURE_UNAVAILABLE\n" << std::flush;
         std::cerr << "Actual host operation failed: " << message.toStdString() << '\n' << std::flush;
         QTimer::singleShot(0, &host, acknowledgeErrors);
     });
-    QObject::connect(&host, &app::QtApplication::started, &host, [&](app::InstanceRole role) {
-        sawRole = true;
-        if (role == app::InstanceRole::Forwarded) {
-            require(expected == QStringLiteral("forwarded") && !host.findChild<app::MediaWorkspace*>() && !host.findChild<app::SettingsController*>(),
-                "A forwarded actual process has no duplicate application services");
-            std::cout << "FORWARDED\n" << std::flush; return;
-        }
+    QObject::connect(&host, &app::DesktopApplication::started, &host, [&] {
+        sawOwner = true;
+        auto* instance = host.findChild<app::SingleInstance*>(); require(instance, "Owned role has one actual instance coordinator");
         auto* clipboard = host.findChild<desktop::SystemClipboard*>(); require(clipboard, "Owned role constructs its one real clipboard service");
         QObject::connect(clipboard, &desktop::SystemClipboard::shutdownFinished, &host, [&] {
             clipboardDrained = true; std::cout << "CLIPBOARD_DRAINED\n" << std::flush;
         });
-        if (role == app::InstanceRole::Independent) {
-            require(expected == QStringLiteral("independent") && !host.findChild<app::SettingsController*>() && !host.findChild<app::LanController*>() &&
-                !host.findChild<QSystemTrayIcon*>(), "An independent CLI child owns no resident-only service");
+        if (instance->role() == app::InstanceRole::Independent) {
+            require(expected == QStringLiteral("independent"), "Only the explicit one-shot child acquires Independent");
+            verifyIndependentServices(host);
             std::cout << "INDEPENDENT\n" << std::flush; return;
         }
-        require(role == app::InstanceRole::Primary && expected == QStringLiteral("primary"), "The actual background child acquires Primary");
-        require(!host.findChild<app::CaptureWorkspace*>()->busy(), "Actual --auto-start creates no capture journey");
-        QObject::connect(host.findChild<app::CaptureWorkspace*>(), &app::CaptureWorkspace::captureFinished, &host,
-            [] { std::cout << "CAPTURE_FINISHED\n" << std::flush; });
+        require(instance->role() == app::InstanceRole::Primary && expected == QStringLiteral("primary"), "The actual background child acquires Primary");
+        require(host.findChild<capture::DesktopCapture*>() && !host.findChild<capture::DesktopCapture*>()->busy(),
+            "Actual --auto-start creates no capture request");
         require(!QSystemTrayIcon::isSystemTrayAvailable(), "This process validates a genuinely unavailable system tray");
-        auto* entry = window(QStringLiteral("applicationEntry")); require(entry && entry->isVisible(), "A no-tray primary provides a visible shared entry and Exit");
-        require(entry->findChild<QPushButton*>(QStringLiteral("applicationCapture"))->isEnabled() &&
-            entry->findChild<QPushButton*>(QStringLiteral("applicationExit"))->isEnabled(), "The real fallback exposes working capture and exit controls");
+        auto* entry = window(QStringLiteral("applicationLauncher")); require(entry && entry->isVisible(), "A no-tray primary provides a visible shared entry and Exit");
+        auto* captureButton = entry->findChild<QPushButton*>(QStringLiteral("launcherCapture"));
+        auto* exitButton = entry->findChild<QPushButton*>(QStringLiteral("launcherExit"));
+        auto* settingsButton = entry->findChild<QPushButton*>(QStringLiteral("launcherSettings"));
+        require(captureButton && captureButton->isEnabled() && exitButton && exitButton->isEnabled() && settingsButton,
+            "The real fallback exposes working capture, settings and exit controls");
         render(*entry, artifacts, QStringLiteral("application-entry-en-us"));
-        entry->findChild<QPushButton*>(QStringLiteral("applicationSettings"))->click();
+        settingsButton->click();
         auto* settings = window(QStringLiteral("settingsWindow")); require(settings && settings->isVisible(), "Fallback Settings opens the existing production settings window");
         settings->close();
         require(host.findChildren<app::SettingsController*>().size() == 1 && host.findChildren<app::LanController*>().size() == 1 &&
@@ -357,20 +388,37 @@ int childMain(QApplication& application, const QStringList& arguments)
         require(!host.findChild<app::LanController*>()->settingsSnapshot().enabled, "Default-disabled LAN does not start a listener when its entry exists");
         std::cout << "PRIMARY_READY\n" << std::flush;
     });
-    QObject::connect(&host, &app::QtApplication::exitReady, &host, [&](int code) {
+    QObject::connect(&host, &app::DesktopApplication::exitReady, &host, [&](int code) {
         verifyDrained(host);
-        require(sawRole && (expected == QStringLiteral("forwarded") || clipboardDrained), "Child exit follows its actual role and service-drain signal");
+        const auto* instance = host.findChild<app::SingleInstance*>(); require(instance, "Every attempted child has its actual instance result");
+        if (expected == QStringLiteral("forwarded") || expected == QStringLiteral("control")) {
+            require(!sawOwner && !host.ready() && !host.findChild<app::MediaWorkspace*>() &&
+                !host.findChild<desktop::SystemClipboard*>() && !host.findChild<app::SettingsController*>() &&
+                !host.findChild<app::LanController*>() && !host.findChild<capture::DesktopCapture*>(),
+                "Forwarded and control-only children construct no second set of business services");
+            for (const auto* widget : QApplication::topLevelWidgets()) require(!widget->isVisible(), "A non-owner child opens no ordinary application window");
+            if (expected == QStringLiteral("forwarded")) {
+                require(code == 0 && instance->role() == app::InstanceRole::Forwarded, "Actual launch forwarding receives the existing primary acknowledgement");
+                std::cout << "FORWARDED\n" << std::flush;
+            } else {
+                require(code == 2 && instance->role() == app::InstanceRole::Failed &&
+                    request.action == core::StartupAction::FinishCapture,
+                    "Idle or absent primary rejects a genuine finish request without acquiring ownership");
+                require(!host.findChild<localization::LanguageCatalog*>(), "A control child starts no localization/settings application journey");
+                std::cout << "CONTROL_REJECTED\n" << std::flush;
+            }
+        } else require(sawOwner && clipboardDrained && code == 0, "Owned child exit follows the actual clipboard service-drain signal");
         result = code; std::cout << "EXIT_READY " << code << '\n' << std::flush; application.exit(code);
     });
     QTimer control;
     if (!stopPath.isEmpty()) {
         control.setInterval(25);
-        QObject::connect(&control, &QTimer::timeout, &host, [&] { if (QFileInfo::exists(stopPath)) { control.stop(); host.requestQuit(); } });
+        QObject::connect(&control, &QTimer::timeout, &host, [&] { if (QFileInfo::exists(stopPath)) { control.stop(); host.requestExit(); } });
         control.start();
     }
     QTimer deadline; deadline.setSingleShot(true); deadline.setInterval(30000);
     QObject::connect(&deadline, &QTimer::timeout, &host, [&] { std::cerr << "Actual host child exceeded its lifecycle deadline\n"; application.exit(3); });
-    deadline.start(); require(host.start(parsed.startup), "Actual child host accepts its parsed CLI request"); application.exec(); return result;
+    deadline.start(); require(host.start(request), "Actual child host accepts its production-parsed startup request"); application.exec(); return result;
 }
 
 #ifndef Q_OS_WIN
@@ -382,15 +430,14 @@ int clipboardReceiver(const QString& encoded)
     require(QApplication::clipboard()->text() == expected, "A separate process receives complete Unicode from the visible retained owner");
     std::cout << "VISIBLE_OWNER_RECEIVED\n"; return 0;
 }
-void clipboardOwner(QApplication& application, const QString& artifacts)
+void clipboardOwner(const QString& artifacts)
 {
     require(QGuiApplication::platformName() == QStringLiteral("xcb"), "Clipboard-owner retention needs an actual X11 desktop, never offscreen");
     QTemporaryDir directory; require(directory.isValid(), "Create actual owner-retention profile"); profile(directory.path());
     QWidget origin; origin.setWindowTitle(QStringLiteral("huhucapture actual clipboard origin")); origin.resize(360, 180); origin.show(); events();
-    app::ApplicationOptions options; options.portableDirectory = directory.path();
-    app::QtApplication host(application, options); Observation observed(host);
-    QObject::connect(&host, &app::QtApplication::operationFailed, &host, [&] { QTimer::singleShot(0, &host, acknowledgeErrors); });
-    require(host.start(app::parseApplicationArguments({QStringLiteral("--auto-quit")}).startup), "Start actual one-shot host for clipboard retention");
+    app::DesktopApplication host(paths(directory.path())); Observation observed(host);
+    QObject::connect(&host, &app::DesktopApplication::operationFailed, &host, [&] { QTimer::singleShot(0, &host, acknowledgeErrors); });
+    require(host.start(startup({QStringLiteral("--auto-quit")})), "Start actual one-shot host for clipboard retention");
     waitFor([&] { return observed.role == app::InstanceRole::Independent; }, "The actual independent host initializes its services");
     const auto value = QStringLiteral("huhucapture 保留剪贴板\nUnicode \U0001f680\t完整内容");
     auto prepared = desktop::prepareText(value); require(!prepared.failure && prepared.content, "Prepare real complete Unicode payload");
@@ -399,12 +446,13 @@ void clipboardOwner(QApplication& application, const QString& artifacts)
         if (request != token) return;
         require(result.completed(), "The actual X server confirms ownership of the published text"); ++receipts;
     });
-    token = clipboard->publish(prepared.content, origin.windowHandle());
+    token = clipboard->publish(std::move(prepared.content), origin.windowHandle());
     waitFor([&] { return receipts == 1; }, "Actual native clipboard publication completes");
-    host.requestQuit();
-    waitFor([&] { acknowledgeErrors(); return host.phase() == app::ApplicationPhase::ClipboardOwner; }, "Normal exit preserves a visible owner after all actual services drain");
+    host.requestExit();
+    waitFor([&] { acknowledgeErrors(); return host.shuttingDown() && window(QStringLiteral("applicationClipboardOwner")) &&
+        window(QStringLiteral("applicationClipboardOwner"))->isVisible(); }, "Normal exit preserves a visible owner after all actual services drain");
     origin.close(); events();
-    auto* entry = window(QStringLiteral("applicationEntry")); require(entry && entry->isVisible() && !observed.exits && observed.clipboardStops == 1,
+    auto* entry = window(QStringLiteral("applicationClipboardOwner")); require(entry && entry->isVisible() && !observed.exits && observed.clipboardStops == 1,
         "One-shot never silently exits or becomes a hidden clipboard owner");
     auto* keep = entry->findChild<QPushButton*>(QStringLiteral("applicationKeepClipboard"));
     auto* exit = entry->findChild<QPushButton*>(QStringLiteral("applicationExit"));
@@ -426,6 +474,7 @@ int main(int argc, char** argv)
         QApplication application(argc, argv); application.setApplicationName(QStringLiteral("huhucapture"));
         application.setOrganizationName({}); application.setOrganizationDomain(QStringLiteral("github.com"));
         application.setDesktopFileName(QStringLiteral("io.github.NAMEWTA.huhucapture")); application.setQuitOnLastWindowClosed(false);
+        initializeResources();
         const auto arguments = application.arguments();
         if (!argument(arguments, QStringLiteral("--lifecycle-child=")).isEmpty()) return childMain(application, arguments);
 #ifndef Q_OS_WIN
@@ -435,13 +484,13 @@ int main(int argc, char** argv)
         const auto artifacts = arguments.size() > 1 && !arguments[1].startsWith(QStringLiteral("--")) ?
             QDir(arguments[1]).absolutePath() : QDir::current().filePath(QStringLiteral("artifacts/tests/application"));
 #ifndef Q_OS_WIN
-        if (arguments.contains(QStringLiteral("--clipboard-owner"))) { clipboardOwner(application, artifacts); return 0; }
+        if (arguments.contains(QStringLiteral("--clipboard-owner"))) { clipboardOwner(artifacts); return 0; }
 #endif
         require(QGuiApplication::platformName() == QStringLiteral("offscreen"), "Lifecycle failure/entry checks use an actually unavailable desktop backend");
-        argumentContracts(); invalidProfile(application); events(); damagedConfiguration(application); events();
-        independentAndDrain(application, artifacts); events();
+        damagedConfiguration(); events();
+        independentAndDrain(artifacts); events();
         if (!arguments.contains(QStringLiteral("--no-ipc"))) processContracts(artifacts);
-        std::cout << "Actual application argument, profile protection, independent no-backend and async drain contracts passed.\n";
+        std::cout << "Actual DesktopApplication profile protection, independent no-backend and async drain contracts passed.\n";
         if (arguments.contains(QStringLiteral("--no-ipc"))) std::cout << "Real cross-process IPC explicitly not run in this invocation.\n";
         return 0;
     } catch (const std::exception& failure) {

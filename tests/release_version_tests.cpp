@@ -1,6 +1,8 @@
 #include "core/ReleaseVersion.h"
+#include "core/ReleasePackage.h"
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 using HuhuCapture::Core::parseReleaseVersion;
 
@@ -18,5 +20,26 @@ int main()
     }
     check(*parseReleaseVersion(L"2.10.0") > *parseReleaseVersion(L"2.9.999"));
     check(*parseReleaseVersion(L"3.0.0") > *parseReleaseVersion(L"2.99.99"));
-    std::cout << "release version parsing: valid tags, bounds, invalid tags and ordering passed\n";
+    namespace package = HuhuCapture::Core::ReleasePackage;
+    check(package::canonicalVersion(L"v0.0.5", true));
+    check(package::canonicalVersion(L"0.0.5"));
+    for (const auto invalid : {L"00.0.5", L"0.00.5", L"v0.0.5", L"0.0.05"})
+        check(!package::canonicalVersion(invalid));
+    check(package::assetName(L"huhucapture-v0.0.5-windows-x64.zip"));
+    for (const auto invalid : {L"../payload.zip", L"x/y.zip", L"x:y.exe", L"..", L"a%2f.zip", L"a b.zip"})
+        check(!package::assetName(invalid));
+    check(package::relativeFile(L"installer/plugins/platforms/qwindows.dll"));
+    for (const auto invalid : {L"/root/file", L"a/../file", L"a//file", L"C:/file", L"a\\file", L"a/./file", L"file/"})
+        check(!package::relativeFile(invalid));
+    check(package::lowerHex(std::wstring(64, L'a'), 64));
+    check(!package::lowerHex(std::wstring(64, L'A'), 64));
+    std::uint64_t size{};
+    check(package::byteCount(65 * 1024 * 1024, package::archiveBudget, size));
+    check(!package::byteCount(65 * 1024 * 1024, package::legacyBudget, size));
+    check(!package::byteCount(1.5, package::archiveBudget, size));
+    check(!package::byteCount(std::numeric_limits<double>::infinity(), package::archiveBudget, size));
+    check(!package::byteCount(std::numeric_limits<double>::quiet_NaN(), package::archiveBudget, size));
+    check(package::byteCount(0, package::archiveBudget, size, true));
+    check(!package::byteCount(0, package::archiveBudget, size));
+    std::cout << "release contract: canonical versions, names, paths, hashes, per-kind byte bounds and ordering passed\n";
 }

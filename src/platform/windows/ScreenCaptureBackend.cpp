@@ -72,7 +72,7 @@ Failure desktop(CaptureDesktop& output, bool windows)
 }
 }
 struct ScreenCaptureBackend::State { GdiCapture capture; };
-ScreenCaptureBackend::ScreenCaptureBackend() : state_(std::make_unique<State>()) {}
+ScreenCaptureBackend::ScreenCaptureBackend(std::stop_token) : state_(std::make_unique<State>()) {}
 ScreenCaptureBackend::~ScreenCaptureBackend() = default;
 Capture::Failure ScreenCaptureBackend::initialize()
 {

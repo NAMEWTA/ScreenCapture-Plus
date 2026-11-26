@@ -58,5 +58,13 @@
       "upstreamGitBlob": "ae9809e9e29df548afdfb59d9b5b0b9830e3e851",
       "upstreamSha256": "491634b02cba91b63a8558683b3a10e1829b7909b72f910ef4c6dcc22dcb4b44"
     }
-  ]
+  ],
+  "integration": {
+    "pr6Commit": "ba9358443207b9fa349de2bc0f47cebc0b13aa5c",
+    "pr7Commit": "6b7acf2371df6ca228cd6537f605f68e88fc21d4",
+    "retained": "One PR7 ScrollController and MediaWorkspace output flow; PR6 ScrollCaptureModel, start/outline QWidget, shared toolbar metrics and native per-frame controls/SHAPE guards; PR7 owned XCB cancellation and frame producer completion barrier.",
+    "adaptation": "ScrollAccumulator delegates to ScrollCaptureModel. ScreenCastSource keeps one LiveCaptureSource producer and exposes the shared LiveFrameReader only after hidden-control refresh. The native probe uses the final controller and real shared Save As/archive output; no parallel ScrollWorkspace/ScrollCaptureSession/ScrollWindow implementation remains.",
+    "license": "MIT",
+    "licenseFile": "LICENSE"
+  }
 }

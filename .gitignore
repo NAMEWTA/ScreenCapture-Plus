@@ -2,7 +2,7 @@
 /.deps/
 /artifacts/
 __pycache__/
-*.pyc
+*.py[cod]
 
 # Local IDE state
 **/.vs/

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Build only the fixed FFmpeg inspection DLLs with matching MSVC CRTs."""
+"""Build the fixed FFmpeg inspection/cover DLLs with matching MSVC CRTs."""
 
 import argparse
 import hashlib
 import json
 import os
 import re
+import runpy
 from pathlib import Path, PurePosixPath
 import shlex
 import shutil
@@ -150,6 +151,7 @@ def main():
         str(compiler_bin), str(msys / "usr/bin"), environment["PATH"]))
     source = workspace / "source"
     run("git", "init", str(source), env=environment)
+    run("git", "config", "core.autocrlf", "false", cwd=source, env=environment)
     run("git", "remote", "add", "origin", package["repository"], cwd=source, env=environment)
     run("git", "fetch", "--depth=1", "--no-tags", "origin", package["commit"], cwd=source, env=environment)
     run("git", "-c", "advice.detachedHead=false", "checkout", "--detach", "FETCH_HEAD", cwd=source, env=environment)
@@ -174,10 +176,15 @@ def main():
                          "msysRuntime": output(str(bash), "--noprofile", "--norc", "-c", "uname -r", env=environment)}}
     metadata["nasm"]["versionOutput"] = output(str(nasms[0]), "-v", env=environment)
     metadata["make"]["versionOutput"] = output(str(make), "--version", env=environment)
+    native_build = runpy.run_path(str(root / "build/package/source_receipts.py"))["NativeBuild"]
     for configuration in configurations:
         build = workspace / ("build-" + configuration)
         prefix = workspace / "install" / configuration
         build.mkdir()
+        receipt = native_build(workspace / ("source-receipt-" + configuration), "windows", __file__,
+                               "ffmpeg", source, package, prefix)
+        for tool in (compiler_bin / "cl.exe", compiler_bin / "link.exe", nasms[0], make):
+            receipt.observe_tool(str(tool), environment)
         crt = "MDd" if configuration == "Debug" else "MD"
         arguments = [posix(source / "configure"), "--prefix=" + posix(prefix), *profile["configure"],
                      "--extra-cflags=-" + crt, "--extra-cxxflags=-" + crt,
@@ -185,7 +192,9 @@ def main():
         script = build / "configure-fixed.sh"
         script.write_text("set -eu\n" + "cd " + shlex.quote(posix(build)) + "\n" +
                           shlex.join(arguments) + "\n", encoding="utf-8", newline="\n")
-        run(str(bash), "--noprofile", "--norc", posix(script), env=environment)
+        configuration_index = receipt.run_fixed_script(
+            [str(bash), "--noprofile", "--norc", posix(script)], script, [arguments],
+            build_directory=build, posix_directory=posix(build), env=environment)[0]
         configuration_text = (build / "ffbuild/config.mak").read_text(encoding="utf-8", errors="replace")
         cflags = next((line for line in configuration_text.splitlines() if line.startswith("CFLAGS=")), "")
         if "-" + crt not in cflags or "-MT" in cflags or (crt == "MD" and "-MDd" in cflags):
@@ -205,7 +214,9 @@ def main():
         script.write_text("set -eu\n" + "cd " + shlex.quote(posix(build)) + "\n" +
                           shlex.join((posix(make), "-j" + str(options.jobs))) + "\n" +
                           shlex.join((posix(make), "install")) + "\n", encoding="utf-8", newline="\n")
-        run(str(bash), "--noprofile", "--norc", posix(script), env=environment)
+        receipt.run_fixed_script([str(bash), "--noprofile", "--norc", posix(script)], script,
+            [[posix(make), "-j" + str(options.jobs)], [posix(make), "install"]],
+            build_directory=build, posix_directory=posix(build), env=environment)
         files = []
         for name, major in (("avcodec", 63), ("avformat", 63), ("avutil", 61), ("swscale", 10)):
             for filename in (f"{name}-{major}.dll", f"{name}.lib"):
@@ -223,10 +234,13 @@ def main():
         licenses.mkdir(parents=True)
         for name in ("COPYING.LGPLv2.1", "LICENSE.md"):
             shutil.copy2(source / name, licenses / name)
+        source_receipt = receipt.finish(configure_index=configuration_index, configuration_files=[build / name for name in (
+            "ffbuild/config.mak", "config.h", "config_components.h", "libavutil/avconfig.h", "libavutil/ffversion.h",
+            "configure-fixed.sh", "build-fixed.sh")])
         metadata["configurations"][configuration] = {"prefix": str(prefix), "crt": crt,
-            "configure": arguments, "actualCflags": cflags, "files": files}
+            "configure": arguments, "actualCflags": cflags, "files": files, "sourceBuildReceipt": source_receipt}
     (workspace / "build-info.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-    print("Built pinned MSVC AVCodec/AVFormat/AVUtil/swscale inspection and cover DLLs with per-configuration dynamic CRTs.")
+    print("Built pinned MSVC AVCodec/AVFormat/AVUtil/SWScale inspection and cover DLLs with per-configuration dynamic CRTs.")
     print("These dependencies contain no FFmpeg recording encoder, x264, network protocol or GUI runtime.")
 
 

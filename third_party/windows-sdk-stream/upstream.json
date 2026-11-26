@@ -22,5 +22,6 @@
     "Validate pointers, EOF/short writes, file kind, allocations and sizes; initialize all STATSTG fields."
   ],
   "officialBridge": "https://learn.microsoft.com/windows/win32/api/mfidl/nf-mfidl-mfcreatemfbytestreamonstream",
-  "notClaimed": "This file-object adapter is not a codec, container implementation, filesystem sandbox or hardware recording acceptance."
+  "notClaimed": "This file-object adapter is not a codec, container implementation, filesystem sandbox or hardware recording acceptance.",
+  "licenseFormatting": "One trailing blank line removed from the retained license; the complete license text is unchanged."
 }

@@ -79,4 +79,3 @@ private:
 } // namespace HuhuCapture::Desktop
 
 Q_DECLARE_METATYPE(HuhuCapture::Desktop::ShortcutFailure)
-

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace HuhuCapture::Media {
@@ -58,6 +59,70 @@ std::optional<FrameExtent> normalizedFrameExtent(const Core::FrameFormat& format
     return FrameExtent{width, height};
 }
 
+FrameNormalizationError copyNormalizedBgra(const Core::FrameLease& source,
+    std::optional<Core::FrameCrop> selection, std::span<std::uint8_t> destination,
+    std::size_t destinationStride) noexcept
+{
+    using Error = FrameNormalizationError;
+    if (!source) return Error::InvalidFrame;
+    const auto& input = source.format();
+    const auto& metadata = source.metadata();
+    const auto extent = normalizedFrameExtent(input, metadata);
+    if (!extent) return Error::InvalidFrame;
+    if (input.pixelFormat != Core::FramePixelFormat::Bgra8 && input.pixelFormat != Core::FramePixelFormat::Rgba8)
+        return Error::UnsupportedFormat;
+    const auto selected = selection.value_or(Core::FrameCrop{0, 0,
+        static_cast<std::uint32_t>(extent->width), static_cast<std::uint32_t>(extent->height)});
+    if (!selected.width || !selected.height || selected.x > static_cast<unsigned>(extent->width) ||
+        selected.width > static_cast<unsigned>(extent->width) - selected.x ||
+        selected.y > static_cast<unsigned>(extent->height) || selected.height > static_cast<unsigned>(extent->height) - selected.y)
+        return Error::InvalidSelection;
+    const auto output = Core::packedFrameFormat(Core::FramePixelFormat::Bgra8,
+        static_cast<int>(selected.width), static_cast<int>(selected.height), input.color, input.alpha);
+    if (!output) return Error::InvalidFrame;
+    const auto rowBytes = static_cast<std::size_t>(selected.width) * 4;
+    const auto rows = static_cast<std::size_t>(selected.height);
+    constexpr auto pointerLimit = static_cast<std::size_t>((std::numeric_limits<std::ptrdiff_t>::max)());
+    if (destinationStride < rowBytes || destinationStride > pointerLimit || rowBytes > pointerLimit ||
+        (rows > 1 && destinationStride > (pointerLimit - rowBytes) / (rows - 1)) ||
+        destination.size() < (rows - 1) * destinationStride + rowBytes)
+        return Error::InvalidFrame;
+    const auto crop = metadata.crop.value_or(Core::FrameCrop{0, 0,
+        static_cast<std::uint32_t>(input.width), static_cast<std::uint32_t>(input.height)});
+    const auto first = inputPoint(static_cast<int>(selected.x), static_cast<int>(selected.y),
+        static_cast<int>(crop.width), static_cast<int>(crop.height), metadata.transform);
+    // Derive one-pixel strides from the affine transform. These adjacent points
+    // determine a direction even for a one-pixel result; they are never read.
+    const auto right = inputPoint(static_cast<int>(selected.x) + 1, static_cast<int>(selected.y),
+        static_cast<int>(crop.width), static_cast<int>(crop.height), metadata.transform);
+    const auto below = inputPoint(static_cast<int>(selected.x), static_cast<int>(selected.y) + 1,
+        static_cast<int>(crop.width), static_cast<int>(crop.height), metadata.transform);
+    const auto stride = input.planes[0].stride;
+    const auto xStep = (right.x - first.x) * std::ptrdiff_t{4} + (right.y - first.y) * stride;
+    const auto yStep = (below.x - first.x) * std::ptrdiff_t{4} + (below.y - first.y) * stride;
+    const auto* start = source.row(0, crop.y + static_cast<std::uint32_t>(first.y)).data() +
+        (static_cast<std::size_t>(crop.x) + static_cast<unsigned>(first.x)) * 4;
+
+    const bool rgba = input.pixelFormat == Core::FramePixelFormat::Rgba8;
+    const bool opaque = input.alpha == Core::FrameAlpha::Opaque;
+    if (xStep == 4 && !rgba) {
+        // Common native frame/crop path is a row copy, including negative input
+        // stride/vertical reflection. No temporary complete image is created.
+        for (int y = 0; y < output->height; ++y) {
+            auto row = destination.subspan(static_cast<std::size_t>(y) * destinationStride, rowBytes);
+            std::memcpy(row.data(), start + static_cast<std::ptrdiff_t>(y) * yStep, row.size());
+            if (opaque) for (std::size_t x = 3; x < row.size(); x += 4) row[x] = 255;
+        }
+    } else {
+        for (int y = 0; y < output->height; y += 8) for (int x = 0; x < output->width; x += 8) {
+            copyBlock(start + static_cast<std::ptrdiff_t>(y) * yStep + static_cast<std::ptrdiff_t>(x) * xStep,
+                xStep, yStep, destination.data() + static_cast<std::size_t>(y) * destinationStride + x * 4,
+                static_cast<std::ptrdiff_t>(destinationStride), std::min(8, output->width - x), std::min(8, output->height - y), rgba, opaque);
+        }
+    }
+    return Error::None;
+}
+
 FrameNormalizer::FrameNormalizer(Core::FramePoolLimits limits) : pool_(limits) {}
 
 NormalizedFrame FrameNormalizer::normalize(const Core::FrameLease& source,
@@ -91,40 +156,9 @@ NormalizedFrame FrameNormalizer::normalize(const Core::FrameLease& source,
     }
     auto writable = pool_.tryAcquire();
     if (!writable) return {{}, Error::Busy};
-    const auto crop = metadata.crop.value_or(Core::FrameCrop{0, 0,
-        static_cast<std::uint32_t>(input.width), static_cast<std::uint32_t>(input.height)});
-    const auto first = inputPoint(static_cast<int>(selected.x), static_cast<int>(selected.y),
-        static_cast<int>(crop.width), static_cast<int>(crop.height), metadata.transform);
-    // Derive one-pixel strides from the affine transform. These adjacent points
-    // determine a direction even for a one-pixel result; they are never read.
-    const auto right = inputPoint(static_cast<int>(selected.x) + 1, static_cast<int>(selected.y),
-        static_cast<int>(crop.width), static_cast<int>(crop.height), metadata.transform);
-    const auto below = inputPoint(static_cast<int>(selected.x), static_cast<int>(selected.y) + 1,
-        static_cast<int>(crop.width), static_cast<int>(crop.height), metadata.transform);
-    const auto stride = input.planes[0].stride;
-    const auto xStep = (right.x - first.x) * std::ptrdiff_t{4} + (right.y - first.y) * stride;
-    const auto yStep = (below.x - first.x) * std::ptrdiff_t{4} + (below.y - first.y) * stride;
-    const auto* start = source.row(0, crop.y + static_cast<std::uint32_t>(first.y)).data() +
-        (static_cast<std::size_t>(crop.x) + static_cast<unsigned>(first.x)) * 4;
-    auto* destination = writable->row(0, 0).data();
-    const auto destinationStride = output->planes[0].stride;
-    const bool rgba = input.pixelFormat == Core::FramePixelFormat::Rgba8;
-    const bool opaque = input.alpha == Core::FrameAlpha::Opaque;
-    if (xStep == 4 && !rgba) {
-        // Common native frame/crop path is a row copy, including negative input
-        // stride/vertical reflection. No temporary complete image is created.
-        for (int y = 0; y < output->height; ++y) {
-            auto row = writable->row(0, static_cast<std::uint32_t>(y));
-            std::memcpy(row.data(), start + static_cast<std::ptrdiff_t>(y) * yStep, row.size());
-            if (opaque) for (std::size_t x = 3; x < row.size(); x += 4) row[x] = 255;
-        }
-    } else {
-        for (int y = 0; y < output->height; y += 8) for (int x = 0; x < output->width; x += 8) {
-            copyBlock(start + static_cast<std::ptrdiff_t>(y) * yStep + static_cast<std::ptrdiff_t>(x) * xStep,
-                xStep, yStep, destination + static_cast<std::ptrdiff_t>(y) * destinationStride + x * 4,
-                destinationStride, std::min(8, output->width - x), std::min(8, output->height - y), rgba, opaque);
-        }
-    }
+    const auto copied = copyNormalizedBgra(source, selected, writable->plane(0),
+        static_cast<std::size_t>(output->planes[0].stride));
+    if (copied != Error::None) return {{}, copied};
     auto normalizedMetadata = metadata;
     normalizedMetadata.crop.reset(); normalizedMetadata.transform = Core::FrameTransform::None;
     return {std::move(*writable).publish(std::move(normalizedMetadata)), Error::None};

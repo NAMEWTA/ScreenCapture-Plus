@@ -79,13 +79,11 @@ BackendResult capture(const BackendRequest& request, int descriptor,
         return result;
     };
     const auto region = alignedMp4Region(request.region, request.maximumFrameBytes);
-    if (request.coordinates != CoordinateSpace::DesktopPixels || request.sourceId || request.generation ||
-        request.format != Format::Mp4 || !region || !request.framesPerSecond ||
+    if (request.format != Format::Mp4 || !region || !request.framesPerSecond ||
         request.framesPerSecond > 240 || request.maximumDuration.count() <= 0 ||
         request.maximumDuration > std::chrono::minutes(120) || request.firstFrameTimeout.count() <= 0 ||
-        request.firstFrameTimeout > std::chrono::minutes(1) ||
-        !request.maximumQueuedAudioBytes || request.maximumQueuedAudioBytes > 64ull * 1024 * 1024)
-        return fail(E_INVALIDARG);
+        request.firstFrameTimeout > std::chrono::minutes(1) || !request.maximumQueuedAudioBytes ||
+        request.maximumQueuedAudioBytes > 64ull * 1024 * 1024) return fail(E_INVALIDARG);
     if (stop.stop_requested()) { result.stopRequested = true; return result; }
     std::error_code fileError;
     const auto file = readFileDescriptorSnapshot(descriptor, fileError);

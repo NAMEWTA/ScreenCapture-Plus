@@ -7,8 +7,9 @@ SetCompressor /SOLID lzma
 AllowSkipFiles off
 Name "huhucapture"
 OutFile "@OUTPUT@"
-InstallDir "$LOCALAPPDATA\Programs\huhucapture"
-InstallDirRegKey HKCU "Software\huhucapture\Installation" "Location"
+; Leave empty so .onInit distinguishes explicit /D= from the default.
+; InstallDirRegKey ignores SetRegView; read the 64-bit HKCU view explicitly.
+InstallDir ""
 ShowInstDetails show
 ShowUninstDetails show
 VIProductVersion "@VERSION@.0"
@@ -26,6 +27,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "NAMEWTA; see bundled component noti
 !define MUI_UNICON "@ICON@"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "@LICENSE@"
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE CheckRegisteredLocation
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -54,6 +56,23 @@ Function .onInit
         MessageBox MB_OK|MB_ICONSTOP "This package requires Windows 10 build 17763 (1809) or later." /SD IDOK
         Abort
     supported:
+    ${If} $INSTDIR == ""
+        ReadRegStr $INSTDIR HKCU "Software\huhucapture\Installation" "Location"
+        ${If} $INSTDIR == ""
+            StrCpy $INSTDIR "$LOCALAPPDATA\Programs\huhucapture"
+        ${EndIf}
+    ${EndIf}
+    Call CheckRegisteredLocation
+FunctionEnd
+
+Function CheckRegisteredLocation
+    ReadRegStr $1 HKCU "Software\huhucapture\Installation" "Location"
+    ${If} $1 != ""
+    ${AndIf} $1 != $INSTDIR
+        SetErrorLevel 2
+        MessageBox MB_OK|MB_ICONSTOP "huhucapture is already installed in $1. Update that location, or uninstall it before choosing a different directory. Captures and user settings will be preserved." /SD IDOK
+        Abort
+    ${EndIf}
 FunctionEnd
 
 Function CheckApplicationClosed
@@ -77,6 +96,8 @@ Section "huhucapture" Main
     ; File may abort inside the NSIS runtime before our next IfErrors executes.
     ; Only the complete section, including shortcuts and registry, returns zero.
     SetErrorLevel 2
+    ; Repeat after the directory page and before any file/registration changes.
+    Call CheckRegisteredLocation
     Call CheckApplicationClosed
     ; Only run our registered previous per-user uninstaller, at the same path.
     ; It removes its explicit file list, which also retires obsolete DLL/plugins.
@@ -173,25 +194,29 @@ Section "Uninstall"
     ; A locked listed file must leave both the uninstaller and registration
     ; available for another attempt. Directory cleanup is intentionally not
     ; recursive: an unlisted user file is a reason to retain its directory.
-    StrCpy $OperationTarget "$SMPROGRAMS\huhucapture\huhucapture.lnk"
-    ClearErrors
-    Delete "$SMPROGRAMS\huhucapture\huhucapture.lnk"
-    IfErrors uninstall_failed
-    IfFileExists "$OperationTarget" uninstall_failed
-    StrCpy $OperationTarget "$SMPROGRAMS\huhucapture\Uninstall.lnk"
-    Delete "$SMPROGRAMS\huhucapture\Uninstall.lnk"
-    IfErrors uninstall_failed
-    IfFileExists "$OperationTarget" uninstall_failed
-    StrCpy $OperationTarget "$INSTDIR\uninstall.exe"
-    Delete "$INSTDIR\uninstall.exe"
-    IfErrors uninstall_failed
-    IfFileExists "$OperationTarget" uninstall_failed
-    RMDir "$INSTDIR"
-    RMDir "$SMPROGRAMS\huhucapture"
-    StrCpy $OperationTarget "HKCU\Software\huhucapture\Installation"
+    ; Only the registered installation owns shared Start Menu and HKCU state.
+    ; A stale copied uninstaller may remove only its own explicit payload list.
     ClearErrors
     ReadRegStr $0 HKCU "Software\huhucapture\Installation" "Location"
     IfErrors uninstall_registry_failed
+    ${If} $0 == $INSTDIR
+        StrCpy $OperationTarget "$SMPROGRAMS\huhucapture\huhucapture.lnk"
+        ClearErrors
+        Delete "$OperationTarget"
+        IfErrors uninstall_failed
+        IfFileExists "$OperationTarget" uninstall_failed
+        StrCpy $OperationTarget "$SMPROGRAMS\huhucapture\Uninstall.lnk"
+        Delete "$OperationTarget"
+        IfErrors uninstall_failed
+        IfFileExists "$OperationTarget" uninstall_failed
+        RMDir "$SMPROGRAMS\huhucapture"
+    ${EndIf}
+    StrCpy $OperationTarget "$INSTDIR\uninstall.exe"
+    ClearErrors
+    Delete "$OperationTarget"
+    IfErrors uninstall_failed
+    IfFileExists "$OperationTarget" uninstall_failed
+    RMDir "$INSTDIR"
     ${If} $0 == $INSTDIR
         StrCpy $OperationTarget "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\huhucapture"
         ClearErrors

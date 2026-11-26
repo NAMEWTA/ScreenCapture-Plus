@@ -282,6 +282,22 @@ void initializeNative(desktop::GlobalShortcut& shortcut)
         "This test requires actual Windows or true X11, not a local/Wayland substitute");
 }
 
+#ifndef _WIN32
+void initializationOwnerLifetime()
+{
+    auto shortcut = std::make_unique<desktop::GlobalShortcut>();
+    const QPointer<desktop::GlobalShortcut> life(shortcut.get());
+    bool initialized{};
+    QObject::connect(shortcut.get(), &desktop::GlobalShortcut::initialized, QCoreApplication::instance(), [&] {
+        initialized = true;
+        shortcut.reset();
+    });
+    shortcut->initialize();
+    waitFor([&] { return initialized; }, "Actual initialization can synchronously destroy its shortcut owner");
+    require(!life, "Initialization completion releases the actual owner before the backend returns");
+}
+#endif
+
 void nativeContracts(const QString& root)
 {
     // Default XKB maps Ctrl+Alt+Fn to the server's SwitchScreen action. The
@@ -338,6 +354,18 @@ void nativeContracts(const QString& root)
     require(!first.setCaptureActive(true) && !first.setCaptureActive(false) && first.snapshot().registered, "Retry restores the original actual native registration");
     injectChord(); expectActivations(++expectedActivations, "Restored registration receives real OS input");
     first.shutdown();
+#ifndef _WIN32
+    auto disposable = std::make_unique<desktop::GlobalShortcut>();
+    initializeNative(*disposable);
+    const QPointer<desktop::GlobalShortcut> life(disposable.get());
+    desktop::ShortcutFailure completed;
+    bool finished{};
+    QObject::connect(disposable.get(), &desktop::GlobalShortcut::bindingFinished, QCoreApplication::instance(),
+        [&](quint64, desktop::ShortcutFailure failure) { completed = failure; finished = true; disposable.reset(); });
+    require(disposable->bind(firstKeys, nullptr) != 0, "Queue the actual binding with owner destruction in its completion");
+    waitFor([&] { return finished; }, "Binding completion can synchronously release the actual shortcut owner");
+    require(!completed && !life, "Successful native binding completes once before its owner is destroyed");
+#endif
     desktop::GlobalShortcut released; Bindings releasedEvents(released); initializeNative(released);
     require(!releasedEvents.bind(firstKeys), "Application shutdown releases its native global shortcut"); released.shutdown();
     std::cout << "Native shortcut registration, conflict, rollback, suspension and OS input passed; physical keyboard not tested.\n";
@@ -518,9 +546,25 @@ int main(int argc, char** argv)
         StartupIsolation startup(directory.path());
         QApplication application(argc, argv); application.setQuitOnLastWindowClosed(false);
         const auto arguments = application.arguments();
-        const bool unavailable = arguments.contains(QStringLiteral("--unavailable"));
-        const auto artifacts = arguments.size() > 1 && !arguments[1].startsWith(QStringLiteral("--")) ? arguments[1] :
-            QDir(directory.path()).filePath(QStringLiteral("render"));
+        bool unavailable{}, startupOnly{}, modeSpecified{};
+        QString artifacts;
+        for (qsizetype index = 1; index < arguments.size(); ++index) {
+            const auto& argument = arguments[index];
+            if (argument == QStringLiteral("--unavailable") || argument == QStringLiteral("--startup-only")) {
+                require(!modeSpecified, "Select exactly one settings regression mode");
+                modeSpecified = true;
+                unavailable = argument == QStringLiteral("--unavailable");
+                startupOnly = argument == QStringLiteral("--startup-only");
+            } else {
+                require(index == 1 && !argument.isEmpty() && !argument.startsWith(QChar(u'-')),
+                    "Unknown settings regression argument");
+                artifacts = argument;
+            }
+        }
+        if (artifacts.isEmpty()) artifacts = QDir(directory.path()).filePath(QStringLiteral("render"));
+#ifndef _WIN32
+        if (!startupOnly) initializationOwnerLifetime();
+#endif
         const auto folder = QDir(directory.path()).filePath(QStringLiteral("工具 files")); require(QDir().mkpath(folder), "Create real Unicode executable directory");
 #ifdef _WIN32
         const auto executable = QDir(folder).filePath(QStringLiteral("huhu capture.exe"));
@@ -530,7 +574,8 @@ int main(int argc, char** argv)
         require(QFile::copy(QCoreApplication::applicationFilePath(), executable), "Copy the actual executable to a spaced Unicode path");
         require(QFile::setPermissions(executable, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner), "Make the actual copied test executable runnable");
         require(desktop::persistentLaunchExecutable(executable), "Actual persistent executable validation succeeds");
-        if (unavailable) unavailableContracts(directory.path(), executable, artifacts);
+        if (startupOnly) startupContracts(directory.path(), executable);
+        else if (unavailable) unavailableContracts(directory.path(), executable, artifacts);
         else { nativeContracts(directory.path()); startupContracts(directory.path(), executable); controllerContracts(directory.path(), executable, artifacts); }
         settle(); return 0;
     } catch (const std::exception& error) { std::cerr << "settings_controller_tests: " << error.what() << '\n'; return 1; }

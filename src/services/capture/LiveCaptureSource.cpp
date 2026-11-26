@@ -108,6 +108,8 @@ struct LiveCaptureSource::State {
         std::shared_ptr<Core::FrameQueue> queue{std::make_shared<Core::FrameQueue>(2)};
         std::shared_ptr<std::atomic<Activity>> activity{std::make_shared<std::atomic<Activity>>(Activity::Starting)};
         std::stop_source stop;
+        std::promise<void> producerCompletion;
+        std::shared_future<void> producerFinished{producerCompletion.get_future().share()};
         std::atomic_bool valid{true};
         std::mutex mutex;
         std::optional<Core::FrameFormat> format;
@@ -400,9 +402,9 @@ struct LiveCaptureSource::State {
                 auto reason = fromPortal(caps.screenCast.failure);
                 if (!caps.screenCast.available() && !reason) reason = fromPortal(error);
                 if (!caps.screenCast.available() && !reason) reason = unavailable();
-                if (!reason && (!(sourceTypes & 3u) || !(cursorModes & 1u)))
+                if (!reason && (!(sourceTypes & 3u) || !(cursorModes & 3u)))
                     reason = fail(Failure::Code::Unavailable,
-                        QStringLiteral("The portal cannot provide a screen or window without an embedded cursor"));
+                        QStringLiteral("The portal cannot provide a screen or window with a supported cursor mode"));
                 available = {reason ? CapabilityState::Unavailable : CapabilityState::RequiresPermission, reason.detail};
                 initialized(reason);
             });
@@ -410,7 +412,7 @@ struct LiveCaptureSource::State {
             [this](const Platform::Linux::PortalCapabilities& caps) {
                 sourceTypes = caps.sourceTypes; cursorModes = caps.cursorModes;
                 auto error = fromPortal(caps.screenCast.failure);
-                if ((!caps.screenCast.available() || !(sourceTypes & 3u) || !(cursorModes & 1u)) && !error) error = unavailable();
+                if ((!caps.screenCast.available() || !(sourceTypes & 3u) || !(cursorModes & 3u)) && !error) error = unavailable();
                 available = {error ? CapabilityState::Unavailable : CapabilityState::RequiresPermission, error.detail};
                 const auto capability = available;
                 post([capability](LiveCaptureSource* target) { Q_EMIT target->capabilityChanged(capability); });
@@ -496,12 +498,15 @@ struct LiveCaptureSource::State {
         // choice fails rather than silently selecting another kind.
         options.monitors = pending->options.monitors && (sourceTypes & 1u);
         options.windows = pending->options.windows && (sourceTypes & 2u);
-        if ((!options.monitors && !options.windows) || !(cursorModes & 1u)) {
+        const auto cursorMode = pending->options.cursor ? 2u : 1u;
+        if ((!options.monitors && !options.windows) || !(cursorModes & cursorMode)) {
             prepared(pending, {}, fail(Failure::Code::Unavailable,
-                QStringLiteral("The portal cannot provide the requested live source without an embedded cursor")));
+                QStringLiteral("The portal cannot provide the requested live source and cursor mode")));
             checkDone(); return;
         }
-        options.multiple = false; options.cursor = Platform::Linux::ScreenCastOptions::Cursor::Hidden;
+        options.multiple = false;
+        options.cursor = pending->options.cursor ? Platform::Linux::ScreenCastOptions::Cursor::Embedded :
+            Platform::Linux::ScreenCastOptions::Cursor::Hidden;
         options.persistence = Platform::Linux::ScreenCastOptions::Persistence::None;
         pending->portalRequest = portal->requestScreenCast(pending->parent, options);
         if (!pending->portalRequest) { prepared(pending, {}, unavailable()); checkDone(); }
@@ -548,6 +553,10 @@ struct LiveCaptureSource::State {
         pending->producerActive = true;
         try {
             watcher->setFuture(QtConcurrent::run(&pool, [data = pending->data, remote = std::move(remote), options, target]() mutable {
+                struct CompleteNative {
+                    Data& data;
+                    ~CompleteNative() { data.producerCompletion.set_value(); }
+                } completeNative{*data};
                 Platform::Linux::PipeWireCaptureCallbacks callbacks;
                 callbacks.formatChanged = [data](const Core::FrameFormat& format, std::uint64_t generation) {
                     return data->changedFormat(format, generation);
@@ -697,6 +706,15 @@ bool LiveCaptureSource::isCurrent(quint64 sourceId, quint64 generation) const
     return pending->refreshId || (pending->data && pending->data->valid.load(std::memory_order_acquire) &&
         pending->data->activity->load(std::memory_order_acquire) != Activity::Closed);
 }
+const Core::FrameLease* LiveCaptureSource::previewFrame(quint64 sourceId, quint64 generation) const
+{
+    const auto pending = state_->operation;
+    if (!isCurrent(sourceId, generation) || pending->previewActive || pending->refreshId ||
+        pending->consumer || !pending->data || !pending->data->firstFrame) return nullptr;
+    // The preview worker has returned before sourceReady/captureReady is
+    // published. Subsequent writes/claim/reset all belong to this GUI thread.
+    return &pending->data->firstFrame;
+}
 quint64 LiveCaptureSource::refreshForCapture(quint64 sourceId, quint64 generation)
 {
     if (!state_->ownerThread() || state_->shuttingDown) return 0;
@@ -757,6 +775,7 @@ std::optional<Core::LiveSourceConsumer> LiveCaptureSource::claim(quint64 sourceI
     consumer.sourceId = sourceId; consumer.generation = generation; consumer.selection = selection;
     consumer.frames = pending->data->queue; consumer.activity = pending->data->activity;
     consumer.stop = pending->data->stop; consumer.claimedAt = Core::MediaClock::now();
+    consumer.producerFinished = pending->data->producerFinished;
     pending->consumer = pending->claimed = true;
     return consumer;
 }

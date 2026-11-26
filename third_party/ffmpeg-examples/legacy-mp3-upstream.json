@@ -5,7 +5,7 @@
   "blob": "1e5034233165996a361c811bf2667a82fc4738eb",
   "license": "MIT",
   "copyright": "Copyright (c) 2026 NAMEWTA",
-  "use": "Reuse the same-project native MF H.264+MP3 fixture generator and strict full-track compatibility assertions. Locate compressed container samples through the mature MOV index API; parsed MPEG audio frame positions are not physical MP4 sample positions. Both platforms still inspect the exact Windows-generated manifest hashes.",
+  "use": "Reuse the same-project native MF H.264+MP3 fixture generator and strict full-track assertions. The test-only locator uses official NOPARSE|NOFILLIN raw MOV samples and compares every pos/size with the exact file bytes through an independent QFile. Production retains the official parser/side-data and indexed byte ledger; parsed frame positions are not physical sample positions.",
   "scope": "No physical audio/desktop acquisition or timing drift evidence. The pinned FFmpeg dependency includes the native MP3 decoder and mpegaudio parser. The new shared adapter passed the original Windows file plus all 25 existing H.264/AAC/HEVC fixtures; native CI must still compile and validate controlled strict MPEG audio patch 0002 with the existing Windows fixture generator. --inspect-recording provides read-only revalidation of a preserved original native recording.",
   "formatLocationReview": {
     "repository": "https://github.com/FFmpeg/FFmpeg.git",
@@ -21,7 +21,7 @@
         "path": "libavformat/avformat.h",
         "blob": "ef2b08c4f3fc2ea73712b20c4a0e391adabc6fa7",
         "license": "LGPL-2.1-or-later",
-        "use": "Use avformat_index_get_entries_count / avformat_index_get_entry to locate bounded complete MOV samples without reimplementing the MP4 box or MP3 bitstream parser."
+        "use": "Use the official paired NOPARSE/NOFILLIN flags only for physical fixture location, and official MOV index APIs for the separate production parsed-byte ledger. No MP4 box or MP3 header parser is reimplemented."
       },
       {
         "path": "libavcodec/parser.c",
@@ -71,5 +71,10 @@
       "sideDataDuration": 1152,
       "indexedReadbackChangedPcmOrSideData": false
     }
+  },
+  "integration": {
+    "pr6": "ba9358443207b9fa349de2bc0f47cebc0b13aa5c",
+    "pr7": "6b7acf2371df6ca228cd6537f605f68e88fc21d4",
+    "contract": "Keep PR7 exact physical-byte fixture locator and PR6 production parser/index ledger plus controlled decoder patch 0002 as one change. The original manifest/51-video-frame/full-EOF/late-corruption assertions remain."
   }
 }

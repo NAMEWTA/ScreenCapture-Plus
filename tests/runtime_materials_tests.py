@@ -40,10 +40,8 @@ class ProjectNotices(unittest.TestCase):
             paths = {record['source'] for record in records}
             required = {
                 'third_party/kwayland-parent/LICENSES/LGPL-2.0-or-later.txt',
-                'third_party/kwayland-activation/LICENSES/LGPL-2.0-or-later.txt',
                 'third_party/ffmpeg-examples/demux-decode-license.txt',
                 'third_party/ffmpeg-examples/remux-license.txt',
-                'third_party/wayland-protocols/xdg-activation-v1.xml',
                 'third_party/wayland-protocols/xdg-foreign-unstable-v2.xml',
             }
             self.assertLessEqual(required, paths)

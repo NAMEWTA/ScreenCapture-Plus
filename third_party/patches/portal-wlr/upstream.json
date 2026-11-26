@@ -205,6 +205,24 @@
         "positiveResizeAfter0005": false,
         "positiveRefreshAfter0005": false
       }
+    },
+    {
+      "file": "0006-cancel-delayed-capture-with-current-frame.patch",
+      "sha256": "214fc8e39097c29b8be16f627cb9f561c58387e1c481f24f72bda2d4afa6713f",
+      "kind": "project-local FPS timer ownership correction after 0001-0005",
+      "purpose": "Cancel deferred capture together with the current buffer so a pause/resume cannot dispatch an old capture timer against a replacement buffer and create two native frame objects.",
+      "changes": [
+        "Own one pending FPS timer per instance; clear its member before its callback, since the original event loop has already freed the timer.",
+        "Cancel the delayed capture from the existing frame cancellation paths for pause, removal and terminal cleanup; clear its member after normal destructor timer removal.",
+        "Do not start deferred capture for a terminal, paused or bufferless source; retain the negotiated delay and all real client pixel/identity assertions."
+      ],
+      "license": "MIT; unchanged retained upstream license.txt and project-local MIT adaptation",
+      "verification": {
+        "exactBaseBlobs": 15,
+        "orderedSixPatchReplay": true,
+        "nativeProducerCompilationAfter0006": false,
+        "positiveRefreshAfter0006": false
+      }
     }
   ],
   "validation": {
@@ -246,6 +264,23 @@
       "evidenceFiles": {
         "artifacts/cmake/qt-validation/pipewire/Debug/resize/portal-wlr.log": "51c0211fe6719201fcd6dfae5ec4a6484ddc52755973f39ce90da783dcbdfcd4",
         "artifacts/cmake/qt-validation/pipewire/Debug/resize/result.json": "e5d7c90ecf5407dc52457f948dc087654dba0f802e00631b6a07f968863350e0"
+      }
+    },
+    "afterCurrentBufferRetry": {
+      "applicationCommit": "bb416cbea78f9eb9660bbb54db201a223cb433f0",
+      "run": 45784600351,
+      "job": 139788227903,
+      "artifact": 15100277797,
+      "artifactSha256": "5353c933c72d831fdf10545b17c63038f8c1405763467642ef0aa4cf8cf05929",
+      "producerCompiled": true,
+      "directCapturePassed": true,
+      "resizePassed": true,
+      "daemonLossPassed": true,
+      "sharedSourceRefreshPassed": false,
+      "observed": "Initial 800x600 preview matched. After PAUSED and replacement buffers, two FPS timer callbacks created ext frame objects before either completed; the compositor rejected the second with session already has a frame object and the backend exited. Client source refresh correctly failed target not found and all source owners drained.",
+      "evidenceFiles": {
+        "artifacts/cmake/qt-validation/live-source/Debug/capture/portal-wlr.log": "f88fb604bdaa60a55677623314da4b7b920f585b90793ecafe071ea91b808a4a",
+        "artifacts/cmake/qt-validation/live-source/Debug/capture/result.json": "7d6054a990d6147642db104e3b0d2118f31bedd025842d2a26a9635e89720eb0"
       }
     }
   },

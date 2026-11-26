@@ -47,7 +47,7 @@ Rust runtime。打开设置/设备窗也不隐式启用。此前明确保存的�
 
 首次身份写入复用排他暂存和 `FileCommitter::commitFileNoReplace`，不覆盖碰巧
 出现的同名文件。读取复用不跟随最终链接的原生句柄，核对打开对象及命名对象
-身份。`Platform::PrivateStorage` 是唯一权限差异边界：Linux 要求当前 uid
+身份。`Platform::isPrivateStorage` 承担读取前的权限差异检查：Linux 要求当前 uid
 且 group/other 无权限；Windows 检查实际 owner/DACL，允许本用户、SYSTEM、
 Administrators，以及 Qt 为其他主体保留的只读属性、READ_CONTROL、SYNCHRONIZE
 元数据权限，拒绝其他主体读取内容、列目录、修改、执行或接管 ACL。不能证明
@@ -55,26 +55,32 @@ Administrators，以及 Qt 为其他主体保留的只读属性、READ_CONTROL�
 
 目录创建使用 [Qt `QDir::mkpath` 的权限参数](https://doc.qt.io/qt-6/qdir.html#mkpath)。
 Windows 判断核对了
-[Qt v6.12.1 QNativeFilePermissions](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/io/qfilesystemengine_win.cpp)
+[固定 Qt 6.12.1 QNativeFilePermissions](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/io/qfilesystemengine_win.cpp)
 生成的 ACL。仅切换 Windows 只读属性的 `QFile::setPermissions` 不能冒充私钥
 DACL 保护。这里调用已有 Qt/OS API，不复制 Qt 文件引擎源码。
 
-新建身份暂存和 `QSaveFile` 信任替换在写入第一个字节前，另调用
-`initializeCreatedPrivateFile`。它只接受调用方刚排他创建、身份匹配、内容为空
-且现有访问权限已经私有的同一文件对象。Windows 若实际 owner 等于进程的
-`TokenOwner`、但不同于 `TokenUser`，才通过 `ReOpenFile` 取得该对象的元数据
-句柄并设置本用户为 owner，随后重验对象、owner 和 DACL。不会通过路径重开、
-扩大 DACL、启用额外特权或修复已有身份文件。Linux 不修改权限，除单一链接
-文件外仅接受 `F_GETFL` 明确证明为 `O_TMPFILE` 的尚未命名空文件；普通已删除
-文件和多硬链接都拒绝。该区别来自 Qt 的真实原子替换行为。
+新建文件的所有者不能仅由父目录的 DACL 推断。Windows 的
+[TokenOwner](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_owner)
+可为令牌中的用户或组；没有显式所有者时，新文件使用该默认值。
+固定 Qt 的 [QTemporaryFile 引擎](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/io/qtemporaryfile.cpp)
+和 [QSaveFile](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/io/qsavefile.cpp)
+在 Windows 临时文件创建时也使用默认安全描述符。因此首次身份/信任发布与
+已有信任的原子替换都在写入任何内容前调用 `preparePrivateStagingFile`。
 
-此处逐行核对固定 Qt 6.12.1 的 `qfilesystemengine_win.cpp`（blob
-`970440508e67846a493a49880358e58b3cfa0c0a`）、`qtemporaryfile.cpp`
-（`90c302209b85627f3873f9ea672536756e6255b8`）、`qsavefile.cpp`
-（`10383e2c5909ca56c994663c871855786127e607`）和 `qfsfileengine_win.cpp`
-（`1575a2ec5bce70841e98085cdd9473dde2d89abc`）。Qt 的临时文件创建与显式权限
-文件创建采用不同的 Windows 安全描述符路径；具体失败仍须读取实际 owner、
-默认 owner 与 DACL 的布尔观测和原生错误码，不能只凭权限失败猜测原因。
+这个平台入口只接受调用方刚创建并仍持有的空常规文件，借用 CRT fd，不能关闭
+调用方的对象。Windows 先核对原 DACL 已满足严格私有数据权限及只有一个链接；
+需要时通过 [ReOpenFile](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reopenfile)
+取得同一对象的所有者元数据句柄，以 `SetSecurityInfo` 仅设置当前 TokenUser
+所有者，随后再次执行完整 owner/DACL 检查。它不修改 DACL、不提升权限或改变
+进程令牌，也不按路径重新打开其他文件。Linux 不改变任何权限，要求当前 uid、
+无 group/other 权限，允许新具名文件或 QSaveFile 使用的未链接 O_TMPFILE。
+非空、多链接、类型或权限不符的对象在写入之前失败。
+
+已经保存的身份及信任只走原严格读取检查，不在读取失败后修补其所有者或 ACL。
+首次写入继续使用原无覆盖发布；更新继续由 QSaveFile 原子替换。操作系统给出的
+真实文件阶段和系统错误保留到 `IdentityFileDiagnostic`，另保留原 QFile 错误枚举。
+`nativeStatus` 继续表达 Rust ABI 状态；没有原始系统值时不制造 Win32 错误码。
+诊断不记录路径、身份 JSON、密钥、指纹或安全标识符。
 
 信任只绑定用户在发送前明确核对的证书指纹：最多 128 个身份、每个身份 8 个
 端点、256 KiB，按最近明确确认淘汰最旧记录。淘汰后须重新确认。已知证书换 IP
@@ -115,6 +121,9 @@ IPv4/端口，网络重建后恢复。界面按证书合并多端点，保持选
 不会开始监听；保存停止失败仍停止网络，并明确说明下次启动可能恢复旧设置。
 任务/设置窗的普通关闭不停止网络。
 
+监听器发生实际运行错误时保留失败状态并停止服务，不在同一错误上反复创建
+runtime。用户可在设置中重新应用；运行中的所选网卡变化继续走上述受控重建流程。
+
 ## 准备、取消与资源上限
 
 使用 Qt 单线程 `QThreadPool` / `QtConcurrent`，最多一个身份或媒体准备 job，
@@ -128,24 +137,28 @@ IPv4/端口，网络重建后恢复。界面按证书合并多端点，保持选
 上复活。最终析构等待纯 worker 并 join 原服务，worker 不等待 Qt 窗口回调，
 没有 detach 或固定超时后假称释放。
 
+宿主可以在 `availabilityChanged`、`busyChanged`、`operationFailed` 或
+`shutdownFinished` 的直接连接中销毁控制器。控制层在继续访问状态之前检查
+QObject 寿命；真实停止完成通知始终在当前停止分支的最后发出。明确关闭 LAN
+即使遇到配置写入冲突，也会立即请求取消正在准备的媒体，再等待原服务停止。
+
 ## 实际验证与剩余门槛
 
-共享 UI 提交 `c575f84f3b9fc218caff76833b873d1a5d833548` 的
-[native CI 45576735981](https://github.com/NAMEWTA/huhucapture/actions/runs/45576735981)
-已在 Windows/Linux 通过 `qt_transfer_ui`；设备、接收、完成、身份变化和中/俄
-设置的真实 PNG 已检查。这是该提交的组件证据。
+`qt_transfer_ui` 检查设备、接收、完成、身份变化和中/俄设置的真实组件与 PNG。
+`qt_identity_store` 单独运行真实身份生成、连续信任保存/重开及损坏文件保留，
+不要求先启动网络监听器；同一合同也保留在完整控制器旅程中。
+`qt_private_storage` 使用真实新空文件和 QSaveFile 临时对象，检查私有准备、
+借用句柄仍可使用、原目标保留及替换后权限，拒绝非空或其他不合约对象；Windows
+还在 QSaveFile 的独占写句柄仍打开时实际检查所有者元数据访问。
 
 新增 `qt_lan_controller` 使用两个生产控制器、真实私有 RSA 文件、真实网卡、
 QTcpServer 实际占用端口、实际 TLS PNG 传输、销毁发送窗后的继续、全局接收
-确认/拒绝、共享归档、重启身份/信任、损坏身份保留和配置冲突。相同证书的实际
+确认/拒绝、共享归档、连续两次信任保存后重开、损坏身份保留和配置冲突。相同证书的实际
 127.0.0.2 端点验证设备合并和换 IP；公告记录实际成功或组播不可用结果。
-**本新增目标必须以新提交实际 CI 为准，不能继承 c575 的通过状态。**
-
-私有存储子集已在固定 Qt 6.12.1 和匹配源指纹的真实 Rust 库下执行：实际 RSA
-重开、信任原子替换、真实 `O_TMPFILE`、错误身份、非空/多链接/普通已删除文件
-拒绝，以及取消替换后原文件身份与字节保留。显式 `--identity-only` 入口只报告
-这些文件和身份检查，不运行网络或完整控制器。Windows 新建对象 owner 接缝仍
-待原生 CI 的实际观测；Linux 子集通过不能替代它，也不能作为物理互传验收。
+回归还覆盖配置冲突时的真实停网，以及宿主在状态、错误和已完成停止回调中同步
+销毁控制器，不以断开连接掩盖服务仍访问已释放对象的问题。
+这些目标的通过状态以对应提交的实际 CI 日志和产物为准；本地编译及源代码复核
+不能代替 Windows 令牌、权限或真实传输结果。
 
 物理 Windows↔Linux/同平台双机、网卡/VPN、防火墙、DHCP/休眠/热插拔、完整
 PNG/GIF/MP4 端到端与持续负载性能仍按 P10a/P12 分别提供证据。通用 PROTOCOL

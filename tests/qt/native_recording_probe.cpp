@@ -166,6 +166,8 @@ QJsonObject backendJson(const recording::BackendResult& result)
         sink[QStringLiteral("lastSubmitted100ns")] = static_cast<qint64>(statistics.lastSubmitted);
         sink[QStringLiteral("lastSubmittedDuration100ns")] = static_cast<qint64>(statistics.lastSubmittedDuration);
         sink[QStringLiteral("queuedBytes")] = static_cast<qint64>(statistics.queuedBytes);
+        sink[QStringLiteral("lastOriginalEnd100ns")] = static_cast<qint64>(statistics.lastOriginalEnd);
+        sink[QStringLiteral("tailTargetEnd100ns")] = static_cast<qint64>(statistics.tailTargetEnd);
         sink[QStringLiteral("framesCaptured")] = static_cast<qint64>(statistics.captured);
         sink[QStringLiteral("submittedDuration100ns")] = static_cast<qint64>(statistics.submittedDuration);
         sink[QStringLiteral("captureEnd100ns")] = static_cast<qint64>(statistics.captureEnd);
@@ -276,6 +278,8 @@ void inspectRecording(const QString& path, const recording::BackendResult& recor
     const auto cover = worker([path] { return media::videoThumbnail(path, 256); });
     evidence[QStringLiteral("coverFailure")] = cover.failure.detail;
     evidence[QStringLiteral("coverDecoder")] = static_cast<int>(cover.decoder);
+    evidence[QStringLiteral("coverWidth")] = cover.image.width();
+    evidence[QStringLiteral("coverHeight")] = cover.image.height();
     require(!cover.failure, "Generate a real native/software-decoded recording cover");
     require(cover.image.save(coverPath, "PNG"), "Preserve actual decoded cover evidence");
     checkCover(cover.image);

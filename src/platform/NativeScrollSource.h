@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/CaptureControls.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -16,7 +17,8 @@ enum class ScrollInputResult { Scrolled, PointerOutsideTarget, Failed };
 // accessed. User movement to a different target pauses automatic wheel input.
 class NativeScrollSource final {
 public:
-    NativeScrollSource(int x, int y, int width, int height, std::stop_token stop = {});
+    NativeScrollSource(int x, int y, int width, int height, std::stop_token stop = {},
+        std::shared_ptr<Core::CaptureControls> controls = {});
     ~NativeScrollSource();
     NativeScrollSource(const NativeScrollSource&) = delete;
     NativeScrollSource& operator=(const NativeScrollSource&) = delete;

@@ -1,12 +1,11 @@
 # Qt owner and shutdown review
 
-This review covers the shared application's lifetime boundaries at development
-base `adcf6972575c9c5d91380b13417a446d0761a7aa`. It records concrete findings and
-the verification actually performed; it is not a complete desktop acceptance.
+This review covers the final shared application owners and their asynchronous
+shutdown boundaries. Component evidence is separate from complete desktop acceptance.
 
 ## Owner ordering and ordinary shutdown
 
-`QtApplication::State` declares the loaded settings, language catalog and Qt
+`DesktopApplication::State` declares the loaded settings, language catalog and Qt
 translations before its workspaces and top-level windows. C++ reverse member
 destruction therefore keeps these dependencies alive while the views destroy
 their callbacks. The catalog callback retained by editors and settings windows
@@ -14,13 +13,13 @@ does not reproduce the test-fixture ordering error found during migration.
 
 Ordinary application shutdown stops new admission before asking recording and
 scroll consumers to finish. Only after those consumers report completion does it
-stop capture and media output. It waits for media jobs and file-revealer requests,
+stop media output; the independent screenshot owner drains in parallel. It waits for media jobs and file-revealer requests,
 then the system clipboard's real shutdown receipt. Existing error messages must
 be acknowledged before exit. A Linux selection owner is retained visibly until
 the user explicitly releases it or another owner replaces it; successful
 publication alone is not evidence of clipboard persistence after process exit.
 
-The inspected CaptureWorkspace, ScrollWorkspace, MediaWorkspace and editor
+The inspected CaptureWindow, ScrollController, MediaWorkspace and editor
 destructors keep their respective state alive while deleting owned top-level
 views. Capture and media workers own the data they use; deleting a view cancels
 its continuation rather than invalidating a worker's image or archive owner.
@@ -28,7 +27,7 @@ This static review did not establish new defects in those ownership paths.
 
 ## Recording controls during abnormal owner loss
 
-RecordingWorkspace's control snapshot was declared after its outline windows,
+RecordingController's control snapshot was declared after its outline windows,
 so implicit State destruction would release that snapshot before destroying the
 outlines. The windows' native-surface events could still invoke the workspace's
 event filter: QObject removes filters in its base destructor, after the derived

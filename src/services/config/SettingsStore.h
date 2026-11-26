@@ -23,6 +23,11 @@ struct SettingsResult {
 
 enum class PathPolicy { WindowsLegacy, Linux };
 
+// Resolve existing ancestors even when the selected directory or config.json
+// does not exist yet. Empty means invalid or physically inside the supplied
+// AppImage mount; this does not create directories or claim write permission.
+QString resolvePortableDirectory(const QString& directory, const QString& appImageMount = {});
+
 // Callers pass the actual Known Folder / QStandardPaths locations. An explicit
 // portable directory must be outside an AppImage's read-only mount.
 QString settingsPath(PathPolicy policy, const QString& applicationDirectory,

@@ -1,5 +1,4 @@
 #include "ui/qt/CaptureWindow.h"
-#include "ui/qt/CaptureCanvas.h"
 #include "ui/qt/EditorWindow.h"
 
 #include <QApplication>
@@ -38,14 +37,28 @@ Capture::Snapshot source(quint64 generation = 1)
     result.cursor = {120, 110};
     return result;
 }
-void mouse(ui::CaptureCanvas& canvas, QEvent::Type type, QPointF sourcePoint, Qt::MouseButton button, Qt::MouseButtons held)
+QWidget* imageView(ui::CaptureWindow& window, const QImage& image)
 {
-    const auto local = canvas.localAt(sourcePoint);
+    auto* canvas = window.dialogParent();
+    require(canvas && canvas->objectName() == QStringLiteral("captureSurface"),
+        "the final capture presentation owns a real QWidget source surface");
+    // The ordinary source window fits an image inside a 12-DIP margin and does
+    // not enlarge it. Select a 1:1 fixture size so input is independently given
+    // as source pixels plus that margin, without another capture implementation.
+    canvas->resize(image.size() + QSize(24, 24));
+    canvas->activateWindow(); canvas->setFocus(Qt::ActiveWindowFocusReason); events();
+    require(canvas->size() == image.size() + QSize(24, 24) && canvas->isVisible(),
+        "the source fixture has the actual one-to-one image viewport");
+    return canvas;
+}
+void mouse(QWidget& canvas, QEvent::Type type, QPointF sourcePoint, Qt::MouseButton button, Qt::MouseButtons held)
+{
+    const auto local = sourcePoint + QPointF(12, 12);
     const QPointF global = QPointF(canvas.mapToGlobal(local.toPoint())) + local - QPointF(local.toPoint());
     QMouseEvent event(type, local, local, global, button, held, Qt::NoModifier);
     QApplication::sendEvent(&canvas, &event);
 }
-void drag(ui::CaptureCanvas& canvas, QPointF from, QPointF to)
+void drag(QWidget& canvas, QPointF from, QPointF to)
 {
     mouse(canvas, QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
     mouse(canvas, QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
@@ -64,13 +77,15 @@ void enable(Capture::CaptureSession& session, Capture::Action action)
 void realSelectionAndEditor(const QString& directory)
 {
     Capture::CaptureSession session; const auto pixels = source();
-    require(!session.load(pixels), "load an actual immutable image");
     enable(session, Capture::Action::Edit); enable(session, Capture::Action::Clipboard); enable(session, Capture::Action::SaveAs);
-    ui::CaptureWindow window(session); require(!window.open(), "open the shared real QWidget capture view");
-    events(); auto* canvas = qobject_cast<ui::CaptureCanvas*>(window.dialogParent());
-    require(canvas && !canvas->desktopView() && canvas->isVisible(), "an unmapped image has a real image-space view");
-    const auto* hint = canvas->findChild<QLabel*>(QStringLiteral("capture.sourceHint"));
-    require(hint && hint->isVisible() && !hint->text().isEmpty(), "authorized-source coordinates are explicitly explained in the interface");
+    ui::CaptureWindow window(session); require(!window.showSnapshot(pixels), "open an actual immutable image in the final shared QWidget capture view");
+    QPointer<QWidget> canvas(imageView(window, pixels.image));
+    require(session.snapshot().coordinates == Capture::CoordinateSpace::AuthorizedSourcePixels &&
+        session.snapshot().screens.isEmpty(), "an unmapped image stays in source coordinates");
+    const auto labels = canvas->findChildren<QLabel*>(QString(), Qt::FindDirectChildrenOnly);
+    require(labels.size() == 1 && labels.front()->isVisible() &&
+        labels.front()->text().contains(QStringLiteral("source pixels")),
+        "authorized-source coordinates are explicitly explained in the interface");
     save(canvas->grab().toImage(), directory, QStringLiteral("capture-selecting.png"));
     drag(*canvas, {60, 70}, {380, 280});
     require(session.stage() == Capture::Stage::Adjusting && session.selection().bounds().left == 60 &&
@@ -80,16 +95,17 @@ void realSelectionAndEditor(const QString& directory)
     drag(*canvas, {420, 160}, {460, 160});
     require(session.selection().bounds().left == 60 && session.selection().bounds().right == 460,
         "the original outside nine-grid adjustment works through real widget input");
-    auto* mark = canvas->findChild<QToolButton*>(QStringLiteral("cap.mark"));
-    auto* scroll = canvas->findChild<QToolButton*>(QStringLiteral("cap.long"));
+    auto* mark = canvas->findChild<QToolButton*>(QStringLiteral("capture.cap.mark"));
+    auto* scroll = canvas->findChild<QToolButton*>(QStringLiteral("capture.cap.long"));
     require(mark && mark->isEnabled() && mark->width() == 44 && mark->height() == 44 && mark->iconSize() == QSize(24, 24),
         "the shared capture toolbar keeps the original 44/24 logical-pixel controls");
     require(scroll && !scroll->isEnabled(), "an unconnected live service cannot present a working scrolling action");
     save(canvas->grab().toImage(), directory, QStringLiteral("capture-adjusting.png"));
     std::unique_ptr<ui::EditorWindow> editor;
-    QObject::connect(&window, &ui::CaptureWindow::actionRequested, &window,
-        [&](const Capture::ActionRequest& request, QWidget* parent) {
-            require(parent == canvas && request.action == Capture::Action::Edit, "mark dispatches the direct editor intent with its real origin");
+    QObject::connect(&session, &Capture::CaptureSession::actionRequested, &window,
+        [&](const Capture::ActionRequest& request) {
+            require(window.dialogParent() == canvas && request.action == Capture::Action::Edit,
+                "mark dispatches the direct editor intent from the final session and real view");
             editor = std::make_unique<ui::EditorWindow>();
             require(!editor->loadImage(request.image), "the actual shared editor accepts the selected image");
             editor->setCloseOnSuccessfulOutput(true); editor->show();
@@ -100,25 +116,27 @@ void realSelectionAndEditor(const QString& directory)
             session.complete(request.token, Capture::ActionResult::Completed);
         });
     mark->click(); waitFor([&] { return session.stage() == Capture::Stage::Closed; });
-    require(editor && editor->isVisible() && !canvas->isVisible(), "capture closes only after the real shared editor has accepted the image");
-    // One application-owned presentation/session can be reused by the next tray
-    // capture without keeping a stale canvas, source or completion token.
-    require(!session.load(source(2)) && !window.open(), "the same application-owned capture presentation can open a new source generation");
-    auto* next = qobject_cast<ui::CaptureCanvas*>(window.dialogParent());
-    require(next && next != canvas && next->isVisible(), "a later capture uses its newly bound real view");
-    window.close(); editor->close();
+    require(editor && editor->isVisible() && (!canvas || !canvas->isVisible()),
+        "capture closes only after the real shared editor has accepted the image");
+    // The finished event stack may still own the old toolbar. Observe its real
+    // deferred destruction instead of comparing addresses an allocator may reuse.
+    waitFor([&] { return canvas.isNull(); });
+    require(!window.showSnapshot(source(2)), "the same application-owned capture presentation can open a new source generation");
+    auto* next = imageView(window, pixels.image);
+    require(next && session.snapshot().generation == 2 && next->isVisible(), "a later capture binds a fresh real view and source generation");
+    window.cancel(); editor->close();
     std::cout << "PASS real Qt selection, outside adjustment, 44/24 toolbar, direct nine-tool editor and reusable capture presentation\n";
 }
 
 void retryKeysAndWrapping(const QString& directory)
 {
-    Capture::CaptureSession session; require(!session.load(source()), "load an independent shortcut/failed-output image");
+    Capture::CaptureSession session;
     for (const auto action : {Capture::Action::Clipboard, Capture::Action::SaveAs, Capture::Action::Hex, Capture::Action::Position}) enable(session, action);
-    ui::CaptureWindow window(session); require(!window.open(), "open shortcut capture window");
-    auto* canvas = qobject_cast<ui::CaptureCanvas*>(window.dialogParent());
+    ui::CaptureWindow window(session); require(!window.showSnapshot(source()), "open an independent shortcut/failed-output image");
+    QPointer<QWidget> canvas(imageView(window, session.snapshot().image));
     std::vector<Capture::ActionRequest> requests;
-    QObject::connect(&window, &ui::CaptureWindow::actionRequested, &window,
-        [&](const Capture::ActionRequest& request, QWidget*) { requests.push_back(request); });
+    QObject::connect(&session, &Capture::CaptureSession::actionRequested, &window,
+        [&](const Capture::ActionRequest& request) { requests.push_back(request); });
     key(*canvas, Qt::Key_Right); require(session.cursor() == QPoint(121, 110), "arrow nudges exactly one source pixel");
     key(*canvas, Qt::Key_P, Qt::ControlModifier);
     require(requests.size() == 1 && requests.back().text == QStringLiteral("source(121,110)"), "image-source position cannot masquerade as a desktop position");
@@ -131,14 +149,14 @@ void retryKeysAndWrapping(const QString& directory)
     require(requests.back().action == Capture::Action::Clipboard, "Enter adjustment copies through the same real output request");
     session.complete(requests.back().token, Capture::ActionResult::Failed, QStringLiteral("Copy was rejected. The selected image is still available."));
     events(); require(session.stage() == Capture::Stage::Adjusting && !session.failureText().isEmpty(), "a failed host output preserves the exact editable selection");
-    canvas->resize(240, 330); events();
-    auto* toolbar = canvas->findChild<QWidget*>(QStringLiteral("capture.toolbar"));
+    canvas->resize(320, 330); events();
+    auto* toolbar = canvas->findChild<QWidget*>(QStringLiteral("captureToolbar"));
     require(toolbar && toolbar->isVisible() && toolbar->height() >= 90 && toolbar->geometry().left() >= 0 &&
         toolbar->geometry().right() < canvas->width(), "narrow image views wrap complete controls within the real available width");
     for (auto* button : toolbar->findChildren<QToolButton*>()) require(button->size() == QSize(44, 44), "wrapping retains every complete click target");
     save(canvas->grab().toImage(), directory, QStringLiteral("capture-narrow-failure.png"));
     const auto oldBounds = session.selection().bounds();
-    auto* saveButton = canvas->findChild<QToolButton*>(QStringLiteral("tool.save"));
+    auto* saveButton = canvas->findChild<QToolButton*>(QStringLiteral("capture.tool.save"));
     saveButton->click(); waitFor([&] { return requests.size() == 3; });
     session.complete(requests.back().token, Capture::ActionResult::Cancelled);
     const auto& retained = session.selection().bounds();
@@ -151,17 +169,17 @@ void retryKeysAndWrapping(const QString& directory)
 void hostLifetime()
 {
     auto* session = new Capture::CaptureSession;
-    require(!session->load(source()), "load lifetime source");
     enable(*session, Capture::Action::Edit);
     auto* window = new ui::CaptureWindow(*session); QPointer<ui::CaptureWindow> alive(window);
-    require(!window->open(), "open real lifetime capture view");
-    auto* canvas = qobject_cast<ui::CaptureCanvas*>(window->dialogParent());
+    require(!window->showSnapshot(source()), "open real lifetime capture view");
+    QPointer<QWidget> canvas(imageView(*window, session->snapshot().image));
     drag(*canvas, {80, 80}, {300, 250});
-    QObject::connect(window, &ui::CaptureWindow::actionRequested, window, [window, session](const Capture::ActionRequest&, QWidget*) {
+    QObject::connect(session, &Capture::CaptureSession::actionRequested, window, [window, session](const Capture::ActionRequest&) {
         delete window; delete session;
     });
-    canvas->findChild<QToolButton*>(QStringLiteral("cap.mark"))->click();
+    canvas->findChild<QToolButton*>(QStringLiteral("capture.cap.mark"))->click();
     waitFor([&] { return alive.isNull(); });
+    require(canvas.isNull(), "destroying the host also destroys its actual capture widget");
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     std::cout << "PASS actual shared-editor handoff may destroy its capture owner\n";
 }

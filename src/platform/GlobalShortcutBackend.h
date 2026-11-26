@@ -30,4 +30,3 @@ protected:
 std::unique_ptr<GlobalShortcutBackend> createGlobalShortcutBackend(Desktop::GlobalShortcut& owner);
 
 } // namespace HuhuCapture::Platform
-

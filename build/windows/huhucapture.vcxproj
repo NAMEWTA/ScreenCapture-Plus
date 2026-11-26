@@ -114,6 +114,7 @@
     </ClCompile>
     <ClCompile Include="..\..\src\platform\windows\NativeMp4Recording.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Include="..\..\src\platform\windows\NativeGifRecording.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -228,6 +229,7 @@
     <ClInclude Include="..\..\src\core\RecordingResult.h" />
     <ClInclude Include="..\..\src\core\RecordingTime.h" />
     <ClInclude Include="..\..\src\core\ReleaseVersion.h" />
+    <ClInclude Include="..\..\src\core\ReleasePackage.h" />
     <ClInclude Include="..\..\src\core\ScrollStitch.h" />
     <ClInclude Include="..\..\src\editor\History.h" />
     <ClInclude Include="..\..\src\editor\AnnotationModel.h" />
@@ -269,6 +271,7 @@
     <ClInclude Include="..\..\src\platform\windows\DesktopFiles.h" />
     <ClInclude Include="..\..\src\recording\CapVideo.h" />
     <ClInclude Include="..\..\src\recording\RecordingBackend.h" />
+    <ClInclude Include="..\..\src\core\FrameSource.h" />
     <ClInclude Include="..\..\src\recording\VideoGif.h" />
     <ClInclude Include="..\..\src\recording\VideoMp4.h" />
     <ClInclude Include="..\..\src\services\AnnotationRenderer.h" />

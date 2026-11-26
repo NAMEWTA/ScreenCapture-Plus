@@ -26,6 +26,14 @@
       "windowsToolset": "v143",
       "windowsCrt": "MD/MDd",
       "qtbaseLicense": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "sourceTools": {
+        "qttools": {
+          "repository": "https://github.com/qt/qttools.git",
+          "commit": "2bcebd46216b38bf66775a5d42b7f72c6501e686",
+          "tag": "v6.12.1",
+          "tagObject": "6078948faa100e138e7e9cc1a47effb437c79eab"
+        }
+      },
       "sourceModules": {
         "qtbase": {
           "usesQtbaseRevision": true,
@@ -281,6 +289,10 @@
           {
             "path": "third_party/patches/portal-wlr/0005-retry-after-current-buffer-replacement.patch",
             "sha256": "067f6801914a45871ecf09ccbb6c6c6ea2bb0f2d695e2bf6c611a59798d201fd"
+          },
+          {
+            "path": "third_party/patches/portal-wlr/0006-cancel-delayed-capture-with-current-frame.patch",
+            "sha256": "214fc8e39097c29b8be16f627cb9f561c58387e1c481f24f72bda2d4afa6713f"
           }
         ]
       },

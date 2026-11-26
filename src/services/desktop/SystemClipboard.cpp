@@ -28,6 +28,7 @@
 #else
 #include "platform/linux/DesktopClipboard.h"
 #include <QDBusConnection>
+#include <QDBusError>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
@@ -227,6 +228,10 @@ struct SystemClipboard::State {
     std::shared_ptr<PreparedClipboard> content;
     QPointer<QWindow> origin;
     QPointer<QFutureWatcher<Failure>> validation;
+    // Retain the actual owned task independently of its QObject watcher. The
+    // normal shutdown path drains asynchronously; exceptional destruction must
+    // still join this task and release its archive lease before returning.
+    QFuture<Failure> validationWork;
 #ifndef Q_OS_WIN
     std::unique_ptr<Platform::Linux::DesktopClipboard> observer;
     QPointer<QDBusPendingCallWatcher> filePortal;
@@ -246,6 +251,9 @@ SystemClipboard::SystemClipboard(QObject* parent) : QObject(parent), state_(std:
 }
 SystemClipboard::~SystemClipboard()
 {
+    { const std::lock_guard lock(state_->admission); state_->accepting = false; }
+    state_->stopping = true;
+    state_->validationWork.waitForFinished();
     if (state_->content) state_->content->state_->release();
 }
 bool SystemClipboard::busy() const noexcept
@@ -302,7 +310,14 @@ quint64 SystemClipboard::publish(std::shared_ptr<PreparedClipboard> content, QWi
                 QStringLiteral("/org/freedesktop/portal/documents"), QStringLiteral("org.freedesktop.DBus.Properties"),
                 QStringLiteral("Get"));
             message.setArguments({QStringLiteral("org.freedesktop.portal.FileTransfer"), QStringLiteral("version")});
-            auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message, 3000), this);
+            const auto bus = QDBusConnection::sessionBus();
+            if (!bus.isConnected()) {
+                const auto error = bus.lastError();
+                finish(token, {{Error::Unavailable, static_cast<qint64>(error.type()),
+                    QStringLiteral("The desktop document portal is unavailable for file copying: ") + error.message()}, {}});
+                return token;
+            }
+            auto* watcher = new QDBusPendingCallWatcher(bus.asyncCall(message, 3000), this);
             state_->filePortal = watcher;
             const auto completed = [this, token, watcher] {
                 // A disconnected connection returns an already finished call
@@ -354,7 +369,7 @@ void SystemClipboard::validatePrepared(quint64 token)
                 if (state_->active != token) { updateBusy(); return; }
                 if (failure) finish(token, {failure, {}}); else publishPrepared(token);
             });
-            auto future = QtConcurrent::run([lease]() mutable {
+            state_->validationWork = QtConcurrent::run([lease]() mutable {
                 // Empty the stored task capture before QFuture reports its
                 // result; no completed future may retain a hidden media lease.
                 auto reservation = std::move(lease);
@@ -364,7 +379,7 @@ void SystemClipboard::validatePrepared(quint64 token)
                 catch (...) { return Failure{Error::Read, 0, QStringLiteral("The media identity check failed")}; }
             });
             workerStarted = true;
-            watcher->setFuture(future);
+            watcher->setFuture(state_->validationWork);
         } else {
             QTimer::singleShot(0, this, [this, token] { if (state_->active == token) publishPrepared(token); });
         }

@@ -12,39 +12,6 @@ regression baseline until P12 passes; P13 then removes Ling and the old build.
 Do not describe component validation as a complete Qt/Linux product or weaken
 release gates to remove the old architecture early.
 
-`HUHUCAPTURE_BUILD_APP=ON` enables the actual product dependencies and builds
-the one `huhucapture` target. Keep production libraries in the root CMake file,
-validation targets in `build/cmake/tests.cmake`, and deployment in
-`build/cmake/qt-install.cmake`. `BUILD_TESTING=OFF` must still compile and install
-the full application without discovering test interpreters or test daemons.
-`qt-application.yml` is the single full Qt application/package pipeline; other
-workflows validate component configurations or the retained Windows baseline.
-Development packages retain their real dirty/source identity and never satisfy
-the stable release gates. See [packaging](docs/qt-packaging.md).
-
-CaptureWorkspace alone owns authorized live capture. A recording or scrolling
-worker claims that source once and returns every frame lease before reporting
-consumer completion. Do not reopen a second Portal session, infer global pixels
-from a Wayland screenshot, invent silent PCM, or let GUI teardown precede worker
-drain. Qt views and application ownership remain shared across both platforms.
-Before a live recording or scrolling claim, hide controls, observe actual window
-unexposure, and refresh the same authorized data connection. Wait for the real
-old producer/preview/lease drain and captureReady; never promote a queued preview
-seed, a fixed frame drop, a new FD, or Wayland request acknowledgement into proof
-of compositor presentation. Keep the dedicated first-frame pixel probe separate
-from ordinary live-source validation.
-
-The application's loaded SettingsStore is also the editor preference owner.
-Bind it to MediaWorkspace before opening any editor; preserve the existing
-ToolSub/toolPin fields and shared ToolSettings ranges instead of another store
-or defaults table. Native recording controls must remain excluded, unmapped or
-verified outside every real readback. Hiding controls requires an actually
-available stop route; a saved shortcut string is not native registration.
-Desktop finish actions must use the existing primary-instance IPC and real
-GIO registration/launch confirmation. Control errors must not start a capture
-or open a new product window. A verified command path is not evidence of
-GNOME menu reachability or clean captured pixels; keep those acceptance gates.
-
 Reuse existing production behavior first, pinned cited upstream second, then
 mature libraries. Keep pure editor models free of Qt/Win32 and use them in the
 existing adapters while migrating. Register shared targets and tests in CMake;
@@ -58,10 +25,6 @@ Portal fault tests use a real bus, while desktop authorization and PipeWire
 frames require separate real desktop evidence. Preserve unknown configuration
 fields and original migration bytes; a stale writer or failed backup must not
 overwrite user data. See the migration guide for atomicity and durability limits.
-The owned headless Portal probes use the separately locked Sway/Portal desktop
-in docs/validation-desktop.md. Keep its private libraries, system daemons and
-application clients in distinct loader environments; this test desktop is not
-an application runtime dependency or GNOME/Plasma acceptance.
 
 ## Shipping Windows baseline
 
@@ -146,8 +109,11 @@ and documentation rules live in [conventions](docs/conventions.md).
 
 - Use lowercase `huhucapture` for product, executable, solution, configuration,
   and release filenames; use `HuhuCapture` for the C++ namespace. Runtime brand
-  values belong in `src/app/Brand.h`; the sole version input is `build/version.json`. Both CMake and the retained Windows
-  build consume it; tag arguments verify it and must not relabel the source.
+  values belong in `src/app/Brand.h`; `build/version.json` is the sole
+  hand-maintained version source. Run `python scripts/version_source.py --write`
+  after changing it; root `VERSION` and `build/windows/Version.props` are
+  generated compatibility files. CMake, MSBuild and packaging reject stale
+  generated values; tag arguments verify the source and must not relabel it.
   Keep updater and package metadata consistent.
 - Follow [docs/brand.md](docs/brand.md) for SVG, PNG, and ICO assets. Brand family
   association does not imply an unimplemented integration with another product.
@@ -196,7 +162,9 @@ coverage. None proves physical input, IME composition, mixed DPI, or audio worke
 Record actual commands, results, and untested boundaries according to
 [docs/validation.md](docs/validation.md). Do not claim checks that did not run.
 
-Normal stable releases are declared by `releases/publish.json`, matched by
-`build/version.json` and `releases/<tag>.md`. The main workflow publishes only after
-all required checks pass; an already published declaration is left unchanged.
-See [docs/building.md](docs/building.md) for asset validation and recovery steps.
+Stable Qt releases are declared by `releases/publish.json`, matched by
+`build/version.json` and `releases/<tag>.md`. The explicit complete-release workflow
+publishes only the verified same-source aggregate after all required gates pass.
+The P11a legacy Windows bridge uses its distinct explicit declaration and existing
+five-asset production gates; it never claims Qt/Linux delivery. Published versions
+are not overwritten. See [docs/building.md](docs/building.md) for admission and recovery.

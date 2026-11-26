@@ -32,8 +32,7 @@ BackendResult capture(const BackendRequest& request, FileHandle& writer,
     };
     const auto& region = request.region;
     const auto layout = Core::pixelLayout(region.width, region.height, 4);
-    if (request.coordinates != CoordinateSpace::DesktopPixels || request.sourceId || request.generation ||
-        request.format != Format::Gif || !layout || layout->bytes > request.maximumFrameBytes ||
+    if (request.format != Format::Gif || !layout || layout->bytes > request.maximumFrameBytes ||
         region.width > 65535 || region.height > 65535 || !request.framesPerSecond || request.framesPerSecond > 50 ||
         request.systemAudio || request.microphone || request.maximumDuration.count() <= 0 ||
         request.maximumDuration > std::chrono::minutes(6) || request.firstFrameTimeout.count() <= 0 ||
@@ -55,6 +54,7 @@ BackendResult capture(const BackendRequest& request, FileHandle& writer,
     Media::GifEncoder encoder({region.width, region.height, request.maximumFrameBytes}, std::move(writer));
     if (!encoder.ready()) { result.media = encoder.finish(); return result; }
     GdiCapture source;
+    const RECT selected{region.x, region.y, region.x + region.width, region.y + region.height};
     const auto firstDeadline = Core::MediaClock::now() + request.firstFrameTimeout;
     const auto interval = std::chrono::nanoseconds(1'000'000'000 / request.framesPerSecond);
     std::mutex waitMutex;
@@ -67,14 +67,14 @@ BackendResult capture(const BackendRequest& request, FileHandle& writer,
             }
             const auto controls = request.controls ? request.controls->snapshot.load(std::memory_order_acquire) : nullptr;
             if (request.controls) {
-                const auto status = controls ? verifyRecordingControls(*controls) : HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
+                const auto status = controls ? verifyRecordingControls(*controls, &selected) : HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
                 if (FAILED(status)) { result.media.fail(RecordingStage::Capture, status); break; }
             }
             if (!source.capture(region.x, region.y, region.width, region.height, request.cursor)) {
                 result.media.fail(RecordingStage::Capture, HRESULT_FROM_WIN32(ERROR_GEN_FAILURE)); break;
             }
             if (request.controls && (request.controls->snapshot.load(std::memory_order_acquire) != controls ||
-                FAILED(verifyRecordingControls(*controls)))) {
+                FAILED(verifyRecordingControls(*controls, &selected)))) {
                 result.media.fail(RecordingStage::Capture, HRESULT_FROM_WIN32(ERROR_INVALID_STATE)); break;
             }
             if (!result.prepared && Core::MediaClock::now() >= firstDeadline) {

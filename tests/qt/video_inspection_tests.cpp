@@ -101,6 +101,7 @@ int main(int argc, char** argv)
             const auto preview = videoThumbnail(path, 128);
             const int expectedPreview = item.value(QStringLiteral("preview")).toInt(-1);
             outcome[QStringLiteral("previewAccepted")] = !preview.failure;
+            outcome[QStringLiteral("previewFailureCode")] = static_cast<int>(preview.failure.code);
             outcome[QStringLiteral("previewDetail")] = preview.failure.detail;
             outcome[QStringLiteral("previewDecoder")] = static_cast<int>(preview.decoder);
             if (expectedPreview >= 0) passed = passed && ((!preview.failure) == (expectedPreview == 1));

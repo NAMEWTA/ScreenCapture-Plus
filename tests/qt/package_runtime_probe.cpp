@@ -1,5 +1,6 @@
 // Native runtime validation against an installed tree; never shipped as the app.
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
@@ -10,12 +11,14 @@
 #include <QJsonObject>
 #include <QLibraryInfo>
 #include <QSet>
+#include <QScopeGuard>
 #include <QSslCertificate>
 #include <QSslError>
 #include <QSslKey>
 #include <QSslSocket>
 #include <QTcpServer>
 #include <QTimer>
+#include <QXmlStreamReader>
 #include <iostream>
 #include <stdexcept>
 #include <utility>
@@ -91,6 +94,51 @@ QJsonObject checkedModules(const QString& prefix)
     }
     return identities;
 }
+#ifdef Q_OS_WIN
+QJsonObject productManifest(const QString& prefix)
+{
+    // Read resources from the actual packaged product without executing its
+    // entry point. A linked test probe's own default manifest is not evidence.
+    const auto executable = QDir(prefix).filePath(QStringLiteral("huhucapture.exe")).toStdWString();
+    const auto module = LoadLibraryExW(executable.c_str(), nullptr,
+        LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    require(module != nullptr, "Cannot load the actual packaged product's resources");
+    const auto release = qScopeGuard([&] { FreeLibrary(module); });
+    const auto resource = FindResourceW(module, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(24));
+    require(resource != nullptr, "Actual packaged product has no process manifest");
+    const auto size = SizeofResource(module, resource);
+    require(size && size <= 65536, "Actual product manifest is empty or exceeds its bound");
+    const auto loaded = LoadResource(module, resource);
+    const auto data = loaded ? LockResource(loaded) : nullptr;
+    require(data != nullptr, "Cannot read actual product manifest bytes");
+    const QByteArray bytes(static_cast<const char*>(data), static_cast<qsizetype>(size));
+    QXmlStreamReader xml(bytes);
+    unsigned dpi{}, execution{}, longPaths{};
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (!xml.isStartElement()) continue;
+        if (xml.name() == u"dpiAwareness") {
+            require(xml.namespaceUri() == u"http://schemas.microsoft.com/SMI/2016/WindowsSettings" &&
+                xml.readElementText() == QStringLiteral("PerMonitorV2"),
+                "Actual packaged product must declare PerMonitorV2, not only legacy True/PM");
+            ++dpi;
+        } else if (xml.name() == u"longPathAware") {
+            require(xml.namespaceUri() == u"http://schemas.microsoft.com/SMI/2016/WindowsSettings" &&
+                xml.readElementText() == QStringLiteral("true"), "Actual product must declare long path support");
+            ++longPaths;
+        } else if (xml.name() == u"requestedExecutionLevel") {
+            require(xml.attributes().value(u"level") == u"asInvoker" &&
+                xml.attributes().value(u"uiAccess") == u"false", "Actual product must remain an ordinary per-user process");
+            ++execution;
+        }
+    }
+    require(!xml.hasError() && dpi == 1 && execution == 1 && longPaths == 1,
+        "Actual product manifest has invalid or ambiguous process declarations");
+    return {{QStringLiteral("sha256"), QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())},
+            {QStringLiteral("dpiAwareness"), QStringLiteral("PerMonitorV2")},
+            {QStringLiteral("executionLevel"), QStringLiteral("asInvoker")}, {QStringLiteral("longPathAware"), true}};
+}
+#endif
 class NativeTlsServer final : public QTcpServer {
 public:
     NativeTlsServer(QSslCertificate certificate, QSslKey key) : certificate_(std::move(certificate)), key_(std::move(key)) {}
@@ -150,11 +198,14 @@ int main(int argc, char** argv)
         client.connectToHostEncrypted(QStringLiteral("127.0.0.1"), server.serverPort(), QStringLiteral("localhost"));
         loop.exec();
         require(!timedOut && rejected && !encrypted && !errors.isEmpty(), "Deployed TLS did not genuinely reject the self-signed peer");
-        const QJsonObject result{{QStringLiteral("schemaVersion"), 1}, {QStringLiteral("qtVersion"), QString::fromLatin1(qVersion())},
+        QJsonObject result{{QStringLiteral("schemaVersion"), 1}, {QStringLiteral("qtVersion"), QString::fromLatin1(qVersion())},
             {QStringLiteral("backend"), QSslSocket::activeBackend()}, {QStringLiteral("sslRuntimeVersion"), QSslSocket::sslLibraryVersionString()},
             {QStringLiteral("sslBuildVersion"), QSslSocket::sslLibraryBuildVersionString()},
             {QStringLiteral("modules"), checkedModules(prefix)}, {QStringLiteral("untrustedPeerRejected"), true},
             {QStringLiteral("trustErrors"), errors}};
+#ifdef Q_OS_WIN
+        result.insert(QStringLiteral("productManifest"), productManifest(prefix));
+#endif
         client.abort(); server.close();
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         std::cout << QJsonDocument(result).toJson(QJsonDocument::Compact).constData() << '\n';

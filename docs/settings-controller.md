@@ -151,6 +151,16 @@ Exec 转义依据 [Desktop Entry 规范](https://specifications.freedesktop.org/
 Windows SendInput / Linux XTEST 生成实际 OS 输入，验证全局激活、冲突、录入期间
 释放、保存失败后旧注册仍占用、候选释放和退出清理。实际 Qt 控件驱动设置保存与
 多语言切换，并输出真实窗口 PNG；这类输入不等于物理键盘、输入法或混合 DPI 验收。
+
+Linux 生产依赖是已有 Qt、Portal、GIO 加 xcb / xcb-keysyms / xkbcommon；
+快捷键的 `xcb-xtest` 调用只用于测试，应用滚动采集另有实际 XTEST 平台依赖。测试必须在真正 X11 / Xvfb 下运行原生分支，不能用 offscreen
+替代；独立 `--unavailable` 分支在 offscreen 下验证能力禁用、可复制命令与共享截图
+入口。Windows 链接 user32、advapi32、shell32，不增加常驻外部运行时。
+
+CMake 的 `HUHUCAPTURE_X11_TESTS` 默认开启，完整应用 CI 保持开启。
+受限开发环境可显式关闭 X11 测试注册以编译和验证其他目标；这不能记为原生输入
+测试通过。`BUILD_TESTING=OFF` 仅编译生产目标。Xvfb/真实桌面仍是原生测试的运行条件。
+
 真实激活正测使用 `Ctrl+Shift+F9`，候选与设置录入也使用 `Ctrl+Shift+Fn`，
 避开上述服务端 VT 动作。仍验证第一次实际输入，不预先注入“热身”按键、不
 禁用 XKB 系统动作，也不修改生产默认 F1 或用户自定义快捷键。
@@ -160,14 +170,6 @@ X11 测试逐项检查真实 XTEST 请求的原生错误和结束后的按键释
 grab 集变化和激活判定用于诊断原生失败。正式程序默认不启用这一分类；不记录其他
 按键的字符或按键内容。
 
-Linux 生产依赖是已有 Qt、Portal、GIO 加 xcb / xcb-keysyms / xkbcommon；
-`xcb-xtest` 只用于测试。测试必须在真正 X11 / Xvfb 下运行原生分支，不能用 offscreen
-替代；独立 `--unavailable` 分支在 offscreen 下验证能力禁用、可复制命令与共享截图
-入口。Windows 链接 user32、advapi32、shell32，不增加常驻外部运行时。
-
-CMake 的 `HUHUCAPTURE_NATIVE_INPUT_VALIDATION` 默认开启，双平台 Qt CI 保持开启。
-开发机缺少 XTEST 开发文件时，可显式关闭它以单独编译生产控制器；这会排除该原生
-输入测试目标，不能据此记录完整 Qt 测试通过。Xvfb/真实桌面仍是对应测试的运行条件。
 
 本地已实际完成 Qt 6.12.1 头文件、moc 和生产设置控制器的编译链接检查，以及生产
 Linux AutoStart 的真实文件事务和 GLib 子进程启动检查。独立 offscreen smoke 已

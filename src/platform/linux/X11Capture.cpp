@@ -419,6 +419,7 @@ bool X11Capture::desktop(X11Desktop& output, bool includeWindows)
 {
     const X11SignalMask signals;
     if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    if (!state_->connection && !initialize()) return false;
     if (!state_->connected() || !state_->screen) return false;
     X11Desktop result;
     const auto geometry = reply(xcb_get_geometry_reply(state_->connection, xcb_get_geometry(state_->connection, state_->screen->root), nullptr));
@@ -432,10 +433,49 @@ bool X11Capture::desktop(X11Desktop& output, bool includeWindows)
     result.cursorX = pointer->root_x; result.cursorY = pointer->root_y;
     output = std::move(result); state_->failure.clear(); return true;
 }
+bool X11Capture::windowRectangle(std::uintptr_t windowId, X11Rectangle& rectangle)
+{
+    const X11SignalMask signals;
+    if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    if (!state_->connection && !initialize()) return false;
+    if (!state_->connected() || !state_->screen) return false;
+    if (!windowId || windowId > (std::numeric_limits<xcb_window_t>::max)())
+        return state_->fail("The X11 control window identifier is invalid");
+    const auto window = static_cast<xcb_window_t>(windowId);
+    const auto attributes = reply(xcb_get_window_attributes_reply(state_->connection,
+        xcb_get_window_attributes(state_->connection, window), nullptr));
+    if (!attributes || attributes->map_state != XCB_MAP_STATE_VIEWABLE)
+        return state_->fail("The X11 control window is no longer visible");
+    const auto geometry = reply(xcb_get_geometry_reply(state_->connection,
+        xcb_get_geometry(state_->connection, window), nullptr));
+    const auto origin = reply(xcb_translate_coordinates_reply(state_->connection,
+        xcb_translate_coordinates(state_->connection, window, state_->screen->root, 0, 0), nullptr));
+    if (!geometry || !origin || !origin->same_screen || !geometry->width || !geometry->height)
+        return state_->fail("The X11 control window's physical bounds are unavailable");
+    X11Rectangle result{origin->dst_x, origin->dst_y, geometry->width, geometry->height};
+    if (const auto frame = state_->atom("_NET_FRAME_EXTENTS")) {
+        const auto value = reply(xcb_get_property_reply(state_->connection,
+            xcb_get_property(state_->connection, 0, window, frame, XCB_ATOM_CARDINAL, 0, 4), nullptr));
+        if (!value) return state_->fail("The X11 control window decorations are unavailable");
+        if (value->type != XCB_ATOM_NONE) {
+            if (value->type != XCB_ATOM_CARDINAL || value->format != 32 || value->value_len != 4 || value->bytes_after)
+                return state_->fail("The X11 control window decorations are invalid");
+            const auto* extents = static_cast<const std::uint32_t*>(xcb_get_property_value(value.get()));
+            if (!std::all_of(extents, extents + 4, [](auto v) { return v <= 65535; }))
+                return state_->fail("The X11 control decorations exceed the native coordinate budget");
+            result.x -= static_cast<int>(extents[0]); result.y -= static_cast<int>(extents[2]);
+            result.width += static_cast<int>(extents[0] + extents[1]);
+            result.height += static_cast<int>(extents[2] + extents[3]);
+        }
+    }
+    if (!state_->connected()) return false;
+    rectangle = result; state_->failure.clear(); return true;
+}
 bool X11Capture::capture(int x, int y, int width, int height, bool includeCursor)
 {
     const X11SignalMask signals;
     if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    if (!state_->connection && !initialize()) return false;
     if (!state_->connected() || !state_->screen) return false;
     const auto layout = Core::pixelLayout(width, height, 4);
     if (!layout || layout->bytes > maximumBytes || width > 65535 || height > 65535 || !validPosition(x, y))
@@ -479,6 +519,7 @@ bool X11Capture::captureGuarded(int x, int y, int width, int height, bool includ
 {
     const X11SignalMask signals;
     if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    if (!state_->connection && !initialize()) return false;
     if (!state_->connected() || !state_->screen || controls.empty() || controls.size() > 64)
         return state_->fail("The recording has no bounded native control-surface guard");
     // Geometry validation and root readback must not race another client's
@@ -499,6 +540,7 @@ bool X11Capture::moveCursor(int x, int y, int& actualX, int& actualY)
 {
     const X11SignalMask signals;
     if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    if (!state_->connection && !initialize()) return false;
     if (!state_->connected() || !state_->screen) return false;
     if (!validPosition(x, y)) return state_->fail("The cursor target exceeds X11 coordinates");
     if (!state_->checked(xcb_warp_pointer_checked(state_->connection, XCB_NONE, state_->screen->root,
@@ -511,6 +553,7 @@ bool X11Capture::scroll(int x, int y, int steps)
 {
     const X11SignalMask signals;
     if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    if (!state_->connection && !initialize()) return false;
     if (!state_->connected() || !state_->screen) return false;
     int actualX{}, actualY{};
     if (!moveCursor(x, y, actualX, actualY)) return false;
@@ -521,6 +564,7 @@ bool X11Capture::scrollAtPointer(const X11Rectangle& selection, int steps)
 {
     const X11SignalMask signals;
     if (!signals.valid()) return state_->fail("Cannot prepare the capture worker's native signal mask");
+    if (!state_->connection && !initialize()) return false;
     state_->scrollPaused = false;
     if (!state_->connected() || !state_->screen) return false;
     const auto pointer = reply(xcb_query_pointer_reply(state_->connection, xcb_query_pointer(state_->connection, state_->screen->root), nullptr));

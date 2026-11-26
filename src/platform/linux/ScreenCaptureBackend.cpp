@@ -47,8 +47,11 @@ CaptureDesktop converted(const Linux::X11Desktop& native)
     return value;
 }
 }
-struct ScreenCaptureBackend::State { Linux::X11Capture capture; };
-ScreenCaptureBackend::ScreenCaptureBackend() : state_(std::make_unique<State>()) {}
+struct ScreenCaptureBackend::State {
+    Linux::X11Capture capture;
+    explicit State(std::stop_token lifetime) : capture(lifetime) {}
+};
+ScreenCaptureBackend::ScreenCaptureBackend(std::stop_token lifetime) : state_(std::make_unique<State>(lifetime)) {}
 ScreenCaptureBackend::~ScreenCaptureBackend() = default;
 Capture::Failure ScreenCaptureBackend::initialize()
 { return state_->capture.initialize() ? Failure{} : failed(state_->capture); }

@@ -6,6 +6,7 @@
 #include <QGuiApplication>
 #include <QPointer>
 #include <QThread>
+#include <QThreadPool>
 #include <QTimer>
 #include <QWindow>
 #include <QtConcurrent/QtConcurrentRun>
@@ -35,12 +36,16 @@ struct FileRevealer::State {
     QString path;
     bool select{};
     QPointer<QFutureWatcher<RevealResult>> worker;
+    QThreadPool pool;
+    quint64 pendingResults{};
+    bool stopping{}, shutdownReported{};
 #ifndef Q_OS_WIN
     std::unique_ptr<Platform::Linux::DesktopFiles> desktop;
 #endif
 };
 FileRevealer::FileRevealer(QObject* parent) : QObject(parent), state_(std::make_unique<State>())
 {
+    state_->pool.setMaxThreadCount(1);
 #ifndef Q_OS_WIN
     state_->desktop = std::make_unique<Platform::Linux::DesktopFiles>();
     connect(state_->desktop.get(), &Platform::Linux::DesktopFiles::completed, this,
@@ -54,7 +59,7 @@ FileRevealer::FileRevealer(QObject* parent) : QObject(parent), state_(std::make_
         });
 #endif
 }
-FileRevealer::~FileRevealer() { state_->stop.request_stop(); }
+FileRevealer::~FileRevealer() { state_->stop.request_stop(); state_->pool.waitForDone(); }
 bool FileRevealer::busy() const noexcept { return state_->active != 0; }
 quint64 FileRevealer::revealFile(std::shared_ptr<const Media::MediaLease> lease, QWindow* origin)
 {
@@ -67,6 +72,7 @@ quint64 FileRevealer::openDirectory(const QString& path, QWindow* origin, bool c
 quint64 FileRevealer::start(std::shared_ptr<const Media::MediaLease> lease, QString path,
     bool selectFile, bool createIfMissing, QWindow* origin)
 {
+    if (QThread::currentThread() == thread() && state_->stopping) return 0;
     auto token = state_->sequence.fetch_add(1) + 1;
     if (!token) token = state_->sequence.fetch_add(1) + 1;
     if (QThread::currentThread() != thread()) {
@@ -108,7 +114,7 @@ quint64 FileRevealer::start(std::shared_ptr<const Media::MediaLease> lease, QStr
             if (failure) finish(token, {failure, RevealEffect::None, state_->path});
 #endif
         });
-        watcher->setFuture(QtConcurrent::run([readLease = state_->lease, path = state_->path,
+        watcher->setFuture(QtConcurrent::run(&state_->pool, [readLease = state_->lease, path = state_->path,
             selectFile, createIfMissing, stop
 #ifdef Q_OS_WIN
             , owner
@@ -169,7 +175,27 @@ void FileRevealer::finish(quint64 token, RevealResult result)
         }
         state_->lease.reset(); state_->path.clear(); state_->active = 0;
     }
-    QTimer::singleShot(0, this, [this, token, result = std::move(result)] { Q_EMIT finished(token, result); });
+    ++state_->pendingResults;
+    QTimer::singleShot(0, this, [this, token, result = std::move(result)] {
+        --state_->pendingResults;
+        const QPointer<FileRevealer> life(this);
+        Q_EMIT finished(token, result);
+        if (life) finishShutdown();
+    });
+}
+
+void FileRevealer::shutdown()
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (std::exchange(state_->stopping, true)) return;
+    cancel(state_->active);
+    QTimer::singleShot(0, this, [this] { finishShutdown(); });
+}
+void FileRevealer::finishShutdown()
+{
+    if (!state_->stopping || state_->shutdownReported || busy() || state_->pendingResults) return;
+    state_->shutdownReported = true;
+    Q_EMIT shutdownFinished();
 }
 
 } // namespace HuhuCapture::Desktop

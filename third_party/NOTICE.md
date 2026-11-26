@@ -54,6 +54,7 @@ licenses apply independently of the root application license.
 | LocalSend core | `localsend/localsend` `44f48f18a5503c43873570ff489d27ff1983e198`, core crate 0.1.0 | Apache-2.0; original [LICENSE](localsend/LICENSE), [file provenance](localsend/upstream-files.json) and [adaptations](localsend/patches/native-core.patch) retained. |
 | infer 0.22.0 | `bojand/infer` `cb05400c5f43e07200fbc1c5753e15946e9b1de8` | MIT, Bojan; [license](localsend/infer.LICENSE). The crate checksum is in the resolved Cargo.lock. |
 | gif 0.13.3 | `image-rs/image-gif` `acf2f6f7e6195962a9f455dab50a278b7dabc884` | MIT OR Apache-2.0, image-rs Developers / nwin; [sources and checksums](gif/upstream.json), [MIT](gif/LICENSE-MIT), [Apache](gif/LICENSE-APACHE). Reuses the existing gifski dependency for strict complete-file decoding; no new GIF parser. |
+| gif-dispose 5.0.1 | `kornelski/image-gif-dispose` `e50dcfbd38056d75184720e6c45daf23db16cecb` | The original manifest declares MIT OR Apache-2.0 and credits Kornel Lesiński. This distribution selects Apache-2.0 and retains the separately sourced [standard text](rust-notices/standard-licenses/Apache-2.0.txt); [exact source/author/text binding](rust-notices/upstream.json). The standard text is not described as a license file present in the original crate. |
 | windows-sys 0.52.0 | `microsoft/windows-rs` `3a605cba064b26f2a198ac58085f8c8836f47c38` | MIT OR Apache-2.0, Microsoft Corporation; [source and checksum](windows-rs/upstream.json), [MIT](windows-rs/LICENSE-MIT), [Apache](windows-rs/LICENSE-APACHE). Reuses the locked official bindings to identify the actual open Windows file handle. |
 | libportal 0.11.0 | `flatpak/libportal` `fc4d62cfe131e8494c82f597f92b2234d584c367` | LGPL-3.0-only; [COPYING](patches/libportal/COPYING) and [GPL text](patches/libportal/COPYING.GPL3) retained with the [reviewed patch](patches/libportal/0001-capture-request-lifetime-and-async-fd.patch). |
 | PipeWire 1.6.11 client | `PipeWire/pipewire` `4287f31510771fc999f8a58a024c81ca10b8d55f` | MIT for the selected client/examples, Wim Taymans and PipeWire contributors; [original COPYING](patches/pipewire/COPYING), [exact source blobs and controlled patches](../docs/linux-pipewire.md). The host daemon is not an application deployment dependency. |
@@ -62,16 +63,20 @@ licenses apply independently of the root application license.
 | Sway 1.11 and Wayland 1.23.1, validation desktop only | `swaywm/sway` `990b23c0e584114c3694447344d6bbf44b2d748f`; `wayland-mirror/wayland` `a9fec8dd65977c57f4039ced34327204d9b9d779` | MIT / Expat, the Sway and Wayland contributors. Exact LICENSE/COPYING retained in the private desktop prefix and CI evidence. These services/libraries are not bundled as application runtime replacements. |
 | wlroots 0.19.0, libdrm 2.4.124 and pixman 0.44.0, validation desktop only | Deepin source imports `826be6494c201ca887cddd8deb07d70c13595dd2`, `2c5b3b1dd9c5ba09900dc36f5ad7f921ac9ac732`, `02227c183c4e2f35501544d0dd1fa456e36837eb`; canonical upstream and repositories in the dependency lock | MIT and retained per-file kernel-header notices; wlroots authors include Drew DeVault, Jari Vetoniemi and contributors; libdrm/pixman retain their original multi-author notices. The import SHAs are not claimed as upstream Git commits. Original LICENSE/COPYING/copyright records are copied by the private build; [rationale and scope](../docs/validation-desktop.md). |
 | libinput 1.26.0, validation desktop only | `deepin-community/libinput` source import `87f1dabb26a8c7b0a2b3d5043235c004c3ca26c7`; upstream `gitlab.freedesktop.org/libinput/libinput` | MIT / Expat, Simon Thum, Kristian Høgsberg, Intel, Benjamin Franzke, Collabora, Jonas Ådahl, Red Hat and source-file contributors. Original COPYING and per-file Linux input-header notices are retained. The private build supplies Sway's required public types while its hardware input backend stays disabled; no libinput is added to the product. |
-| FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Linux software validation enables GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The Windows inspection-only profile disables encoders, x264 and network and retains LGPL-2.1-or-later. Both apply the recorded [strict MOV patch](patches/ffmpeg/upstream.json); the mux example retains Fabrice Bellard's MIT notice and frame-duration / finalization-error fixes. |
+| FFmpeg 9.0.2 | `FFmpeg/FFmpeg` `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | Linux software validation enables GPL / version3 / libx264, without nonfree; [GPL v3](ffmpeg-examples/COPYING.FFMPEG.GPL3). The Windows inspection and software-cover profile disables encoders, x264 and network and retains LGPL-2.1-or-later. Both apply the recorded [strict MOV and MPEG audio frame-extent patches](patches/ffmpeg/upstream.json); the mux example retains Fabrice Bellard's MIT notice and frame-duration / finalization-error fixes. |
 | FFmpeg MOV box traversal | Same FFmpeg 9.0.2 commit, `libavformat/mov.c` | LGPL-2.1-or-later, Fabrice Bellard, Baptiste Coudurier and the named original contributors; [exact source and adaptation](ffmpeg-mov/upstream.json), [full LGPL text](ffmpeg-mov/COPYING.LGPLv2.1). Only top-level physical bounds are reused in the shared MP4 preflight. |
 | x264 API build 164 | VideoLAN x264 commit `3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3`, fetched from `mirror/x264` | GPL-2.0-or-later, x264 project; [license text](ffmpeg-examples/COPYING.x264). Runtime use through FFmpeg's existing libx264 adapter. |
 | x265 4.1, validation fixtures only | Official VideoLAN archive with the recorded SHA-512 and reviewed source blobs in [hevc-fixtures/upstream.json](hevc-fixtures/upstream.json) | GPL-2.0-or-later; [original COPYING](hevc-fixtures/COPYING.x265). Two independent upstream CLI builds produce real Main / Main10 inputs; x265 is not linked into or distributed with the product. |
 | KWindowSystem 6.32.0 | `KDE/kwindowsystem` `870fed584663656db8b5e3d4ec1a7048b5eff25f` | LGPL-2.0-or-later, Kai Uwe Broulik; only the two asynchronous xdg-foreign export classes are adapted. [Exact source blobs and changes](kwayland-parent/upstream.md), [license](kwayland-parent/LICENSES/LGPL-2.0-or-later.txt). |
 | QHotkey X11 implementation, source reference/adaptation | `Skycoder42/QHotkey` `4e3a244d87f1f7e741e1395f2ffe825f3a8ada45`, project version 1.5.0 | BSD-3-Clause, Copyright (c) 2016 Felix Barz; [unmodified license](qhotkey/LICENSE), [exact source blobs and adaptation](qhotkey/upstream.md). Passive-grab and lock-modifier behavior is adapted to the shared settings service's checked XCB backend; the QHotkey library is not linked. |
 | xdg-foreign unstable v2 protocol | QtBase `5af1a37e31a869cd6eb8a73d82e2c71a450e6634`, source blob `cc3271dca4d6211bf6d04c34c0ca973c52f9b552` | MIT, Red Hat Inc. 2015–2016; the complete notice is retained in the unmodified [protocol XML](wayland-protocols/xdg-foreign-unstable-v2.xml). |
-| KWindowSystem 6.32.0 activation manager | `KDE/kwindowsystem` `870fed584663656db8b5e3d4ec1a7048b5eff25f` | LGPL-2.0-or-later, Aleix Pol Gonzalez (2021); only the existing-token `xdg_activation_v1` manager is adapted. [Exact source and scope](kwayland-activation/upstream.md), [full license](kwayland-activation/LICENSES/LGPL-2.0-or-later.txt). |
-| xdg-activation v1 protocol | QtBase `5af1a37e31a869cd6eb8a73d82e2c71a450e6634`, source blob `d87e633745b870ab479701048416edd14692afde` | MIT, Aleix Pol Gonzalez and Carlos Garnacho (2020); complete original notice in the unmodified [protocol XML](wayland-protocols/xdg-activation-v1.xml). |
-| Windows SDK FileStream adaptation | `microsoft/Windows-classic-samples` `434f6002bdf9cf9829406c3ff2b33387982d6168` | MIT, Microsoft Corporation; [full license](windows-sdk-stream/LICENSE), [original file/blob and changes](windows-sdk-stream/upstream.json). Wraps an existing file object for the retained MF encoder; not a replacement codec or container. |
+| PipeWire audio capture example | Same PipeWire 1.6.11 commit, `src/examples/audio-capture.c` | MIT, Wim Taymans; [original COPYING](pipewire-audio/COPYING) and [source/changes](pipewire-audio/upstream.json). Native stream negotiation and processing are adapted for the bounded audio source. |
+| Windows SDK sample IStream | `microsoft/Windows-classic-samples` `434f6002bdf9cf9829406c3ff2b33387982d6168` | MIT, Microsoft Corporation; [original license](windows-sdk-stream/LICENSE), [source and ownership changes](windows-sdk-stream/upstream.json). The adapter retains an already checked file object for Media Foundation output. |
+
+The retained Qt-private activation adapter consumes a real existing token after
+checking the actual surface role. Its source review and version restriction are
+recorded in [window-activation/upstream.json](window-activation/upstream.json);
+the separate retained KWindowSystem adaptation has its own original notices.
 
 The shared clipboard, recycle and file-reveal services reuse the existing native
 Windows implementation and public Qt/GIO APIs. Their exact audited source files,
@@ -91,8 +96,16 @@ an explicit CI gate.
 The software-codec probe also adapts the decode/drain API flow from FFmpeg's
 `doc/examples/demux_decode.c`, Copyright (c) 2012 Stefano Sabatini; the
 [full MIT notice](ffmpeg-examples/demux-decode-license.txt) and exact source blob
-are retained. The complete-file inspection and fixture remux flow additionally retain Stefano Sabatini's [remux notice](ffmpeg-examples/remux-license.txt) and [exact source records](ffmpeg-examples/video-inspection-upstream.json). These media service candidates are subject to the actual [malformed-file gates](../docs/video-inspection.md). This is dependency validation, not a production Linux recorder;
-see [scope and reproducible inputs](../docs/software-codecs.md).
+are retained. The complete-file inspection and fixture remux flow additionally retain Stefano Sabatini's [remux notice](ffmpeg-examples/remux-license.txt) and [exact source records](ffmpeg-examples/video-inspection-upstream.json). These media services remain subject to the actual [malformed-file gates](../docs/video-inspection.md).
+The retained official MOV demuxer and MPEG audio parser feed strict complete
+decoding; every parsed MP3 output is compared with the physical sample index of
+the same owned file. The controlled MPEG audio frame-extent patch preserves
+Fabrice Bellard's LGPL-2.1-or-later source attribution and rejects extra/skipped
+frame bytes only under `AV_EF_EXPLODE`. Its exact original blob and patch hash
+are recorded in [FFmpeg patch provenance](patches/ffmpeg/upstream.json).
+The unified application uses them for its Linux recorder; component checks do not establish
+real audio-device or long-duration recording acceptance. See [the application boundary](../docs/qt-application.md)
+and [reproducible inputs](../docs/software-codecs.md).
 
 LocalSend's application UI and Flutter/Dart runtime are not included. Unselected
 upstream Rust APIs remain in the audited source to keep the fork reviewable; the
@@ -100,3 +113,11 @@ strict native v2 entry point and its limits are documented in
 [`docs/localsend-core.md`](../docs/localsend-core.md). Rust dependencies retain
 their own Cargo.lock identities and licenses; their final aggregated binary
 distribution requirements remain a release gate.
+
+Additional original notices omitted from exact locked crates are retained under
+[rust-notices](rust-notices/upstream.json). Their binding records preserve the
+original Cargo source, checksum inventory, authors, upstream revision and notice
+bytes. Explicit standard-license selections use a separately identified source;
+neither form changes Cargo's original license declaration or vendor files. These
+notices are installed from the shared runtime notice inventory and do not by
+themselves establish the application's complete corresponding-source closure.

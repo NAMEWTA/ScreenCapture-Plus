@@ -1,7 +1,8 @@
 // Reuses PR #7's controlled-pixel -> production codec/session test method.
 // Copyright (c) 2026 NAMEWTA, MIT. These are real codec/filesystem tests with
 // explicit generated input, never evidence of Portal or audio-device capture.
-#include "platform/linux/LiveRecording.h"
+#include "recording/PlatformRecording.h"
+#include "services/capture/LiveFrameReader.h"
 #include "recording/RecordingSession.h"
 #include "services/media/GifInspection.h"
 #include "services/media/VideoInspection.h"
@@ -26,7 +27,7 @@
 namespace core = HuhuCapture::Core;
 namespace rec = HuhuCapture::Recording;
 namespace media = HuhuCapture::Media;
-namespace native = HuhuCapture::Platform::Linux;
+namespace capture = HuhuCapture::Capture;
 using namespace std::chrono_literals;
 namespace {
 void require(bool value, const char* detail)
@@ -36,8 +37,8 @@ void require(bool value, const char* detail)
 // Generated content isolates the worker/codec contract from native hardware.
 class Pixels final {
 public:
-    enum class Mode { Static, Changing, PermissionLost, OrientationChanged, RequestedStop, UnexpectedStop };
-    static constexpr std::uint64_t sourceId = 41, generation = 3;
+    enum class Mode { Static, Changing, PermissionLost, OrientationChanged, RequestedStop, UnexpectedStop, Paused, Discontinuity };
+    static constexpr std::uint64_t sourceId = 41;
     explicit Pixels(Mode mode) : mode_(mode), pool_({4, 64u * 48u * 4u * 4u, 128})
     {
         auto format = core::packedFrameFormat(core::FramePixelFormat::Bgra8, 64, 48);
@@ -48,6 +49,10 @@ public:
             std::stop_callback terminate(emergency, [this] { stop_.request_stop(); });
             core::FrameSourceTerminal terminal;
             try {
+                {
+                    std::unique_lock lock(beginMutex_);
+                    begin_.wait(lock, stop_.get_token(), [this] { return begun_; });
+                }
                 unsigned sequence{};
                 std::mutex mutex; std::condition_variable_any wait;
                 while (!stop_.stop_requested()) {
@@ -55,6 +60,11 @@ public:
                     wait.wait_for(lock, stop_.get_token(), mode_ == Mode::Static ? 5s : 20ms, [] { return false; });
                     if (stop_.stop_requested()) break;
                     ++sequence;
+                    if (mode_ == Mode::Paused && sequence == 6) {
+                        activity_->store(core::LiveSourceActivity::Paused, std::memory_order_release);
+                        wait.wait_for(lock, stop_.get_token(), 5s, [] { return false; });
+                        continue;
+                    }
                     if (mode_ == Mode::PermissionLost && sequence == 6) {
                         terminal = {core::FrameSourceEnd::PermissionDenied, EACCES, "The explicit input fixture revoked its source"}; break;
                     }
@@ -74,15 +84,32 @@ public:
             activity_->store(core::LiveSourceActivity::Closed, std::memory_order_release);
             queue_->close(std::move(terminal));
             returned_.store(true, std::memory_order_release);
+            finished_.set_value();
         });
     }
     ~Pixels() { stop_.request_stop(); if (producer_.joinable()) producer_.join(); }
-    core::LiveSourceConsumer claim()
+    void beginProduction()
     {
-        return {sourceId, generation, {4, 2, 56, 44}, queue_, activity_, stop_, std::move(seed_), core::MediaClock::now()};
+        { std::lock_guard lock(beginMutex_); begun_ = true; }
+        begin_.notify_all();
+    }
+    rec::Backend backend(unsigned invalidContract = 0)
+    {
+        require(bool(seed_), "One actual selected preview can be consumed only once");
+        rec::FrameSourceContract contract{seed_.format(), seed_.metadata(), seed_.formatGeneration(), {64, 48}};
+        readerState_ = std::make_shared<capture::LiveFrameReaderState>();
+        auto& consumer = readerState_->consumer;
+        consumer.sourceId = sourceId; consumer.generation = seed_.formatGeneration();
+        consumer.selection = {4, 2, 56, 44}; consumer.frames = queue_; consumer.activity = activity_; consumer.stop = stop_;
+        consumer.producerFinished = finished_.get_future().share(); consumer.firstFrame = std::move(seed_);
+        consumer.claimedAt = core::MediaClock::now();
+        if (invalidContract == 1) ++contract.preview.sourceId;
+        if (invalidContract == 2) ++contract.generation;
+        return rec::frameRecordingBackend(capture::makeLiveFrameReader(readerState_), contract);
     }
     bool returned() const { return returned_.load(std::memory_order_acquire); }
-    bool drained() const { return queue_->closed() && !queue_->statistics().queued; }
+    bool drained() const
+    { return returned() && queue_->closed() && !queue_->statistics().queued && readerState_ && readerState_->returned.load(std::memory_order_acquire); }
 private:
     core::FrameLease frame(unsigned sequence)
     {
@@ -100,7 +127,7 @@ private:
         metadata.sessionId = 7; metadata.sourceId = sourceId;
         metadata.timing.receivedAt = core::MediaClock::now();
         metadata.timing.sourceSequence = sequence;
-        metadata.timing.discontinuity = sequence == 0; // actual PW first-format convention
+        metadata.timing.discontinuity = sequence == 0 || (mode_ == Mode::Discontinuity && sequence >= 6); // actual PW first-format convention
         if (mode_ == Mode::OrientationChanged && sequence >= 6) metadata.transform = core::FrameTransform::Rotate180;
         return std::move(*target).publish(metadata);
     }
@@ -112,6 +139,11 @@ private:
     std::stop_source stop_;
     core::FrameLease seed_;
     std::atomic_bool returned_{};
+    std::promise<void> finished_;
+    std::shared_ptr<capture::LiveFrameReaderState> readerState_;
+    std::mutex beginMutex_;
+    std::condition_variable_any begin_;
+    bool begun_{};
     std::jthread producer_;
 };
 
@@ -122,8 +154,6 @@ rec::BackendRequest request(rec::Format format)
     value.framesPerSecond = format == rec::Format::Gif ? 16 : 30;
     value.maximumDuration = 240ms; value.firstFrameTimeout = 1s;
     value.systemAudio = false; value.microphone = false;
-    value.coordinates = rec::CoordinateSpace::AuthorizedSourcePixels;
-    value.sourceId = Pixels::sourceId; value.generation = Pixels::generation;
     return value;
 }
 std::shared_ptr<media::MediaArchiveService> archive(const QString& path)
@@ -136,30 +166,34 @@ std::shared_ptr<media::MediaArchiveService> archive(const QString& path)
 void encode(media::MediaArchiveService& archive, rec::Format format, Pixels::Mode mode)
 {
     Pixels pixels(mode);
-    auto backend = native::makeLiveRecordingBackend(pixels.claim());
-    const auto input = request(format);
+    auto backend = pixels.backend();
+    auto input = request(format);
+    if (mode != Pixels::Mode::Static && mode != Pixels::Mode::Changing) input.maximumDuration = 750ms;
     auto staging = archive.createStaging(); require(!staging.failure, "Create actual owned live-recording output");
     std::error_code error; auto writer = staging.file.openWriter(error); require(writer && !error, "Open identity-checked output");
     unsigned prepared{}, finalizing{};
     const rec::BackendEvents events{
         [&](const rec::PreparedRecording& value) {
             ++prepared;
-            require(value.coordinates == input.coordinates && value.sourceId == Pixels::sourceId &&
-                value.generation == Pixels::generation && value.region == input.region,
-                "Actual prepared media preserves the exact source selection and identity");
-        }, [&] { ++finalizing; }};
+            require(value.source == rec::CaptureSource::PipeWire && value.region == input.region,
+                "Actual prepared media preserves its exact selected pixels and actual source kind");
+            pixels.beginProduction();
+        }, [&] {
+            require(pixels.drained(), "The actual producer future and queue drain before codec finalization");
+            ++finalizing;
+        }};
     const auto result = backend(input, std::move(writer), events, {});
-    require(pixels.drained() && result.sourceTerminal && prepared == 1 && finalizing == 1 && result.media.framesWritten >= 2,
+    require(pixels.drained() && prepared == 1 && finalizing == 1 && result.media.framesWritten >= 2,
         "The real media worker drains the producer queue and announces prepared/finalizing once");
     const bool failure = mode == Pixels::Mode::PermissionLost || mode == Pixels::Mode::OrientationChanged ||
-        mode == Pixels::Mode::UnexpectedStop;
+        mode == Pixels::Mode::UnexpectedStop || mode == Pixels::Mode::Paused || mode == Pixels::Mode::Discontinuity;
     if (failure) {
         require(result.media.firstError && result.media.firstError->stage == core::RecordingStage::Capture &&
             result.media.finalized && !result.media.canArchive() && !result.detail.empty(),
             "Real input identity/terminal failure survives complete codec cleanup");
         const auto retained = staging.file.retainForRecovery();
-        const auto inspection = media::inspectVideo(retained);
-        require(!inspection.failure && inspection.frames == result.media.framesWritten,
+        const auto inspection = format == rec::Format::Gif ? media::inspectGif(retained) : media::inspectVideo(retained);
+        require(!inspection.failure && inspection.frames >= 1 && (format == rec::Format::Gif || inspection.frames == result.media.framesWritten),
             "Failure retains every actual submitted video frame in recoverable finalized media");
     } else {
         if (!result.media.canArchive()) throw std::runtime_error("Actual live encoder failed: " + result.detail);
@@ -186,24 +220,24 @@ void encode(media::MediaArchiveService& archive, rec::Format format, Pixels::Mod
 }
 void admission(media::MediaArchiveService& archive)
 {
-    for (unsigned variant = 0; variant < 4; ++variant) {
+    for (unsigned variant = 0; variant < 5; ++variant) {
         Pixels pixels(Pixels::Mode::Static);
-        auto backend = native::makeLiveRecordingBackend(pixels.claim());
+        auto backend = pixels.backend(variant == 1 ? 1 : variant == 2 ? 2 : 0);
         auto input = request(rec::Format::Mp4);
         std::stop_source stop;
         if (variant == 0) stop.request_stop();
-        if (variant == 1) input.coordinates = rec::CoordinateSpace::DesktopPixels;
-        if (variant == 2) ++input.sourceId;
-        if (variant == 3) ++input.region.width;
+        if (variant == 3) input.region.width = 68; // even alignment cannot put it inside the authorized 64px source
+        if (variant == 4) input.maximumFrameBytes = 0;
         auto staged = archive.createStaging(); require(!staged.failure, "Create real preflight output");
         std::error_code error; auto writer = staged.file.openWriter(error);
         const auto result = backend(input, std::move(writer), {}, stop.get_token());
         require(pixels.drained() && !result.prepared && !result.media.framesWritten &&
             (variant == 0 ? !result.media.firstError && result.stopRequested : result.media.firstError.has_value()) &&
             QFileInfo(staged.file.path()).size() == 0 && !staged.file.discard(),
-            "Pre-cancel/coordinate/identity/selection refusal closes the actual source and empty output");
+            "Pre-cancel/identity/generation/selection/budget refusal drains the actual source and empty output");
     }
 }
+
 void session(const QString& path)
 {
     auto files = archive(path);
@@ -212,7 +246,9 @@ void session(const QString& path)
     std::optional<rec::SessionResult> completed;
     QObject::connect(&recording, &rec::RecordingSession::finished, &recording,
         [&](const auto& value) { completed = value; });
-    const auto token = recording.start(request(rec::Format::Mp4), native::makeLiveRecordingBackend(pixels.claim()));
+    QObject::connect(&recording, &rec::RecordingSession::prepared, &recording,
+        [&](quint64, const auto&) { pixels.beginProduction(); });
+    const auto token = recording.start(request(rec::Format::Mp4), pixels.backend());
     require(token && !recording.start(request(rec::Format::Mp4)), "A source-specific provider uses the one shared session admission");
     QElapsedTimer until; until.start();
     unsigned beats{};
@@ -245,8 +281,11 @@ int main(int argc, char** argv)
         encode(*files, rec::Format::Mp4, Pixels::Mode::OrientationChanged);
         encode(*files, rec::Format::Mp4, Pixels::Mode::RequestedStop);
         encode(*files, rec::Format::Mp4, Pixels::Mode::UnexpectedStop);
+        encode(*files, rec::Format::Mp4, Pixels::Mode::Paused);
+        encode(*files, rec::Format::Mp4, Pixels::Mode::Discontinuity);
+        encode(*files, rec::Format::Gif, Pixels::Mode::Discontinuity);
         admission(*files); session(directory.filePath(QStringLiteral("session")));
-        std::cout << "PASS actual frame pool/queue, shared normalization, GIF/H.264, strict decoding, source terminal, source-specific Qt session and durable archive\n";
+        std::cout << "PASS actual frame pool/queue, single production reader, shared normalization, GIF/H.264, strict decoding, requested/unexpected terminal and pause, source-specific Qt session and durable archive\n";
         std::cout << "NOT RUN here: real desktop authorization/capture, physical audio, pause recovery or A/V drift; these inputs are explicit codec/worker fixtures\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL live recording: " << error.what() << '\n'; return 1; }

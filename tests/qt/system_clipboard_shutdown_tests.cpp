@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 namespace desktop = HuhuCapture::Desktop;
@@ -219,6 +220,24 @@ void queuedWrongThreadDrain()
     require(rejected.get() == 0 && fixture.removalAvailable(), "Post-shutdown cross-thread rejection releases its own unused preparation");
     events(); receipts.exactlyOnce(); require(receipts.results.size() == 1 && shutdowns == 1, "Rejected zero tokens never invent extra receipts");
 }
+
+void exceptionalDestructionDrainsOwnedTask()
+{
+    Fixture fixture;
+    auto service = std::make_unique<desktop::SystemClipboard>();
+    auto prepared = fixture.prepare();
+    PoolBarrier barrier;
+    require(service->publish(prepared, nullptr) && service->busy() && !fixture.removalAvailable(),
+        "The service really owns queued validation and an archive lease before destruction");
+    // Qt may execute its queued owned task while waitForFinished joins it.
+    // Otherwise release the real global-pool barrier from an independent
+    // thread. Neither route pumps GUI callbacks or fabricates a result.
+    std::jthread release([&barrier] { QThread::msleep(100); barrier.release(); });
+    service.reset();
+    require(fixture.removalAvailable(),
+        "Exceptional service destruction joins the actual owned task before releasing the archive reservation");
+    require(QFileInfo::exists(fixture.entry.path), "Exceptional destruction preserves the complete user file");
+}
 }
 
 int main(int argc, char** argv)
@@ -226,6 +245,7 @@ int main(int argc, char** argv)
     try {
         QApplication application(argc, argv); application.setQuitOnLastWindowClosed(false);
         cancelledWorkerDrain(); reusableAfterCancelledWorker(); receiptAndReentrancyDrain(); queuedWrongThreadDrain();
+        exceptionalDestructionDrainsOwnedTask();
         std::cout << "Actual Qt worker/receipt shutdown, bounded cancelled validation and real media lease release passed.\n"
                      "This lifecycle test does not claim a desktop clipboard receiver or process-exit persistence.\n";
         return 0;

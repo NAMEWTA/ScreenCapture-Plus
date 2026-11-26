@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/development-dependencies.yml'
       - 'scripts/bundle-development-dependencies.py'
+      - 'scripts/build-software-media.py'
+      - 'build/dependencies.lock.json'
   workflow_dispatch:
 
 permissions:
@@ -78,6 +80,16 @@ jobs:
           pkg-config --modversion libportal libportal-qt6 libpipewire-0.3 gio-2.0 wayland-client xcb-shm xcb-xfixes xcb-xtest xcb-shape
           test "$(pkg-config --variable=prefix gio-2.0)" = "$(pwd)/artifacts/relocated-development/sdk/system/usr"
           test "$(pkg-config --variable=prefix libportal)" = "$(pwd)/artifacts/relocated-development/sdk/portal"
+          python3 - <<'PY'
+          from pathlib import Path
+          import ctypes
+          runtime=Path('artifacts/relocated-development/sdk/system/usr/lib/x86_64-linux-gnu').resolve()
+          for name in ('libxcb-xtest.so.0','libssl.so.3','libcrypto.so.3'):
+              path=runtime/name
+              if not path.is_file() or not path.resolve().is_relative_to(runtime):
+                  raise RuntimeError('The actual loader SONAME is absent from the restored SDK: '+name)
+              ctypes.CDLL(str(path))
+          PY
           cmake -S . -B artifacts/cmake/relocated-development -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON
           cmake --build artifacts/cmake/relocated-development --target portal_capture_probe pipewire_capture_probe pipewire_fd_tests qt_software_codec --parallel 2
           ctest --test-dir artifacts/cmake/relocated-development -R '^(pipewire_fd_tests|qt_software_codec)$' --output-on-failure

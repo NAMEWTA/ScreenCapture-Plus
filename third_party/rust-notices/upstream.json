@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "scope": "Exact additional original notices for already Cargo-verified package bytes; metadata and license expressions remain unchanged",
+  "scope": "Exact additional notices for Cargo-verified package bytes; explicitly selected standard-license text is identified separately and original metadata is retained",
   "correspondingSourceComplete": false,
   "sourceReview": "The original Windows/Linux 24f vendor inventories match each other. Commit binding compares every authored file, mapping Cargo.toml.orig and external readmes; Cargo generated manifests/locks are retained separately. GNU import-library files exactly match the upstream 2018 commit named Publish 0.3.4; the original crates contain no publication VCS record, so this is content equivalence and does not assert the upload commit. No later same-version tag is substituted.",
   "crates": [
@@ -41,6 +41,51 @@
           "gitBlobSha1": "290e7b9be19d39a81c8eb24c75a6b5f1e57fea71",
           "size": 1060,
           "sha256": "a5c61b93b6ee1d104af9920cf020ff3c7efe818e31fe562c72261847a728f513"
+        }
+      ]
+    },
+    {
+      "name": "gif-dispose",
+      "version": "5.0.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "registryChecksum": "5e1aa07391f3d9c279f388cea6faf291555dd891df59bed01d4378583df946ac",
+      "cargoChecksumFileSha256": "acc7982f20494668cc290e077442fc1f01b046db257e3c0689ec9fabe1f9237f",
+      "declaredLicense": "MIT OR Apache-2.0",
+      "declaredRepository": "https://github.com/kornelski/image-gif-dispose.git",
+      "authors": [
+        "Kornel Lesiński <kornel@geekhood.net>"
+      ],
+      "upstreamRepository": "https://github.com/kornelski/image-gif-dispose.git",
+      "upstreamCommit": "e50dcfbd38056d75184720e6c45daf23db16cecb",
+      "pathInVcs": "",
+      "bindingType": "cargo-vcs-and-authored-files-match",
+      "matchedPublishedFileCount": 7,
+      "cargoGeneratedFiles": [
+        "Cargo.toml",
+        "Cargo.lock",
+        ".cargo_vcs_info.json"
+      ],
+      "publicationCommitRecorded": true,
+      "selectedLicense": "Apache-2.0",
+      "sourceManifest": {
+        "path": "Cargo.toml.orig",
+        "upstreamPath": "Cargo.toml",
+        "size": 1090,
+        "sha256": "590fbfc4c55592f768e1b2a904a4f75008067857c973eb2e6389dda89f5652c7",
+        "gitBlobSha1": "7c1f77d9a073eaf9584adbf4bd43fb63d61334c8"
+      },
+      "licenseTextScope": "Upstream declares MIT OR Apache-2.0 but supplies no license file at the exact source commit. Preserve the authored declaration/attribution and choose Apache-2.0 using the separately pinned standard text; this is not an upstream license-file claim.",
+      "notices": [
+        {
+          "inputKind": "standard-license",
+          "inputPath": "third_party/rust-notices/standard-licenses/Apache-2.0.txt",
+          "upstreamPath": "text/Apache-2.0.txt",
+          "spdxLicense": "Apache-2.0",
+          "standardRepository": "https://github.com/spdx/license-list-data",
+          "standardCommit": "cc4fe1ac462bd3ad3c81a07234baf7d9541ee871",
+          "gitBlobSha1": "137069b823873b8bcf42979bcf8e9371052d26a2",
+          "size": 10280,
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
         }
       ]
     },

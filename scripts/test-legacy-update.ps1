@@ -17,7 +17,7 @@ if (-not (Test-Path $nativeExecutable -PathType Leaf)) { throw 'Build the actual
 $output = Join-Path $ArtifactsRoot "tests/windows/legacy-update/$Configuration/run-$([guid]::NewGuid().ToString('N'))"
 $probe = Join-Path $ArtifactsRoot "tests/windows/legacy-update/$Configuration/LegacyUpdateProbe.exe"
 $arguments = @((Join-Path $PSScriptRoot 'test-legacy-update.py'), '--probe', $probe,
-    '--legacy-executable', $nativeExecutable, '--output', $output)
+    '--legacy-executable', $nativeExecutable, '--output', $output, '--configuration', $Configuration)
 if ($RealPackageDirectory) { $arguments += @('--real-package-directory', $RealPackageDirectory) }
 if ($RequireRealPackage) { $arguments += '--require-real-package' }
 if ($Gui) {

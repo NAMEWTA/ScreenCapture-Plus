@@ -17,4 +17,3 @@ QString desktopExecCommand(const QString& executable, const QStringList& argumen
 QString shortcutLaunchCommand(const QString& executable);
 
 } // namespace HuhuCapture::Desktop
-

@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <exception>
 #include <limits>
 #include <new>
 #include <stop_token>
@@ -22,8 +21,7 @@ namespace {
 constexpr auto actionCount = static_cast<std::size_t>(Action::Count);
 constexpr auto actionIndex(Action action) { return static_cast<std::size_t>(action); }
 bool isText(Action action) { return action >= Action::Hex && action <= Action::Position; }
-bool needsSelection(Action action) { return !isText(action) && action != Action::History; }
-bool needsImage(Action action) { return needsSelection(action) && action != Action::Record; }
+bool needsImage(Action action) { return !isText(action) && action != Action::History; }
 SelectionPoint point(QPoint value) { return {static_cast<float>(value.x()), static_cast<float>(value.y())}; }
 QRect rectangle(const SelectionBounds& value)
 {
@@ -103,29 +101,22 @@ Failure CaptureSession::load(Snapshot snapshot, StartOptions options)
     if (options.enter && *options.enter != Action::Pin && *options.enter != Action::Scroll &&
         *options.enter != Action::Record && *options.enter != Action::Qr)
         return {Failure::Code::InvalidSnapshot, 0, QStringLiteral("The capture entry action is unsupported")};
-    try {
-        SelectionModel selection(static_cast<float>(snapshot.image.width()), static_cast<float>(snapshot.image.height()));
-        std::vector<SelectionBounds> candidates;
-        candidates.reserve(static_cast<std::size_t>(snapshot.windows.size()));
-        for (const auto& window : snapshot.windows)
-            candidates.push_back({static_cast<float>(window.x()), static_cast<float>(window.y()),
-                static_cast<float>(window.x()) + static_cast<float>(window.width()),
-                static_cast<float>(window.y()) + static_cast<float>(window.height())});
-        selection.setWindowCandidates(std::move(candidates));
-        const QPoint cursor{std::clamp(snapshot.cursor.x(), 0, snapshot.image.width() - 1),
-            std::clamp(snapshot.cursor.y(), 0, snapshot.image.height() - 1)};
-        if (snapshot.coordinates == CoordinateSpace::AuthorizedSourcePixels)
-            selection.setSelection({0, 0, static_cast<float>(snapshot.image.width()), static_cast<float>(snapshot.image.height())});
-        else selection.highlight(point(cursor));
-        std::stop_source nextStop;
-        state_->stop.request_stop();
-        state_->stop = std::move(nextStop);
-        state_->snapshot = std::move(snapshot); state_->selection = std::move(selection);
-        state_->cursor = cursor; state_->options = options; state_->pressed = false; state_->active = 0;
-        state_->failure.clear(); state_->stage = Stage::Selecting;
-    } catch (const std::bad_alloc&) {
-        return {Failure::Code::Allocation, 0, QStringLiteral("The source selection could not be initialized")};
-    }
+    state_->stop.request_stop();
+    state_->stop = {};
+    state_->snapshot = std::move(snapshot);
+    state_->selection.setExtent(static_cast<float>(state_->snapshot.image.width()), static_cast<float>(state_->snapshot.image.height()));
+    std::vector<SelectionBounds> candidates;
+    candidates.reserve(static_cast<std::size_t>(state_->snapshot.windows.size()));
+    for (const auto& window : state_->snapshot.windows)
+        candidates.push_back({static_cast<float>(window.x()), static_cast<float>(window.y()),
+            static_cast<float>(window.x()) + static_cast<float>(window.width()),
+            static_cast<float>(window.y()) + static_cast<float>(window.height())});
+    state_->selection.setWindowCandidates(std::move(candidates));
+    state_->cursor = {std::clamp(state_->snapshot.cursor.x(), 0, state_->snapshot.image.width() - 1),
+        std::clamp(state_->snapshot.cursor.y(), 0, state_->snapshot.image.height() - 1)};
+    state_->selection.highlight(point(state_->cursor));
+    state_->options = options; state_->pressed = false; state_->active = 0;
+    state_->failure.clear(); state_->stage = Stage::Selecting;
     Q_EMIT changed();
     return {};
 }
@@ -150,10 +141,10 @@ void CaptureSession::pointerMove(QPoint source)
     if (state_->stage != Stage::Selecting && state_->stage != Stage::Adjusting) return;
     state_->cursor = {std::clamp(source.x(), 0, state_->snapshot.image.width() - 1),
         std::clamp(source.y(), 0, state_->snapshot.image.height() - 1)};
-    if (state_->pressed && source != state_->lastPointer) {
+    if (state_->pressed) {
         if (state_->stage == Stage::Selecting) state_->selection.createTo(point(source));
         else state_->selection.adjustTo(point(source));
-    } else if (!state_->pressed && state_->stage == Stage::Selecting) state_->selection.highlight(point(source));
+    } else if (state_->stage == Stage::Selecting) state_->selection.highlight(point(source));
     state_->lastPointer = source;
     Q_EMIT changed();
 }
@@ -204,14 +195,15 @@ void CaptureSession::nudgeCursor(QPoint delta)
 quint64 CaptureSession::request(Action action)
 {
     if (state_->stage != Stage::Selecting && state_->stage != Stage::Adjusting) return 0;
-    if (!capability(action).canRequest() || (needsSelection(action) &&
+    if (!capability(action).canRequest() || (needsImage(action) &&
         (state_->stage != Stage::Adjusting || !state_->selection.hasSelection()))) return 0;
     ActionRequest request;
     request.token = ++state_->sequence;
     if (!request.token) request.token = ++state_->sequence;
     request.action = action; request.coordinates = state_->snapshot.coordinates;
     request.sourceId = state_->snapshot.sourceId; request.generation = state_->snapshot.generation;
-    if (needsSelection(action)) {
+    request.screens = state_->snapshot.screens;
+    if (needsImage(action)) {
         request.sourceRect = rectangle(state_->selection.bounds());
         if (state_->snapshot.desktopOrigin)
             request.desktopRect = request.sourceRect.translated(*state_->snapshot.desktopOrigin);
@@ -286,6 +278,7 @@ void CaptureSession::complete(quint64 token, ActionResult result, QString detail
     const bool close = result == ActionResult::Completed ||
         (state_->activeAction == Action::Qr && result == ActionResult::Cancelled);
     state_->stage = close ? Stage::Closed : state_->resume;
+    if (close) state_->snapshot = {};
     const QPointer<CaptureSession> lifetime(this);
     Q_EMIT changed();
     if (lifetime && close) Q_EMIT closed();
@@ -296,6 +289,7 @@ void CaptureSession::cancel()
     const auto token = std::exchange(state_->active, 0);
     state_->stop.request_stop(); state_->pressed = false; state_->selection.finishGesture();
     state_->stage = Stage::Closed;
+    state_->snapshot = {};
     const QPointer<CaptureSession> lifetime(this);
     if (token) Q_EMIT actionCancelled(token);
     if (!lifetime) return;

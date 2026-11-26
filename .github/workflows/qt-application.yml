@@ -1,17 +1,26 @@
-name: Unified Qt application and development packages
+name: Unified Qt application and complete package validation
 
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release_candidate:
+        description: 'Prepare a same-source formal candidate; requires complete final-stage sources, no publication'
+        type: boolean
+        default: false
+        required: true
+
+env:
+  RELEASE_CANDIDATE: ${{ inputs.release_candidate || false }}
 
 permissions:
   contents: read
 
 concurrency:
   group: qt-application-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   fixtures:
@@ -57,6 +66,39 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  aggregate:
+    needs: [linux, windows, legacy-mp3-linux]
+    if: ${{ inputs.release_candidate && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.linux.outputs.candidate_id }}
+          path: artifacts/formal-input/linux
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.windows.outputs.candidate_id }}
+          path: artifacts/formal-input/windows
+          merge-multiple: true
+      - name: Aggregate the unchanged native packages and computed-complete corresponding sources
+        run: |
+          python scripts/package-qt.py aggregate --input artifacts/formal-input/linux --input artifacts/formal-input/windows --output artifacts/release-candidate
+          python scripts/publish-qt-release.py verify --package artifacts/release-candidate --source-commit "$GITHUB_SHA"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qt-release-candidate-${{ github.sha }}
+          path: artifacts/release-candidate/
+          if-no-files-found: error
+          retention-days: 14
+
   linux:
     needs: fixtures
     runs-on: ubuntu-24.04
@@ -64,6 +106,8 @@ jobs:
     env:
       AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
       CARGO_BUILD_JOBS: 2
+    outputs:
+      candidate_id: ${{ steps.candidate.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -91,6 +135,7 @@ jobs:
           path: artifacts/video-fixtures
           merge-multiple: true
       - name: Build the exact application dependencies
+        id: application_dependencies
         run: |
           # setup-python prepends its own pkg-config directory after install-qt.
           # libportal's pkg-config metadata needs the actual Qt module .pc files.
@@ -154,7 +199,7 @@ jobs:
         if: ${{ !cancelled() && steps.application_build.outcome == 'success' }}
         run: |
           cmake --install artifacts/cmake/application-linux --config RelWithDebInfo --prefix "$GITHUB_WORKSPACE/artifacts/install/linux"
-          python scripts/test-qt-package-runtime.py --prefix artifacts/install/linux --probe artifacts/cmake/application-linux/package_runtime_probe --certificate tests/fixtures/qt-tls/localhost-test-cert.pem --private-key tests/fixtures/qt-tls/localhost-test-key.pem --report artifacts/cmake/application-linux/package-runtime.json
+          python scripts/test-qt-package-runtime.py --prefix artifacts/install/linux --probe artifacts/cmake/application-linux/qt_package_runtime_probe --certificate tests/fixtures/qt-tls/localhost-test-cert.pem --private-key tests/fixtures/qt-tls/localhost-test-key.pem --report artifacts/cmake/application-linux/package-runtime.json
       - name: Collect actual deployed library origins and original notices
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
         run: |
@@ -218,17 +263,69 @@ jobs:
           shutil.copytree(source/'notices', target)
           shutil.copyfile(source/'rust-toolchain-materials.json', target/'rust-toolchain-materials.json')
           PY
-      - name: Verify actual development packages from the installed runtime
-        id: packages
+      - name: Prepare the final Linux payloads and actual native candidate packages
+        id: prepared
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
         run: |
           python scripts/restore-packaging-tools.py --platform linux --output artifacts/packaging-tools
           python tests/package_metadata_tests.py
-          python scripts/package-qt.py package --installed artifacts/install/linux --output artifacts/packages/linux --minimum-system 'Ubuntu 24.04 amd64; desktop acceptance pending' --tools artifacts/packaging-tools --qmake "$QT_ROOT_DIR/bin/qmake" --development
+          intent=()
+          if [ "$RELEASE_CANDIDATE" = true ]; then
+            test "$GITHUB_REF" = refs/heads/main
+          else
+            intent+=(--development)
+          fi
+          python scripts/package-qt.py prepare --installed artifacts/install/linux --stage artifacts/packages/linux-prepared --minimum-system 'Ubuntu 24.04 amd64' --tools artifacts/packaging-tools --qmake "$QT_ROOT_DIR/bin/qmake" "${intent[@]}"
+      - name: Finalize exact Linux bytes with the required source-completeness boundary
+        id: packages
+        if: ${{ !cancelled() && steps.prepared.outcome == 'success' }}
+        run: |
+          if [ "$RELEASE_CANDIDATE" = true ]; then
+            python scripts/package-qt.py finalize --stage artifacts/packages/linux-prepared --output artifacts/packages/linux --source-plan artifacts/packages/linux-prepared/source-plan.json --source-output artifacts/source-complete/linux
+          else
+            python scripts/package-qt.py finalize --stage artifacts/packages/linux-prepared --output artifacts/packages/linux --development
+          fi
       - name: Install, run, reinstall and remove the real Linux package pair
         if: ${{ !cancelled() && steps.packages.outcome == 'success' }}
         run: |
           dbus-run-session -- xvfb-run -a env QT_QPA_PLATFORM=xcb python scripts/test-qt-installation.py --packages artifacts/packages/linux --probe artifacts/cmake/application-linux/installation_gui_probe --video artifacts/video-fixtures/valid.mp4 --artifacts artifacts/cmake/application-linux/installation
+      - name: Download both actual formal Linux packages through production Qt About
+        if: ${{ !cancelled() && inputs.release_candidate && steps.packages.outcome == 'success' }}
+        run: |
+          QT_QPA_PLATFORM=offscreen python scripts/test-qt-complete-update.py --package artifacts/packages/linux --probe artifacts/cmake/application-linux/qt_complete_update_probe --output artifacts/cmake/application-linux/complete-update
+      - name: Retain actual source inputs from the existing Linux dependency build
+        if: ${{ !cancelled() && steps.application_dependencies.outcome == 'success' }}
+        run: |
+          python scripts/retain-development-sources.py --qt-prefix "$QT_ROOT_DIR" --source-commit "$(git rev-parse HEAD)" --output artifacts/source-retention/linux-incomplete --fetch-locked-sources
+      - name: Preserve incomplete corresponding-source materials and collection evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qt-application-linux-sources-incomplete
+          path: |
+            artifacts/source-retention/linux-incomplete/bundle/
+            artifacts/source-retention/linux-incomplete/collection-plan.json
+            artifacts/source-retention/linux-incomplete/cargo-coverage.json
+            artifacts/source-retention/linux-incomplete/retention-report.json
+            artifacts/source-retention/linux-incomplete/logs/
+            artifacts/source-retention/linux-incomplete/vendor-config.toml
+            artifacts/source-retention/linux-incomplete/materials/
+            artifacts/source-retention/linux-incomplete/inputs/registry-cache/
+            artifacts/source-retention/linux-incomplete/inputs/gifski/
+            !artifacts/source-retention/linux-incomplete/inputs/gifski/.git/
+          compression-level: 0
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: true
+      - name: Retain the verified formal linux candidate
+        id: candidate
+        if: ${{ success() && inputs.release_candidate }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qt-formal-linux-${{ github.sha }}
+          path: artifacts/packages/linux/
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve actual evidence and clearly marked development artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -239,12 +336,14 @@ jobs:
             !artifacts/packages/linux/_CPack_Packages/**
             artifacts/cmake/application-linux/CMakeCache.txt
             artifacts/cmake/application-linux/Testing/Temporary/
-            artifacts/cmake/application-linux/native-capture/
+            artifacts/cmake/application-linux/screen-capture/
+            artifacts/cmake/application-linux/capture-window/
             artifacts/cmake/application-linux/x11-controls-evidence/
             artifacts/cmake/application-linux/x11-recording/
-            artifacts/cmake/application-linux/scroll-render/
+            artifacts/cmake/application-linux/scroll-capture/
             artifacts/cmake/application-linux/pipewire-audio/
-            artifacts/cmake/application-linux/settings-controller/
+            artifacts/cmake/application-linux/settings-controller-render/
+            artifacts/cmake/application-linux/transfer-render/
             artifacts/cmake/application-linux/lan-controller-render/
             artifacts/cmake/application-linux/application-lifecycle/
             artifacts/cmake/application-linux/application-clipboard-owner/
@@ -257,6 +356,13 @@ jobs:
             artifacts/cmake/application-linux/package/
             artifacts/cmake/application-linux/package-runtime.json
             artifacts/cmake/application-linux/installation/
+            artifacts/cmake/application-linux/complete-update/**/*.json
+            artifacts/cmake/application-linux/complete-update/**/*.log
+            artifacts/cmake/application-linux/complete-update/**/*.png
+            artifacts/packages/linux-prepared/prepared.json
+            artifacts/packages/linux-prepared/source-deployment-inventory.json
+            artifacts/packages/linux-prepared/transformations.json
+            artifacts/packages/linux-prepared/executions/
             !artifacts/cmake/application-linux/installation/**/runtime-temp/**
             artifacts/runtime-materials-linux/
             artifacts/runtime-materials-qt-linux/
@@ -271,8 +377,12 @@ jobs:
             artifacts/corresponding-sources-rust-toolchain-linux/
             artifacts/native-rust/build-info.json
             .deps/portal-validation/build-info.json
+            .deps/portal-validation/source-receipt/
             .deps/pipewire-validation/build-info.json
+            .deps/pipewire-validation/source-receipt/
             .deps/media-validation/build-info.json
+            .deps/media-validation/x264-source-receipt/
+            .deps/media-validation/ffmpeg-source-receipt/
           if-no-files-found: warn
           retention-days: 14
           include-hidden-files: true
@@ -280,12 +390,13 @@ jobs:
   windows:
     needs: fixtures
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 240
     env:
       AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
       CARGO_BUILD_JOBS: 2
     outputs:
       legacy_id: ${{ steps.legacy.outputs.artifact-id }}
+      candidate_id: ${{ steps.candidate.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -309,6 +420,32 @@ jobs:
           artifact-ids: ${{ needs.fixtures.outputs.fixture_id }}
           path: artifacts/video-fixtures
           merge-multiple: true
+      - name: Build one source-attributed Windows Qt prefix
+        id: qt_source
+        shell: pwsh
+        run: |
+          python -m pip install spdx-tools==0.8.5 reuse==6.3.0
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/windows_qt_builder_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python scripts/restore-qt-module-sources.py --platform windows --workspace artifacts/qt-module-sources
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $referenceSdk = $env:QT_ROOT_DIR
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $installation = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'The actual MSVC v143 x64 toolchain is required.' }
+          & (Join-Path $installation 'Common7/Tools/Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          python scripts/build-windows-qt.py --source-workspace artifacts/qt-module-sources --reference-sdk $referenceSdk --workspace .deps/qt-runtime-windows --jobs 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $prefix = (Resolve-Path .deps/qt-runtime-windows/install).Path
+          # Only a successful complete source build becomes the application SDK.
+          # All Qt libraries, plugins, tools and translations use this one prefix.
+          "QT_ROOT_DIR=$prefix" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "QTDIR=$prefix" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAKE_PREFIX_PATH=$prefix" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "Qt6_DIR=$prefix/lib/cmake/Qt6" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "QT_PLUGIN_PATH=$prefix/plugins" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$prefix/bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: Build the exact release-CRT Rust aggregate and inspection DLLs
         shell: pwsh
         run: |
@@ -330,7 +467,7 @@ jobs:
       - name: Generate and decode actual Windows H264 plus legacy MP3 audio
         shell: pwsh
         run: |
-          & artifacts/cmake/application-windows/RelWithDebInfo/legacy_mp3_recording_tests.exe --generate artifacts/legacy-mp3-fixtures
+          & artifacts/cmake/application-windows/RelWithDebInfo/qt_legacy_mp3_recording.exe --generate artifacts/legacy-mp3-fixtures
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Preserve real Windows-encoded files for independent Linux decoding
         id: legacy
@@ -361,24 +498,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --install artifacts/cmake/application-windows --config RelWithDebInfo --component Symbols --prefix "$env:GITHUB_WORKSPACE/artifacts/install/windows-symbols"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python scripts/test-qt-package-runtime.py --prefix artifacts/install/windows --probe artifacts/cmake/application-windows/RelWithDebInfo/package_runtime_probe.exe --certificate tests/fixtures/qt-tls/localhost-test-cert.pem --private-key tests/fixtures/qt-tls/localhost-test-key.pem --report artifacts/cmake/application-windows/package-runtime.json
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Inspect original Qt SDK signatures with the installed Windows SDK tool
-        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
-        timeout-minutes: 10
-        shell: pwsh
-        run: |
-          $sdkKeys = @('HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows Kits\Installed Roots')
-          $sdkRoots = @($sdkKeys | ForEach-Object { Get-ItemPropertyValue -LiteralPath $_ -Name KitsRoot10 -ErrorAction SilentlyContinue } | Sort-Object -Unique)
-          $candidates = @($sdkRoots | ForEach-Object {
-            Get-ChildItem -LiteralPath (Join-Path $_ 'bin') -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | ForEach-Object {
-              $candidate = Join-Path $_.FullName 'x64/signtool.exe'
-              if (Test-Path -LiteralPath $candidate -PathType Leaf) { [PSCustomObject]@{ Path = $candidate; Version = [Version]$_.Name } }
-            }
-          })
-          $signtool = $candidates | Sort-Object -Property Version -Descending | Select-Object -First 1
-          if (-not $signtool) { throw 'No actual registered Windows SDK x64 SignTool is available' }
-          python scripts/probe-qt-sdk-signing.py --qt-prefix "$env:QT_ROOT_DIR" --signtool $signtool.Path --output artifacts/qt-sdk-signing-windows
+          python scripts/test-qt-package-runtime.py --prefix artifacts/install/windows --probe artifacts/cmake/application-windows/RelWithDebInfo/qt_package_runtime_probe.exe --certificate tests/fixtures/qt-tls/localhost-test-cert.pem --private-key tests/fixtures/qt-tls/localhost-test-key.pem --report artifacts/cmake/application-windows/package-runtime.json
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Check original Windows notices, SDK bytes and the actual Rust graph
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
@@ -386,17 +506,11 @@ jobs:
         run: |
           python tests/runtime_materials_tests.py --cargo-metadata artifacts/native-rust/cargo-metadata.json
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Restore the fixed original Qt module sources
-        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          python scripts/restore-qt-module-sources.py --platform windows --workspace artifacts/qt-module-sources
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Bind actual Qt runtime bytes to original SDK SPDX and official deployment
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
         shell: pwsh
         run: |
-          python scripts/collect-runtime-materials.py qt --installed artifacts/install/windows --qt-prefix "$env:QT_ROOT_DIR" --build-directory artifacts/cmake/application-windows --configuration RelWithDebInfo --output artifacts/runtime-materials-qt-windows --module-source qtbase=artifacts/qt-module-sources/qtbase --module-source qtsvg=artifacts/qt-module-sources/qtsvg --module-source qttranslations=artifacts/qt-module-sources/qttranslations --source-output artifacts/corresponding-sources-qt-windows
+          python scripts/collect-runtime-materials.py qt --installed artifacts/install/windows --qt-prefix "$env:QT_ROOT_DIR" --build-directory artifacts/cmake/application-windows --configuration RelWithDebInfo --output artifacts/runtime-materials-qt-windows --module-source qtbase=artifacts/qt-module-sources/qtbase --module-source qtsvg=artifacts/qt-module-sources/qtsvg --module-source qttranslations=artifacts/qt-module-sources/qttranslations --module-source qttools=.deps/qt-runtime-windows/qttools-source --source-output artifacts/corresponding-sources-qt-windows
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           @'
           from pathlib import Path
@@ -456,8 +570,8 @@ jobs:
           shutil.copyfile(source/'rust-toolchain-materials.json', target/'rust-toolchain-materials.json')
           '@ | python
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Verify complete portable and per-user development setup packages
-        id: packages
+      - name: Prepare final Windows payloads and the actual NSIS/ZIP candidate packages
+        id: prepared
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
         shell: pwsh
         run: |
@@ -465,7 +579,22 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/package_metadata_tests.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python scripts/package-qt.py package --installed artifacts/install/windows --output artifacts/packages/windows --minimum-system 'Windows 10 1809 x64; desktop acceptance pending' --symbols artifacts/install/windows-symbols/symbols --nsis-installer artifacts/packaging-tools/nsis/nsis-3.11-setup.exe --development
+          $intent = @()
+          if ($env:RELEASE_CANDIDATE -eq 'true') {
+            if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Formal candidates require the canonical main checkout.' }
+          } else { $intent += '--development' }
+          python scripts/package-qt.py prepare --installed artifacts/install/windows --stage artifacts/packages/windows-prepared --minimum-system 'Windows 10 1809 x64' --symbols artifacts/install/windows-symbols/symbols --nsis-installer artifacts/packaging-tools/nsis/nsis-3.11-setup.exe @intent
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Finalize exact Windows bytes with the required source-completeness boundary
+        id: packages
+        if: ${{ !cancelled() && steps.prepared.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_CANDIDATE -eq 'true') {
+            python scripts/package-qt.py finalize --stage artifacts/packages/windows-prepared --output artifacts/packages/windows --source-plan artifacts/packages/windows-prepared/source-plan.json --source-output artifacts/source-complete/windows
+          } else {
+            python scripts/package-qt.py finalize --stage artifacts/packages/windows-prepared --output artifacts/packages/windows --development
+          }
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Install, run, reinstall and uninstall the real Windows package pair
         if: ${{ !cancelled() && steps.packages.outcome == 'success' }}
@@ -473,6 +602,28 @@ jobs:
         run: |
           python scripts/test-qt-installation.py --packages artifacts/packages/windows --probe artifacts/cmake/application-windows/RelWithDebInfo/installation_gui_probe.exe --video artifacts/video-fixtures/valid.mp4 --artifacts artifacts/cmake/application-windows/installation
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Verify changed-directory and stale-uninstaller ownership
+        if: ${{ !cancelled() && steps.packages.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $version = (Get-Content build/version.json -Raw | ConvertFrom-Json).version
+          python scripts/test-windows-installer.py --installer "artifacts/packages/windows/huhucapture-v$version-windows-x64-setup.exe" --evidence artifacts/cmake/application-windows/installer-ownership
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Download both actual formal Windows packages through production Qt About
+        if: ${{ !cancelled() && inputs.release_candidate && steps.packages.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python scripts/test-qt-complete-update.py --package artifacts/packages/windows --probe artifacts/cmake/application-windows/RelWithDebInfo/qt_complete_update_probe.exe --output artifacts/cmake/application-windows/complete-update
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Retain the verified formal windows candidate
+        id: candidate
+        if: ${{ success() && inputs.release_candidate }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: qt-formal-windows-${{ github.sha }}
+          path: artifacts/packages/windows/
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve actual Windows results and development artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -481,7 +632,12 @@ jobs:
           path: |
             artifacts/packages/windows/
             artifacts/runtime-materials-qt-windows/
-            artifacts/qt-sdk-signing-windows/
+            .deps/qt-runtime-windows/build-info.json
+            .deps/qt-runtime-windows/control/
+            .deps/qt-runtime-windows/*-source-receipt/
+            .deps/qt-runtime-windows/install/sbom/
+            .deps/qt-runtime-windows/*-build/CMakeCache.txt
+            .deps/qt-runtime-windows/*-build/CMakeFiles/CMakeConfigureLog.yaml
             artifacts/runtime-materials-rust-windows/
             artifacts/runtime-materials-native-windows/
             artifacts/runtime-materials-rust-toolchain-windows/
@@ -494,22 +650,35 @@ jobs:
             artifacts/cmake/application-windows/CMakeCache.txt
             artifacts/cmake/application-windows/Testing/Temporary/
             artifacts/cmake/application-windows/editor-render/
-            artifacts/cmake/application-windows/settings-controller/
+            artifacts/cmake/application-windows/settings-controller-render/
+            artifacts/cmake/application-windows/transfer-render/
             artifacts/cmake/application-windows/lan-controller-render/
             artifacts/cmake/application-windows/application-lifecycle/
             artifacts/cmake/application-windows/update-render/
-            artifacts/cmake/application-windows/native-capture/
+            artifacts/cmake/application-windows/screen-capture/
+            artifacts/cmake/application-windows/capture-window/
             artifacts/cmake/application-windows/native-gif-recording/
             artifacts/cmake/application-runtime/CMakeCache.txt
             artifacts/cmake/application-runtime/CMakeFiles/CMakeConfigureLog.yaml
             artifacts/cmake/application-windows/native-recording/
-            artifacts/cmake/application-windows/scroll-render/
+            artifacts/cmake/application-windows/scroll-capture/
+            artifacts/cmake/application-windows/recording-render/
             artifacts/legacy-mp3-fixtures/
             artifacts/cmake/application-windows/package/
             artifacts/cmake/application-windows/package-runtime.json
             artifacts/cmake/application-windows/installation/
+            artifacts/cmake/application-windows/installer-ownership/
+            artifacts/cmake/application-windows/complete-update/**/*.json
+            artifacts/cmake/application-windows/complete-update/**/*.log
+            artifacts/cmake/application-windows/complete-update/**/*.png
+            artifacts/packages/windows-prepared/prepared.json
+            artifacts/packages/windows-prepared/source-deployment-inventory.json
+            artifacts/packages/windows-prepared/transformations.json
+            artifacts/packages/windows-prepared/executions/
             artifacts/native-rust/build-info.json
             .deps/video-inspection-windows/build-info.json
+            .deps/video-inspection-windows/source-receipt-Release/
+            .deps/video-inspection-windows/source-receipt-Debug/
           if-no-files-found: warn
           retention-days: 14
           include-hidden-files: true
@@ -550,7 +719,7 @@ jobs:
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/.deps/media-validation/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
           export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/.deps/media-validation/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           cmake -S . -B artifacts/cmake/legacy-mp3 -G Ninja -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON -DHUHUCAPTURE_VIDEO_VALIDATION=ON -DHUHUCAPTURE_LEGACY_MP3_FIXTURES="$GITHUB_WORKSPACE/artifacts/legacy-mp3-fixtures"
-          cmake --build artifacts/cmake/legacy-mp3 --target legacy_mp3_recording_tests --parallel 2
+          cmake --build artifacts/cmake/legacy-mp3 --target qt_legacy_mp3_recording --parallel 2
           ctest --test-dir artifacts/cmake/legacy-mp3 -R '^qt_legacy_mp3_recording$' --output-on-failure --no-tests=error
       - name: Retain actual same-byte compatibility results
         if: always()

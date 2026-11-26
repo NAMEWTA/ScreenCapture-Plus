@@ -1,7 +1,7 @@
 #include "recording/VideoMp4.h"
 #include "platform/windows/RecordingControls.h"
-#include "core/MediaClock.h"
 #include "core/RecordingTime.h"
+#include "core/MediaClock.h"
 #include "core/PixelBuffer.h"
 #include "platform/windows/AudioFormat.h"
 #include "platform/windows/ComApartment.h"
@@ -2003,6 +2003,8 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     LONGLONG lastSubmittedVideoTime = 0;
     LONGLONG lastSubmittedVideoDuration = 0;
     LONGLONG submittedVideoDuration = 0;
+    LONGLONG lastOriginalVideoEnd = 0;
+    LONGLONG tailTargetVideoEnd = 0;
     std::uint64_t capturedVideoFrames = 0;
     CComPtr<IMFSample> pendingVideoSample;
     LONGLONG pendingVideoTime = 0;
@@ -2299,7 +2301,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
         const auto controls = dp.Controls ? dp.Controls->snapshot.load(std::memory_order_acquire) : nullptr;
         if (dp.Controls) {
-            hr = controls ? HuhuCapture::Platform::Windows::verifyRecordingControls(*controls) : HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
+            hr = controls ? HuhuCapture::Platform::Windows::verifyRecordingControls(*controls, &dp.GdiRegion) : HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
             if (FAILED(hr)) { failureStage = RecordingStage::Capture; break; }
         }
 
@@ -2370,7 +2372,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 break;
             }
             if (dp.Controls && (dp.Controls->snapshot.load(std::memory_order_acquire) != controls ||
-                FAILED(HuhuCapture::Platform::Windows::verifyRecordingControls(*controls)))) {
+                FAILED(HuhuCapture::Platform::Windows::verifyRecordingControls(*controls, &dp.GdiRegion)))) {
                 failureStage = RecordingStage::Capture;
                 hr = HRESULT_FROM_WIN32(ERROR_INVALID_STATE); break;
             }
@@ -2580,21 +2582,19 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
     // still preserve this last valid, unsubmitted image. Never repeat a failed
     // video submission/transform or clear the original capture/encoding error.
     if (pendingVideoSample && !pendingVideoSubmissionAttempted) {
-        // Keep the real stop timestamp separately. MF's nominal-FPS conversion
-        // may otherwise discard a partial final slot. Reuse the bounded tail
-        // rule from the shared migration: extend only this unsubmitted sample
-        // to the first rounded cadence boundary at or after the observed stop.
-        // All earlier input intervals remain contiguous and unmodified.
-        if (pendingVideoTime < 0 || captureEnd <= pendingVideoTime) {
-            dp.result.fail(RecordingStage::Encode, MF_E_INVALID_TIMESTAMP);
-        } else {
-            const auto tail = HuhuCapture::Core::recordingTailTime(
-                pendingVideoTime, captureEnd - pendingVideoTime, dp.fps);
-            if (!tail) dp.result.fail(RecordingStage::Encode, E_INVALIDARG);
-            else {
-                const auto tailResult = submitPendingVideo(tail->targetEnd);
-                if (FAILED(tailResult)) dp.result.fail(RecordingStage::Encode, tailResult);
-            }
+        // The original E is the observed stop on the capture clock. Freeze it
+        // once, then extend only this immutable pending sample to the first
+        // rounded CFR boundary T >= E. Never shorten E or chase sink statistics
+        // by generating additional samples after stopping.
+        const auto tail = captureEnd > pendingVideoTime
+            ? HuhuCapture::Core::recordingTailTime(pendingVideoTime, captureEnd - pendingVideoTime, dp.fps)
+            : std::nullopt;
+        if (!tail) dp.result.fail(RecordingStage::Encode, MF_E_INVALID_TIMESTAMP);
+        else {
+            lastOriginalVideoEnd = tail->originalEnd;
+            tailTargetVideoEnd = tail->targetEnd;
+            const auto tailResult = submitPendingVideo(tail->targetEnd);
+            if (FAILED(tailResult)) dp.result.fail(RecordingStage::Encode, tailResult);
         }
     }
     pendingVideoSample.Release();
@@ -2618,6 +2618,7 @@ static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 statistics.llLastTimestampReceived, statistics.llLastTimestampEncoded,
                 statistics.llLastTimestampProcessed, lastSubmittedVideoTime,
                 lastSubmittedVideoDuration, statistics.dwByteCountQueued,
+                lastOriginalVideoEnd, tailTargetVideoEnd,
                 capturedVideoFrames, submittedVideoDuration, captureEnd};
         }
     }

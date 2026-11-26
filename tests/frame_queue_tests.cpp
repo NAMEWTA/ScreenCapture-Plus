@@ -125,6 +125,35 @@ void threaded(FramePool& pool)
         delivered + statistics.droppedOldest == 1000 && !statistics.queued && statistics.highWater <= 3,
         "Every real submitted frame must be delivered or explicitly counted as dropped");
 }
+void deadlineWait(FramePool& pool)
+{
+    FrameQueue queue(2);
+    const auto expired = queue.waitUntil(MediaClock::now());
+    require(!expired.frame && !expired.terminal && !expired.interrupted && !queue.closed(),
+        "A sampling deadline is distinct from source closure and consumer cancellation");
+    std::stop_source stop;
+    std::latch entered(1);
+    auto waiter = std::async(std::launch::async, [&] {
+        entered.count_down(); return queue.waitUntil(MediaClock::now() + 30s, stop.get_token());
+    });
+    entered.wait(); stop.request_stop();
+    require(waiter.wait_for(5s) == std::future_status::ready && waiter.get().interrupted,
+        "Cancellation wakes an actual long-deadline read without waiting for another frame");
+    require(queue.push(frame(pool, 13)), "Deadline/cancellation leave the real producer admitted");
+    const auto cancelled = queue.waitUntil(MediaClock::now(), stop.get_token());
+    require(cancelled.interrupted && queue.statistics().queued == 1,
+        "An interrupted deadline read cannot consume an existing frame");
+    auto actual = queue.waitUntil(MediaClock::now() + 5s);
+    require(actual.frame && actual.frame.metadata().timing.sourceSequence == 13,
+        "A subsequent reader retains the exact real input");
+    actual.frame.reset();
+    auto terminal = std::async(std::launch::async, [&] { return queue.waitUntil(MediaClock::now() + 30s); });
+    queue.close({FrameSourceEnd::PermissionDenied, 5, "permission revoked"});
+    require(terminal.wait_for(5s) == std::future_status::ready, "Source closure wakes a deadline read promptly");
+    const auto ended = terminal.get();
+    require(ended.terminal && ended.terminal->reason == FrameSourceEnd::PermissionDenied && ended.terminal->nativeCode == 5,
+        "Deadline reads preserve the actual source failure");
+}
 }
 int main()
 {
@@ -132,7 +161,7 @@ int main()
         const auto format = *packedFrameFormat(FramePixelFormat::Bgra8, 8, 8);
         FramePool pool({8, format.bytes * 8, 64});
         require(pool.configure(format) == FramePoolStatus::Ready, "Allocate actual source frame slots");
-        bounded(pool); terminalDrain(pool); cancelledWait(pool); threaded(pool);
+        bounded(pool); terminalDrain(pool); cancelledWait(pool); deadlineWait(pool); threaded(pool);
         std::cout << "PASS bounded real leases, drop accounting, retained terminal/drain, cancellation and concurrent delivery\n";
         return 0;
     } catch (const std::exception& error) {

@@ -152,7 +152,8 @@ IdentityError publishNew(const QString& path, const QByteArray& bytes, IdentityF
     });
     auto handle = Platform::openOwnedEmptyFileForWrite(staging, claimed->identity, error);
     if (!handle) return fileFailure(diagnostic, IdentityError::Write, IdentityFilePhase::OpenTemporary, error);
-    if (!Platform::initializeCreatedPrivateFile(handle.get(), claimed->identity, error, diagnostic.creation))
+    if (!Platform::preparePrivateStagingFile(handle.get(), error) ||
+        !Platform::isPrivateStorage(staging, false, error))
         return fileFailure(diagnostic, IdentityError::Permissions, IdentityFilePhase::InitializeTemporary, error);
     QFile output;
     if (!output.open(handle.get(), QIODevice::ReadWrite, QFileDevice::DontCloseHandle) ||
@@ -327,7 +328,7 @@ IdentityResult IdentityStore::rememberPeer(const QString& address, quint16 port,
         const auto claimed = Platform::readFileDescriptorSnapshot(descriptor, error);
         if (!claimed)
             return current(fileFailure(diagnostic_, IdentityError::Write, IdentityFilePhase::ClaimReplacement, error));
-        if (!Platform::initializeCreatedPrivateFile(descriptor, claimed->identity, error, diagnostic_.creation))
+        if (!Platform::preparePrivateStagingFile(descriptor, error))
             return current(fileFailure(diagnostic_, IdentityError::Permissions, IdentityFilePhase::InitializeReplacement, error));
         if (output.write(encoded) != encoded.size())
             return current(fileFailure(diagnostic_, IdentityError::Write, IdentityFilePhase::WriteReplacement, {}, output.error()));

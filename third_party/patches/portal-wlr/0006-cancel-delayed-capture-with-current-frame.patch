@@ -1,0 +1,99 @@
+Subject: [PATCH] validation: cancel FPS-delayed capture with its current buffer
+
+Project-local correction for the pinned validation desktop after 0001-0005.
+It is not represented as an upstream backport.
+
+Real shared-source refresh in Qt run 45784600351 initially captured matching
+pixels, paused and reopened the same authorized PipeWire node. The backend
+then dispatched two FPS timers, created two ext frame objects for one session,
+and exited on "session already has a frame object". The client correctly
+failed with "target not found"; its pixel and source checks stay unchanged.
+
+The original cancellation backport destroys an already-created frame but not
+the timer which will create one. Retain that timer in the instance. The same
+cancellation paths used by pause, current-buffer replacement and terminal
+cleanup destroy it before any replacement buffer is dequeued. Clear its member
+before the callback runs because the existing event loop has already freed the
+timer; normal instance destruction also clears it after removing owned timers.
+A paused, terminal or bufferless source cannot start delayed capture. Preserve
+the producer's negotiated FPS delay and normal frame-ready graph trigger.
+
+Original source: emersion/xdg-desktop-portal-wlr
+Base: e1d5d16f0e064a0b788c5d70c11461b15ee7a4af plus locked patches 0001-0005.
+Source and timer/main-loop blob identities are retained in upstream.json.
+License: MIT, matching the retained upstream license and project license.
+This private validation service is never bundled with the product or installed
+into a user's desktop. Real capture/resize/reconnect probes remain mandatory.
+
+diff --git a/include/screencast_common.h b/include/screencast_common.h
+index 19ab09e..a905c7c 100644
+--- a/include/screencast_common.h
++++ b/include/screencast_common.h
+@@ -201,6 +201,7 @@ struct xdpw_screencast_instance {
+ 	struct xdpw_timer *process_retry;
+ 
+ 	// wlroots
++	struct xdpw_timer *capture_timer;
+ 	union {
+ 		struct xdpw_screencast_wlr_session wlr_session;
+ 		struct xdpw_screencast_ext_session ext_session;
+diff --git a/src/screencast/screencast.c b/src/screencast/screencast.c
+index 60b7381..e519460 100644
+--- a/src/screencast/screencast.c
++++ b/src/screencast/screencast.c
+@@ -98,6 +98,7 @@ void xdpw_screencast_instance_destroy(struct xdpw_screencast_instance *cast) {
+ 	// The later PipeWire disconnect emits state_changed synchronously.
+ 	// Its disarm path must not destroy a timer removed by the loop above.
+ 	cast->process_retry = NULL;
++	cast->capture_timer = NULL;
+ 	struct xdpw_session *sess, *stmp;
+ 	wl_list_for_each_safe(sess, stmp, &cast->ctx->state->xdpw_sessions, link) {
+ 		if (sess->screencast_data.screencast_instance == cast) {
+diff --git a/src/screencast/wlr_screencast.c b/src/screencast/wlr_screencast.c
+index 77c2e87..fbff4f2 100644
+--- a/src/screencast/wlr_screencast.c
++++ b/src/screencast/wlr_screencast.c
+@@ -28,7 +28,7 @@
+ #include "fps_limit.h"
+ 
+ static void wlr_frame_capture_start(struct xdpw_screencast_instance *cast) {
+-	if (cast->destroy_pending) {
++	if (cast->destroy_pending || !cast->pwr_stream_state || !cast->current_frame.pw_buffer) {
+ 		return;
+ 	}
+ 	fps_limit_measure_start(&cast->fps_limit, cast->framerate);
+@@ -41,22 +41,31 @@ static void wlr_frame_capture_start(struct xdpw_screencast_instance *cast) {
+ }
+ 
+ static void wlr_frame_capture_timer(void *data) {
+-	wlr_frame_capture_start((struct xdpw_screencast_instance *)data);
++	struct xdpw_screencast_instance *cast = data;
++	// The event loop destroys this timer before calling us.
++	cast->capture_timer = NULL;
++	wlr_frame_capture_start(cast);
+ }
+ 
+ void xdpw_wlr_frame_capture(struct xdpw_screencast_instance *cast) {
+-	if (cast->destroy_pending) {
++	if (cast->destroy_pending || !cast->pwr_stream_state ||
++			!cast->current_frame.pw_buffer || cast->capture_timer) {
+ 		return;
+ 	}
+ 	uint64_t delay_ns = fps_limit_measure_end(&cast->fps_limit, cast->framerate);
+ 	if (delay_ns > 0) {
+-		xdpw_add_timer(cast->ctx->state, delay_ns, wlr_frame_capture_timer, cast);
++		cast->capture_timer = xdpw_add_timer(cast->ctx->state,
++			delay_ns, wlr_frame_capture_timer, cast);
+ 	} else {
+ 		wlr_frame_capture_start(cast);
+ 	}
+ }
+ 
+ void xdpw_wlr_frame_cancel(struct xdpw_screencast_instance *cast) {
++	// A delayed capture belongs to the current buffer just like its native
++	// frame proxy. Pause/replacement must cancel both before another dequeue.
++	xdpw_destroy_timer(cast->capture_timer);
++	cast->capture_timer = NULL;
+ 	if (cast->ctx->ext_image_copy_capture_manager
+ 			&& cast->ctx->ext_output_image_capture_source_manager) {
+ 		xdpw_ext_ic_frame_cancel(cast);

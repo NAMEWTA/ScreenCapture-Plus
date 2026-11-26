@@ -8,9 +8,8 @@
 #endif
 #include <windows.h>
 #include <aclapi.h>
-#include <array>
-#include <cstddef>
 #include <io.h>
+#include <array>
 #include <vector>
 
 namespace HuhuCapture::Platform {
@@ -33,52 +32,34 @@ bool fail(std::error_code& error, DWORD value = GetLastError())
     return false;
 }
 
-struct TokenIdentity {
-    std::vector<unsigned char> userBytes;
-    std::vector<unsigned char> ownerBytes;
-    PSID user() const noexcept
-    { return reinterpret_cast<const TOKEN_USER*>(userBytes.data())->User.Sid; }
-    PSID owner() const noexcept
-    { return ownerBytes.empty() ? nullptr : reinterpret_cast<const TOKEN_OWNER*>(ownerBytes.data())->Owner; }
-};
-
-bool readTokenInformation(HANDLE token, TOKEN_INFORMATION_CLASS kind,
-    std::size_t minimum, std::vector<unsigned char>& bytes, std::error_code& error)
+bool ordinaryObject(HANDLE file, bool directory, BY_HANDLE_FILE_INFORMATION& info,
+    std::error_code& error)
 {
-    DWORD length{};
-    if (GetTokenInformation(token, kind, nullptr, 0, &length))
-        return fail(error, ERROR_INVALID_DATA);
-    const auto queryError = GetLastError();
-    if (queryError != ERROR_INSUFFICIENT_BUFFER) return fail(error, queryError);
-    if (length < minimum || length > 65536) return fail(error, ERROR_INVALID_DATA);
-    bytes.resize(length);
-    if (!GetTokenInformation(token, kind, bytes.data(), length, &length)) return fail(error);
-    return true;
-}
-
-bool readTokenIdentity(bool includeOwner, TokenIdentity& identity, std::error_code& error)
-{
-    HANDLE rawToken{};
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &rawToken)) return fail(error);
-    const Handle token(rawToken);
-    if (!readTokenInformation(token.get(), TokenUser, sizeof(TOKEN_USER), identity.userBytes, error) ||
-        (includeOwner && !readTokenInformation(token.get(), TokenOwner, sizeof(TOKEN_OWNER), identity.ownerBytes, error)))
-        return false;
-    if (!IsValidSid(identity.user()) || (identity.owner() && !IsValidSid(identity.owner())))
-        return fail(error, ERROR_INVALID_SID);
-    return true;
-}
-
-bool inspectPrivateHandle(HANDLE file, bool directory, const TokenIdentity& token,
-    PrivateStorageObservation& observation, std::error_code& error)
-{
-    BY_HANDLE_FILE_INFORMATION info{};
     if (!GetFileInformationByHandle(file, &info)) return fail(error);
     if (GetFileType(file) != FILE_TYPE_DISK ||
         (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
         ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) != directory)
         return fail(error, ERROR_ACCESS_DENIED);
+    return true;
+}
 
+bool currentUser(std::vector<unsigned char>& userBytes, std::error_code& error)
+{
+    HANDLE rawToken{};
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &rawToken)) return fail(error);
+    const Handle token(rawToken);
+    DWORD length{};
+    GetTokenInformation(token.get(), TokenUser, nullptr, 0, &length);
+    if (!length || length > 65536) return fail(error);
+    userBytes.resize(length);
+    if (!GetTokenInformation(token.get(), TokenUser, userBytes.data(), length, &length)) return fail(error);
+    return true;
+}
+
+bool privateDacl(HANDLE file, bool directory, PSID user, bool& ownerMatches,
+    std::error_code& error)
+{
+    ownerMatches = false;
     std::array<unsigned char, SECURITY_MAX_SID_SIZE> systemBytes{}, adminBytes{};
     DWORD systemSize = static_cast<DWORD>(systemBytes.size()), adminSize = static_cast<DWORD>(adminBytes.size());
     if (!CreateWellKnownSid(WinLocalSystemSid, nullptr, systemBytes.data(), &systemSize) ||
@@ -94,14 +75,9 @@ bool inspectPrivateHandle(HANDLE file, bool directory, const TokenIdentity& toke
         PSECURITY_DESCRIPTOR value;
         ~DescriptorOwner() { LocalFree(value); }
     } allocation{descriptor};
-    observation.ownerObserved = owner && IsValidSid(owner);
-    observation.ownerMatchesUser = observation.ownerObserved && EqualSid(owner, token.user());
-    observation.tokenOwnerObserved = token.owner() != nullptr;
-    observation.ownerMatchesTokenOwner = observation.ownerObserved && observation.tokenOwnerObserved && EqualSid(owner, token.owner());
-    observation.tokenOwnerMatchesUser = observation.tokenOwnerObserved && EqualSid(token.owner(), token.user());
-    observation.accessObserved = true;
-    if (!observation.ownerObserved || !dacl || !IsValidAcl(dacl))
+    if (!owner || !IsValidSid(owner) || !dacl || !IsValidAcl(dacl))
         return fail(error, ERROR_ACCESS_DENIED);
+    ownerMatches = EqualSid(owner, user) != FALSE;
     for (DWORD index = 0; index < dacl->AceCount; ++index) {
         void* rawAce{};
         if (!GetAce(dacl, index, &rawAce)) return fail(error);
@@ -115,9 +91,8 @@ bool inspectPrivateHandle(HANDLE file, bool directory, const TokenIdentity& toke
         const auto allowed = static_cast<ACCESS_ALLOWED_ACE*>(rawAce);
         if (!allowed->Mask) continue;
         const auto sid = const_cast<DWORD*>(&allowed->SidStart);
-        if (!IsValidSid(sid) || GetLengthSid(sid) > header->AceSize - offsetof(ACCESS_ALLOWED_ACE, SidStart))
-            return fail(error, ERROR_ACCESS_DENIED);
-        const bool privileged = EqualSid(sid, token.user()) || EqualSid(sid, systemBytes.data()) || EqualSid(sid, adminBytes.data());
+        if (!IsValidSid(sid)) return fail(error, ERROR_ACCESS_DENIED);
+        const bool privileged = EqualSid(sid, user) || EqualSid(sid, systemBytes.data()) || EqualSid(sid, adminBytes.data());
         // Qt 6.12's owner-only QNativeFilePermissions deliberately retains
         // these metadata rights for the group/Everyone. They grant no reading
         // of file data, listing children, executing, writing or ACL ownership.
@@ -125,22 +100,15 @@ bool inspectPrivateHandle(HANDLE file, bool directory, const TokenIdentity& toke
         constexpr ACCESS_MASK metadataOnly = READ_CONTROL | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
         if (!privileged && (allowed->Mask & ~metadataOnly)) return fail(error, ERROR_ACCESS_DENIED);
     }
-    observation.accessPrivate = true;
     return true;
 }
 
-bool matchesCreatedEmptyFile(HANDLE file, FileIdentity expected, std::error_code& error)
+bool emptyStagingObject(HANDLE file, std::error_code& error)
 {
     BY_HANDLE_FILE_INFORMATION info{};
-    if (!GetFileInformationByHandle(file, &info)) return fail(error);
-    const FileIdentity actual{info.dwVolumeSerialNumber,
-        (std::uint64_t{info.nFileIndexHigh} << 32) | info.nFileIndexLow};
-    if (GetFileType(file) != FILE_TYPE_DISK ||
-        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) ||
-        info.nNumberOfLinks != 1 || info.nFileSizeHigh || info.nFileSizeLow || actual != expected) {
-        error = std::make_error_code(std::errc::state_not_recoverable);
-        return false;
-    }
+    if (!ordinaryObject(file, false, info, error)) return false;
+    if (info.nFileSizeHigh || info.nFileSizeLow || info.nNumberOfLinks != 1)
+        return fail(error, ERROR_ACCESS_DENIED);
     return true;
 }
 } // namespace
@@ -152,52 +120,52 @@ bool isPrivateStorage(const std::filesystem::path& path, bool directory, std::er
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0), nullptr));
     if (!file) return fail(error);
-    TokenIdentity token;
-    PrivateStorageObservation observation;
-    if (!readTokenIdentity(false, token, error) ||
-        !inspectPrivateHandle(file.get(), directory, token, observation, error)) return false;
-    return observation.ownerMatchesUser || fail(error, ERROR_ACCESS_DENIED);
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!ordinaryObject(file.get(), directory, info, error)) return false;
+    std::vector<unsigned char> userBytes;
+    if (!currentUser(userBytes, error)) return false;
+    const auto user = reinterpret_cast<TOKEN_USER*>(userBytes.data())->User.Sid;
+    bool ownerMatches{};
+    if (!privateDacl(file.get(), directory, user, ownerMatches, error)) return false;
+    return ownerMatches || fail(error, ERROR_ACCESS_DENIED);
 }
 
-bool initializeCreatedPrivateFile(int descriptor, FileIdentity expected,
-    std::error_code& error, PrivateFileCreation& observation)
+bool preparePrivateStagingFile(int borrowedDescriptor, std::error_code& error)
 {
     error.clear();
-    observation = {};
-    observation.stage = PrivateFileCreationStage::Inspect;
-    if (descriptor < 0) return fail(error, ERROR_INVALID_HANDLE);
-    const auto raw = _get_osfhandle(descriptor);
-    if (raw == -1) return fail(error, ERROR_INVALID_HANDLE);
-    const auto file = reinterpret_cast<HANDLE>(raw); // Borrowed, never closed here.
-    if (!matchesCreatedEmptyFile(file, expected, error)) return false;
-    TokenIdentity token;
-    if (!readTokenIdentity(true, token, error) ||
-        !inspectPrivateHandle(file, false, token, observation.before, error)) return false;
-    if (!observation.before.ownerMatchesUser) {
-        if (!observation.before.ownerMatchesTokenOwner) return fail(error, ERROR_ACCESS_DENIED);
-        // A CREATE_NEW file can inherit TokenOwner instead of TokenUser.
-        // Request metadata rights on this same kernel object, not its name.
-        // Do not request data access, enable privileges or alter the private DACL.
-        observation.stage = PrivateFileCreationStage::Reopen;
-        const Handle ownerHandle(ReOpenFile(file, WRITE_OWNER | READ_CONTROL | FILE_READ_ATTRIBUTES,
+    if (borrowedDescriptor < 0) return fail(error, ERROR_INVALID_HANDLE);
+    const auto value = _get_osfhandle(borrowedDescriptor);
+    if (value == -1) return fail(error, ERROR_INVALID_HANDLE);
+    // This handle belongs to QFile/the caller. Neither this function nor the
+    // temporary metadata handle takes ownership of the borrowed CRT descriptor.
+    const auto file = reinterpret_cast<HANDLE>(value);
+    if (!emptyStagingObject(file, error)) return false;
+    std::vector<unsigned char> userBytes;
+    if (!currentUser(userBytes, error)) return false;
+    const auto user = reinterpret_cast<TOKEN_USER*>(userBytes.data())->User.Sid;
+    bool ownerMatches{};
+    if (!privateDacl(file, false, user, ownerMatches, error)) return false;
+    if (!ownerMatches) {
+        // ReOpenFile addresses the same open object, not its mutable pathname.
+        // Metadata-only access requests no data/delete sharing, while all three
+        // share flags preserve QFile/QSaveFile's existing data/delete access.
+        // No backup/restore privilege, WRITE_DAC or token changes are used.
+        const Handle metadata(ReOpenFile(file, READ_CONTROL | WRITE_OWNER,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0));
-        if (!ownerHandle) return fail(error);
-        PrivateStorageObservation rechecked;
-        if (!matchesCreatedEmptyFile(ownerHandle.get(), expected, error) ||
-            !inspectPrivateHandle(ownerHandle.get(), false, token, rechecked, error)) return false;
-        if (!rechecked.ownerMatchesTokenOwner) return fail(error, ERROR_ACCESS_DENIED);
-        observation.stage = PrivateFileCreationStage::SetOwner;
-        const auto status = SetSecurityInfo(ownerHandle.get(), SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION, token.user(), nullptr, nullptr, nullptr);
-        if (status != ERROR_SUCCESS) return fail(error, status);
-        observation.ownerChanged = true;
+        if (!metadata) return fail(error);
+        if (!emptyStagingObject(file, error) ||
+            !privateDacl(metadata.get(), false, user, ownerMatches, error)) return false;
+        if (!ownerMatches) {
+            const auto status = SetSecurityInfo(metadata.get(), SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION, user, nullptr, nullptr, nullptr);
+            if (status != ERROR_SUCCESS) return fail(error, status);
+        }
     }
-    observation.stage = PrivateFileCreationStage::Verify;
-    if (!matchesCreatedEmptyFile(file, expected, error) ||
-        !inspectPrivateHandle(file, false, token, observation.after, error)) return false;
-    if (!observation.after.ownerMatchesUser) return fail(error, ERROR_ACCESS_DENIED);
-    observation.stage = PrivateFileCreationStage::Ready;
-    return true;
+    // The complete strict rule still has to hold after preparation. In
+    // particular, setting an owner never repairs an unsafe existing DACL.
+    if (!emptyStagingObject(file, error) ||
+        !privateDacl(file, false, user, ownerMatches, error)) return false;
+    return ownerMatches || fail(error, ERROR_ACCESS_DENIED);
 }
 
 } // namespace HuhuCapture::Platform

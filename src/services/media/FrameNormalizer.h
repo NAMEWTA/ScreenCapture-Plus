@@ -12,6 +12,13 @@ std::optional<FrameExtent> normalizedFrameExtent(const Core::FrameFormat& format
     const Core::FrameMetadata& metadata) noexcept;
 
 enum class FrameNormalizationError { None, InvalidFrame, UnsupportedFormat, InvalidSelection, Budget, Busy, Allocation };
+// Copy into caller-owned storage using the same crop/transform traversal as
+// the pooled normalizer. The span and stride are validated before any write;
+// no intermediate full-image allocation or alpha/color reinterpretation occurs.
+FrameNormalizationError copyNormalizedBgra(const Core::FrameLease& source,
+    std::optional<Core::FrameCrop> selection, std::span<std::uint8_t> destination,
+    std::size_t destinationStride) noexcept;
+
 struct NormalizedFrame {
     Core::FrameLease frame;
     FrameNormalizationError error{FrameNormalizationError::None};

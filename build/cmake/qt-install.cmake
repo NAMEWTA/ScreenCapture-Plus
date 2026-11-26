@@ -51,10 +51,13 @@ file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/package/$<CONFIG>/build-identity.cpp
     INPUT "${PROJECT_BINARY_DIR}/package/build-identity.cpp.in")
 target_sources(huhucapture PRIVATE "${PROJECT_BINARY_DIR}/package/$<CONFIG>/build-identity.cpp")
 if(MSVC)
-    target_link_options(huhucapture PRIVATE /INCLUDE:huhuPackageIdentity)
-    # The product already compiles resources/qt/application.rc, which includes
-    # the same version-info.rc as the retained Windows product. Do not embed a
-    # second VERSIONINFO resource or introduce another version representation.
+    # The RC embeds the one reviewed process manifest, including PMv2. CMake's
+    # VS_DPI_AWARE=PerMonitor emits only the older True/PM v1 declaration.
+    target_link_options(huhucapture PRIVATE /INCLUDE:huhuPackageIdentity /MANIFEST:NO)
+    string(REPLACE "." "," HUHU_WINDOWS_VERSION "${HUHUCAPTURE_VERSION}")
+    configure_file("${PROJECT_SOURCE_DIR}/build/package/version.rc.in"
+        "${PROJECT_BINARY_DIR}/package/version.rc" @ONLY)
+    target_sources(huhucapture PRIVATE "${PROJECT_BINARY_DIR}/package/version.rc")
 endif()
 file(WRITE "${PROJECT_BINARY_DIR}/package/installation.json"
     "{\n  \"schemaVersion\": 1,\n  \"product\": \"huhucapture\",\n  \"version\": \"${HUHUCAPTURE_VERSION}\",\n  \"platform\": \"${_huhu_platform}\",\n  \"architecture\": \"${_huhu_architecture}\",\n  \"packageKind\": \"${HUHUCAPTURE_PACKAGE_KIND}\"\n}\n")

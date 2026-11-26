@@ -14,7 +14,7 @@ Arrival time is not capture time, source PTS is not implicitly the application's
 steady epoch, and dropping a fixed count or waiting a fixed delay cannot establish
 when the compositor painted hidden surfaces.
 
-Both workspaces now keep only the selected coordinates during setup. Actual
+Both controllers now keep only the selected coordinates during setup. Actual
 Start requires reachable stop controls, hides the relevant native windows and
 tooltips, and observes Qt unexposure within a bounded deadline. The Wayland
 refresh then performs the following operations, in order:
@@ -50,16 +50,16 @@ stays closed and the error terminal waits for actual producer/preview/Portal
 drain. `prepared` is not emitted a second time. Parent disappearance after the
 original authorization does not invalidate an otherwise active session.
 
-`RecordingWorkspace` includes pending unmap/refresh preparation in its real Stop
-route before creating a recording worker or output staging file. It handles
-failure, cancellation, capability loss and application exit before claiming a
-consumer. `ScrollCaptureSession::prepareLive` stores the selection only;
-`start` refreshes and then adopts the single consumer. Closing during refresh
-waits for that terminal. Once a worker runs, the existing source-consumer drain
-and `consumerFinished` handshake remain unchanged.
+`RecordingController` and `ScrollController` include pending unmap/refresh
+preparation in their real Stop route. They use the one ScreenCastSource facade,
+which claims the source only after the same-authorized-session refresh completes.
+Closing during refresh waits for its terminal and actual shutdown. Once a worker
+runs, LiveFrameReader waits for producer completion before the exact
+consumerFinished handshake. Failure, cancellation or capability loss does not
+create a second consumer or transfer the old Screenshot rectangle.
 
 Manual scrolling hides its complete window, rather than warning users to move
-it outside an unmapped source coordinate system. Both workspaces use actual
+it outside an unmapped source coordinate system. Both controllers use actual
 tray/registered-shortcut capability or a verified installed desktop action
 provided by the host. Without a reachable
 stop route they refuse hidden Start and retain visible instructions. A saved
@@ -148,4 +148,3 @@ preserves both failures, the actual-pixel diagnostics and the minimal retry
 correction after current-buffer removal. These changes belong only to the owned
 validation desktop and cannot establish that the user's system Portal has
 equivalent behavior.
-

@@ -5,7 +5,8 @@
 
 namespace HuhuCapture::Platform::Windows {
 
-inline HRESULT verifyRecordingControls(const Core::CaptureControlSnapshot& controls) noexcept
+inline HRESULT verifyRecordingControls(const Core::CaptureControlSnapshot& controls,
+    const RECT* selected = nullptr) noexcept
 {
     if (controls.surfaces.empty() || controls.surfaces.size() > 64) return E_INVALIDARG;
     for (const auto& surface : controls.surfaces) {
@@ -14,6 +15,16 @@ inline HRESULT verifyRecordingControls(const Core::CaptureControlSnapshot& contr
         if (!window || !GetWindowThreadProcessId(window, &process) || process != GetCurrentProcessId())
             return HRESULT_FROM_WIN32(ERROR_INVALID_WINDOW_HANDLE);
         if (!IsWindowVisible(window)) continue;
+        if (surface.placement == Core::CaptureControlPlacement::Outside && selected) {
+            RECT actual{};
+            if (selected->right <= selected->left || selected->bottom <= selected->top ||
+                !GetWindowRect(window, &actual) || actual.right <= actual.left || actual.bottom <= actual.top)
+                return HRESULT_FROM_WIN32(ERROR_INVALID_WINDOW_HANDLE);
+            if (actual.left < selected->right && actual.top < selected->bottom &&
+                actual.right > selected->left && actual.bottom > selected->top)
+                return HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
+            continue;
+        }
         if (surface.placement != Core::CaptureControlPlacement::Excluded)
             return HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
         DWORD affinity{};

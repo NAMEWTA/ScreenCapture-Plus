@@ -153,4 +153,3 @@ void GlobalShortcut::checkShutdown()
 }
 
 } // namespace HuhuCapture::Desktop
-

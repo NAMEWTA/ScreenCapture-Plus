@@ -66,8 +66,7 @@ WinSettingAbout::WinSettingAbout(Ling::WinBase* parent) : Ling::Node(parent)
     folderButton->setText(Lang::get(L"update.openFolder"));
     folderButton->onClick.add([this](Ling::Button*) {
         const auto state = Update::status();
-        if (state.file.empty() || (state.stage != Update::Stage::Downloaded &&
-            state.error != Update::Error::DurabilityUnknown)) return;
+        if (state.file.empty()) return;
         const auto directory = state.file.parent_path();
         if (reinterpret_cast<INT_PTR>(ShellExecuteW(win->hwnd, L"open", directory.c_str(),
             nullptr, nullptr, SW_SHOWNORMAL)) <= 32) {
@@ -199,14 +198,6 @@ void WinSettingAbout::refreshUpdate()
     case Stage::Downloaded: {
         setStatusText(std::format(L"v{} · {}", state.version,
             Lang::get(state.packageKind ? L"update.extractWindows" : L"update.downloaded")));
-        // Labels do not wrap. Keep the complete resolved path available in the
-        // folder button's tooltip while fitting the caption at the minimum size.
-        const auto path = state.file.wstring();
-        wchar_t compactPath[64]{};
-        const bool compacted = PathCompactPathExW(compactPath, path.c_str(), 32, 0) != FALSE;
-        downloadPath->setText(compacted ? compactPath : state.file.filename().wstring());
-        downloadPath->show();
-        folderButton->show();
         break;
     }
     case Stage::Failed: {
@@ -220,16 +211,20 @@ void WinSettingAbout::refreshUpdate()
         default: break;
         }
         setStatusText(Lang::get(key));
-        if (state.error == Update::Error::DurabilityUnknown && !state.file.empty()) {
-            wchar_t compactPath[64]{};
-            const auto path = state.file.wstring();
-            downloadPath->setText(PathCompactPathExW(compactPath, path.c_str(), 32, 0) ? compactPath : state.file.filename().wstring());
-            downloadPath->show(); folderButton->show();
-        }
         break;
     }
     case Stage::Cancelled:
         setStatusText(Lang::get(L"update.cancelled"));
         break;
+    }
+    if (!state.file.empty()) {
+        // A retained file must remain discoverable when durability is unknown
+        // or owned-file cleanup failed. Displaying its folder never executes it.
+        const auto path = state.file.wstring();
+        wchar_t compactPath[64]{};
+        downloadPath->setText(PathCompactPathExW(compactPath, path.c_str(), 32, 0)
+            ? compactPath : state.file.filename().wstring());
+        downloadPath->show();
+        folderButton->show();
     }
 }

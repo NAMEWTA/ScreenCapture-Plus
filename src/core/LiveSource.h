@@ -2,6 +2,7 @@
 
 #include "core/FrameQueue.h"
 #include <atomic>
+#include <future>
 #include <memory>
 #include <stop_token>
 
@@ -19,6 +20,10 @@ struct LiveSourceConsumer {
     std::shared_ptr<FrameQueue> frames;
     std::shared_ptr<const std::atomic<LiveSourceActivity>> activity;
     std::stop_source stop;
+    // Signalled on the producer worker only after native capture has returned.
+    // A media worker can drain without waiting for the GUI delivery of its
+    // QFutureWatcher; queue closure alone can also mean explicit cancellation.
+    std::shared_future<void> producerFinished;
     // The actual native frame used for the selection preview is transferred
     // exactly once. A quiet Streaming source need not deliver another damage
     // frame; consumers prefer a newer queued frame, otherwise use this lease.

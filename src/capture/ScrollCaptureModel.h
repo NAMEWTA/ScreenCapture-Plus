@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace HuhuCapture::Capture {
@@ -63,6 +64,10 @@ public:
     int height() const noexcept { return resultHeight_; }
     ScrollStopReason stopReason() const noexcept { return reason_; }
     const std::vector<std::uint8_t>& pixels() const noexcept { return result_; }
+    // Terminal ownership transfer releases matcher storage and moves the
+    // accumulated image without allocating or copying its complete pixels.
+    std::vector<std::uint8_t> takePixels() noexcept
+    { stop(); return std::move(result_); }
     std::size_t allocatedBytes() const noexcept;
 
 private:

@@ -22,7 +22,7 @@ Qt 迁移继续直接复用本仓库的 `HistoryStack`、批注几何 / 排版�
 
 Wayland 异步父窗口导出适配 KWindowSystem 6.32.0 固定提交 `870fed584663656db8b5e3d4ec1a7048b5eff25f` 中的两类导出对象，保留 Kai Uwe Broulik 的 LGPL-2.0-or-later 归属；未引入整套 KDE Frameworks。原始源码 blob、Qt 私有 ABI 边界及协议 XML 来源见 [来源清单](../third_party/kwayland-parent/upstream.md)。
 
-窗口激活继续窄复用同一 KWindowSystem 提交的 `xdg_activation_v1` 管理器，保留 Aleix Pol Gonzalez 的 LGPL-2.0-or-later 归属。协议定义保留 Aleix Pol Gonzalez / Carlos Garnacho 的 MIT 声明。只消费桌面实际给出的令牌，不另开连接或伪造输入序列；原始文件、逐文件 blob 和适配范围见 [激活来源](../third_party/kwayland-activation/upstream.md)。
+窗口激活使用固定 Qt 6.12.1 自有 Wayland shell surface 的窄平台适配：只附上桌面给出的有效令牌，再调用 Qt 的正常激活请求，不额外引入 KWindowSystem 激活管理器或协议连接。实现与未授予焦点的边界见 [窗口激活](window-activation.md)。
 
 Windows 已认领文件句柄到 Media Foundation 的桥接适配 Microsoft Corporation 的 Windows classic samples 提交 `434f6002bdf9cf9829406c3ff2b33387982d6168` 中 `XmlLiteReaderWriter` 的 `FileStream`，保留原 MIT 许可。它持有同一个文件对象，不按路径重新打开或截断；录制与编码仍复用本项目原后端。精确源码、改动和官方 MF 接口见 [句柄流来源](../third_party/windows-sdk-stream/upstream.json)。
 

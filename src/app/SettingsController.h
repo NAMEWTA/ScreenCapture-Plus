@@ -21,7 +21,8 @@ public:
     // Call after SettingsStore::load succeeds. It only reads OS autostart.
     // Windows/X11 request the saved shortcut; Wayland restores a previously
     // configured Portal session and reports whatever authorization really does.
-    bool initialize();
+    bool initialize(bool enableGlobalShortcut = true);
+    void setApplicationCaptureActive(bool active);
     UI::Qt::SettingsWindow* openSettings(UI::Qt::SettingsWindow::Page page = UI::Qt::SettingsWindow::Page::General);
     UI::Qt::SettingsSnapshot snapshot() const;
     void setArchiveDirectory(const QString& path, bool canOpen = true);
@@ -37,6 +38,7 @@ public:
     void shutdown();
 
 Q_SIGNALS:
+    void shortcutCaptureActive(bool active);
     void captureRequested(const QString& activationToken);
     void openArchiveRequested();
     void lanSettingsRequested();

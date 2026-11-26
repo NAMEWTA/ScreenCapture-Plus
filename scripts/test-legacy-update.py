@@ -2,7 +2,7 @@
 """Exercise the production WinRT bridge against real bounded HTTP and files.
 
 The default ZIP is an explicitly non-installable transport fixture. It proves
-streaming, ownership and policy failures, never P11a complete-product acceptance.
+the P11a controlled download contract, never Qt product installation or source completeness.
 Pass --real-package-directory with actual clean package metadata to additionally
 download that exact complete package; development flags are never rewritten.
 """
@@ -18,6 +18,7 @@ from pathlib import Path
 import subprocess
 import threading
 import time
+import types
 import zipfile
 
 from version_source import read_version
@@ -218,10 +219,11 @@ def main():
     parser.add_argument('--real-package-directory', type=Path)
     parser.add_argument('--require-real-package', action='store_true')
     parser.add_argument('--gui-probe', type=Path)
+    parser.add_argument('--configuration', choices=('Debug', 'Release'), required=True)
     args = parser.parse_args()
     require(args.probe.is_file() and args.legacy_executable.is_file(), 'Use actual built native probe and old product executable')
     require(not args.require_real_package or args.real_package_directory is not None,
-            'P11a full-package acceptance requires actual clean package artifacts')
+            'Actual Qt product acceptance requires actual clean package artifacts')
     version = read_version(ROOT)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -390,11 +392,15 @@ def main():
         if args.real_package_directory is not None:
             directory = args.real_package_directory.resolve()
             manifest_path = directory / 'release-manifest.json'
-            if not manifest_path.is_file():
-                manifest_path = directory / 'package-manifest-windows-x64.json'
-            value = json.loads(manifest_path.read_text(encoding='utf-8'))
-            require(value.get('developmentOnly', False) is False and value.get('sourceDirty', False) is False,
-                    'Actual development/dirty package is ineligible for the stable bridge; do not rewrite its flags')
+            path = ROOT / 'scripts/package-qt.py'
+            packager = types.ModuleType('huhucapture_actual_release')
+            packager.__file__ = str(path)
+            exec(compile(path.read_bytes(), str(path), 'exec'), packager.__dict__)
+            source_commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, check=True,
+                                           stdout=subprocess.PIPE, text=True, encoding='ascii').stdout.strip()
+            value, verified_assets = packager.verify_aggregate(directory, expected_commit=source_commit, expected_version=version)
+            require(value.get('developmentOnly') is False and value.get('sourceDirty') is False,
+                    'Only the unchanged complete formal aggregate is eligible for the stable bridge')
             selected = [x for x in value['assets'] if x['platform'] == 'windows' and x['architecture'] == 'x64' and x['packageKind'] == 'portable-zip']
             require(len(selected) == 1, 'Expected one actual complete Windows portable package')
             asset = selected[0]
@@ -402,18 +408,29 @@ def main():
             build = directory / asset['buildInfo']['name']
             require(descriptor(body.name, body) == {k: asset[k] for k in ('name', 'size', 'sha256')}, 'Actual package bytes changed')
             require(descriptor(build.name, build) == asset['buildInfo'], 'Actual build-info bytes changed')
-            assets = {body.name: body, build.name: build, 'release-manifest.json': manifest_path}
+            assets = {name: directory / name for name in verified_assets}
             actual_routes = routes_for(value['version'], assets)
+            actual_routes['/NAMEWTA/huhucapture/releases/download/' + value['tag'] + '/' + asset['name']].slow = True
             run('actual-complete-package', actual_routes, 'downloaded', same_bytes=body, offered_version=value['version'])
             if args.gui_probe is not None:
                 run_gui('native-about-actual-complete-package', actual_routes)
             actual_result = {'package': str(body), 'sha256': sha256(body), 'manifestSource': str(manifest_path),
+                             'manifestSha256': sha256(manifest_path), 'sourceCommit': value['sourceCommit'],
+                             'version': value['version'], 'tag': value['tag'], 'actualAboutPassed': args.gui_probe is not None,
                              'scope': 'Exact full-package transport; install/upgrade/uninstall remain independent checks'}
-        report = {'transportFixtureIncluded': True,
+        report = {'schemaVersion': 1, 'purpose': 'legacy-windows-bridge-contract',
+                  'repository': 'NAMEWTA/huhucapture', 'sourceCommit': base['sourceCommit'],
+                  'version': version, 'tag': 'v' + version, 'configuration': args.configuration,
+                  'nativeExecutable': descriptor('huhucapture.exe', args.legacy_executable),
+                  'probe': descriptor(args.probe.name, args.probe),
+                  'controlledPackageFixture': descriptor(package.name, package),
+                  'controlledPackageContractPassed': True,
+                  'nativeAboutFixturePassed': args.gui_probe is not None,
+                  'transportFixtureIncluded': True,
                   'actualCompletePackageRun': args.real_package_directory is not None,
                   'actualCompletePackage': actual_result, 'cases': reports}
         (output / 'result.json').write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
-        print('Production WinRT transport checks passed. Fixture results do not claim product installation or P11a release acceptance.', flush=True)
+        print('Production WinRT controlled bridge contract passed. Qt product installation/source acceptance remains independently recorded.', flush=True)
     finally:
         server.shutdown()
         server.server_close()

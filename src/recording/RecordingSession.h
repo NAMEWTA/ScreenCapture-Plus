@@ -21,8 +21,8 @@ struct SessionResult {
     BackendResult backend;
     Media::Failure failure;
     Media::ArchiveResult archive;
-    // Created and verified by the worker after durable publication. Output
-    // actions lease this exact identity; the GUI must not resnapshot the path.
+    // Bind later output to the exact object finalized and published by this
+    // worker. A path by itself is not a permit to export substituted media.
     std::optional<Media::Entry> archivedEntry;
     QString recoveryPath;
 };
@@ -38,12 +38,10 @@ public:
         QObject* parent = nullptr);
     ~RecordingSession() override;
     // Zero means rejected admission (busy, closed, missing service/backend or
-    // wrong thread). While the service remains alive, a nonzero token receives
-    // exactly one terminal result. Normal application exit awaits shutdownFinished.
+    // wrong thread). A nonzero token receives exactly one terminal result.
     quint64 start(BackendRequest request);
-    // Capture a provider for only this admitted task. Rejection never invokes
-    // it or changes the constructor's default. The owner releases any claimed
-    // live-source consumer when token == 0; nonzero tokens complete normally.
+    // A one-use authorized provider belongs to this worker, including failures
+    // before invocation; no idle session retains its first native frame.
     quint64 start(BackendRequest request, Backend requestBackend);
     // The first intent wins. Repeated stop clicks cannot change an in-flight
     // save into a discard or publish the same recording twice.
@@ -61,7 +59,7 @@ Q_SIGNALS:
     void stateChanged(quint64 token, HuhuCapture::Recording::SessionState state);
     void prepared(quint64 token, const HuhuCapture::Recording::PreparedRecording& recording);
     // Completed means the full recording is durably archived. A shared output
-    // controller uses intent + archivedEntry for Save As or clipboard, and must
+    // controller uses intent + archive.path for Save As or clipboard, and must
     // report that subsequent action's actual result separately.
     void finished(const HuhuCapture::Recording::SessionResult& result);
     void shutdownFinished();

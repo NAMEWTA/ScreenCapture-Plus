@@ -49,6 +49,8 @@ public:
     bool push(FrameLease frame);
     FrameQueueRead takeLatest();
     FrameQueueRead waitNext(std::stop_token stop = {});
+    // Empty/open at the deadline is distinct from an immutable source terminal.
+    FrameQueueRead waitUntil(MediaClock::time_point deadline, std::stop_token stop = {});
     // First terminal wins. Normal stop retains queued frames for encoder drain;
     // discardQueued is for explicit abandonment, and records all released input.
     void close(FrameSourceTerminal terminal = {}, bool discardQueued = false);

@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import types
 import zipfile
 from version_source import read_version
 
@@ -26,9 +27,35 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 _spec = importlib.util.spec_from_file_location('huhucapture_package_metadata', ROOT/'build/package/metadata.py')
 meta = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(meta)
+_execution_log = None
+
+
+def source_inventory_api():
+    # One inventory format and digest algorithm with the source collector.
+    # Metadata inventory follows symlink targets for updater accounting; the
+    # source inventory intentionally records the link itself, including modes.
+    path = ROOT/'scripts/create-source-bundle.py'
+    module = types.ModuleType('huhucapture_source_inventory')
+    module.__file__ = str(path)
+    exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+    return module
+
+
+def execution_api():
+    path = ROOT/'build/package/source_receipts.py'
+    module = types.ModuleType('huhucapture_packaging_execution')
+    module.__file__ = str(path)
+    exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+    return module
 
 
 def run(arguments, *, cwd=None, env=None, capture=False):
+    if _execution_log is not None:
+        # The shared producer recorder writes actual tool bytes, argv, exit
+        # status and stdout/stderr even on failure. Only raw_record's successful
+        # execution gate can later produce a completed transformation journal.
+        result = _execution_log.run(arguments, cwd=cwd or Path.cwd(), env=env, capture=capture)
+        return result[0] if capture else ''
     print('+', ' '.join(map(str, arguments)), flush=True)
     result = subprocess.run(list(map(str, arguments)), cwd=cwd, env=env, check=True,
                             text=True, encoding='utf-8', errors='replace',
@@ -118,33 +145,75 @@ def nsi_escape(value):
     return str(value).replace('$', '$$').replace('"', '$\\"')
 
 
-def windows_installer(prefix: Path, output: Path, workspace: Path, version: str, nsis_archive: Path):
+def nsis_distribution(distribution: Path):
+    # Official v311, Examples/makensis.nsi, installs a root launcher AND the
+    # real Bin compiler. Source/build.cpp initializes NSISDIR from Bin's parent.
+    source_commit = '7359413009afd4f0fff472d841fc2f2cc0e0a5f8'
+    required = ('makensis.exe', 'Bin/makensis.exe', 'COPYING',
+                'Include/MUI2.nsh', 'Include/LogicLib.nsh', 'Include/x64.nsh', 'Include/WinVer.nsh',
+                'Stubs/uninst', 'Stubs/lzma_solid-x86-unicode',
+                'Plugins/x86-unicode/nsDialogs.dll', 'Plugins/x86-unicode/System.dll',
+                'Contrib/Modern UI 2/MUI2.nsh', 'Contrib/Language files/English.nsh')
+    meta.require(distribution.is_dir() and not distribution.is_symlink(), 'NSIS extraction must be an owned directory')
+    entries = sorted(distribution.rglob('*'), key=lambda path: path.relative_to(distribution).as_posix())
+    meta.require(not any(path.is_symlink() for path in entries), 'NSIS extraction must not contain symbolic links')
+    candidates = [path for path in entries if path.name.lower() == 'makensis.exe']
+    records = []
+    for path in candidates:
+        meta.require(path.is_file(), 'NSIS compiler candidate is not a regular file: '+path.relative_to(distribution).as_posix())
+        records.append({'path':path.relative_to(distribution).as_posix(),
+                        'size':path.stat().st_size, 'sha256':meta.sha256(path)})
+    layouts = []
+    roots = []
+    for path in candidates:
+        if path.parent.name != 'Bin': continue
+        root = path.parent.parent
+        missing = [name for name in required if not (root/name).is_file() or not (root/name).stat().st_size]
+        layouts.append({'root':root.relative_to(distribution).as_posix(), 'missing':missing})
+        if not missing: roots.append(root)
+    print('NSIS distribution inspection: '+json.dumps({'candidates':records, 'layouts':layouts}, sort_keys=True), flush=True)
+    meta.require(len(roots) == 1, 'The official NSIS archive must contain exactly one complete distribution root')
+    root = roots[0]
+    compiler = root/'Bin/makensis.exe'
+    meta.require(set(candidates) == {root/'makensis.exe', compiler},
+                 'Unexpected compiler candidates outside the official NSIS launcher/Bin pair')
+    selection = {'distributionRoot':root.relative_to(distribution).as_posix(),
+                 'compilerPath':compiler.relative_to(distribution).as_posix(),
+                 'compilerCandidates':records, 'layoutSourceCommit':source_commit}
+    print('NSIS compiler selection: '+json.dumps(selection, sort_keys=True), flush=True)
+    return root, compiler, selection
+
+
+def prepare_nsis(nsis_archive: Path, workspace: Path):
     specification = meta.json_read(ROOT/'build/package/dependencies.lock.json')['windowsTools']['nsis']
     meta.require(nsis_archive is not None and nsis_archive.is_file() and
                  meta.sha256(nsis_archive) == specification['sha256'],
                  'Supply the exact reviewed NSIS distribution; arbitrary PATH compilers are not packaging inputs')
     distribution = workspace/'nsis'; distribution.mkdir()
     run([tool('7z'),'x','-y','-o'+str(distribution),nsis_archive])
-    # The fixed setup contains a root SubStart launcher and the real compiler
-    # in Bin. Their matching basenames are the official distribution layout.
-    candidates = [path for path in distribution.rglob('makensis.exe') if path.parent.name.casefold() == 'bin']
-    meta.require(len(candidates) == 1, 'The official NSIS archive has no unambiguous Bin/makensis.exe compiler')
-    compiler = candidates[0]
-    nsis_root = compiler.parent.parent
-    meta.require((nsis_root/'Include/MUI2.nsh').is_file() and (nsis_root/'Stubs/uninst').is_file(),
-                 'The fixed compiler is missing its own include files or uninstaller stub')
-    environment = os.environ.copy()
-    environment['NSISDIR'] = str(nsis_root)
-    environment.pop('NSISCONFDIR', None)
-    compiler_version = run([compiler, '/VERSION'], env=environment, capture=True).strip()
+    root, compiler, selection = nsis_distribution(distribution)
+    # Ignore ambient NSIS locations even on Windows, where environment names
+    # are case-insensitive. /NOCONFIG also excludes per-user nsisconf.nsh.
+    environment = {key:value for key, value in os.environ.copy().items()
+                   if key.upper() not in {'NSISDIR', 'NSISCONFDIR'}}
+    environment['NSISDIR'] = str(root.resolve())
+    compiler_version = run([compiler, '/NOCONFIG', '/VERSION'], env=environment, capture=True).strip()
     meta.require(compiler_version == 'v3.11', 'Use the reviewed NSIS 3.11 compiler, not an unspecified PATH version')
-    records = meta.inventory(prefix)
+    provenance = {'name':'nsis', 'version':compiler_version, 'sha256':meta.sha256(compiler),
+                  'source':specification['source'], 'distributionSha256':specification['sha256'], **selection}
+    return compiler, environment, provenance
+
+
+def windows_installer_script(prefix: Path, output: Path, version: str, records):
     install, remove, directories = [], [], set()
     for entry in records:
         relative = Path(entry['path'])
         meta.require('linkTarget' not in entry, 'Installer input cannot contain links')
         parent = str(relative.parent).replace('/', '\\')
         output_dir = '$INSTDIR' if parent == '.' else '$INSTDIR\\'+nsi_escape(parent)
+        # v311 Source/script.cpp rejects a quote immediately after /oname=.
+        # Quote the whole token, as Docs/src/basic.but documents:
+        # https://github.com/NSIS-Dev/nsis/blob/7359413009afd4f0fff472d841fc2f2cc0e0a5f8/Docs/src/basic.but
         target = '$INSTDIR\\'+nsi_escape(str(relative).replace('/', '\\'))
         install.extend(['    StrCpy $OperationTarget "'+output_dir+'"', '    ClearErrors',
                         '    SetOutPath "'+output_dir+'"', '    IfErrors install_failed',
@@ -156,22 +225,24 @@ def windows_installer(prefix: Path, output: Path, workspace: Path, version: str,
                        '    IfFileExists "$OperationTarget" uninstall_failed'])
         for ancestor in relative.parents:
             if ancestor != Path('.'): directories.add(str(ancestor).replace('/', '\\'))
-    # A nonempty directory may contain user data. Failure to remove it is not a
-    # failed payload deletion and never authorizes recursive removal.
     remove += ['    RMDir "$INSTDIR\\'+nsi_escape(value)+'"' for value in sorted(directories, key=lambda x:(x.count('\\'),x), reverse=True)]
     replacements = {'OUTPUT':nsi_escape(output), 'VERSION':version, 'ICON':nsi_escape(ROOT/'resources/logo.ico'),
                     'LICENSE':nsi_escape(ROOT/'LICENSE'), 'INSTALL_FILES':'\n'.join(install), 'REMOVE_FILES':'\n'.join(remove)}
     source = (ROOT/'build/package/user-installer.nsi.in').read_text()
     for key, value in replacements.items(): source = source.replace('@'+key+'@', value)
     meta.require(not re.search(r'@[A-Z_]+@', source), 'Unexpanded installer template token')
+    return source
+
+
+def windows_installer(prefix: Path, output: Path, workspace: Path, version: str, nsis_archive: Path):
+    compiler, environment, provenance = prepare_nsis(nsis_archive, workspace)
+    records = meta.inventory(prefix)
+    source = windows_installer_script(prefix, output, version, records)
     script = workspace/'installer.nsi'; script.write_text(source, encoding='utf-8-sig')
     run([compiler, '/NOCONFIG', '/INPUTCHARSET', 'UTF8', script], env=environment)
     meta.verify_inventory(prefix, records)
     meta.require(output.is_file() and output.stat().st_size > 0, 'NSIS did not create the complete installer')
-    return {'name':'nsis','version':compiler_version,'sha256':meta.sha256(compiler),
-            'compilerPath':compiler.relative_to(distribution).as_posix(),
-            'source':specification['source'], 'distributionSha256':specification['sha256'],
-            'templateSha256':meta.sha256(ROOT/'build/package/user-installer.nsi.in')}
+    return {**provenance, 'templateSha256':meta.sha256(ROOT/'build/package/user-installer.nsi.in')}
 
 
 def linux_environment(qmake: Path):
@@ -232,14 +303,17 @@ def split_debug(prefix: Path, destination: Path):
             meta.require(path != executable, 'The actual app has no debug data; build RelWithDebInfo for matching symbols')
             continue
         meta.require(identity is not None, 'ELF with debug data has no build-id: '+str(relative))
+        original = meta.descriptor(path)
         debug = destination/relative.with_name(relative.name+'.debug'); debug.parent.mkdir(parents=True,exist_ok=True)
         run([objcopy,'--only-keep-debug',path,debug])
         run([objcopy,'--strip-debug',path])
         run([objcopy,'--add-gnu-debuglink='+str(debug),path])
-        records.append({'path':relative.as_posix(),'buildId':identity.group(1), 'runtimeSha256':meta.sha256(path),
+        records.append({'path':relative.as_posix(),'buildId':identity.group(1), 'input':original,
+                        'runtimeSha256':meta.sha256(path),
                         'debug':debug.relative_to(destination).as_posix(), 'debugSha256':meta.sha256(debug)})
     meta.require(any(item['path'] == 'bin/huhucapture' for item in records), 'Missing matching app debug symbols')
     meta.json_write(destination/'build-ids.json', {'schemaVersion':1,'files':records})
+    return records
 
 
 def tar_zstd(prefix: Path, output: Path, workspace: Path):
@@ -256,11 +330,11 @@ def cmake_quote(path):
     return '[=['+value+']=]'
 
 
-def linux_deb(appdir: Path, output: Path, workspace: Path, version: str):
+def linux_deb(appdir: Path, output: Path, workspace: Path, version: str, root: Path):
     # CPack otherwise falls back to only explicit Depends when shlibdeps is
     # absent. This pipeline requires the actual ELF dependency calculation.
     tool('dpkg-shlibdeps'); tool('file')
-    root = workspace/'deb-root'; (root/'opt').mkdir(parents=True)
+    (root/'opt').mkdir(parents=True)
     shutil.copytree(appdir/'usr', root/'opt/huhucapture', symlinks=True)
     marker(root/'opt/huhucapture','deb')
     (root/'usr/bin').mkdir(parents=True)
@@ -311,45 +385,60 @@ def linux_deb(appdir: Path, output: Path, workspace: Path, version: str):
     extracted = workspace/'deb-verified'; run([dpkg,'--extract',output,extracted])
     meta.require(meta.inventory(root) == meta.inventory(extracted), 'DEB extraction differs from the real staged package')
     meta.audit_tree(extracted/'opt/huhucapture','deb',development=True)
+    # Retain the actual CPack-generated control bytes too. They belong to the
+    # final source mapping, not an inferred reconstruction from package fields.
+    run([dpkg,'--control',output,root/'DEBIAN'])
     return root
 
 
-def source_materials(args, output: Path, build: dict):
-    if args.source_bundle is None or args.source_manifest is None:
-        meta.require(args.development, 'Release packaging requires the corresponding source bundle and its matching manifest')
-        return None
-    evidence = meta.json_read(args.source_manifest)
-    for key in ('product','repository','version','sourceCommit'):
-        meta.require(evidence.get(key) == build[key], 'Corresponding source manifest describes a different build')
-    actual = meta.descriptor(args.source_bundle)
-    meta.require(evidence.get('archive') == actual and evidence.get('complete') is True,
-                 'Corresponding-source archive bytes or completion status do not match their manifest')
-    required = {'huhucapture','qt','gifski','localsend','ffmpeg','rust-vendor'}
-    if build['platform'] == 'linux': required |= {'libportal','pipewire','x264','appimage-runtime'}
-    meta.require(required <= {entry['name'] for entry in evidence.get('components',[])}, 'Corresponding source material omits a shipped dependency family')
-    copy_exclusive(args.source_bundle,output/actual['name'])
-    copy_exclusive(args.source_manifest,output/args.source_manifest.name)
-    return {'archive':actual,'manifest':meta.descriptor(output/args.source_manifest.name)}
+def package_products(platform):
+    if platform == 'windows':
+        return [{'root':kind, 'executable':'huhucapture.exe', 'packageKind':kind}
+                for kind in ('installer','portable-zip')]
+    return [{'root':'appimage/usr', 'executable':'bin/huhucapture', 'packageKind':'appimage'},
+            {'root':'deb/opt/huhucapture', 'executable':'bin/huhucapture', 'packageKind':'deb'}]
 
 
-def package(args):
-    installed = args.installed.resolve(); output = args.output.resolve()
+def empty_output(path: Path):
+    meta.require(not path.is_symlink(), 'Output directory must not be a link')
+    path.mkdir(parents=True, exist_ok=True)
+    meta.require(not any(path.iterdir()), 'Use an empty output directory; existing results are retained')
+
+
+def prepare(args):
+    """Create and retain the actual final bytes before corresponding-source closure.
+
+    A prepared release candidate has no release manifest. Its explicit intent,
+    clean build identity and frozen payloads are verified again by finalize.
+    Development preparation can only produce development metadata afterward.
+    """
+    global _execution_log
+    installed = args.installed.resolve(); stage = args.stage.resolve()
     meta.require(installed.is_dir(), 'The actual CMake-installed tree is required')
-    output.mkdir(parents=True, exist_ok=True)
-    meta.require(not any(output.iterdir()), 'Use an empty output directory; existing results are retained')
+    meta.require(not stage.is_relative_to(installed) and not installed.is_relative_to(stage),
+                 'Package staging and installed input must be separate directories')
+    empty_output(stage)
     platform = 'windows' if sys.platform == 'win32' else 'linux'
     kind = 'portable-zip' if platform == 'windows' else 'appimage'
     build, _ = meta.audit_tree(installed,kind,development=args.development)
     verify_source(build,args.development)
     meta.require(build['platform'] == platform, 'Package on the actual target platform; cross-host fake assets are forbidden')
-    sources = source_materials(args,output,build)
-    version = build['version']; arch=build['architecture']; dependencies=meta.locked_dependencies(ROOT,platform)
-    all_files, packages, extra_assets = [], [], []
-    with tempfile.TemporaryDirectory(prefix='huhucapture-package-') as temporary:
-        workspace = Path(temporary)
+    version = build['version']
+    collector = source_inventory_api()
+    original = collector.inventory(installed)
+    meta.json_write(stage/'installed-input-inventory.json',original)
+    payloads=stage/'payloads'; payloads.mkdir()
+    output=stage/'artifacts'; output.mkdir()
+    workspace=stage/'work'; workspace.mkdir()
+    packages, extra_assets, transforms = [], [], []
+    execution=execution_api().ExecutionLog(stage/'executions',platform,Path(__file__).resolve())
+    execution.retain_record(ROOT/'build/package/dependencies.lock.json')
+    execution.retain_record(stage/'installed-input-inventory.json')
+    _execution_log=execution
+    try:
         if platform == 'windows':
-            portable=workspace/'portable-zip'; shutil.copytree(installed,portable,symlinks=True); marker(portable,'portable-zip')
-            installer=workspace/'installer'; shutil.copytree(installed,installer,symlinks=True); marker(installer,'installer')
+            portable=payloads/'portable-zip'; shutil.copytree(installed,portable,symlinks=True); marker(portable,'portable-zip')
+            installer=payloads/'installer'; shutil.copytree(installed,installer,symlinks=True); marker(installer,'installer')
             meta.audit_tree(portable,'portable-zip',development=args.development)
             meta.audit_tree(installer,'installer',development=args.development)
             zip_path=output/meta.asset_name(version,'portable-zip'); zip_tree(portable,zip_path)
@@ -358,8 +447,7 @@ def package(args):
             verify_windows_symbols(args.symbols,portable/'huhucapture.exe',build)
             symbols=output/f'huhucapture-v{version}-windows-x64-symbols.zip'; zip_tree(args.symbols,symbols)
             extra_assets.append(meta.descriptor(symbols))
-            for item, tree, artifact in [('portable-zip',portable,zip_path),('installer',installer,installer_path)]:
-                all_files += meta.inventory(tree,item+'/')
+            for item,artifact in [('portable-zip',zip_path),('installer',installer_path)]:
                 packages.append({**meta.descriptor(artifact),'packageKind':item,'contentRoot':item})
             build['packagingTools']=[compiler]
         else:
@@ -367,84 +455,358 @@ def package(args):
             paths,provenance=verify_tools(args.tools,workspace/'tools')
             qmake=args.qmake.resolve()
             meta.require(run([qmake,'-query','QT_VERSION'],capture=True).strip() == build['qtVersion'], 'Packager Qt SDK does not match the actual binary')
-            appdir=workspace/'appimage'; environment=prepare_appdir(installed,appdir,paths,qmake)
-            symbols=workspace/'debug'; split_debug(appdir/'usr',symbols)
+            appdir=payloads/'appimage'; environment=prepare_appdir(installed,appdir,paths,qmake)
+            deployed = collector.inventory(appdir)
+            meta.json_write(stage/'linuxdeploy-output-inventory.json',deployed)
+            symbols=workspace/'debug'; transforms=split_debug(appdir/'usr',symbols)
             symbol_path=output/f'huhucapture-v{version}-linux-amd64-debug.tar.zst';tar_zstd(symbols,symbol_path,workspace)
             extra_assets.append(meta.descriptor(symbol_path))
-            deb_path=output/meta.asset_name(version,'deb'); deb=linux_deb(appdir,deb_path,workspace,version)
+            deb_path=output/meta.asset_name(version,'deb'); linux_deb(appdir,deb_path,workspace,version,payloads/'deb')
             image_path=output/meta.asset_name(version,'appimage')
             run([paths['appimagetool'],'--runtime-file',paths['appimageRuntime'],'--comp','zstd','--mksquashfs-opt','-processors','--mksquashfs-opt','1',appdir,image_path],env=environment)
             meta.require(meta.machine(image_path) == 'linux', 'AppImage has the wrong outer runtime architecture')
-            with image_path.open('rb') as stream: stream.seek(8); meta.require(stream.read(3)==b'AI\x02','AppImage type-2 magic is missing')
+            with image_path.open('rb') as stream:
+                stream.seek(8); meta.require(stream.read(3)==b'AI\x02','AppImage type-2 magic is missing')
             extracted=workspace/'appimage-verified'; extracted.mkdir()
             run([image_path,'--appimage-extract'],cwd=extracted,env=environment)
             extracted=extracted/'squashfs-root'
             meta.require(meta.inventory(appdir) == meta.inventory(extracted), 'AppImage extraction differs from the actual staged payload')
             meta.audit_tree(extracted/'usr','appimage',development=args.development)
-            for item,tree,artifact in [('deb',deb,deb_path),('appimage',appdir,image_path)]:
-                all_files += meta.inventory(tree,item+'/')
+            for item,artifact in [('deb',deb_path),('appimage',image_path)]:
                 packages.append({**meta.descriptor(artifact),'packageKind':item,'contentRoot':item})
             build['packagingTools']=provenance
-        meta.write_platform_metadata(output,build,all_files,packages,dependencies,args.minimum_system,
-                                     development=args.development,source_materials=sources,extra_assets=extra_assets)
-    print('Actual package files and hashes written. No tag, upload, installation or release was performed.')
+    finally:
+        _execution_log=None
+    products=package_products(platform)
+    for product in products:
+        actual,_=meta.audit_tree(payloads/product['root'],product['packageKind'],development=args.development)
+        meta.require(actual == {key:value for key,value in build.items() if key != 'packagingTools'},
+                     'Prepared product identities disagree')
+    meta.require(collector.inventory(installed)==original, 'Packaging changed the original CMake-installed input')
+    files=collector.inventory(payloads)
+    meta.json_write(stage/'source-deployment-inventory.json',files)
+    execution_record=execution.raw_record(
+        {'buildIdentity':{key:value for key,value in build.items() if key != 'packagingTools'},
+         'installedInput':original},
+        {'deploymentTreeSha256':collector.tree_digest(files),'files':files,'products':products,
+         'artifacts':[*packages,*extra_assets]})
+    meta.json_write(stage/'transformations.json',{'schemaVersion':1, 'kind':'huhucapture-package-transformations',
+        'buildIdentity':{key:value for key,value in build.items() if key != 'packagingTools'},
+        'installedInput':meta.descriptor(stage/'installed-input-inventory.json'),
+        'packagerSha256':meta.sha256(Path(__file__)), 'commands':execution.commands, 'debugTransforms':transforms,
+        'executionRecord':{**meta.descriptor(execution_record),'path':'executions/build-execution.json'},
+        'executionInventory':collector.inventory(stage/'executions'),
+        'deploymentTreeSha256':collector.tree_digest(files), 'products':products,
+        'artifacts':[*packages,*extra_assets]})
+    prepared={'schemaVersion':1,'kind':'huhucapture-prepared-packages',
+              'intent':'development' if args.development else 'release','build':build,
+              'minimumSystem':args.minimum_system,'products':products,
+              'packages':packages,'additionalAssets':extra_assets,
+              'deployment':{'files':files,'treeSha256':collector.tree_digest(files),'products':products},
+              'transformations':meta.descriptor(stage/'transformations.json')}
+    meta.json_write(stage/'prepared.json',prepared)
+    print('Prepared actual immutable payloads and candidate packages; corresponding sources must bind this final stage before release finalization.')
+    return prepared
+
+
+def verify_prepared(stage: Path):
+    prepared=meta.json_read(stage/'prepared.json',32*1024*1024)
+    meta.require(prepared.get('schemaVersion') == 1 and prepared.get('kind')=='huhucapture-prepared-packages' and
+                 prepared.get('intent') in ('development','release'), 'Unknown or incomplete package preparation')
+    development=prepared['intent']=='development'; build=prepared['build']
+    meta.identity(build,development=development)
+    expected=package_products(build['platform'])
+    meta.require(prepared.get('products')==expected and prepared['deployment'].get('products')==expected,
+                 'Prepared products do not cover both actual package forms')
+    collector=source_inventory_api(); actual=collector.inventory(stage/'payloads')
+    meta.require(actual==prepared['deployment']['files'] and
+                 collector.tree_digest(actual)==prepared['deployment']['treeSha256'] and
+                 meta.json_read(stage/'source-deployment-inventory.json',32*1024*1024)==actual,
+                 'Prepared deployment changed after source collection')
+    meta.require(meta.descriptor(stage/'transformations.json')==prepared['transformations'],
+                 'Actual packaging transformation records changed')
+    transformations=meta.json_read(stage/'transformations.json',32*1024*1024)
+    execution_record=transformations.get('executionRecord',{})
+    meta.require(execution_record.get('path')=='executions/build-execution.json' and
+                 meta.descriptor(stage/'executions/build-execution.json')==
+                    {key:value for key,value in execution_record.items() if key != 'path'} and
+                 collector.inventory(stage/'executions')==transformations.get('executionInventory'),
+                 'Actual packaging execution records or original logs changed')
+    for product in expected:
+        identity,_=meta.audit_tree(stage/'payloads'/product['root'],product['packageKind'],development=development)
+        meta.require(identity=={key:value for key,value in build.items() if key != 'packagingTools'},
+                     'Prepared product identity differs from its native build')
+    entries=prepared['packages']; expected_kinds={item['packageKind'] for item in expected}
+    meta.require(len(entries)==2 and {item['packageKind'] for item in entries}==expected_kinds,
+                 'Prepared candidate package matrix is incomplete')
+    for item in entries:
+        meta.require(item.get('contentRoot')==item['packageKind'], 'Prepared package content root differs')
+        meta.verify_artifact(stage/'artifacts',item,item['packageKind'],build['version'])
+    for item in prepared['additionalAssets']:
+        meta.require(Path(item['name']).name==item['name'] and meta.descriptor(stage/'artifacts'/item['name'])==item,
+                     'Prepared symbols changed or escaped the output')
+    meta.require({path.name for path in (stage/'artifacts').iterdir()}==
+                 {item['name'] for item in [*entries,*prepared['additionalAssets']]}, 'Unexpected prepared artifact')
+    return prepared
+
+
+def verify_source_materials(bundle: Path, manifest: Path, build: dict, deployment: dict):
+    evidence=meta.json_read(manifest,64*1024*1024)
+    meta.require(isinstance(evidence,dict) and isinstance(deployment,dict), 'Corresponding-source metadata must be an object')
+    for key in ('product','repository','version','sourceCommit','platform','architecture'):
+        meta.require(evidence.get(key)==build[key], 'Corresponding source manifest describes a different build')
+    stem=f"huhucapture-v{build['version']}-{build['platform']}-{build['architecture']}"
+    meta.require(bundle.name==stem+'-sources.tar.gz' and manifest.name==stem+'-source-manifest.json',
+                 'Source asset names must bind their actual platform and architecture')
+    actual=meta.descriptor(bundle)
+    meta.require(evidence.get('schemaVersion')==1 and evidence.get('generator')=='scripts/create-source-bundle.py' and
+                 evidence.get('archive')==actual and evidence.get('complete') is True and evidence.get('gaps')==[],
+                 'Corresponding-source bytes or computed completion do not match their manifest')
+    required={'huhucapture','qt','gifski','localsend','ffmpeg','rust-vendor'}
+    if build['platform']=='linux': required |= {'libportal','pipewire','x264','appimage-runtime'}
+    meta.require(required <= {entry['name'] for entry in evidence.get('components',[])},
+                 'Corresponding source material omits a shipped dependency family')
+    meta.require(evidence.get('deployment')==deployment,
+                 'Corresponding sources must bind the unchanged final payloads of both package forms')
+    collector=source_inventory_api()
+    meta.require(deployment.get('products')==package_products(build['platform']) and
+                 collector.tree_digest(deployment['files'])==deployment.get('treeSha256'),
+                 'Corresponding-source deployment inventory is incomplete or has changed')
+    expected_inventory=evidence.get('sourceInventory',{})
+    meta.require(expected_inventory.get('path')=='huhucapture-sources/source-inventory.json' and
+                 meta.HEX64.fullmatch(expected_inventory.get('sha256','')) is not None,
+                 'Corresponding-source archive has no bound original collector report')
+    found=False; members=0; expanded=0
+    with tarfile.open(bundle,'r|gz') as archive:
+        for entry in archive:
+            members+=1; expanded+=entry.size
+            meta.require(members<=500000 and 0<=entry.size<=32*1024*1024*1024 and expanded<=64*1024*1024*1024,
+                         'Corresponding-source archive exceeds the bounded inspection budget')
+            if entry.name != expected_inventory['path']: continue
+            meta.require(not found and entry.isfile() and 0 < entry.size <= 64*1024*1024,
+                         'Corresponding-source report in the actual archive is duplicate or invalid')
+            incoming=archive.extractfile(entry)
+            meta.require(incoming is not None, 'Cannot read actual archived collector report')
+            raw=incoming.read(64*1024*1024+1)
+            meta.require(len(raw)==entry.size and hashlib.sha256(raw).hexdigest()==expected_inventory['sha256'] and
+                         json.loads(raw)=={key:value for key,value in evidence.items() if key not in {'archive','sourceInventory'}},
+                         'External source manifest differs from the report inside the actual archive')
+            found=True
+    meta.require(found, 'The corresponding-source archive does not contain its recorded collector report')
+    return {'archive':actual,'manifest':meta.descriptor(manifest)}
+
+
+def verify_inventory_binding(files, deployment):
+    """Compare updater inventory with the collector's exact file/link format."""
+    actual={entry['path']:entry for entry in files}
+    source={entry['path']:entry for entry in deployment['files']}
+    meta.require(len(actual)==len(files) and len(source)==len(deployment['files']) and set(actual)==set(source),
+                 'Build-info and corresponding-source deployment paths differ')
+    for name, entry in source.items():
+        item=actual[name]
+        meta.safe_relative(name)
+        if entry['type']=='symlink':
+            meta.require(item.get('linkTarget')==entry['target'], 'Build-info link differs from the final source-mapped link')
+        else:
+            meta.require(entry['type']=='file' and 'linkTarget' not in item and
+                         item.get('size')==entry['size'] and item.get('sha256')==entry['sha256'],
+                         'Build-info bytes differ from the final source-mapped deployment')
+
+
+def finalize(args):
+    stage=args.stage.resolve(); output=args.output.resolve()
+    meta.require(not output.is_relative_to(stage) and not stage.is_relative_to(output),
+                 'Final output must not alter the preserved preparation')
+    prepared=verify_prepared(stage); build=prepared['build']
+    development=prepared['intent']=='development'
+    meta.require(development==args.development,
+                 'A prepared development bundle cannot be promoted to release; finalization intent must match')
+    verify_source(build,development)
+    sources=None
+    if not development:
+        if getattr(args,'source_plan',None) is not None:
+            meta.require(args.source_bundle is None and args.source_manifest is None and args.source_output is not None,
+                         'Supply one verified source plan/output or an already collected archive/manifest pair')
+            meta.require(args.source_plan.is_file() and not args.source_plan.is_symlink(),
+                         'The actual producer materials have not supplied the final-stage source plan; release completion is blocked')
+            run([sys.executable,ROOT/'scripts/create-source-bundle.py','collect','--plan',args.source_plan,
+                 '--output',args.source_output,'--require-complete'])
+            stem=f"huhucapture-v{build['version']}-{build['platform']}-{build['architecture']}"
+            args.source_bundle=args.source_output/(stem+'-sources.tar.gz')
+            args.source_manifest=args.source_output/(stem+'-source-manifest.json')
+        meta.require(args.source_bundle is not None and args.source_manifest is not None,
+                     'Release finalization requires computed-complete corresponding sources for the final stage')
+        sources=verify_source_materials(args.source_bundle,args.source_manifest,build,prepared['deployment'])
+    else:
+        meta.require(args.source_bundle is None and args.source_manifest is None and getattr(args,'source_plan',None) is None,
+                     'Development output never claims release source completeness; retain diagnostic sources separately')
+    meta.require(verify_prepared(stage)==prepared, 'Preparation changed during corresponding-source collection')
+    empty_output(output)
+    for item in [*prepared['packages'],*prepared['additionalAssets']]:
+        copy_exclusive(stage/'artifacts'/item['name'],output/item['name'])
+    if sources:
+        copy_exclusive(args.source_bundle,output/args.source_bundle.name)
+        copy_exclusive(args.source_manifest,output/args.source_manifest.name)
+    files=meta.inventory(stage/'payloads')
+    meta.write_platform_metadata(output,build,files,prepared['packages'],meta.locked_dependencies(ROOT,build['platform']),
+        prepared['minimumSystem'],development=development,source_materials=sources,extra_assets=prepared['additionalAssets'],
+        deployment={'treeSha256':prepared['deployment']['treeSha256'],'products':prepared['products']})
+    verify_prepared(stage)
+    print('Finalized exact prepared bytes and hashes; no repacking, relabeling, tag, upload, installation or publication occurred.')
+
+
+def package(args):
+    # Existing CI convenience remains explicitly development-only. Formal
+    # packaging has a required source-collection boundary between two commands.
+    meta.require(args.development, 'Formal packages require prepare, complete source collection, then finalize')
+    meta.require(args.source_bundle is None and args.source_manifest is None,
+                 'Use the explicit prepare/finalize boundary for corresponding sources')
+    args.stage=args.stage or args.output.with_name(args.output.name+'-prepared')
+    prepare(args)
+    finalize(args)
+
+
+def release_identity(manifest):
+    meta.require(isinstance(manifest,dict), 'Release package metadata must be an object')
+    meta.require(manifest.get('developmentOnly') is False and manifest.get('sourceDirty') is False,
+                 'Development, dirty or unspecified package metadata cannot enter a release manifest')
+    version=manifest.get('version',''); commit=manifest.get('sourceCommit','')
+    meta.require(type(manifest.get('schemaVersion')) is int and manifest['schemaVersion']==1 and
+                 manifest.get('product')==meta.PRODUCT and manifest.get('repository')==meta.REPOSITORY and
+                 isinstance(version,str) and meta.VERSION.fullmatch(version) and manifest.get('tag')=='v'+version and
+                 isinstance(commit,str) and meta.HEX40.fullmatch(commit), 'Noncanonical release identity')
+    return {key:manifest[key] for key in ('schemaVersion','product','repository','tag','version','sourceCommit','sourceDirty','developmentOnly')}
+
+
+def verify_release_files(folder: Path, manifest: dict, *, complete: bool):
+    """One verifier shared by aggregation and the sole publication command."""
+    identity=release_identity(manifest); entries=manifest.get('assets')
+    meta.require(isinstance(entries,list) and len(entries)==(4 if complete else 2), 'The actual release package matrix is incomplete')
+    seen=set(); platforms=set(); references={}; infos={}
+    for item in entries:
+        kind=item['packageKind']
+        meta.require(kind in meta.KINDS and kind not in seen, 'Unexpected/duplicate release package')
+        platform,arch,_,_=meta.KINDS[kind]
+        meta.require(item['platform']==platform and item['architecture']==arch and item.get('contentRoot')==kind and
+                     isinstance(item.get('minimumSystem'),str) and 0<len(item['minimumSystem'].encode('utf-8'))<=256,
+                     'Package platform, architecture, content root or system baseline differs')
+        seen.add(kind); platforms.add(platform)
+        actual=meta.verify_artifact(folder,item,kind,identity['version'])
+        info_name=f'build-info-{platform}-{arch}.json'
+        meta.require(item['buildInfo'].get('name')==info_name and meta.descriptor(folder/info_name)==item['buildInfo'],
+                     'Build-info reference or bytes changed')
+        if info_name not in infos:
+            info=meta.json_read(folder/info_name)
+            meta.require(release_identity(info)==identity and info.get('platform')==platform and info.get('architecture')==arch,
+                         'Build-info describes a different release/platform')
+            meta.identity(info)
+            source=info.get('sourceMaterials')
+            meta.require(isinstance(source,dict) and set(source)=={'archive','manifest'},
+                         'Release build-info lacks complete corresponding-source references')
+            for reference in source.values():
+                meta.require(Path(reference['name']).name==reference['name'] and meta.descriptor(folder/reference['name'])==reference,
+                             'Corresponding-source artifact changed or escaped its output')
+            evidence=meta.json_read(folder/source['manifest']['name'],64*1024*1024)
+            deployment=evidence.get('deployment')
+            meta.require(isinstance(deployment,dict) and info.get('deployment')==
+                         {key:deployment.get(key) for key in ('treeSha256','products')},
+                         'Release build-info is not bound to its actual final deployment')
+            meta.require(verify_source_materials(folder/source['archive']['name'],folder/source['manifest']['name'],info,deployment)==source,
+                         'Corresponding-source references differ')
+            verify_inventory_binding(info['files'],deployment)
+            symbols=info.get('additionalAssets')
+            expected_symbol=f"huhucapture-v{identity['version']}-{platform}-{arch}"+('-symbols.zip' if platform=='windows' else '-debug.tar.zst')
+            meta.require(isinstance(symbols,list) and len(symbols)==1 and symbols[0].get('name')==expected_symbol,
+                         'Matching native debug symbols are missing or ambiguous')
+            infos[info_name]=info
+        info=infos[info_name]
+        matching=[entry for entry in info.get('packages',[]) if entry.get('packageKind')==kind]
+        meta.require(len(matching)==1 and matching[0]=={**actual,'packageKind':kind,'contentRoot':kind},
+                     'Build-info package bytes differ from the release entry')
+        for reference in [actual,item['buildInfo'],*info['additionalAssets'],*info['sourceMaterials'].values()]:
+            name=reference['name']
+            meta.require(Path(name).name==name and meta.descriptor(folder/name)==reference,
+                         'Referenced artifact changed or escaped its platform output')
+            meta.require(name not in references or references[name]==reference, 'Conflicting release asset names')
+            references[name]=reference
+    if complete:
+        meta.require(platforms=={'windows','linux'} and seen==set(meta.KINDS), 'The complete Windows/Linux package matrix is required')
+    else:
+        meta.require(len(platforms)==1 and seen=={kind for kind,value in meta.KINDS.items() if value[0] in platforms},
+                     'A platform output must contain both real package forms')
+    return identity,references
+
+
+def verify_aggregate(folder: Path, *, expected_commit=None, expected_version=None):
+    manifest=meta.json_read(folder/'release-manifest.json',1024*1024)
+    identity,references=verify_release_files(folder,manifest,complete=True)
+    meta.require(expected_commit is None or identity['sourceCommit']==expected_commit, 'Release source commit differs from the requested source')
+    meta.require(expected_version is None or identity['version']==expected_version, 'Release version differs from the single source of truth')
+    references['release-manifest.json']=meta.descriptor(folder/'release-manifest.json')
+    expected=''.join(references[name]['sha256']+'  '+name+'\n' for name in sorted(references))
+    checksums=folder/'SHA256SUMS.txt'
+    meta.require(checksums.is_file() and not checksums.is_symlink() and checksums.read_bytes()==expected.encode('ascii'),
+                 'Release checksums omit, add or change an exact asset')
+    references[checksums.name]=meta.descriptor(checksums)
+    meta.require({path.name for path in folder.iterdir()}==set(references), 'Release directory contains undeclared artifacts')
+    return manifest,references
 
 
 def aggregate(args):
-    output=args.output.resolve(); output.mkdir(parents=True,exist_ok=True)
-    meta.require(not any(output.iterdir()), 'Aggregate output must be empty')
-    combined=[]; baseline=None; seen=set(); platforms=set()
+    output=args.output.resolve(); empty_output(output)
+    combined=[]; baseline=None; names=set(); seen_platforms=set()
+    meta.require(len(args.inputs)==2, 'Exactly one native output from each platform is required')
     for folder in args.inputs:
+        folder=folder.resolve()
         manifests=list(folder.glob('package-manifest-*.json'))
         meta.require(len(manifests)==1,'Each platform input requires one generated package manifest')
         manifest=meta.json_read(manifests[0],1024*1024)
-        meta.require(manifest.get('developmentOnly') is False and manifest.get('sourceDirty') is False,
-                     'Development or dirty package metadata cannot enter a release manifest')
-        current={key:manifest[key] for key in ('schemaVersion','product','repository','tag','version','sourceCommit','sourceDirty')}
+        current,references=verify_release_files(folder,manifest,complete=False)
         if baseline is None: baseline=current
-        meta.require(current==baseline and current['product']==meta.PRODUCT and current['repository']==meta.REPOSITORY,'Platforms were built from different identities')
-        for item in manifest['assets']:
-            kind=item['packageKind']; platform,arch,_,budget=meta.KINDS[kind]
-            meta.require(kind not in seen and item['platform']==platform and item['architecture']==arch and item['name']==meta.asset_name(current['version'],kind),'Unexpected/duplicate release package')
-            seen.add(kind); platforms.add(platform)
-            actual=meta.verify_artifact(folder,item,kind,current['version'])
-            info_name=item['buildInfo']['name'];meta.require(info_name==f'build-info-{platform}-{arch}.json','Unexpected build-info reference')
-            meta.require(meta.descriptor(folder/info_name)==item['buildInfo'],'Build-info changed before aggregation')
-            info=meta.json_read(folder/info_name)
-            meta.require({key:info[key] for key in current}==current and info.get('developmentOnly') is False and
-                         info.get('sourceDirty') is False and info.get('sourceMaterials'),
-                         'Build-info lacks matching clean release identity/corresponding source')
-            references=[actual,item['buildInfo'],*info.get('additionalAssets',[]),*info['sourceMaterials'].values()]
-            for reference in references:
-                meta.require(Path(reference['name']).name==reference['name'] and meta.descriptor(folder/reference['name'])==reference,'Referenced artifact changed or escaped its platform output')
-                destination=output/reference['name']
-                if destination.exists(): meta.require(meta.descriptor(destination)==reference,'Different platform assets collided by name')
-                else: copy_exclusive(folder/reference['name'],destination)
-            combined.append(item)
-    meta.require(platforms=={'windows','linux'} and seen==set(meta.KINDS),'The complete Windows/Linux package matrix is required')
+        meta.require(current==baseline,'Platforms were built from different identities')
+        platform=manifest['assets'][0]['platform']
+        meta.require(platform not in seen_platforms, 'Duplicate platform output')
+        seen_platforms.add(platform)
+        for name,reference in references.items():
+            meta.require(name not in names, 'Different platform assets collided by name')
+            names.add(name); copy_exclusive(folder/name,output/name)
+        combined.extend(manifest['assets'])
+    # developmentOnly is explicit in the canonical manifest consumed by both
+    # real Qt and legacy About paths. Absence must not accidentally mean stable.
     meta.json_write(output/'release-manifest.json',{**baseline,'assets':sorted(combined,key=lambda item:item['name'])})
     checksums=[meta.sha256(path)+'  '+path.name for path in sorted(output.iterdir()) if path.is_file()]
     with (output/'SHA256SUMS.txt').open('x',encoding='ascii',newline='\n') as stream: stream.write('\n'.join(checksums)+'\n')
+    verify_aggregate(output)
     print('Complete aggregate manifest generated from exact artifacts; no publishing operation was performed.')
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     commands=parser.add_subparsers(dest='command',required=True)
-    pack=commands.add_parser('package',help='Package one actual native CMake install tree')
-    pack.add_argument('--installed',type=Path,required=True);pack.add_argument('--output',type=Path,required=True)
-    pack.add_argument('--minimum-system',required=True)
-    pack.add_argument('--tools',type=Path);pack.add_argument('--qmake',type=Path);pack.add_argument('--symbols',type=Path)
-    pack.add_argument('--nsis-installer',type=Path,help='Exact reviewed NSIS 3.11 distribution, extracted without executing setup')
-    pack.add_argument('--source-bundle',type=Path);pack.add_argument('--source-manifest',type=Path)
-    pack.add_argument('--development',action='store_true',help='Explicit non-release bundle; dirty sources permitted and release aggregation forbidden')
-    final=commands.add_parser('aggregate',help='Verify and combine both native platform outputs, without publishing')
-    final.add_argument('--input',dest='inputs',action='append',type=Path,required=True);final.add_argument('--output',type=Path,required=True)
+    for name in ('prepare','package'):
+        pack=commands.add_parser(name,help='Preserve actual final package payloads' if name=='prepare' else 'Prepare/finalize an explicit development bundle')
+        pack.add_argument('--installed',type=Path,required=True)
+        pack.add_argument('--stage',type=Path,required=name=='prepare')
+        if name=='package':
+            pack.add_argument('--output',type=Path,required=True)
+            pack.add_argument('--source-bundle',type=Path);pack.add_argument('--source-manifest',type=Path)
+        pack.add_argument('--minimum-system',required=True)
+        pack.add_argument('--tools',type=Path);pack.add_argument('--qmake',type=Path);pack.add_argument('--symbols',type=Path)
+        pack.add_argument('--nsis-installer',type=Path,help='Exact reviewed NSIS 3.11 distribution, extracted without executing setup')
+        pack.add_argument('--development',action='store_true',help='Explicit non-release intent; never promotable to a formal release')
+    finish=commands.add_parser('finalize',help='Verify frozen payloads and complete sources, then write platform metadata without repacking')
+    finish.add_argument('--stage',type=Path,required=True);finish.add_argument('--output',type=Path,required=True)
+    finish.add_argument('--source-bundle',type=Path);finish.add_argument('--source-manifest',type=Path)
+    finish.add_argument('--source-plan',type=Path,help='Actual producer/material plan for this frozen final deployment')
+    finish.add_argument('--source-output',type=Path,help='New output directory for computed-complete corresponding sources')
+    finish.add_argument('--development',action='store_true')
+    combined=commands.add_parser('aggregate',help='Verify and combine both native platform outputs, without publishing')
+    combined.add_argument('--input',dest='inputs',action='append',type=Path,required=True);combined.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
     try:
-        package(args) if args.command=='package' else aggregate(args)
+        {'prepare':prepare,'finalize':finalize,'package':package,'aggregate':aggregate}[args.command](args)
         return 0
-    except (ValueError,OSError,subprocess.CalledProcessError) as error:
+    except (ValueError,KeyError,TypeError,OSError,tarfile.TarError,subprocess.CalledProcessError) as error:
         print('Qt packaging failed; existing outputs retained:',error,file=sys.stderr)
         return 1
 

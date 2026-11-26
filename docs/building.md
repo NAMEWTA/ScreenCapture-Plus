@@ -2,7 +2,7 @@
 
 ## Qt 迁移验证入口
 
-当前正式 Windows 构建仍使用本页后续的 PowerShell / MSBuild 入口。根目录 CMake 用于 [Issue #5 的迁移验证](qt-migration.md)，还不生成最终 Qt 应用或安装包。CMake 要求 3.25 以上及 C++20 编译器，纯核心配置不需要 Qt：
+当前正式 Windows 构建仍使用本页后续的 PowerShell / MSBuild 入口。根目录 CMake 默认构建 [Issue #5 的迁移验证](qt-migration.md)；显式开启 `HUHUCAPTURE_BUILD_APP=ON` 可构建统一 Qt 应用。完整应用预设及服务边界见 [Qt 应用](qt-application.md)，实际安装树和开发包命令见 [打包说明](qt-packaging.md)。这些入口仍受 P12 发布验收约束。CMake 要求 3.25 以上及 C++20 编译器，纯核心配置不需要 Qt：
 
 ```sh
 cmake --preset core
@@ -65,19 +65,11 @@ Rust 聚合库由独立验证工作流保留实际 `.a` / `.lib` 和 `build-info
 
 ## 现有 Windows 生产构建
 
-本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。唯一版本输入来自 [build/version.json](../build/version.json)，发布意图来自 [publish.json](../releases/publish.json)。
+本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。唯一手写版本来源是 [build/version.json](../build/version.json)，发布意图来自 [publish.json](../releases/publish.json)。
 
-CMake 从 `build/version.json` 的 schemaVersion 1 / version 字段设置 `PROJECT_VERSION`，
-并生成 `app/Version.h`；Qt 应用层通过 `huhucapture_version` 目标使用该头。保留 Windows
-入口的 `scripts/build.ps1` 从同一个 JSON 和 `Version.props.in` 生成
-`artifacts/generated/Version.props`，资源第四段固定为零。MSBuild 在实际构建前核对
-源 JSON 的 SHA256，拒绝陈旧的生成文件和不一致的命令行版本覆盖。直接使用保留
-Visual Studio 工程前也先运行该脚本；不手工修改生成的 props。
+CMake 使用原生 JSON 解析从同一个文件设置 `PROJECT_VERSION`，生成 `app/Version.h`、Qt Windows RC、About 版本和包身份；运行时不会读取版本 JSON 或启动 Python。根目录 `VERSION` 和保留 Windows 工程的 `build/windows/Version.props` 是兼容生成文件，不再独立维护。修改 JSON 后运行 `python scripts/version_source.py --write`，普通检查使用 `python scripts/version_source.py --check`；CMake、PowerShell 构建/打包脚本和直接 Visual Studio/MSBuild 构建都会拒绝未同步的生成值。MSBuild 在编译前核对 JSON 与模板的实际 SHA256、源版本和资源分量，正常构建不依赖 Python。
 
-`build.ps1 -Version`、打包及发布声明只核对版本，不覆盖资源值；不同标签或陈旧 EXE
-会明确失败。版本格式为无前导零的 `MAJOR.MINOR.PATCH`，每段不超过 65535，以匹配
-Windows 资源格式。修改 JSON 会触发 CMake 重新配置。迁移分支保持当前正式版本号，
-只有发布门槛满足后才执行规定的 Patch 递增。
+资源的第四段固定为零。`build.ps1 -Version`、打包及发布声明只核对版本，不覆盖资源值；不同标签或陈旧 EXE 会明确失败。版本格式为无前导零的 `MAJOR.MINOR.PATCH`，每段不超过 65535，以匹配 Windows 资源格式。修改 JSON 或兼容生成文件会触发 CMake 重新配置。迁移分支保持当前正式版本号，只有发布门槛满足后才更新版本；首个完整 Qt 重构版本的目标为 v0.1.0。
 
 ## 环境与依赖决策
 
@@ -127,50 +119,49 @@ GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项�
 
 ## CI 与发布门槛
 
-[Windows 工作流](../.github/workflows/windows.yml) 固定 Actions 提交，检出触发事件的精确源码。构建任务只具有读取权限，发布任务在全部验证通过后才获得写入发行资产的权限。
+[Windows 工作流](../.github/workflows/windows.yml) 保留旧生产版本的 Release / Debug、
+核心与脚本、原生 GUI、更新下载和五资产验证。Qt 组件、原生 Rust、视频检查和
+[完整 Qt 应用](../.github/workflows/qt-application.yml) 则分别验证各自实际能力。
+普通 PR、main push 和开发构建产出的 artifact 不能自动成为正式发行。
 
-| 入口 | 行为 |
-| --- | --- |
-| Pull request | 完整验证与 artifact，供审阅；不发布 |
-| main push | 完整验证后按显式声明发布，已有正式版本保持不变 |
-| Release `published` | 检出指定 tag 验证，并上传到该已存在 Release |
-| 手工运行，不填标签 | 验证所选提交并保存 artifact |
-| 手工运行，填写已存在 Release 标签 | 检出该 tag 重建和上传，供恢复使用 |
+Qt 正式包使用同一个来源提交、唯一版本源和完整发行清单。安装器、便携 ZIP、
+DEB、AppImage、两端符号、构建信息、校验和及对应源码必须齐全。`prepare` 先冻结
+最终实际载荷；`finalize` 按载荷计算来源完整性。开发包明确标记为 development，
+不能通过修改标志或省略运行库成为正式包。详情见 [Qt 打包](qt-packaging.md)。
 
-新版本声明发布要求 Release / Debug、核心与脚本检查、原生渲染、单 EXE 启动、真实窗口/剪贴板、真实更新下载和打包门槛全部通过。Debug 与真实更新下载在常规 main、PR 和不填标签的手工构建中执行；Release 事件及填写标签的恢复构建不执行这两项，避免待上传资产的版本成为 latest 后，下载门槛反过来阻止它上传首批资产。打包核对版本与产品资源，检查 PE 依赖，拒绝意外增加外部 MSVC、Ling、Yoga 或 gifski DLL。
+P11a 是 Issue #5 明确规定的过渡例外：旧 Windows 更新桥接按现有生产五资产及
+受控完整包下载契约独立验证和发行，不等待 Qt/Linux 来源和 P12 完成。桥接发行
+只交付旧 Windows 产品及更新迁移能力，不声称交付 Qt 或 Linux。它必须有显式
+桥接声明、匹配的源版本与当前 main，以及同 SHA 的实际 Windows 验证证据。
 
-`windows-x64` 保留 EXE、便携包、符号、构建信息和校验和；`windows-render-checks` 保留原生、GUI 与更新下载报告及图片；失败时尽量保留 `windows-build-logs`。具体保留期以工作流为准。程序 artifact 可能在后续 GUI 检查前已经上传，因此“能下载 artifact”本身不证明完整构建成功。
+新 Qt 版本由 [完整发布工作流](../.github/workflows/qt-release.yml) 显式执行。
+入口先核对当前 main、同 SHA 的必要成功流水线和真正的正式 aggregate，再通过
+实际旧 About 下载该完整包。所有检查通过后创建新 tag 和未公开草稿，逐一上传
+并核对远端资产的长度和 SHA-256，最后才公开为正式版本。既有 tag 或发行资产
+不会被强制覆盖。P11a 桥接使用其独立声明入口，不把两种产品的资产混装。
 
 ## 声明新版本
 
-发行所指向的提交必须同时包含相互匹配的：
+发行提交须同时包含匹配的 `build/version.json`、生成的 `VERSION` 与
+`build/windows/Version.props`、对应发布声明、版本说明和更新记录。稳定标签为
+`vMAJOR.MINOR.PATCH`，Windows 第四段固定为 0；构建参数仅核对版本，不重新标记
+另一份二进制。下一完整重构目标是 **v0.1.0**，当前 v0.0.5 声明不会被新入口自动
+重新发布。P11a 桥接采用下一未占用补丁版本，仍明确标记其过渡范围。
 
-1. `build/version.json` 中的产品版本；
-2. `releases/publish.json` 的稳定 tag 与说明路径；
-3. `releases/<tag>.md`、更新记录和当前下载说明。
-
-发布声明示例：
-
-```json
-{
-  "schemaVersion": 1,
-  "tag": "v0.0.5",
-  "notes": "releases/v0.0.5.md"
-}
-```
-
-稳定标签使用 `vMAJOR.MINOR.PATCH`，Windows 第四段固定为 0，各数字分量受 Windows 版本资源范围约束。可在手工预发布流程使用后缀，但内置更新器只处理稳定三段版本。构建参数覆盖版本时，构建与打包必须使用同一个标签。
-
-main 构建成功后，[声明发布脚本](../scripts/publish-release.ps1) 使用本次已验证的 artifact，核对仓库、源 SHA、main 当前头、版本、架构、五个资产和哈希。只有一致才创建新 tag 和 Release。它不会通过重新构建另一份内容来完成这次发布，也不会自行推导下一个版本号。
-
-已有正式 Release 时不再重复发布。main 已前进时旧运行不发布过时提交，新的运行重新完成验证。发布并发串行化；GitHub token 创建的发布不依赖再触发一轮构建来补资产。
+正式 Qt 发布采用 `releases/publish.json` 中的 tag 和说明路径；桥接使用单独的
+显式 bridge 声明。工作流验证当前 main 没有前进，不将旧运行的资产发布成新源码。
+发布串行进行，创建发行的 token 不依赖额外触发事件补齐资产。
 
 ## 失败与恢复
 
-编译、测试或打包失败时修复原因再运行，不能跳过失败检查。Runner 或网络临时失败可重跑失败任务；对应源码未改变时，无需为一次重跑修改版本号。
+编译、测试、来源收集或安装旅程失败时修复实际原因后重新验证。没有执行的
+物理桌面、音源、IME、长时录制或双端互传验收保持未验证，不通过关闭 Issue
+代替验收。Runner/网络临时故障可重跑同一源码，不必因此更改产品版本。
 
-如果留下同名草稿或未发布 tag，先核对它指向的 SHA、成功构建和资产元数据。声明脚本会停止而不移动已有引用，维护者应完成匹配的草稿/标签流程，不能通过强行覆盖掩盖不一致。
+已存在未公开 tag 或草稿时，先核对其 SHA、对应成功构建与全部资产。发布器拒绝
+移动引用或覆盖旧资产；修复后必须保持程序、符号、构建信息、来源及校验和是
+同一次构建。公开版本中的源码缺陷用新版本修复，保留旧发行的可追溯性。
 
-已有 Release 可通过手工标签入口重建和上传，但需要保持 EXE、PDB、构建信息与哈希作为同一组，不能只替换其中一个文件。源码修复发布新的补丁版本，保留旧版本的可追溯性。
-
-问题报告引用实际 [Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 与 [Release](https://github.com/NAMEWTA/huhucapture/releases)。本文定义流程，不表示某个待发布提交已通过全部检查。
+本文定义可执行流程，不表示某个候选已通过全部门槛。实际状态以
+[Actions](https://github.com/NAMEWTA/huhucapture/actions) 和
+[Releases](https://github.com/NAMEWTA/huhucapture/releases) 为准。

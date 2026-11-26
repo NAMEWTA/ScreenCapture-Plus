@@ -3,7 +3,7 @@
 Issue #5 §8.4 要求没有托盘的 Wayland 桌面仍能完成手动长截图。捕获控件必须
 先隐藏，不能一边把控件录入像素、一边将“隐藏后无入口”当作已经支持。
 `DesktopCaptureAction` 为 GNOME 提供一条经过实际进程和 IPC 确认的 desktop
-action 路由；停止和完成仍由现有 RecordingWorkspace、ScrollWorkspace 执行。
+action 路由；停止和完成仍由现有 RecordingController、ScrollController 执行。
 
 这条路由的系统查找、进程启动和命令转发可分别测试。它们不能代替真实 GNOME
 菜单展示、操作可达性、授权采流以及最终拼接结果的验收。

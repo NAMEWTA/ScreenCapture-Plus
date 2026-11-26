@@ -120,11 +120,16 @@ FFmpeg 的固定 configure 会把整个 shell 环境写入 `ffbuild/config.log`�
 `client.conf`，逐项核对原前缀中的完整大小和 SHA256；文件名只用于定位候选。
 Windows 还必须匹配原 builder 写入 receipt 的 DLL/导入库哈希。
 
-Linux 当前 builder 没有记录构建时输出哈希。本阶段证明的是同一个 runner 上，
-现存固定源码、原构建记录、真实配置、原安装前缀与产品 payload 的对应关系；
-它不是独立签名，不证明前缀文件从未被替换，也没有重新编译以证明可重复性。
-报告中的 `buildTimeOutputHashesVerified` 在 Linux 为 `false`，
-`reproducibleRebuildPerformed` 始终为 `false`。
+新 builder 通过共享 [`source_receipts.py`](../build/package/source_receipts.py)
+在配置前记录实际源树、实际执行配置/编译/安装，成功后核对原源码并记录输出哈希。
+原 `build-info.json` 中有 `sourceBuildReceipt` 时，本收集器保留真实成功执行日志、
+严格收据和配置快照；再核对源码档案的完整清单及每个运行文件的构建时输出哈希。
+这些检查全部成立才把 `buildTimeOutputHashesVerified` 设为 `true`。
+旧 Linux 证据没有此字段时仍为 `false`，不能在收集阶段补写成功构建历史。
+
+这些记录证明的是同次实际源码、构建执行、输出和部署文件的匹配，不是独立签名，
+也没有重新编译以证明可重复性；`reproducibleRebuildPerformed` 始终为 `false`。
+新 hook 的完整平台构建须由真实 CI 执行验收，不能由收据单元合同推导已成功。
 
 ## 输出与发行边界
 

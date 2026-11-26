@@ -41,7 +41,7 @@ def sdk_spdx(api, prefix, version):
                      entry.get('relationshipType') == 'DESCRIBES'}
         roots = [packages[key] for key in described if key in packages]
         api.meta.require(len(roots) == 1 and roots[0]['name'] in
-                         {'qtbase', 'qtsvg', 'qtwayland', 'qttranslations'},
+                         {'qtbase', 'qtsvg', 'qtwayland', 'qttranslations', 'qttools'},
                          'An original Qt SBOM has no unambiguous supported module')
         name = roots[0]['name']
         api.meta.require(path.name == f'{name}-{version}.spdx.json' and name not in documents,

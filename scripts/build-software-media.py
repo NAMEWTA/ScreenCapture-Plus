@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 
 
@@ -15,6 +16,7 @@ def run(*arguments, cwd=None, env=None):
 
 def checkout(specification, source):
     run("git", "init", str(source))
+    run("git", "config", "core.autocrlf", "false", cwd=source)
     run("git", "remote", "add", "origin", specification["repository"], cwd=source)
     run("git", "fetch", "--depth=1", "--no-tags", "origin", specification["commit"], cwd=source)
     run("git", "-c", "advice.detachedHead=false", "checkout", "--detach", "FETCH_HEAD", cwd=source)
@@ -40,6 +42,7 @@ def main():
     env = os.environ.copy()
     env["PKG_CONFIG_PATH"] = str(prefix / "lib/pkgconfig") + (":" + env["PKG_CONFIG_PATH"] if env.get("PKG_CONFIG_PATH") else "")
     metadata = {"prefix": str(prefix), "components": {}}
+    native_build = runpy.run_path(str(root / "build/package/source_receipts.py"))["NativeBuild"]
     for name in ("x264", "ffmpeg"):
         package = specification[name]
         source = workspace / (name + "-source")
@@ -52,17 +55,24 @@ def main():
             run("git", "apply", "--check", str(path), cwd=source)
             run("git", "apply", str(path), cwd=source)
         build.mkdir()
+        receipt = native_build(workspace / (name + "-source-receipt"), "linux", __file__, name, source, package, prefix)
+        for tool in ("cc", "ar", "ld", "make", "nasm"):
+            receipt.observe_tool(tool, env)
         arguments = [str(source / "configure"), "--prefix=" + str(prefix), *package["configure"]]
-        run(*arguments, cwd=build, env=env)
+        configuration_index = receipt.run(arguments, cwd=build, env=env)
         if name == "ffmpeg":
             components = (build / "config_components.h").read_text(encoding="utf-8")
             for required in ("MP3FLOAT_DECODER", "MPEGAUDIO_PARSER"):
                 if f"#define CONFIG_{required} 1" not in components.splitlines():
                     raise SystemExit(f"The locked media profile must retain Windows MP3 recordings: {required}")
-        run("make", "-j" + str(options.jobs), cwd=build, env=env)
-        run("make", "install", cwd=build, env=env)
+        receipt.run(["make", "-j" + str(options.jobs)], cwd=build, env=env)
+        receipt.run(["make", "install"], cwd=build, env=env)
+        build_records = (("ffbuild/config.mak", "config.h", "config_components.h", "libavutil/avconfig.h", "libavutil/ffversion.h")
+                         if name == "ffmpeg" else ("config.mak", "config.h", "x264_config.h", "x264.pc"))
+        source_receipt = receipt.finish(configure_index=configuration_index,
+                                        configuration_files=[build / path for path in build_records])
         metadata["components"][name] = {"repository": package["repository"], "commit": package["commit"],
-            "patches": package.get("patches", []), "configure": arguments}
+            "patches": package.get("patches", []), "configure": arguments, "sourceBuildReceipt": source_receipt}
     metadata["pkgConfig"] = subprocess.check_output(
         ["pkg-config", "--modversion", "x264", "libavcodec", "libavformat", "libavutil", "libswscale", "libswresample"],
         env=env, text=True).splitlines()

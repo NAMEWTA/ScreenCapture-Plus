@@ -34,6 +34,8 @@ struct X11Desktop {
 // Callers must reject XWayland before constructing this native X11 adapter.
 // Returned pixels are owned, tightly packed top-down opaque BGRA, and borrowed
 // only until the next capture/reset/destruction. All failures preserve a reason.
+// Stop interrupts only this worker's established connection. The initial
+// xcb_connect handshake cannot be interrupted before it exposes its socket.
 class X11Capture final {
 public:
     explicit X11Capture(std::stop_token stop = {});
@@ -44,6 +46,7 @@ public:
     bool isXWayland() const noexcept;
     bool supportsAutomaticScroll() const noexcept;
     bool desktop(X11Desktop& result, bool includeWindows = true);
+    bool windowRectangle(std::uintptr_t windowId, X11Rectangle& rectangle);
     bool capture(int x, int y, int width, int height, bool includeCursor = false);
     // Same pixel implementation, with real owned-window visibility/shape and
     // geometry checked atomically with readback on this worker's connection.

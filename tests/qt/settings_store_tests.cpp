@@ -1,5 +1,6 @@
 #include "services/config/JsonText.h"
 #include "services/config/SettingsStore.h"
+#include "services/files/QtPaths.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -186,6 +187,33 @@ void pathAndImportContracts(const QTemporaryDir& root)
         "Linux uses XDG config even if an AppImage resource contains config.json");
     require(config::settingsPath(config::PathPolicy::Linux, executableDirectory, userDirectory, executableDirectory) == executableConfig,
         "only explicit Linux portable mode chooses its external directory");
+    const auto mount = root.filePath(QStringLiteral("mounted-image"));
+    require(QDir().mkpath(mount), "Create the actual mount-boundary fixture directory");
+    require(config::resolvePortableDirectory(mount, mount).isEmpty() &&
+        config::resolvePortableDirectory(mount + QStringLiteral("/new/subdirectory"), mount).isEmpty(),
+        "Neither the mount itself nor a new child can hold explicit portable settings");
+    const auto external = mount + QStringLiteral("-external/new");
+    require(config::resolvePortableDirectory(external, mount) == external && !QFileInfo::exists(external),
+        "A sibling sharing the mount prefix remains valid and validation creates no directory");
+    require(config::resolvePortableDirectory(QStringLiteral("relative/path"), mount).isEmpty(),
+        "Portable configuration requires an absolute location");
+#ifndef Q_OS_WIN
+    const auto alias = root.filePath(QStringLiteral("mount-alias"));
+    std::error_code linkError;
+    std::filesystem::create_directory_symlink(HuhuCapture::Files::nativePath(mount),
+        HuhuCapture::Files::nativePath(alias), linkError);
+    require(!linkError && config::resolvePortableDirectory(alias + QStringLiteral("/absent/child"), mount).isEmpty(),
+        "A nonexistent child under a real symlink into the mount is rejected");
+    const auto outside = root.filePath(QStringLiteral("outside-mount"));
+    require(QDir().mkpath(outside), "Create the external configuration directory");
+    write(mount + QStringLiteral("/config.json"), "{\"mounted\":true}");
+    std::filesystem::create_symlink(HuhuCapture::Files::nativePath(mount + QStringLiteral("/config.json")),
+        HuhuCapture::Files::nativePath(outside + QStringLiteral("/config.json")), linkError);
+    require(!linkError && config::resolvePortableDirectory(outside, mount).isEmpty(),
+        "An existing configuration symlink cannot redirect an external directory into the mount");
+    require(read(mount + QStringLiteral("/config.json")) == "{\"mounted\":true}",
+        "Portable-path validation never modifies the referenced configuration");
+#endif
 
     config::SettingsStore installed(userConfig);
     require(installed.load().ok(), "installed config loaded");

@@ -1,5 +1,4 @@
 #include "app/LanController.h"
-#include "platform/FileCommitter.h"
 #include "platform/PrivateStorage.h"
 #include "services/files/QtPaths.h"
 #include "services/localization/LanguageCatalog.h"
@@ -23,7 +22,6 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
-#include <QSaveFile>
 #include <QSpinBox>
 #include <QTcpServer>
 #include <QTemporaryDir>
@@ -42,7 +40,6 @@ namespace media = HuhuCapture::Media;
 namespace transfer = HuhuCapture::Transfer;
 namespace ui = HuhuCapture::UI::Qt;
 namespace localization = HuhuCapture::Localization;
-namespace platform = HuhuCapture::Platform;
 using namespace std::chrono_literals;
 
 namespace {
@@ -182,153 +179,36 @@ void confirmAndDestroy(ui::TransferWindow* view)
     view->close(); delete view; settle();
 }
 
-void printCreation(const char* operation, const platform::PrivateFileCreation& value,
-    const std::error_code& error)
-{
-    // Report actual observations even on success. In particular, do not infer
-    // a Windows default-owner mismatch just from a permission error elsewhere.
-    std::cout << operation << ": stage=" << static_cast<int>(value.stage)
-              << " error=" << error.value() << " category=" << error.category().name()
-              << " before.ownerObserved=" << value.before.ownerObserved
-              << " before.ownerMatchesUser=" << value.before.ownerMatchesUser
-              << " before.tokenOwnerObserved=" << value.before.tokenOwnerObserved
-              << " before.ownerMatchesTokenOwner=" << value.before.ownerMatchesTokenOwner
-              << " before.tokenOwnerMatchesUser=" << value.before.tokenOwnerMatchesUser
-              << " before.accessObserved=" << value.before.accessObserved
-              << " before.accessPrivate=" << value.before.accessPrivate
-              << " ownerChanged=" << value.ownerChanged
-              << " unnamedTemporary=" << value.unnamedTemporary
-              << " after.ownerObserved=" << value.after.ownerObserved
-              << " after.ownerMatchesUser=" << value.after.ownerMatchesUser
-              << " after.accessObserved=" << value.after.accessObserved
-              << " after.accessPrivate=" << value.after.accessPrivate << '\n';
-}
-
-void privateCreationContracts(const QString& root)
-{
-    const auto directory = QDir(root).filePath(QStringLiteral("new private files"));
-    constexpr auto ownerDirectory = QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner;
-    constexpr auto ownerFile = QFileDevice::ReadOwner | QFileDevice::WriteOwner;
-    require(QDir().mkpath(directory, ownerDirectory), "Create actual private initialization directory");
-    std::error_code error;
-    require(platform::isPrivateStorage(files::nativePath(directory), true, error), "Fixture directory is actually private");
-
-    const auto staging = platform::createExclusiveTemporaryFile(files::nativePath(directory), error);
-    require(!staging.empty() && !error, "Create the production exclusive empty file");
-    const auto claimed = platform::readFileSnapshot(staging, error);
-    require(claimed.has_value(), "Read actual newly created file identity");
-    auto handle = platform::openOwnedEmptyFileForWrite(staging, claimed->identity, error);
-    require(bool(handle), "Open the same claimed new object without truncation");
-    auto wrongIdentity = claimed->identity;
-    wrongIdentity.file ^= 1;
-    platform::PrivateFileCreation creation;
-    require(!platform::initializeCreatedPrivateFile(handle.get(), wrongIdentity, error, creation) &&
-        error && !creation.ownerChanged, "A mismatched file identity cannot initialize permissions");
-    const bool initialized = platform::initializeCreatedPrivateFile(handle.get(), claimed->identity, error, creation);
-    printCreation("Exclusive file initialization", creation, error);
-    require(initialized && !error && creation.stage == platform::PrivateFileCreationStage::Ready,
-        "The actual created empty private object is ready before its first byte");
-    require(platform::isPrivateStorage(staging, false, error), "Strict read predicate accepts initialized object");
-    const QByteArray content("private content retained\n");
-    QFile borrowed;
-    require(borrowed.open(handle.get(), QIODevice::ReadWrite, QFileDevice::DontCloseHandle) &&
-        borrowed.write(content) == content.size() && borrowed.flush(), "Write only after real private initialization");
-    require(!platform::initializeCreatedPrivateFile(handle.get(), claimed->identity, error, creation) &&
-        error && !creation.ownerChanged, "Creation initialization never mutates a nonempty file");
-    require(borrowed.seek(0) && borrowed.readAll() == content, "Refused reinitialization retains all existing bytes");
-    borrowed.close(); require(handle.close(error), "Close the exact original file descriptor");
-
-    const auto linked = platform::createExclusiveTemporaryFile(files::nativePath(directory), error);
-    require(!linked.empty() && !error, "Create separate actual empty hard-link fixture");
-    const auto linkedSnapshot = platform::readFileSnapshot(linked, error);
-    require(linkedSnapshot.has_value(), "Read hard-link fixture identity");
-    const auto secondName = files::nativePath(QDir(directory).filePath(QStringLiteral("second-name")));
-    std::filesystem::create_hard_link(linked, secondName, error);
-    require(!error, "Create a real second name for the same empty object");
-    auto linkedHandle = platform::openOwnedEmptyFileForWrite(linked, linkedSnapshot->identity, error);
-    require(bool(linkedHandle), "Open actual multiply linked fixture without changing it");
-    require(!platform::initializeCreatedPrivateFile(linkedHandle.get(), linkedSnapshot->identity, error, creation) &&
-        error && !creation.ownerChanged, "Multiply linked empty files cannot be initialized as exclusive creations");
-    const auto linkedAfter = platform::readFileDescriptorSnapshot(linkedHandle.get(), error);
-    require(linkedAfter && linkedAfter->identity == linkedSnapshot->identity && linkedAfter->bytes == 0,
-        "Hard-link rejection retains object identity and its empty content");
-#ifndef Q_OS_WIN
-    require(std::filesystem::remove(linked, error) && !error &&
-        std::filesystem::remove(secondName, error) && !error, "Unlink both owned fixture names while retaining their actual fd");
-    require(!platform::initializeCreatedPrivateFile(linkedHandle.get(), linkedSnapshot->identity, error, creation) &&
-        error && !creation.ownerChanged && !creation.unnamedTemporary,
-        "An ordinary deleted file is not treated as a newly created Linux O_TMPFILE");
-#endif
-    require(linkedHandle.close(error), "Close the multiply linked object");
-
-    QFile publicFile(QDir(directory).filePath(QStringLiteral("nonprivate-empty")));
-    require(publicFile.open(QIODevice::ReadWrite | QIODevice::NewOnly, ownerFile | QFileDevice::ReadOther),
-        "Explicitly create a real nonprivate empty fixture");
-#ifndef Q_OS_WIN
-    // A restrictive process umask must not silently turn this negative fixture
-    // into a private file. This is an owned test file, never application data.
-    require(publicFile.setPermissions(ownerFile | QFileDevice::ReadOther), "Apply the actual negative fixture mode");
-#endif
-    const auto publicSnapshot = platform::readFileDescriptorSnapshot(publicFile.handle(), error);
-    require(publicSnapshot.has_value(), "Read nonprivate fixture identity");
-    require(!platform::initializeCreatedPrivateFile(publicFile.handle(), publicSnapshot->identity, error, creation) &&
-        error && creation.before.accessObserved && !creation.before.accessPrivate && !creation.ownerChanged,
-        "An existing broad DACL/mode is rejected without repair or ownership changes");
-    publicFile.close();
-    require(!platform::isPrivateStorage(files::nativePath(publicFile.fileName()), false, error) &&
-        read(publicFile.fileName()).isEmpty(), "Rejected nonprivate file keeps its permissions and empty content");
-
-    const auto preservedPath = QDir(directory).filePath(QStringLiteral("existing-private"));
-    QFile existing(preservedPath);
-    require(existing.open(QIODevice::WriteOnly | QIODevice::NewOnly, ownerFile) &&
-        existing.write(content) == content.size(), "Create real private file for atomic cancellation");
-    existing.close();
-    const auto before = platform::readFileSnapshot(files::nativePath(preservedPath), error);
-    require(before.has_value(), "Claim the original file for preservation verification");
-    {
-        QSaveFile replacement(preservedPath);
-        replacement.setDirectWriteFallback(false);
-        require(replacement.open(QIODevice::WriteOnly), "Open the real Qt atomic replacement");
-        const auto temporary = platform::readFileDescriptorSnapshot(replacement.handle(), error);
-        require(temporary.has_value(), "Qt exposes the same new temporary object through its borrowed descriptor");
-        const bool ready = platform::initializeCreatedPrivateFile(replacement.handle(), temporary->identity, error, creation);
-        printCreation("QSaveFile initialization", creation, error);
-        require(ready && !error, "Qt replacement is private before receiving content");
-        require(replacement.write("cancelled replacement") == 21, "Write only to the real atomic temporary file");
-        replacement.cancelWriting();
-        require(!replacement.commit(), "Cancellation does not publish the replacement");
-    }
-    const auto after = platform::readFileSnapshot(files::nativePath(preservedPath), error);
-    require(after && *before == *after && read(preservedPath) == content &&
-        platform::isPrivateStorage(files::nativePath(preservedPath), false, error),
-        "Atomic cancellation preserves the existing file identity, bytes and strict privacy");
-}
-
 void privateIdentityContracts(const QString& root)
 {
     const auto location = QDir(root).filePath(QStringLiteral("private identity"));
     transfer::IdentityStore store(location);
     auto first = worker([&] { return store.loadOrCreate(); });
-    printCreation("Identity creation", first.fileDiagnostic.creation, first.fileDiagnostic.error);
     if (!first.ok() || !first.created || first.fingerprint.size() != 64) {
-        std::error_code directoryError, fileError;
-        const bool directoryPrivate = HuhuCapture::Platform::isPrivateStorage(
-            files::nativePath(QFileInfo(store.identityPath()).absolutePath()), true, directoryError);
-        const bool filePrivate = HuhuCapture::Platform::isPrivateStorage(
-            files::nativePath(store.identityPath()), false, fileError);
-        // Numeric state and native error codes are sufficient to locate this
-        // boundary. Never print the identity JSON, key, SID or user directory.
-        std::cerr << "Identity persistence: error=" << static_cast<int>(first.error)
-                  << " native=" << first.nativeStatus << " created=" << first.created
-                  << " phase=" << static_cast<int>(first.fileDiagnostic.phase)
-                  << " fileNativeError=" << first.fileDiagnostic.error.value()
-                  << " fileErrorCategory=" << first.fileDiagnostic.error.category().name()
-                  << " qtFileError=" << first.fileDiagnostic.qtFileError
-                  << " fingerprintLength=" << first.fingerprint.size()
-                  << " directoryPrivate=" << directoryPrivate
-                  << " directoryError=" << directoryError.value()
-                  << " filePrivate=" << filePrivate << " fileError=" << fileError.value()
-                  << " fileExists=" << QFileInfo::exists(store.identityPath()) << '\n';
+        // Keep real persistence failures actionable without printing any key,
+        // certificate, fingerprint, user path or account/security identifier.
+        const auto storage = [](const QString& path, bool directory) {
+            std::error_code error;
+            const bool privateStorage = HuhuCapture::Platform::isPrivateStorage(
+                files::nativePath(path), directory, error);
+            return QJsonObject{{QStringLiteral("exists"), QFileInfo::exists(path)},
+                {QStringLiteral("privateStorage"), privateStorage},
+                {QStringLiteral("error"), error.value()},
+                {QStringLiteral("errorCategory"), QString::fromLatin1(error.category().name())}};
+        };
+        const QJsonObject diagnostic{{QStringLiteral("identityError"), static_cast<int>(first.error)},
+            {QStringLiteral("nativeStatus"), first.nativeStatus},
+            {QStringLiteral("filePhase"), static_cast<int>(first.fileDiagnostic.phase)},
+            {QStringLiteral("fileError"), first.fileDiagnostic.error.value()},
+            {QStringLiteral("fileErrorCategory"), QString::fromLatin1(first.fileDiagnostic.error.category().name())},
+            {QStringLiteral("qtFileError"), first.fileDiagnostic.qtFileError},
+            {QStringLiteral("created"), first.created},
+            {QStringLiteral("fingerprintLength"), first.fingerprint.size()},
+            {QStringLiteral("directory"), storage(QFileInfo(store.identityPath()).absolutePath(), true)},
+            {QStringLiteral("identity"), storage(store.identityPath(), false)},
+            {QStringLiteral("trust"), storage(store.trustPath(), false)}};
+        std::cerr << "Private identity persistence diagnostic: " <<
+            QJsonDocument(diagnostic).toJson(QJsonDocument::Compact).constData() << '\n';
     }
     require(first.ok() && first.created && first.fingerprint.size() == 64, "Persist official native RSA identity");
     std::error_code error;
@@ -344,21 +224,28 @@ void privateIdentityContracts(const QString& root)
     require(peer.ok() && peer.trustedPeers.size() == 1, "Persist only a user-confirmed public fingerprint");
     const auto trust = read(reopened.trustPath());
     require(!trust.contains("PRIVATE KEY") && !trust.contains("privateKeyPem"), "Trust metadata excludes private keys");
-    const auto originalTrust = platform::readFileSnapshot(files::nativePath(reopened.trustPath()), error);
-    auto updated = worker([&] { return reopened.rememberPeer(QStringLiteral("127.0.0.2"), 53318,
+    auto updated = worker([&] { return reopened.rememberPeer(QStringLiteral("127.0.0.1"), 53318,
         first.fingerprint, QStringLiteral("Second explicit confirmation")); });
-    printCreation("Trust replacement", updated.fileDiagnostic.creation, updated.fileDiagnostic.error);
     require(updated.ok() && updated.trustedPeers.size() == 1 &&
-        updated.trustedPeers.first().toObject().value(QStringLiteral("endpoints")).toArray().size() == 2,
-        "A second real confirmation updates existing trust through QSaveFile");
-    const auto updatedTrust = platform::readFileSnapshot(files::nativePath(reopened.trustPath()), error);
-    require(originalTrust && updatedTrust && originalTrust->identity != updatedTrust->identity &&
-        platform::isPrivateStorage(files::nativePath(reopened.trustPath()), false, error) && read(reopened.identityPath()) == original,
-        "Atomic trust replacement has a new private object and preserves the original TLS key");
-    transfer::IdentityStore updatedStore(location);
-    auto updatedRead = worker([&] { return updatedStore.loadOrCreate(); });
-    require(updatedRead.ok() && !updatedRead.created && updatedRead.fingerprint == first.fingerprint &&
-        updatedRead.trustedPeers == updated.trustedPeers, "Strict reopen accepts the real replacement without changing trust");
+        HuhuCapture::Platform::isPrivateStorage(files::nativePath(reopened.trustPath()), false, error),
+        "Replacing existing trust preserves its actual current-user owner and private permissions");
+    const auto updatedTrust = read(reopened.trustPath());
+    const auto updatedPeer = updated.trustedPeers.first().toObject();
+    const auto updatedEndpoints = updatedPeer.value(QStringLiteral("endpoints")).toArray();
+    require(updatedTrust != trust &&
+        updatedPeer.value(QStringLiteral("alias")).toString() == QStringLiteral("Second explicit confirmation") &&
+        updatedEndpoints.size() == 2 &&
+        std::any_of(updatedEndpoints.cbegin(), updatedEndpoints.cend(), [](const QJsonValue& value) {
+            const auto endpoint = value.toObject();
+            return endpoint.value(QStringLiteral("address")).toString() == QStringLiteral("127.0.0.1") &&
+                endpoint.value(QStringLiteral("port")).toInt() == 53318;
+        }), "The second trust save actually persists the changed alias and additional confirmed endpoint");
+    transfer::IdentityStore afterTrustReplacement(location);
+    auto restored = worker([&] { return afterTrustReplacement.loadOrCreate(); });
+    require(restored.ok() && !restored.created && restored.fingerprint == first.fingerprint &&
+        restored.trustedPeers == updated.trustedPeers && read(reopened.trustPath()) == updatedTrust &&
+        read(reopened.identityPath()) == original,
+        "Reopening after a second trust save retains exact identity and updated trust bytes");
     replace(reopened.identityPath(), QByteArray("damaged identity\n"));
     auto damaged = worker([&] { transfer::IdentityStore candidate(location); return candidate.loadOrCreate(); });
     require(damaged.error == transfer::IdentityError::InvalidIdentity && read(reopened.identityPath()) == "damaged identity\n",
@@ -375,7 +262,6 @@ void controllerContracts(const QString& pictures)
 {
     QTemporaryDir temporary; require(temporary.isValid(), "Create real controller fixture directory");
     privateIdentityContracts(temporary.path());
-    privateCreationContracts(temporary.path());
     const auto senderRoot = QDir(temporary.path()).filePath(QStringLiteral("sender"));
     const auto receiverRoot = QDir(temporary.path()).filePath(QStringLiteral("receiver"));
     config::SettingsStore senderSettings(QDir(senderRoot).filePath(QStringLiteral("config.json")));
@@ -523,7 +409,62 @@ void controllerContracts(const QString& pictures)
     require(!restarted->available() && !restarted->service().statistics().nativeRunning &&
         !senderSettings.value({QStringLiteral("lan"), QStringLiteral("enabled")}).toBool(),
         "Disable stops the actual runtime and persists disabled preference");
+
+    enable(*restarted, QStringLiteral("Disable conflict fixture"), occupiedPort);
+    disablePanel = restarted->openSettings(); settle();
+    const auto externallyChanged = QByteArray("{\"external\":\"must be retained\"}\n");
+    replace(senderSettings.path(), externallyChanged);
+    click(*child<QCheckBox>(*disablePanel, "lanEnable"));
+    require(disablePanel->requestApply(), "Explicit disable reaches the actual persistence conflict");
+    waitFor([&] { return !disablePanel->changePending() && !restarted->service().statistics().nativeRunning; },
+        "Failed persistence must still stop the real listener");
+    require(!restarted->available() && !restarted->settingsSnapshot().enabled &&
+        read(senderSettings.path()) == externallyChanged &&
+        child<QLabel>(*disablePanel, "lanSettingsStatus")->text() == languages.text(u"lan.disableSaveFailure"),
+        "Disable remains effective and reports persistence failure without overwriting external configuration");
     shutdown(*restarted); shutdown(receiver);
+}
+
+void hostLifetimeContracts()
+{
+    QTemporaryDir temporary; require(temporary.isValid(), "Create host lifetime fixture");
+    config::SettingsStore settings(QDir(temporary.path()).filePath(QStringLiteral("config.json")));
+    require(settings.load().ok(), "Load actual host lifetime settings");
+    auto archive = std::make_shared<media::MediaArchiveService>(QDir(temporary.path()).filePath(QStringLiteral("media")));
+    QObject host;
+    {
+        auto controller = std::make_unique<application::LanController>(archive, settings, temporary.path());
+        require(controller->initialize(), "Initialize actual disabled controller");
+        QPointer<application::LanController> lifetime(controller.get());
+        QObject::connect(controller.get(), &application::LanController::busyChanged, &host,
+            [&](bool) { controller.reset(); });
+        controller->shutdown();
+        require(lifetime.isNull(), "Host may synchronously release a disabled controller during shutdown state notification");
+    }
+    {
+        auto controller = std::make_unique<application::LanController>(archive, settings, temporary.path());
+        require(controller->initialize(), "Initialize actual asynchronous lifetime fixture");
+        QTcpServer collision;
+        require(collision.listen(QHostAddress::LocalHost, 0), "Reserve a real test port");
+        enable(*controller, QStringLiteral("Host lifetime fixture"), collision.serverPort());
+        QPointer<application::LanController> lifetime(controller.get());
+        bool joined{};
+        QObject::connect(controller.get(), &application::LanController::shutdownFinished, &host, [&] {
+            joined = !controller->service().statistics().nativeRunning;
+            controller.reset();
+        });
+        controller->shutdown();
+        waitFor([&] { return lifetime.isNull(); }, "Host release on real asynchronous join completion did not finish");
+        require(joined, "shutdownFinished follows real native resource release and permits immediate destruction");
+    }
+    require(settings.setValue({QStringLiteral("lan")}, QStringLiteral("invalid fixture")).ok(),
+        "Write an actual invalid LAN preference without changing the shared configuration format");
+    auto invalid = std::make_unique<application::LanController>(archive, settings, temporary.path());
+    QPointer<application::LanController> invalidLifetime(invalid.get());
+    QObject::connect(invalid.get(), &application::LanController::operationFailed, &host,
+        [&](const QString&) { invalid.reset(); });
+    require(!invalid->initialize() && invalidLifetime.isNull(),
+        "Host may synchronously destroy a controller in its actual invalid-configuration callback");
 }
 
 void configurationConflict()
@@ -549,15 +490,15 @@ int main(int argc, char** argv)
     QApplication app(argc, argv); app.setQuitOnLastWindowClosed(false);
     try {
         if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--identity-only")) {
-            QTemporaryDir temporary; require(temporary.isValid(), "Create real isolated identity fixture");
-            privateIdentityContracts(temporary.path()); privateCreationContracts(temporary.path());
-            std::cout << "Actual private creation, RSA persistence, atomic trust replacement and data preservation passed. "
-                "Explicit identity-only run: network/controller contracts NOT RUN.\n";
+            QTemporaryDir temporary;
+            require(temporary.isValid(), "Create actual standalone identity fixture directory");
+            privateIdentityContracts(temporary.path());
+            std::cout << "PASS actual private identity, repeated trust replacement, reopen and damaged-file retention\n";
             return 0;
         }
         const auto pictures = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
         if (!pictures.isEmpty()) require(QDir().mkpath(pictures), "Create actual controller PNG output directory");
-        controllerContracts(pictures); configurationConflict();
+        controllerContracts(pictures); configurationConflict(); hostLifetimeContracts();
         std::cout << "Production LAN controller: actual private identity persistence, shared settings, interface selection, "
             "typed port fallback, TLS transfer after view destruction, global receive confirmation, shared archive and shutdown passed.\n";
         return 0;

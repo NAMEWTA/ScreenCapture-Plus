@@ -1,13 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <!-- The retained product consumes generated metadata from build/version.json. -->
-  <Import Project="$(ArtifactsRoot)generated\Version.props" Condition="Exists('$(ArtifactsRoot)generated\Version.props')" />
-  <Target Name="RequireGeneratedHuhuVersion" BeforeTargets="PrepareForBuild;ResourceCompile">
-    <Error Condition="'$(_HuhuVersionGenerated)'!='true'" Text="Generate version metadata with scripts/build.ps1 before using this retained Windows project." />
-    <GetFileHash Files="$(RepoRoot)build\version.json" Algorithm="SHA256">
-      <Output TaskParameter="Items" ItemName="_HuhuVersionSourceHash" />
+  <!-- Generated from build/version.json by scripts/version_source.py. Do not edit. -->
+  <PropertyGroup>
+    <_HuhuVersionSource>$(MSBuildThisFileDirectory)..\version.json</_HuhuVersionSource>
+    <_HuhuVersionTemplate>$(MSBuildThisFileDirectory)Version.props.in</_HuhuVersionTemplate>
+    <_HuhuVersionCompatibility>$(MSBuildThisFileDirectory)..\..\VERSION</_HuhuVersionCompatibility>
+    <_HuhuVersionSourceSha256>260f271ca96cd7a6861b819471df4356c8daef3fa146c03f9ae37f9569c04553</_HuhuVersionSourceSha256>
+    <_HuhuVersionTemplateSha256>f8c584473682fe1d8ee4cbf4d0a5340d84103649b3c81cf6f90325a9563fd5d6</_HuhuVersionTemplateSha256>
+    <_HuhuGeneratedProductVersion>0.0.5</_HuhuGeneratedProductVersion>
+    <VersionMajor Condition="'$(VersionMajor)'==''">0</VersionMajor>
+    <VersionMinor Condition="'$(VersionMinor)'==''">0</VersionMinor>
+    <VersionPatch Condition="'$(VersionPatch)'==''">5</VersionPatch>
+    <VersionRevision Condition="'$(VersionRevision)'==''">0</VersionRevision>
+  </PropertyGroup>
+  <Target Name="ValidateHuhuProductVersion" BeforeTargets="PrepareForBuild;ResourceCompile">
+    <Error Condition="!Exists('$(_HuhuVersionSource)') or !Exists('$(_HuhuVersionTemplate)') or !Exists('$(_HuhuVersionCompatibility)')" Text="Version inputs are missing. Run python scripts/version_source.py --write from a complete checkout." />
+    <GetFileHash Files="$(_HuhuVersionSource)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_HuhuActualVersionSourceSha256" />
     </GetFileHash>
-    <Error Condition="'%(_HuhuVersionSourceHash.FileHash)'!='$(_HuhuVersionSourceSha256)'" Text="build/version.json changed after metadata generation; rerun scripts/build.ps1." />
-    <Error Condition="'$(VersionMajor).$(VersionMinor).$(VersionPatch)'!='$(_HuhuProductVersion)' or '$(VersionRevision)'!='0'" Text="Build version overrides must match build/version.json with revision zero." />
+    <GetFileHash Files="$(_HuhuVersionTemplate)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_HuhuActualVersionTemplateSha256" />
+    </GetFileHash>
+    <Error Condition="'$(_HuhuActualVersionSourceSha256)'!='$(_HuhuVersionSourceSha256)' or '$(_HuhuActualVersionTemplateSha256)'!='$(_HuhuVersionTemplateSha256)'" Text="Generated Version.props is stale. Run python scripts/version_source.py --write after editing build/version.json." />
+    <PropertyGroup>
+      <_HuhuVersionDocument>$([System.IO.File]::ReadAllText('$(_HuhuVersionSource)'))</_HuhuVersionDocument>
+      <_HuhuSourceProductVersion>$([System.Text.RegularExpressions.Regex]::Replace('$(_HuhuVersionDocument)', '(?s)\A.*&quot;version&quot;\s*:\s*&quot;([0-9]+\.[0-9]+\.[0-9]+)&quot;.*\z', '$1'))</_HuhuSourceProductVersion>
+      <_HuhuCompatibilityProductVersion>$([System.IO.File]::ReadAllText('$(_HuhuVersionCompatibility)').Trim())</_HuhuCompatibilityProductVersion>
+    </PropertyGroup>
+    <Error Condition="'$(_HuhuSourceProductVersion)'!='$(_HuhuGeneratedProductVersion)' or '$(_HuhuCompatibilityProductVersion)'!='$(_HuhuGeneratedProductVersion)'" Text="Generated version values disagree with build/version.json. Run python scripts/version_source.py --write." />
+    <Error Condition="'$(VersionMajor).$(VersionMinor).$(VersionPatch)'!='$(_HuhuGeneratedProductVersion)' or '$(VersionRevision)'!='0'" Text="Build version overrides must match build/version.json with revision zero." />
   </Target>
+  <ItemDefinitionGroup>
+    <ResourceCompile>
+      <PreprocessorDefinitions>HUHU_VERSION_MAJOR=$(VersionMajor);HUHU_VERSION_MINOR=$(VersionMinor);HUHU_VERSION_PATCH=$(VersionPatch);HUHU_VERSION_REVISION=$(VersionRevision);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+  </ItemDefinitionGroup>
 </Project>

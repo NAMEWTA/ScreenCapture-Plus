@@ -39,7 +39,7 @@ struct NativeScreenshot {
 // the existing GdiCapture; the X11 implementation uses its reusable XCB surface.
 class ScreenCaptureBackend final {
 public:
-    ScreenCaptureBackend();
+    explicit ScreenCaptureBackend(std::stop_token lifetime = {});
     ~ScreenCaptureBackend();
     ScreenCaptureBackend(const ScreenCaptureBackend&) = delete;
     ScreenCaptureBackend& operator=(const ScreenCaptureBackend&) = delete;

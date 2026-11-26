@@ -1,4 +1,5 @@
-#include "services/capture/ScreenCaptureService.h"
+#include "services/capture/DesktopCapture.h"
+#include "platform/DesktopPointer.h"
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -56,33 +57,29 @@ int main(int argc, char** argv)
             "the unavailable test runs on an actual non-desktop QPA");
         else require(platform == QStringLiteral("windows") || platform == QStringLiteral("xcb"),
             "native capture validation requires an actual Windows or X11 desktop");
-        Capture::ScreenCaptureService service;
+        Capture::DesktopCapture service;
         bool initialized = false, stopped = false;
-        Capture::CaptureCapabilities capabilities;
-        Capture::Failure initialization;
+        Capture::Capability capability;
         std::map<quint64, Result> results;
-        QObject::connect(&service, &Capture::ScreenCaptureService::initialized, &service,
-            [&](const auto& value, const auto& error) { require(!initialized, "capture initializes once"); capabilities = value; initialization = error; initialized = true; });
-        QObject::connect(&service, &Capture::ScreenCaptureService::finished, &service,
+        QObject::connect(&service, &Capture::DesktopCapture::initialized, &service,
+            [&](const auto& value) { require(!initialized, "capture initializes once"); capability = value; initialized = true; });
+        QObject::connect(&service, &Capture::DesktopCapture::finished, &service,
             [&](quint64 token, const auto& image, const auto& error) {
                 require(!results.contains(token), "one actual screen request completes once"); results.emplace(token, Result{image, error});
             });
-        QObject::connect(&service, &Capture::ScreenCaptureService::shutdownFinished, &service,
+        QObject::connect(&service, &Capture::DesktopCapture::shutdownFinished, &service,
             [&] { require(!stopped, "native resources drain once"); stopped = true; });
         service.initialize(); waitFor([&] { return initialized; });
         if (unavailable) {
-            require(initialization.code == Capture::Failure::Code::Unavailable && !capabilities.screenshot.canRequest(),
+            require(!capability.canRequest() && !capability.reason.isEmpty(),
                 "offscreen QPA cannot advertise a synthetic desktop source");
-            const auto token = service.request(); waitFor([&] { return results.contains(token); });
-            require(results.at(token).failure.code == Capture::Failure::Code::Unavailable && results.at(token).source.image.isNull(),
-                "unavailable capture publishes no placeholder pixels");
-            require(!service.isCurrent(1, 1), "a nonexistent captured source cannot authorize live capture");
+            require(service.request() == 0 && results.empty(),
+                "unavailable capture rejects admission and publishes no placeholder pixels");
             service.shutdown(); require(service.request() == 0, "shutdown closes capture admission immediately"); waitFor([&] { return stopped; });
             std::cout << "PASS actual unsupported-QPA capture refusal and asynchronous worker shutdown\n"; return 0;
         }
-        if (initialization) std::cerr << "INIT " << static_cast<int>(initialization.code) << ' ' << initialization.nativeCode << ' ' << initialization.detail.toStdString() << '\n';
-        require(!initialization && capabilities.screenshot.state == Capture::CapabilityState::Available &&
-            capabilities.desktopCoordinates.state == Capture::CapabilityState::Available, "the actual native desktop capture is initialized");
+        require(capability.state == Capture::CapabilityState::Available,
+            "the actual native desktop capture is initialized");
         ColorWindow window;
         auto* display = QGuiApplication::primaryScreen(); require(display, "the real desktop has a screen");
         window.move(display->availableGeometry().center() - QPoint(window.width() / 2, window.height() / 2)); window.show(); window.raise();
@@ -109,7 +106,7 @@ int main(int argc, char** argv)
         require(first.image.pixelColor(sourcePoint(first, window)) == window.color, "native readback contains the visible Qt window's actual pixel color");
         if (!artifacts.isEmpty()) require(first.image.save(QDir(artifacts).filePath(QStringLiteral("native-desktop.png")), "PNG"),
             "write the actual captured native desktop as a reviewable artifact");
-        require(service.isCurrent(first.sourceId, first.generation), "the freshly published native source can admit live capture");
+        require(first.sourceId && first.generation, "the actual published source has a nonzero identity and generation");
         require(!first.windows.isEmpty(), "the real backend supplies visible window candidates");
         const auto initialPixel = first.image.pixelColor(sourcePoint(first, window));
         window.color = QColor(190, 61, 92); const auto oldPaints = window.paints; window.update();
@@ -124,27 +121,22 @@ int main(int argc, char** argv)
         require(second.image.pixelColor(sourcePoint(second, window)) == window.color, "a later real native frame sees the updated visible window");
         require(first.image.pixelColor(sourcePoint(first, window)) == initialPixel && first.sourceId != second.sourceId,
             "reused native buffers cannot mutate a published frozen image");
-        require(!service.isCurrent(first.sourceId, first.generation) && service.isCurrent(second.sourceId, second.generation),
-            "superseded source identities cannot admit recording or scrolling");
-        bool moved = false; Capture::Failure cursorFailure; QPoint actual;
-        QObject::connect(&service, &Capture::ScreenCaptureService::cursorMoved, &service,
-            [&](quint64 source, quint64 generation, QPoint requested, QPoint point, const Capture::Failure& error) {
-                require(source == second.sourceId && generation == second.generation, "cursor completion retains the current source identity");
-                require(second.image.rect().contains(requested), "cursor completion carries its actual requested source pixel");
-                moved = true; actual = point; cursorFailure = error;
-            });
+        // Native pointer movement is the shared platform action used by the
+        // final CaptureWindow. Verify its actual position by another readback.
         const auto target = sourcePoint(second, window);
-        service.moveCursor(second.sourceId, second.generation, target); waitFor([&] { return moved; });
-        require(!cursorFailure && actual == target, "the real desktop cursor reaches the requested source pixel");
-        moved = false; service.moveCursor(second.sourceId, second.generation, second.cursor); waitFor([&] { return moved; });
-        require(!cursorFailure, "the test restores the original real cursor position");
+        require(Platform::requestDesktopPointerMove(target + *second.desktopOrigin),
+            "the actual platform accepts the native source-pixel cursor request");
+        waitFor([&] { return capture().cursor == target; });
+        require(Platform::requestDesktopPointerMove(second.cursor + *second.desktopOrigin),
+            "restore the original actual native cursor position");
+        waitFor([&] { return capture().cursor == second.cursor; });
         const auto cancelled = service.request();
         const auto busy = service.request();
         service.cancel(cancelled);
-        waitFor([&] { return results.contains(cancelled) && results.contains(busy); });
+        waitFor([&] { return results.contains(cancelled); });
         require(results.at(cancelled).failure.code == Capture::Failure::Code::Cancelled && results.at(cancelled).source.image.isNull(),
             "cancelled native readback never publishes its late pixels");
-        require(results.at(busy).failure.code == Capture::Failure::Code::Busy, "a concurrent source request cannot reuse the active readback buffer");
+        require(busy == 0, "a concurrent source request is rejected before it can reuse the active readback buffer");
         const auto closing = service.request(); service.shutdown(); require(service.request() == 0, "shutdown closes capture admission immediately"); waitFor([&] { return stopped; });
         require(results.contains(closing) && results.at(closing).failure.code == Capture::Failure::Code::Cancelled,
             "shutdown reports cancellation before actual native worker resource release");

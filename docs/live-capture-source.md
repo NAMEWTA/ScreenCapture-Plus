@@ -76,64 +76,33 @@ desktop sources continue to use their existing adapters. This service does
 not claim RemoteDesktop input injection, arbitrary global Wayland coordinates
 or a working ScreenCast source on offscreen/minimal QPA.
 
-## Actual validation and remaining gates
+## Composition and validation boundary
 
-`Application::CaptureWorkspace` owns the application's single live source beside
-its native `ScreenCaptureService`. Recording and scrolling borrow these owners
-through `liveSource()` / `nativeSource()`, and source-currentness checks use the
-same globally unique source identities. No consumer workspace creates its own
-Portal controller. A direct Wayland recording/scrolling entry authorizes the
-stream first; a live action chosen from an ordinary Screenshot starts a separate
-authorization. Both use a real modeless parent window and wait for its actual
-`QWindow::isExposed()` event before requesting ScreenCast. The wait is bounded;
-there is no invented parent handle or GUI-thread round trip.
+`ScreenCastSource` is the narrow facade over this one authorized source owner.
+RecordingController or ScrollController owns it for an active live journey;
+DesktopApplication prevents competing capture journeys. Screenshot actions use
+`DesktopCapture`, without a second Portal/PipeWire live implementation. The
+consumer uses the single `LiveFrameReader` and the source's actual frame queue,
+stop token and producer-completion future.
 
-After the real first frame is prepared, the same `CaptureSession` and
-`CaptureWindow` replace the previous source and require selection in that new
-image. The old Screenshot rectangle is never transferred. Canceling permission
-before replacement restores an existing screenshot selection. A repeated entry
-activates the existing parent, picker or live-action controls. If a source ends,
-its already-owned image remains usable for image actions; another live action
-must authorize/select again. Normal producer completion has no failure and is
-not translated into a source-invalidated error. Actual source failures retain
-their typed error and notify the consumer.
+A Portal Screenshot never supplies a recording rectangle. The controller opens
+a real permission window, accepts the authorized stream's first frame, and uses
+the existing CaptureSession/CaptureWindow to select that actual source. Before
+encoding or scrolling, it hides/excludes controls and refreshes the same grant.
+The replacement frame must retain the expected source identity, generation,
+format, dimensions and color contract. A queued event turn separates the borrowed
+refresh-frame signal from transfer to its media worker.
 
-Capture workspace shutdown waits for both source owners' real drain signals,
-in addition to its QR/text and clipboard operations. The application must stop
-and await recording/scrolling consumers while the GUI dispatcher is alive, so
-each worker can deliver its `consumerFinished` handshake. The existing real
-`capture_workspace_tests --unavailable` was rebuilt and run locally with this
-composition; it passed unavailable-desktop propagation, no invented pixels or
-history, and ordered shutdown. Positive authorization/reselection remains a
-native-compositor test, not an offscreen result.
+Normal requested stop is distinguished from an unexpected terminal. Paused,
+changed or failed sources stop safely instead of reusing a stale frame forever.
+The worker stops and waits for the real producer, returns its leases, and signals
+consumerFinished for the exact source/generation. The facade waits for real
+producer and Portal shutdown before emitting its own stopped signal.
 
-The fixed Qt 6.12.1 / libportal / PipeWire SDK compiles the owner, MOC output,
-shared normalizer and real source probe with strict GCC warnings. The local
-offscreen test actually executes unavailable-capability handling, no fabricated
-snapshot/claim, queued preparation and terminal ordering, closed admission,
-reentrant shutdown, and destruction from completion signals.
-
-The updated local tests also execute invalid refresh admission and the actual
-non-Wayland request-ordering failure, including cancellation before start and
-immediate deletion from its queued terminal. These are real unavailable/failure
-paths, not a successful capture substitute. The shared recording workspace,
-scrolling session/window/workspace and both compositor probes compile with the
-same fixed Qt SDK and strict warnings; the offscreen scrolling test still
-passes closed admission, empty output controls and asynchronous shutdown.
-
-`tests/qt/live_capture_source_probe.cpp` is a real compositor probe for the
-existing `scripts/test-pipewire-capture.py` harness. It paints a real Qt surface,
-requests the actual Portal source, checks source-local first-frame pixels,
-single consumer admission, native lease normalization, timestamps, bounded
-queue statistics and full producer/consumer/Portal drain. Its resize and daemon
-loss modes require the wrapper to change its owned Sway output or stop its own
-PipeWire process. The probe saves an actual final frame as PNG and never
-substitutes generated frames for received pixels.
-
-The existing owner/probe at commit `11c6033e` passed capture, resize and owned
-daemon loss in both Debug/Release in [Qt CI 45629021964](https://github.com/NAMEWTA/huhucapture/actions/runs/45629021964),
-including actual owner drain. The subsequent refresh/claim-gating changes and
-the independent first-replacement-pixel probe still require their own CI run.
-Positive compositor execution has **not run locally**: this workspace has no Xvfb/Sway session. Physical Windows,
-GNOME and Plasma/Wayland selection, rotation, mixed DPI and pause recovery
-remain required environment checks. The offscreen tests do not satisfy them.
+The offscreen source tests check actual unavailable capability, rejected claims,
+queued cancellation, refresh admission, reentrant shutdown and owner destruction.
+`live_recording_tests` feeds real bounded queues through the production reader and
+shared GIF/H264 codecs; it is controlled-source coverage, not Portal authorization.
+The real compositor source and refresh probes verify actual frames and source
+replacement separately. Physical GNOME/Plasma authorization, display behavior,
+long-running capture and audio remain distinct acceptance requirements.

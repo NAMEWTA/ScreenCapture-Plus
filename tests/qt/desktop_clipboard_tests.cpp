@@ -26,6 +26,8 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <shellapi.h>
+#else
+#include <QDBusConnection>
 #endif
 
 using namespace HuhuCapture;
@@ -170,12 +172,12 @@ void receiveFile(const QString& expected)
 void receiveText(const QString& expected)
 {
     auto* clipboard = QApplication::clipboard();
-    // Qt 6.12 QWaylandMimeData::formats_sys() exposes both plain-text wire
-    // types as text/plain. Waiting for the UTF-8 spelling in formats() can
-    // never complete even when the real compositor delivered that offer.
-    // Keep checking the explicit wire payload as well as Qt's Unicode value.
+    // Fixed qtbase 5af1a37e, qwaylanddataoffer.cpp::formats_sys() exposes
+    // text/plain;charset=utf-8 as text/plain. Its retrieveData_sys() still
+    // accepts the explicit wire MIME name below. Waiting for hasFormat(utf8)
+    // therefore never succeeds on Wayland, even after a valid selection offer.
     waitFor([&] { return clipboard->mimeData()->hasText(); },
-        "the independent process receives an actual normalized text offer");
+        "the independent process receives a real plain-text offer");
     require(clipboard->mimeData()->data(QStringLiteral("text/plain;charset=utf-8")) == expected.toUtf8() &&
         clipboard->text() == expected, "the receiver gets exact Unicode, non-BMP text, tabs and line endings");
 }
@@ -195,19 +197,22 @@ void receiver(const QString& kind, const QString& expected)
 void runReceiver(const QString& kind, const QString& expected)
 {
     QProcess child; child.setProcessChannelMode(QProcess::MergedChannels);
+    QObject::connect(&child, &QProcess::readyRead, &child, [&child] {
+        // Relay protocol/failure evidence while the child is alive. A timeout
+        // must not discard its unread diagnostics during QProcess teardown.
+        const auto bytes = child.readAll(); std::cout.write(bytes.constData(), bytes.size()); std::cout.flush();
+    });
     child.start(QCoreApplication::applicationFilePath(), {kind, expected});
     require(child.waitForStarted(2000), "start an actual independent clipboard receiver");
     try {
         waitFor([&] { return child.state() == QProcess::NotRunning; }, "the real receiver completes while the owner pumps its event loop");
     } catch (...) {
-        // Preserve the actual receiver's protocol/error evidence on failure,
-        // then reap our own child rather than losing it in QProcess's dtor.
-        const auto output = child.readAll(); std::cerr << output.constData();
+        const auto output = child.readAll(); std::cerr.write(output.constData(), output.size());
         child.kill(); child.waitForFinished(2000);
-        const auto tail = child.readAll(); std::cerr << tail.constData();
+        const auto tail = child.readAll(); std::cerr.write(tail.constData(), tail.size());
         throw;
     }
-    const auto output = child.readAll(); std::cout << output.constData();
+    const auto output = child.readAll(); std::cout.write(output.constData(), output.size()); std::cout.flush();
     require(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0, "the separate process validates the actual system clipboard");
 }
 
@@ -256,6 +261,7 @@ Media::Entry entryAt(Media::MediaArchiveService& archive, const QString& path)
 void unavailableFilePortal(const QString& path, const QString& expectedImage)
 {
     require(QGuiApplication::platformName().startsWith(QStringLiteral("wayland")), "document portal admission uses the real Wayland backend");
+    require(!QDBusConnection::sessionBus().isConnected(), "the capability test uses a genuinely disconnected session bus");
     Results results; Origin origin; show(origin);
     waitFor([&] { return QGuiApplication::focusWindow() == origin.windowHandle(); }, "the unavailable-portal process receives real keyboard focus");
     Media::MediaArchiveService archive(QFileInfo(path).absolutePath());
@@ -263,9 +269,12 @@ void unavailableFilePortal(const QString& path, const QString& expectedImage)
     auto lease = worker([&] { return archive.lease(entry); }); require(!lease.failure && lease.lease, "reserve actual media for portal capability validation");
     auto prepared = worker([owned = std::move(lease.lease)]() mutable { return Desktop::prepareFile(std::move(owned)); });
     require(!prepared.failure && prepared.content, "prepare the complete real file without publishing it");
+    QElapsedTimer elapsed; elapsed.start();
     const auto result = results.result(results.clipboard.publish(prepared.content, origin.windowHandle()));
     require(result.failure.code == Desktop::Error::Unavailable && result.publishedFormats.isEmpty(),
         "an absent real session bus rejects the portal-dependent file before replacing the system clipboard");
+    require(elapsed.elapsed() < 2000 && !results.clipboard.busy(),
+        "a disconnected bus promptly releases the publication instead of waiting for a signal that cannot arrive");
     require(!worker([&] { return archive.reserveRemoval(entry); }).failure, "failed file admission releases its real read reservation");
     receiveImage(QImage(expectedImage));
     std::cout << "PASS unavailable Documents portal retains the previous real clipboard and releases history\n";
@@ -275,6 +284,9 @@ void runUnavailableFilePortal(const QString& path, const QString& expectedImage)
 {
     if (!QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) return;
     QProcess child; child.setProcessChannelMode(QProcess::MergedChannels);
+    QObject::connect(&child, &QProcess::readyRead, &child, [&child] {
+        const auto bytes = child.readAll(); std::cout.write(bytes.constData(), bytes.size()); std::cout.flush();
+    });
     auto environment = QProcessEnvironment::systemEnvironment();
     environment.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"), QStringLiteral("unix:path=/nonexistent/huhucapture-clipboard-capability"));
     child.setProcessEnvironment(environment);
@@ -283,12 +295,12 @@ void runUnavailableFilePortal(const QString& path, const QString& expectedImage)
     try {
         waitFor([&] { return child.state() == QProcess::NotRunning; }, "portal capability rejection completes without a GUI-thread wait");
     } catch (...) {
-        const auto output = child.readAll(); std::cerr << output.constData();
+        const auto output = child.readAll(); std::cerr.write(output.constData(), output.size());
         child.kill(); child.waitForFinished(2000);
-        const auto tail = child.readAll(); std::cerr << tail.constData();
+        const auto tail = child.readAll(); std::cerr.write(tail.constData(), tail.size());
         throw;
     }
-    const auto output = child.readAll(); std::cout << output.constData();
+    const auto output = child.readAll(); std::cout.write(output.constData(), output.size()); std::cout.flush();
     require(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0, "the separate client validates actual unavailable-portal behavior");
 }
 #endif

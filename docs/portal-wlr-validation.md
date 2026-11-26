@@ -100,20 +100,47 @@ before the timer fires; missing buffers follow the existing bounded-rate retry,
 and successful dequeue, pause and teardown retain their existing disarm paths.
 The patch adds no new capture loop and changes neither pixels nor deadlines.
 It is a local integration correction, attributed separately from the upstream
-backports. Its real resize and refresh checks remain pending CI.
+backports. The subsequent native run passed direct capture, resize and daemon
+loss, but exposed the separate delayed-capture lifetime problem below.
+
+## Delayed capture across pause and resume
+
+[Qt run 45784600351](https://github.com/NAMEWTA/huhucapture/actions/runs/45784600351/job/139788227903)
+at `bb416cbea78f9eb9660bbb54db201a223cb433f0` compiled patches 0001–0005 and
+passed the three direct PipeWire scenarios. The shared-source probe prepared a
+matching 800 × 600 image, then refreshed its data connection on the same
+authorized source. The producer paused while an FPS delay was pending. After
+resume, its old and new timers each created an ext frame before either frame
+completed. The compositor rejected the second object with
+`session already has a frame object`; Portal-wlr exited and the client correctly
+reported `target not found`. All source owners still drained.
+
+`0006-cancel-delayed-capture-with-current-frame.patch` owns the existing FPS
+timer in the instance and cancels it whenever the current native frame is
+canceled. A delayed frame belongs to its original buffer even before the native
+proxy has been created. The callback clears its timer member before capture,
+because the original event loop frees the timer before dispatch; normal
+instance destruction also clears it after removing its timers. Deferred capture
+requires a live streaming instance and a held buffer. The negotiated FPS delay,
+graph trigger and every application pixel/identity assertion are unchanged.
+
+This is a local correction to the controlled producer, not an upstream release
+or a repair to the user's Portal service. Its native build and positive refresh
+still require a new CI result. The existing shared-source and independent
+first-frame probes remain the acceptance checks; neither discards an invalid
+first image or grants a second authorization to hide reconnect failures.
 
 ## Verification and support boundary
 
 The fixed source blobs and license have been checked by their Git object IDs.
-All five patches apply in order with `git apply --check`; the resulting source
+All six patches apply in order with `git apply --check`; the resulting source
 bytes match the reviewed backports and local corrections. The diagnostic client
 compiled with the fixed Qt 6.12.1 SDK and strict GCC 14 warnings. This workspace
 lacks the compositor's host development headers and cannot create the private
-Unix sockets required by the native desktop. The four-patch producer compiled
-in the run above, but compilation with 0005, positive resize recovery and actual
-first-frame behavior remain CI work. Daemon-loss, shared live-source refresh,
-the dedicated first-frame check and Release did not run after that resize
-failure; earlier results cannot cover these new changes.
+Unix sockets required by the native desktop. The five-patch producer compiled
+and passed direct capture, resize and daemon loss in the run above. Native
+compilation with 0006, shared-source refresh, the dedicated first-frame check
+and Release remain CI work; earlier results cannot cover these new changes.
 
 A previously executed native PipeWire client check confirmed that disconnect
 can emit `UNCONNECTED` synchronously. It did not use a compositor or validate

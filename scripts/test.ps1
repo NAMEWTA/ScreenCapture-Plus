@@ -21,14 +21,21 @@ foreach ($test in $tests) {
     $object = Join-Path $testDirectory "$($test.BaseName).obj"
     $extraObjects = @()
     $extraCompilerArguments = @()
-    if ($test.BaseName -in @('media_frame_tests', 'frame_queue_tests', 'frame_normalizer_tests')) {
+    if ($test.BaseName -in @('media_frame_tests', 'recording_frame_tests', 'frame_queue_tests', 'frame_normalizer_tests')) {
         $frameObject = Join-Path $testDirectory 'MediaFrame.obj'
         & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /MT /O2 /c "/I$(Join-Path $RepoRoot 'src')" `
             (Join-Path $RepoRoot 'src/core/MediaFrame.cpp') "/Fo$frameObject"
         Assert-NativeSuccess 'Compiling shared media frame implementation'
         $extraObjects = @($frameObject)
     }
-    if ($test.BaseName -eq 'frame_normalizer_tests') {
+    if ($test.BaseName -eq 'recording_frame_tests') {
+        $sourceObject = Join-Path $testDirectory 'FrameSource.obj'
+        & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /MT /O2 /c "/I$(Join-Path $RepoRoot 'src')" `
+            (Join-Path $RepoRoot 'src/recording/FrameSource.cpp') "/Fo$sourceObject"
+        Assert-NativeSuccess 'Compiling shared recording frame source implementation'
+        $extraObjects += $sourceObject
+    }
+    if ($test.BaseName -in @('frame_normalizer_tests', 'recording_frame_tests')) {
         $normalizerObject = Join-Path $testDirectory 'FrameNormalizer.obj'
         & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /MT /O2 /c "/I$(Join-Path $RepoRoot 'src')" `
             (Join-Path $RepoRoot 'src/services/media/FrameNormalizer.cpp') "/Fo$normalizerObject"
@@ -42,7 +49,7 @@ foreach ($test in $tests) {
         Assert-NativeSuccess 'Compiling shared bounded frame queue'
         $extraObjects += $queueObject
     }
-    if ($test.BaseName -eq 'scroll_capture_model_tests') {
+    if ($test.BaseName -in @('scroll_capture_model_tests', 'scroll_accumulator_tests')) {
         $scrollObject = Join-Path $testDirectory 'ScrollCaptureModel.obj'
         & cl.exe /nologo /std:c++20 /EHsc /utf-8 /W4 /MT /O2 /c "/I$(Join-Path $RepoRoot 'src')" `
             (Join-Path $RepoRoot 'src/capture/ScrollCaptureModel.cpp') "/Fo$scrollObject"

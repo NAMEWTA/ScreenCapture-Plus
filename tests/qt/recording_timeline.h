@@ -4,7 +4,6 @@
 // demux_decode.c adaptation. Copyright (c) 2012 Stefano Sabatini, MIT;
 // exact source and full notice are retained in third_party/ffmpeg-examples.
 #include "core/RecordingResult.h"
-#include "core/RecordingTime.h"
 
 #include <QFile>
 #include <QJsonObject>
@@ -108,26 +107,37 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
     const auto& sink = *result.sinkStatistics;
     require(sink.queryStatus >= 0 && sink.received == result.framesWritten && sink.received > 0 &&
         sink.encoded == sink.processed && sink.encoded > 0 && sink.queuedBytes == 0 &&
-        sink.lastReceived == sink.lastSubmitted && sink.lastEncoded == sink.lastProcessed,
+        sink.lastReceived == sink.lastSubmitted && sink.lastEncoded >= 0 && sink.lastEncoded == sink.lastProcessed,
         "Finalized MF input, encoded, processed and pending stages must account for all real work");
     require(sink.lastSubmitted >= 0 && sink.lastSubmittedDuration > 0 &&
         sink.lastSubmittedDuration <= (std::numeric_limits<std::int64_t>::max)() - sink.lastSubmitted,
         "The real final submitted sample has a valid bounded interval");
-    require(sink.captured == result.framesWritten && sink.captureEnd > sink.lastSubmitted,
-        "Every captured sample must be submitted and the actual final source interval must be positive");
-    const auto tail = Core::recordingTailTime(sink.lastSubmitted,
-        sink.captureEnd - sink.lastSubmitted, static_cast<std::int32_t>(fps));
-    require(tail && tail->originalEnd == sink.captureEnd &&
-        sink.submittedDuration == tail->targetEnd &&
-        sink.lastSubmitted + sink.lastSubmittedDuration == sink.submittedDuration,
-        "The final submitted sample must cover the observed stop to its first legal nominal-FPS boundary");
+    require(sink.captured == result.framesWritten && sink.captureEnd > 0 &&
+        sink.captureEnd == sink.lastOriginalEnd && sink.submittedDuration == sink.tailTargetEnd &&
+        sink.lastSubmitted + sink.lastSubmittedDuration == sink.tailTargetEnd,
+        "Every captured sample must be submitted in contiguous intervals up to the one fixed tail target, preserving the actual stop");
     Input input; input.open(path);
     const auto timeBase = input.format->streams[0]->time_base;
     require(timeBase.num > 0 && timeBase.den > 0, "Read a positive actual output time base");
     constexpr AVRational hundredNs{1, 10'000'000};
     const AVRational cadence{1, static_cast<int>(fps)};
+    const auto inputEnd = sink.lastSubmitted + sink.lastSubmittedDuration;
+    require(sink.lastOriginalEnd > sink.lastSubmitted && sink.lastOriginalEnd <= sink.tailTargetEnd &&
+        sink.tailTargetEnd == inputEnd,
+        "The final native input must preserve its original interval and use its one frozen CFR target");
+    // Compute the independent boundary with FFmpeg's rational rescaler rather
+    // than the production integer helper. The preceding grid boundary must be
+    // strictly before the original end: equality must not add another frame.
+    const auto targetFrame = av_rescale_q(sink.tailTargetEnd, hundredNs, cadence);
+    require(targetFrame > 0 && av_rescale_q(targetFrame, cadence, hundredNs) == sink.tailTargetEnd,
+        "The frozen final target must be an actual rounded nominal-FPS boundary");
+    const auto previousBoundary = av_rescale_q(targetFrame - 1, cadence, hundredNs);
+    require(previousBoundary >= 0 && previousBoundary < sink.lastOriginalEnd &&
+        sink.tailTargetEnd > previousBoundary &&
+        sink.tailTargetEnd - sink.lastOriginalEnd < sink.tailTargetEnd - previousBoundary,
+        "The final target must be the first covering CFR boundary and add less than one frame");
     std::uint64_t decoded{}, packets{};
-    std::int64_t lastPts{}, lastEnd{};
+    std::int64_t lastPts{}, lastEnd{}, lastPacketPts{AV_NOPTS_VALUE};
     const auto receive = [&](bool draining) {
         for (;;) {
             const auto status = avcodec_receive_frame(input.decoder, input.frame);
@@ -148,8 +158,10 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
     };
     int status{};
     while ((status = av_read_frame(input.format, input.packet)) >= 0) {
-        require(input.packet->stream_index == 0 && !(input.packet->flags & AV_PKT_FLAG_CORRUPT),
+        require(input.packet->stream_index == 0 && !(input.packet->flags & AV_PKT_FLAG_CORRUPT) &&
+            input.packet->pts != AV_NOPTS_VALUE,
             "Every actual output packet belongs to the complete native video stream");
+        lastPacketPts = input.packet->pts;
         auto submitted = avcodec_send_packet(input.decoder, input.packet);
         if (submitted == AVERROR(EAGAIN)) { receive(false); submitted = avcodec_send_packet(input.decoder, input.packet); }
         checked(submitted, "Submit every actual compressed output packet");
@@ -159,38 +171,36 @@ inline QJsonObject verifyNativeRecordingTimeline(const QString& path, const Core
         "Actual local recording demux must reach clean EOF");
     checked(avcodec_send_packet(input.decoder, nullptr), "Begin complete native output decoder drain");
     receive(true);
-    require(decoded == sink.encoded && decoded == sink.processed,
+    require(decoded == sink.encoded && decoded == sink.processed && packets == sink.encoded,
         "Every MF encoded/processed output must survive the actual file and complete decoder drain");
     const auto decodedLast = av_rescale_q(lastPts, timeBase, hundredNs);
     const auto decodedEnd = av_rescale_q(lastEnd, timeBase, hundredNs);
-    const auto inputEnd = sink.lastSubmitted + sink.lastSubmittedDuration;
-    // The input is now deliberately aligned to the first whole output slot
-    // that covers the original capture interval. Independently calculate its
-    // exact nominal cadence with FFmpeg. A missing or extra whole output
-    // frame remains a failure; the actual capture interval must not be cut.
-    const auto expectedSlots = av_rescale_q(inputEnd, hundredNs, cadence);
-    const auto expectedEnd = av_rescale_q(expectedSlots, cadence, hundredNs);
-    if (std::llabs(decodedLast - sink.lastEncoded) > 1 || expectedSlots <= 0 ||
-        inputEnd != expectedEnd || decodedEnd < sink.captureEnd ||
-        decoded != static_cast<std::uint64_t>(expectedSlots) || std::llabs(decodedEnd - expectedEnd) > 1) {
-        throw std::runtime_error("The complete MF output must match its actual encoded stage and cover the aligned nominal-FPS tail slot: "
-            "decoded=" + std::to_string(decoded) + ", expectedSlots=" + std::to_string(expectedSlots) +
-            ", decodedLast100ns=" + std::to_string(decodedLast) + ", mfLastEncoded100ns=" + std::to_string(sink.lastEncoded) +
-            ", decodedEnd100ns=" + std::to_string(decodedEnd) + ", submittedEnd100ns=" + std::to_string(inputEnd) +
-            ", captureEnd100ns=" + std::to_string(sink.captureEnd) +
-            ", quantizedSubmittedEnd100ns=" + std::to_string(expectedEnd));
-    }
+    // MF's last-encoded statistic describes call order. With B frames the last
+    // encoded packet need not have the greatest presentation timestamp. The
+    // independent decoded timeline still proves complete tail coverage below.
+    const auto lastEncodedPacket = av_rescale_q(lastPacketPts, timeBase, hundredNs);
+    // The producer has already frozen the first CFR boundary covering the
+    // observed stop. Require that exact number of independently decoded slots;
+    // neither a missing frame nor an extra frame is an acceptable tail result.
+    // Only the existing one-100ns rational conversion allowance remains.
+    require(lastEncodedPacket >= 0 && std::llabs(lastEncodedPacket - sink.lastEncoded) <= 1 &&
+        decoded == static_cast<std::uint64_t>(targetFrame) && decodedEnd >= sink.captureEnd &&
+        std::llabs(decodedEnd - sink.tailTargetEnd) <= 1,
+        "The encoded packet must match MF and the complete decoded timeline must end at exactly the frozen covering CFR slot");
     return {{QStringLiteral("framesDecoded"), static_cast<qint64>(decoded)},
         {QStringLiteral("packetsDecoded"), static_cast<qint64>(packets)},
         {QStringLiteral("lastDecoded100ns"), static_cast<qint64>(decodedLast)},
+        {QStringLiteral("lastEncodedPacket100ns"), static_cast<qint64>(lastEncodedPacket)},
         {QStringLiteral("decodedEnd100ns"), static_cast<qint64>(decodedEnd)},
         {QStringLiteral("submittedEnd100ns"), static_cast<qint64>(inputEnd)},
-        {QStringLiteral("captureEnd100ns"), static_cast<qint64>(sink.captureEnd)},
+        {QStringLiteral("lastOriginalEnd100ns"), static_cast<qint64>(sink.lastOriginalEnd)},
+        {QStringLiteral("tailTargetEnd100ns"), static_cast<qint64>(sink.tailTargetEnd)},
         {QStringLiteral("framesCaptured"), static_cast<qint64>(sink.captured)},
-        {QStringLiteral("expectedOutputSlots"), static_cast<qint64>(expectedSlots)},
-        {QStringLiteral("quantizedSubmittedEnd100ns"), static_cast<qint64>(expectedEnd)},
+        {QStringLiteral("expectedOutputSlots"), static_cast<qint64>(targetFrame)},
         {QStringLiteral("tailRounding100ns"), static_cast<qint64>(decodedEnd - inputEnd)},
         {QStringLiteral("tailExtension100ns"), static_cast<qint64>(inputEnd - sink.captureEnd)},
+        {QStringLiteral("submittedDuration100ns"), static_cast<qint64>(sink.submittedDuration)},
+        {QStringLiteral("captureEnd100ns"), static_cast<qint64>(sink.captureEnd)},
         {QStringLiteral("nominalFps"), static_cast<qint64>(fps)},
         {QStringLiteral("contiguousTimeline"), true}};
 }

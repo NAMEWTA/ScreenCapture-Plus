@@ -41,22 +41,22 @@
       {
         "path": "src/recording/SoftwareMp4Recording.cpp",
         "blob": "6f6eb84d3c6421f4caad6227c35f98f3624f96a8",
-        "use": "Pending video frame duration, bounded audio catch-up, producer-before-codec teardown adapted in LiveRecording.cpp; retain this branch shared codecs and exact AAC tail fix."
+        "use": "Retain the pending-frame actual-time, bounded audio catch-up and source-before-codec teardown orchestration in SoftwareMp4Recording.cpp; use the sole shared Mp4Encoder/GifEncoder services and exact AAC tail fix."
       },
       {
         "path": "src/recording/FrameSource.cpp",
         "blob": "a7b5316356f5aa344d963e6301f1473b1a65b096",
-        "use": "Reuse native borrowed BGRA -> finite FramePool row copying in X11Recording.cpp; preserve the existing single X11Capture, FrameQueue and shared recording consumer."
+        "use": "Retain borrowed native BGRA -> finite FramePool row copying in FrameSource.cpp. Authorized LiveCaptureSource is adapted once by ScreenCastSource; no parallel X11/Live recording implementation remains."
       },
       {
         "path": "tests/qt/recording_pipeline_tests.cpp",
         "blob": "757b5485bf1ede3c16b084c48f3ced06d8e2ddbf",
-        "use": "Review actual codec fixture coverage and unavailable hardware boundaries; local live_recording_tests covers this branch source/queue/session interfaces."
+        "use": "Retain actual codec/archive/session coverage and add explicit Paused versus Streaming / producer-barrier assertions; physical sources remain separate evidence."
       },
       {
         "path": "src/platform/linux/RecordingBackend.cpp",
         "blob": "cf87ee1868cfd3a1a9bfec4054853a0f08e76d0e",
-        "use": "Reuse worker-owned native X11 capture -> shared recording architecture; retain this branch queue, session and strict codecs. The UI still must resolve native recording controls placement."
+        "use": "Retain worker-owned X11 capture and shared session factory, incorporating continuous native control geometry/SHAPE validation and the exact selected audio budget."
       }
     ],
     "changes": [

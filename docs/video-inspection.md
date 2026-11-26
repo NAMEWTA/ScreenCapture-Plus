@@ -98,7 +98,7 @@ Linux 的薄适配层 [`platform/linux/VideoInspection.cpp`](../src/platform/lin
 | Unicode 路径、封面边长与不放大 | 使用真实文件并验证实际图像尺寸/像素变化 |
 | 文件/像素预算、预取消、运行中停止 | 显式正确失败，返回后文件句柄释放 |
 
-每轮测试在独占临时目录保留真实封面 PNG 和 JSON 结果，包括意外接受的文件。坏样本断言失败必须使测试进程失败；不得为了让 CI 变绿而把它们标为可接受。工作区缺少 Qt / FFmpeg 开发包，不能将本地源审当作编译或运行通过；实际平台证据以对应 CI commit、日志和 artifact 为准。
+每轮测试在独占临时目录保留真实封面 PNG 和 JSON 结果，包括意外接受的文件。坏样本断言失败必须使测试进程失败；不得为了让 CI 变绿而把它们标为可接受。恢复 SDK 的来源与补丁 profile 必须单独核对，未包含新补丁的库不能作为该补丁已执行的证据；实际平台证据以对应 CI commit、日志和 artifact 为准。
 
 ## 已取得的首轮反例证据
 
@@ -115,7 +115,7 @@ Linux 的薄适配层 [`platform/linux/VideoInspection.cpp`](../src/platform/lin
 
 共同服务源是 `Mp4Envelope.cpp`、`FfmpegVideoInspection.cpp` 与 `FfmpegVideoThumbnail.cpp`，再加一个平台的 `VideoInspection.cpp` 封面适配。共同代码需要 core、Qt6::Gui、固定 AVCodec/AVFormat/AVUtil/swscale。Windows 原生封面另需 `huhucapture_media_frames` 及 MF、COM、SHCreateStream 库。
 
-Windows 使用 [`build-windows-video-inspection.py`](../scripts/build-windows-video-inspection.py) 从同一固定 FFmpeg commit 与同一严格补丁构建，包含 H.264/HEVC/AAC 软件解码器、MOV demuxer、所需 AVUtil 和封面转换所需 swscale 10.1.102；不加入 x264、录制编码器、网络协议或新 GUI 运行时。脚本采用官方 MSVC `configure --toolchain=msvc` 路径，保留 x64 NASM 优化，明确构建 `install/Debug` 的 `/MDd` 和 `install/Release` 的 `/MD`，各自对应相同 Qt/应用配置。不得把两个配置的 DLL 混入同一测试 PATH。四个原生 `.lib` 导入库与带 major 的 DLL（含 `swscale-10.dll`）均由固定上游安装到各配置的 `bin/`，CMake 逐个核对这八个文件的真实 SHA-256；链接 PDB 保存在 `symbols/`。
+Windows 使用 [`build-windows-video-inspection.py`](../scripts/build-windows-video-inspection.py) 从同一固定 FFmpeg commit 与同一严格补丁构建，包含 H.264/HEVC/AAC/MP3 软件解码器、mpegaudio parser、MOV demuxer、所需 AVUtil 和封面转换所需 swscale 10.1.102；不加入 x264、录制编码器、网络协议或新 GUI 运行时。脚本采用官方 MSVC `configure --toolchain=msvc` 路径，保留 x64 NASM 优化，明确构建 `install/Debug` 的 `/MDd` 和 `install/Release` 的 `/MD`，各自对应相同 Qt/应用配置。不得把两个配置的 DLL 混入同一测试 PATH。四个原生 `.lib` 导入库与带 major 的 DLL（含 `swscale-10.dll`）均由固定上游安装到各配置的 `bin/`，CMake 逐个核对这八个文件的真实 SHA-256；链接 PDB 保存在 `symbols/`。
 
 只读取真实 VSDevCmd 的编译环境，不把 MinGW 库混入 MSVC。NASM 3.01 与 GNU Make 4.4.1-3 从官方固定 URL 下载并逐个核对 Microsoft vcpkg 源码记录的 SHA-512，在私有 workspace 解压；Bash/coreutils 使用 Windows runner 已有 MSYS2，记录其实际 runtime。不会安装或覆盖系统文件。构建元数据保留源 commit、补丁 SHA、实际 CFLAGS、工具来源、DLL/导入库 SHA；缺少文件、PDB 或实际 CRT 不符均失败。
 
@@ -141,6 +141,8 @@ fixture generator 仍只在 Linux 使用固定完整软件编码链与 `ffmpeg_m
 ## Windows MP3 的容器样本与 codec 帧
 
 保留的 Windows MF 录制器可以把多个 MP3 帧放入同一个 MP4 sample。实际 CI 文件 `windows-h264-mp3.mp4`（SHA-256 `f973e77db41997d020538094ec4a2e0e7ebf5133843e64db867f98401298c9b2`）包含 51 个 H.264 容器样本与 51 个双声道 44.1 kHz MP3 容器样本，官方 parser 将音频拆为 80 帧，其中 29 帧的 `pos` 合法地为 `-1`。旧检查器把这些解析帧当作物理样本，在第 9 个视频帧后误拒绝；测试用解析帧定位物理位置也发生相同错误。
+
+测试生成器的物理定位与生产解码承担不同责任。`legacy_mp3_recording_tests` 的 locator 使用官方 `AVFMT_FLAG_NOPARSE | AVFMT_FLAG_NOFILLIN`，只枚举原始容器 sample，逐个检查 `pos`、`size`、文件范围和 `packet.data` 与独立只读 `QFile` 中实际字节相等；它不会改变 custom AVIO 位置。后段破坏仍在独占副本的准确物理范围中执行。该定位模式不会进入生产解码路径，不能通过放行任意未知位置或删除数量检查解决问题。
 
 共同检查器保留原有官方 MOV demux、自动 parser、时间戳和 skip/discard side-data 路径。H.264/HEVC/AAC 的物理位置与数量检查保持原合同。MP3 则通过官方完整 sample index 建立物理字节游标，把每个实际 parser 输出帧逐字节与原始容器样本的连续切片比较。只有一个原始 sample 的全部字节都被准确覆盖，才增加其样本计数；输出可以跨 sample，但不能跳字节、重排、替换或添加内容。所有物理边界、预算、最终索引复查、样本数量与真正 decoder EOF 要求继续保留，末尾部分样本或未消费完整索引均失败。只有这条已核对原始字节的 MP3 路径允许 parser 的未知位置，其他 codec 不放宽位置规则。
 

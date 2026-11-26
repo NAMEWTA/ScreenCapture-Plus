@@ -1,4 +1,4 @@
-#include "platform/linux/X11Recording.h"
+#include "recording/PlatformRecording.h"
 #include "services/media/MediaArchiveService.h"
 
 #include <QCoreApplication>
@@ -14,7 +14,6 @@
 
 namespace recording = HuhuCapture::Recording;
 namespace media = HuhuCapture::Media;
-namespace native = HuhuCapture::Platform::Linux;
 namespace core = HuhuCapture::Core;
 namespace {
 void require(bool value, const char* detail)
@@ -37,7 +36,7 @@ int main(int argc, char** argv)
         require(directory.isValid(), "Create an actual private native-failure archive");
         media::MediaArchiveService archive(directory.path());
         const auto before = descriptors();
-        auto backend = native::makeX11RecordingBackend();
+        auto backend = recording::desktopRecordingBackend();
         recording::BackendRequest request;
         request.region = {0, 0, 64, 48}; request.systemAudio = false; request.microphone = false;
         request.firstFrameTimeout = std::chrono::milliseconds(500);
@@ -65,13 +64,7 @@ int main(int argc, char** argv)
             const auto result = run(value, {});
             return result.media.firstError && result.media.firstError->stage == core::RecordingStage::Prepare;
         };
-        auto wrong = request; wrong.coordinates = recording::CoordinateSpace::AuthorizedSourcePixels;
-        require(refused(wrong),
-            "An authorized-source region cannot be misinterpreted as a native X11 desktop rectangle");
-        wrong = request; wrong.sourceId = wrong.generation = 1;
-        require(refused(wrong),
-            "Native desktop recording cannot claim an unrelated stream identity");
-        wrong = request; wrong.framesPerSecond = 0;
+        auto wrong = request; wrong.framesPerSecond = 0;
         require(refused(wrong),
             "Invalid pacing is rejected before allocating the native polling source");
         require(setenv("WAYLAND_DISPLAY", "huhucapture-owned-unavailable-probe", 1) == 0, "Mark a Wayland environment for native refusal");
@@ -82,11 +75,10 @@ int main(int argc, char** argv)
         for (unsigned repeat = 0; repeat < 6; ++repeat) {
             const auto failed = run(request, {});
             require(failed.media.firstError && failed.media.firstError->stage == core::RecordingStage::Capture &&
-                failed.sourceTerminal && failed.sourceTerminal->reason == core::FrameSourceEnd::PlatformFailure &&
-                !failed.detail.empty(), "The actual XCB failure returns its source terminal and useful reason");
+                !failed.detail.empty(), "The actual XCB failure returns its capture error and useful reason");
         }
         require(descriptors() == before, "Repeated native initialization failure releases every worker-owned descriptor");
-        std::cout << "PASS real X11 unavailable-display failure, coordinate/currentness refusal, pre-cancel, worker join, owned output and descriptor cleanup\n";
+        std::cout << "PASS real X11 unavailable-display failure, explicit Wayland refusal, pre-cancel, worker join, owned output and descriptor cleanup\n";
         std::cout << "NOT RUN here: actual X server capture, cursor, monitor changes or audio devices\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL " << error.what() << '\n'; return 1; }

@@ -18,7 +18,7 @@ flowchart TD
 
 Portal 会话必须活到 worker 返回。正常停止先请求 worker 的 stop token，等待数据面终态和编码收尾，再关闭 Portal session。停止事件通过 PipeWire 自己的 event source 唤醒独立 loop；`stop_callback` 在销毁 loop 前等待正在执行的唤醒回调结束。worker 从不等待 GUI 处理消息，因此异步结果投递不形成 GUI/worker 相互等待。应用服务仍须以异步状态编排整个停止流程，不能在界面按钮中同步等待录制完成。
 
-每个取出的 `pw_buffer` 都由局部归还对象持有：空帧、损坏帧、内存格式不支持、消费者异常和正常帧均在同一 worker 上归还。只有按行复制到帧池后的 `FrameLease` 可以离开该回调。消费者收到 lease 前，原生 buffer 已经排回 PipeWire；格式变更和 `remove_buffer` 不会撤销消费者持有的像素。停止后先移除监听，再销毁 stream、core、事件源、context 和 loop。只保留首个失败的类别、原生错误码和消息；取消不会覆盖已经发生的错误。
+每个取出的 `pw_buffer` 都由局部归还对象持有：空帧、损坏帧、内存格式不支持、消费者异常和正常帧均在同一 worker 上归还。只有按行复制到帧池后的 `FrameLease` 可以离开该回调。消费者收到 lease 前，原生 buffer 已经排回 PipeWire；格式变更和 `remove_buffer` 不会撤销消费者持有的像素。停止后先显式释放应用持有的兼容映射，再移除 stream 监听并销毁 stream、core、事件源、context 和 loop。只保留首个失败的类别、原生错误码和消息；取消不会覆盖已经发生的错误。
 
 ### 未自动映射的实际 MemFd
 
@@ -40,6 +40,8 @@ Portal-wlr 的 `screencast_common.c` 使用 `shm_open`、立即 `shm_unlink`、`
 
 预算明确指**帧池像素分配字节**，不包含分配器、对象描述、PipeWire 原生映射及编码器自身的额外内存。每个格式代次预分配固定 slot 数，逐帧不扩容；旧代次只要仍有一个 lease，就保留该代次完整分配并计费。默认数据面采用 4 个 slot、128 MiB 像素预算和 16384 的单边上限，调用方可以提供更严格或经测量的预算。满池时明确累计丢帧数并立即归还原生 buffer；格式变化无法容纳旧 lease 与新池时返回 Budget 错误。不能把该策略称为零丢帧或完整多屏热插拔验收。
 
+旧 MemFd 的兼容映射另有独立上限：最多 4 个原生 buffer，总映射范围不得超过 `4 × min(maximumBytes / slotCount, INT32_MAX)`，默认 128 MiB。计费使用官方 `pw_map_range_init()` 算出的页对齐范围，包含首尾页的额外字节；不是只计算有效像素。这个上限与帧池像素预算分别计算，不把两者合计宣称为 128 MiB。通常已由 PipeWire 提供 `data` 的帧保留原有直接复制路径。
+
 时间信息分别记录 PipeWire 原始纳秒 PTS、源时钟域、服务分配的时钟实例、序列号及本机 steady 接收时间。未提供 PTS 时保持空值，不用到达时间冒充源 PTS；源 PTS 也不会直接当作本机 steady epoch。首个格式帧、上游 DISCONT 和倒退 PTS 都标记不连续。音画校时、重采样和长时漂移补偿属于共享录制服务，当前数据面没有自行发明这套策略。
 
 色彩的 primaries/transfer/matrix/range、有效 crop 与旋转/反射元数据随帧保留。Portal 的逻辑 size/position 不参与像素 stride 计算；实际宽高只能来自 PipeWire 协商。格式通知发生在该代次首帧前，消费者可以明确拒绝不能处理的新格式，不能继续套用旧的编码尺寸。
@@ -60,13 +62,25 @@ Portal-wlr 的 `screencast_common.c` 使用 `shm_open`、立即 `shm_unlink`、`
 
 格式解析和消费者回调均不会让 C++ 异常穿过 C 回调栈。非实时 process 回调只做有界取帧、验证、复制和移交，单次处理最多 16 个 buffer，以免异常源饿死取消或截止事件。消费者必须迅速返回；完整编码应在共享媒体服务的有界队列上执行。
 
+## 旧 MemFd 描述符的兼容映射
+
+真实 Ubuntu 24.04 / PipeWire 1.0.5 daemon、固定 Portal-wlr 0.8.1 与应用 1.6.11 客户端的采流已经观察到正常的 800×600 单 plane MemFd：`type=2`、`flags=0`、有效 FD、`data=null`、`mapoffset=0`、`maxsize=1920000`、`chunkSize=1920000`、`stride=3200`。这次失败并非超出 32 MiB 单 plane 上限。固定 Portal-wlr 的生产者会填写零 flags；旧 daemon 没有新 `client_node_port_buffers()` 的 MemFd 标志补偿，而 1.6.11 stream 的自动映射要求 SPA `MAPPABLE`，并根据 `READABLE/WRITABLE` 选择权限。
+
+[PipeWireMemFdMappings](../src/platform/linux/pipewire/PipeWireMemFdMappings.h) 只处理 `MemFd` 且 CPU 指针为空的情况。它从**当前授权 core** 的 mempool 查找已存在的同一 FD，要求 block 类型仍是 MemFd、ID 有效、没有 `UNMAPPABLE` 或禁止撤销通知的 `DONT_NOTIFY`，并检查真实 FD 可读、为 regular file 及宽整数端点不超过 `fstat` 长度。未知 FD 不会被重新 import，SPA flags 和 data 指针不被改写，DMA-BUF/空 MemPtr 不进入该分支。通过检查后调用固定库的 `pw_memblock_map(..., PW_MEMMAP_FLAG_READ, ...)`，由官方实现完成映射和引用计数。公开入口本身也已有 `fstat` 与 `int64_t offset + size` 校验；应用的额外检查用于自己的 FD 类型、权限和预算限制，并在复用映射时重新核对文件长度。
+
+这里只声明**请求只读访问、应用只读取像素**。固定库的 `memblock_find_mapping()` 按范围复用已有映射，不比较请求权限；同一 pool 中已有映射可能具有写权限，不能宣称所有复用页都被内核强制设为只读。测试的内核权限断言限定于新建且此前没有其他映射的实际 memory block。
+
+每个原生 buffer 的映射复用到 `remove_buffer` 或实际格式变更；这里只保存 buffer 身份键与 FD/范围数值，不跨回调保留 plane/chunk 地址。官方 memblock 还可能早于 stream 回调被强制撤销，因此 helper 同时监听同一 mempool 的 `removed` 和 `destroy`：在 block/map 仍有效时释放对应映射，pool 销毁前清空并 detach。释放最后一个 map 可能同步触发 `removed`，所有权记录必须先清空，避免递归二次释放。所有原生指针仍只在一次 `process()` 中用于复制，不进入消费者 lease。
+
+这不是修改宿主 daemon，也没有增加逐帧自写 `mmap/munmap`。官方 [2f8740d](https://github.com/PipeWire/pipewire/commit/2f8740dee85bb813a03184b11c85e482f03802bb) 的新 daemon MemFd 补偿与 [39ca1bb](https://github.com/PipeWire/pipewire/commit/39ca1bb9edbebd6a57704d7aa92b61d9ee6e3f01) 的 memory-block `UNMAPPABLE` 兼容属于不同层；后者已在固定库中。不能只给零 flags 加 SPA `MAPPABLE`：自 [5ccaf29](https://github.com/PipeWire/pipewire/commit/5ccaf29793100c00ed16d54dabc5651cfbf782cc) 起，stream 按 SPA 权限位映射，零读写权限仍会导致不可读的映射。当前补充只请求真实 FD 的只读访问，不伪造这些元数据。
+
 ### 实际活动状态与暂停恢复
 
 共享实时源通过 `activityChanged` 接收真正的 `PW_STREAM_STATE_STREAMING` / `PAUSED` 转移和终态 inactivity。这个回调仍在唯一 PipeWire worker 上执行；调用方只更新线程安全健康状态或排队通知，不触碰 GUI，也不能阻塞。重复相同状态不重复通知，消费者异常明确回传 Consumer / Allocation，保留已有首错。
 
 静止画面可能长时间没有新 damage buffer，因此没有把“没有帧”当作暂停或断线。初始 PAUSED 仍由原首帧截止控制；已经交付真实帧后出现 PAUSED 才开始独立、默认五秒的恢复截止。重复 PAUSED 不延长截止，真实 STREAMING 会撤销它；未恢复返回 `PauseTimeout`。来源关闭/失败/用户停止均先使健康状态不再 Streaming，避免消费者在已经失效的来源上无限重复旧图像。
 
-2026-11-25，新增状态接缝以固定 PipeWire 1.6.11 实际严格编译并通过已有真实 socket/epoll/loop deadline/跨线程取消测试；额外断言失败传输和连接前取消不会宣布 Streaming，并最终报告 inactivity。真实 ScreenCast 探针新增原生转移数组、至少一次 Streaming 和返回时 inactive 断言，等待对应 CI 运行；此本地故障测试不证明 compositor PAUSED/恢复或物理显示器静止长录制已经通过。
+静止采流、真实 compositor 的暂停恢复及物理显示器长录制分别验证；本地故障用例和受控桌面结果不能代替实体设备验收。
 
 ## 固定源码、复用与许可
 
@@ -78,7 +92,9 @@ Portal-wlr 的 `screencast_common.c` 使用 `shm_open`、立即 `shm_unlink`、`
 | [audio-capture.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/examples/audio-capture.c) | `2429a2d3491b6621cddd48492161b184ae378ca4` | 输入流状态、dequeue/queue 生命周期；空数据也必须归还，取消改用独立 loop event |
 | [gstpipewiresrc.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/gst/gstpipewiresrc.c) | `9918a631ac033fbf61d8dfb783767928d972334b` | 内存类型、buffer 移除、时间戳、crop/transform 和协商边界；没有引入 GStreamer |
 | [stream.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/pipewire/stream.c) | `a4f96cff2b4b2127901b15822c1b5c94665b3c98` | MAP_BUFFERS、mapoffset、MemFd 映射/释放与 adapter 建立 |
-| [mem.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/pipewire/mem.h) | `0c3ce73bcd762bd76e9e1a9ca3a9ac8ce3ae9fb1` | 直接调用官方页对齐/溢出检查 `pw_map_range_init`；额外核对同一 FD 的物理长度，不自行重写映射范围算法 |
+| [mem.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/pipewire/mem.c)、[mem.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/pipewire/mem.h) | `3072c99c5830dc0655c447a56a30a5d72d6127b3` / `0c3ce73bcd762bd76e9e1a9ca3a9ac8ce3ae9fb1` | 实际调用官方 MemFd map/free、页对齐范围、fstat 边界、引用计数及 pool 撤销通知；不复制另一套 mmap 实现 |
+| [gstpipewirepool.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/gst/gstpipewirepool.c) | `5e201d3151544547c59ecf10fff93259812ac1a7` | 核对成熟调用方按类型分别处理 MemFd 和 DMA-BUF 的边界；不引入 GStreamer allocator 或依赖 |
+| [client-node.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/modules/module-client-node/client-node.c)、[remote-node.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/modules/module-client-node/remote-node.c) | `871331febbeffffc86eb6a2940205cdf4d4e7a97` / `411d034c7f847454d9b631ddb368c7b667d72ba6` | 新 daemon 的 MemFd 标志补偿、客户端 MemId 到现有 pool FD 的转换 |
 | [main-loop.c](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/src/pipewire/main-loop.c) | `6e73a13cb33c04db3c7f50b115dfdda0a48ef025` | enter/iterate/leave；本接缝在持续 dispatch 错误时明确终止，而非无限重试 |
 | [buffer.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/spa/include/spa/buffer/buffer.h)、[meta.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/spa/include/spa/buffer/meta.h) | `29ef9f5349771dab09e0aff50662400a1812f6ef` / `287410f02426e06e869ba38f8919734ca52b0797` | chunk 有效区间、元数据最小尺寸、时间戳、旋转含义 |
 | [raw-utils.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/spa/include/spa/param/video/raw-utils.h)、[color.h](https://github.com/PipeWire/pipewire/blob/4287f31510771fc999f8a58a024c81ca10b8d55f/spa/include/spa/param/video/color.h) | `738f64cf481b04106455422976c9cbc9bafe95ec` / `68b69a5b3f8df83c25a6ee11fcb8ad843345d17f` | 固定版本的格式字段及颜色枚举，不凭 README 推断默认值 |
@@ -86,7 +102,7 @@ Portal-wlr 的 `screencast_common.c` 使用 `shm_open`、立即 `shm_unlink`、`
 
 本数据面改写自上述 MIT 示例，保留 Wim Taymans 的 2018/2022 版权与 SPDX 标识。[原始 COPYING](../third_party/patches/pipewire/COPYING) 来自固定提交，blob 为 `aa100ce9c02238111b56e394ad5a13311e23a521`。这不表示整个 PipeWire 源码树、Qt、Portal 或最终软件编码组合都只有 MIT；最终分发必须按实际编入的文件和依赖保留对应许可。
 
-上述 MemFd 兼容条件还逐行核对了 Portal-wlr 0.8.1 提交 `e1d5d16f0e064a0b788c5d70c11461b15ee7a4af` 的 [`pipewire_screencast.c`](https://github.com/emersion/xdg-desktop-portal-wlr/blob/e1d5d16f0e064a0b788c5d70c11461b15ee7a4af/src/screencast/pipewire_screencast.c)（blob `603c9e0138f9960fa34dfc0928e38ff5ee9701b9`）和 [`screencast_common.c`](https://github.com/emersion/xdg-desktop-portal-wlr/blob/e1d5d16f0e064a0b788c5d70c11461b15ee7a4af/src/screencast/screencast_common.c)（blob `721da038d7164c2671f4316fd8c2c58877289198`）；只核对其缓冲合同，没有复制该后端进应用或修改测试生产者。
+兼容边界另外对照官方 1.0.5 commit `a2287be601710eea0d073261223ec34b92384c8a` 的 `src/pipewire/stream.c`（blob `8b64635e81c24711640258a5165db269c47289f1`）与 `src/modules/module-client-node/client-node.c`（blob `b9aac39b978c1cb2d578583f72a13bd801981d33`），均为 MIT。1.0.5 已认识 SPA `MAPPABLE`，但仍有按 MemFd 类型映射的旧客户端兜底；不把版本差异描述成“旧 daemon 不认识此标志”。这些旧版本文件只用于核对，没有替换应用固定客户端。
 
 ## 受控连接失败修复
 
@@ -129,14 +145,17 @@ export PIPEWIRE_CONFIG_DIR="$HUHUCAPTURE_PIPEWIRE_ROOT/share/pipewire"
 cmake -S . -B artifacts/portal -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DBUILD_TESTING=ON -DHUHUCAPTURE_QT_VALIDATION=ON \
   -DHUHUCAPTURE_PORTAL_VALIDATION=ON -DHUHUCAPTURE_PIPEWIRE_VALIDATION=ON
-cmake --build artifacts/portal --target media_frame_tests pipewire_fd_tests pipewire_capture_probe
+cmake --build artifacts/portal --target media_frame_tests pipewire_fd_tests pipewire_memfd_tests pipewire_capture_probe
 artifacts/portal/media_frame_tests
 artifacts/portal/pipewire_fd_tests
+artifacts/portal/pipewire_memfd_tests
 ```
 
 `huhucapture_media_frames` 是纯 C++20 帧存储目标；Linux 的 `huhucapture_pipewire` 链接该目标、固定 pkg-config PipeWire 客户端及系统 Threads。`HUHUCAPTURE_PIPEWIRE_VALIDATION` 需要既有 Qt/Portal validation；图形探针再链接 `huhucapture_portal` 与 Qt Widgets。该开关不切换现有 Windows 生产采集或编码后端。
 
 原生 `pipewire_fd_tests` 使用真实 PipeWire 对象和真实 Linux socket/epoll。它验证缺失 protocol、私有 loop 的 epoll 注册失败、连接前取消、错误参数、无响应 AF_UNIX 传输的首帧 timer，以及跨线程取消事件。epoll 故障只替换测试自己拥有的 loop FD，结束前恢复同一 open-file description；检查连接 FD 关闭及 peer EOF。静默 socket 是真实失败输入，不是成功 daemon 或 Portal 的模拟替代。测试硬性检查运行库版本为 1.6.11。
+
+`pipewire_memfd_tests` 使用真实 Linux memfd 和固定 1.6.11 的实际 mempool/import/map/free API；检查零 flags 的实际字节、新建映射的只读权限、非零非页对齐 offset、复用与 descriptor 改变、文件截短、文件模式/类型、未知 FD、DMA/UNMAPPABLE/DONT_NOTIFY 拒绝、4-buffer 与页对齐总字节预算，以及真实 remove_id、强制 block free 和 pool 先于 helper 销毁的回调生命周期。它没有替换 PipeWire 函数或伪造成功 daemon，也不作为 Portal 授权、实际帧率或桌面录制验收。
 
 纯 `media_frame_tests` 不依赖 PipeWire 或 Qt，可用任意受支持 C++20 编译器验证 plane/lease/预算合同。该结果不证明 PipeWire 实际映射、GUI、桌面或媒体编码可用。
 
@@ -169,8 +188,12 @@ Ubuntu 24.04 的 Portal-wlr 0.7.1 在实际 CI 中于 Start 阶段返回 `Operat
 
 后端采用上游 0.8.1 提交 `e1d5d16f0e064a0b788c5d70c11461b15ee7a4af`，没有为测试伪造 Portal 回复或媒体帧。已阅读其协议选择、共享 buffer constraints 与 PipeWire 实现：CPU/SHM 可走 ext-image-copy-capture，但旧 wlr-screencopy 分支在初始化时仍要求 linux-dmabuf。故应同时使用实际提供新 ext-image 协议的 compositor，不能仅凭 MemFd 分支存在推断可用。固定源码与具体条件见 [测试桌面的源码依据](validation-desktop.md)。MIT 许可证署名 emersion 及各文件原作者；Wayland protocols 1.41 的完整 COPYING 和各 XML 作者保留。版本、commit、构建参数由依赖锁唯一指定。
 
-该版本在 Ubuntu 宿主头文件下实际编译暴露了 `close()` 缺少声明。唯一构建适配 [include 补丁](../third_party/patches/portal-wlr/0001-include-posix-close-declaration.patch) 为 `wlr_screencast.c` 补充 POSIX `unistd.h`；脚本核对补丁 SHA-256 并执行 `git apply --check`，保留上游 `-Werror` 和所有采集行为。它不是新增采集实现，也不以屏蔽编译诊断代替修复。
+但 0.8.1 的[初始化条件](https://github.com/emersion/xdg-desktop-portal-wlr/blob/e1d5d16f0e064a0b788c5d70c11461b15ee7a4af/src/screencast/wlr_screencast.c) 仍要求旧 `wlr_screencopy` 同时具有 `linux-dmabuf`。Sway 1.9/wlroots 0.17.1 的 pixman/headless 输出公布 `wlr_screencopy` v3 与 `wl_shm`，却没有 `linux-dmabuf` 或 ext-image 协议；该初始化条件会让后端在探针启动前退出，无法使用已有的 SHM 实现。
 
-测试通过正式配置 `output_name=HEADLESS-1, chooser_type=none` 选择脚本自建输出；这不证明人工授权对话框或任何现有桌面同意了采集。后端只用于建立真实测试环境，其源码没有复制进应用。升级测试后端也不构成宣称新一轮采集已通过，仍须以实际结果为准。
+依赖锁按顺序应用两份受控补丁。[include 补丁](../third_party/patches/portal-wlr/0001-include-posix-close-declaration.patch) 修复实际编译发现的 `close()` 缺少 POSIX `unistd.h` 声明，保留上游 `-Werror`。[SHM 启动补丁](../third_party/patches/portal-wlr/0002-allow-wlr-shm-without-dmabuf.patch) 仅在已绑定 `screencopy_manager` 和 `shm` 时允许进入既有 SHM 路径；原 ext-image、DMA-BUF/GBM 和缺少协议时的失败分支保留。脚本逐份核对 SHA-256 并执行 `git apply --check`，把固定来源及补丁清单保留在构建元数据中。
+
+包含兼容映射的 Debug 与 Release 已在上述真实 headless Sway 环境分别通过 capture、resize 和 daemon-loss。实际 JSON 核对了源时间戳、原生 MemFd、动态帧图案、格式变更、已取 buffer 全部归还，以及底层流销毁后消费者保留的图像仍可读取。该结果覆盖受控测试桌面的采流和释放合同；每次修改仍需保留与实际提交一致的新结果，不将旧产物替换为新提交的证明。
+
+测试通过正式配置 `output_name=HEADLESS-1, chooser_type=none` 选择脚本自建输出；这不证明人工授权对话框或任何现有桌面同意了采集。后端只用于建立真实测试环境，其源码没有复制进应用。
 
 编译、原生故障、真实桌面三类结果分别以对应提交的 CI 日志和产物为准。没有实际运行的检查必须保持 **not run**。本探针不能替代 GNOME/Plasma 的接受/拒绝/取消与热插拔、混合 DPI、实体显示器、HDR/DMA-BUF、音频、FFmpeg 同时编码、资源/延迟基线、长时间稳定性、安装包或完整产品验收。

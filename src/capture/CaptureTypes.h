@@ -59,7 +59,7 @@ struct Snapshot {
     QString sourceName;
 };
 
-enum class Action { Pin, Scroll, Record, Qr, History, SaveAs, Clipboard, Hex, Rgb, Cmyk, Position, Edit, Count };
+enum class Action { Edit, Pin, Scroll, Record, Qr, History, SaveAs, Clipboard, Hex, Rgb, Cmyk, Position, Count };
 enum class ActionResult { Completed, Cancelled, Failed };
 enum class Stage { Empty, Selecting, Adjusting, Submitting, Closed };
 struct StartOptions {
@@ -72,9 +72,8 @@ struct ActionRequest {
     CoordinateSpace coordinates{CoordinateSpace::AuthorizedSourcePixels};
     QRect sourceRect;
     std::optional<QRect> desktopRect;
-    // Owned worker-prepared selection for image consumers, never a borrowed
-    // view. Recording consumes the verified rectangles and has no image copy.
-    QImage image;
+    QVector<ScreenBinding> screens; // verified GUI bindings for initial tool/pin placement only
+    QImage image; // owned selection, copied on a worker, never a borrowed view
     QString text;
 };
 

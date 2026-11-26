@@ -11,6 +11,25 @@ import sys
 import tempfile
 
 
+def installed_environment(prefix: Path, windows: bool):
+    environment=os.environ.copy()
+    for name in list(environment):
+        if name.startswith(('QT_','QML_','LD_')) or name in ('OPENSSL_CONF','OPENSSL_MODULES','SSL_CERT_FILE','SSL_CERT_DIR'):
+            environment.pop(name)
+    environment['QT_PLUGIN_PATH']=str(prefix/'plugins')
+    if windows:
+        # CPython normalizes Windows os.environ keys to uppercase. Its copied
+        # plain dict no longer implements case-insensitive environment lookup.
+        system_root=next((value for name,value in environment.items() if name.upper()=='SYSTEMROOT'),None)
+        if not system_root:raise ValueError('Windows SystemRoot is missing from the actual environment')
+        system=Path(system_root)
+        environment['PATH']=os.pathsep.join(map(str,(prefix,system/'System32',system)))
+    else:
+        environment['LD_LIBRARY_PATH']=str(prefix/'lib')
+        environment['PATH']='/usr/bin:/bin'
+    return environment
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prefix',type=Path,required=True)
@@ -24,23 +43,7 @@ def main():
     windows=sys.platform=='win32'
     receipt=prefix/('build-identity.json' if windows else 'bin/build-identity.json')
     identity=json.loads(receipt.read_text())
-    environment=os.environ.copy()
-    for name in list(environment):
-        if name.startswith(('QT_','QML_','LD_')) or name in ('OPENSSL_CONF','OPENSSL_MODULES','SSL_CERT_FILE','SSL_CERT_DIR'):
-            environment.pop(name)
-    environment['QT_PLUGIN_PATH']=str(prefix/'plugins')
-    if windows:
-        # os.environ performs Windows' case-insensitive lookup, but copy()
-        # returns a plain dict whose keys CPython normalizes to uppercase.
-        system_value=os.environ.get('SystemRoot')
-        if not system_value:raise ValueError('Windows did not supply its actual system directory')
-        system=Path(system_value)
-        if not system.is_absolute() or not (system/'System32').is_dir():
-            raise ValueError('Windows system directory is not available')
-        environment['PATH']=os.pathsep.join(map(str,(prefix,system/'System32',system)))
-    else:
-        environment['LD_LIBRARY_PATH']=str(prefix/'lib')
-        environment['PATH']='/usr/bin:/bin'
+    environment=installed_environment(prefix,windows)
     # Windows resolves app-local CRT before System32 only when this executable
     # lives beside the actual app. Add one exclusively owned probe temporarily,
     # leaving qt.conf and every product file intact; remove only that identity.

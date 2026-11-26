@@ -293,12 +293,12 @@ def archive_source(family, source, package, output, source_output, inputs):
         others = git(['ls-files', '--others', '-z'], cwd=source, git_dir=owned, index=actual_index, binary=True)
         require(not others, 'Untracked files in native source (including ignored files): ' +
                 others.decode('utf-8', errors='replace').replace('\0', ', ')[:2048])
-        # The fresh index is seeded with the exact patched blobs. Ordinary
-        # Git add uses that index's existing-CRLF protection under autocrlf;
-        # --renormalize deliberately bypasses it and can change an unchanged
-        # upstream fixture (FFmpeg tests/ref/fate/wavpack-cuesheet-tags).
-        # Keep the original checkout's conversion semantics, not a forced
-        # migration of its text attributes. Exact tree equality remains mandatory.
+        # Normal Git conversion preserves an indexed upstream blob containing
+        # intentional CRLF/mixed line endings. --renormalize would force a new
+        # blob even when the worktree bytes already exactly match that source
+        # (FFmpeg tests/ref/fate/wavpack-cuesheet-tags on Git for Windows).
+        # The owned index starts at the exact patched tree; ordinary add -A
+        # still checks every change/deletion without mutating the original.
         git(['add', '-A', '--', '.'], cwd=source, git_dir=owned, index=actual_index, conversion=conversion)
         actual_tree = git(['write-tree'], cwd=source, git_dir=owned, index=actual_index)
         if actual_tree != expected_tree:
@@ -507,6 +507,61 @@ def runtime_inputs(installed, files, family, prefix, target, inputs):
     return records
 
 
+def producer_receipt(family, specification, workspace, prefix, source_record, runtime, source_output, inputs):
+    """Keep a new real producer receipt; never retrofit one onto older builds."""
+    if specification is None:
+        return None
+    require(isinstance(specification, dict) and specification.get('id') == family and
+            specification.get('staticFiles') == {} and specification.get('buildRecords'),
+            'Unsupported same-run native producer receipt')
+    strict = materials.module('huhucapture_native_source_bundle', ROOT / 'scripts/create-source-bundle.py')
+    original_inventory = materials.meta.json_read(source_output / source_record['sourceInventory']['path'])['archiveFiles']
+    files = []
+    for item in original_inventory:
+        if item['mode'] == '120000':
+            data = item['linkTarget'].encode('utf-8')
+            files.append({'path': item['path'], 'type': 'symlink', 'target': item['linkTarget'],
+                          'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'mode': 0o777})
+        else:
+            files.append({'path': item['path'], 'type': 'file', 'size': item['size'], 'sha256': item['sha256'],
+                          'mode': 0o755 if item['mode'] == '100755' else 0o644})
+    source_hash = strict.tree_digest(sorted(files, key=lambda item: item['path']))
+    base = Path('families') / family / 'producer'
+
+    def retained(value, name, expected=None):
+        path = Path(value)
+        require(path.is_absolute() and path.resolve(strict=True).is_relative_to(workspace),
+                'Producer record is outside its original native workspace')
+        target = base / name
+        found = retain(path, source_output / target, inputs)
+        require(expected is None or found['sha256'] == expected, 'Producer evidence differs from its original hash')
+        return {'path': target.as_posix(), **found}
+
+    receipt_file = retained(specification['path'], 'source-build-receipt.json')
+    receipt = materials.meta.json_read(source_output / receipt_file['path'])
+    require(receipt.get('schemaVersion') == 1 and receipt.get('kind') == 'huhucapture-source-build-receipt' and
+            receipt.get('sources') == [{'id': family, 'sourceTreeSha256': source_hash}],
+            'Producer receipt used different source bytes')
+    outputs = {item['path']: item for item in receipt.get('outputs', [])}
+    require(outputs and len(outputs) == len(receipt['outputs']), 'Native producer outputs are empty or ambiguous')
+    for item in runtime:
+        relative = Path(item['originalPath']).relative_to(prefix).as_posix()
+        require(relative in outputs and all(outputs[relative][key] == item[key] for key in ('size', 'sha256')),
+                'Installed runtime differs from its actual producer-time output identity: ' + item['path'])
+    records = [retained(item['path'], str(index) + '-' + Path(item['path']).name, item['sha256'])
+               for index, item in enumerate(specification['buildRecords'])]
+    executions = [item for item in records if item['path'].endswith('-build-execution.json')]
+    require(len(executions) == 1, 'Native receipt has no unique original execution journal')
+    execution = materials.meta.json_read(source_output / executions[0]['path'])
+    require(execution.get('kind') == 'huhucapture-build-execution' and execution.get('commands') == receipt['commands'] and
+            execution.get('inputs', {}).get('sources') == receipt['sources'] and execution.get('executions') and
+            all(item.get('exitCode') == 0 for item in execution['executions']),
+            'Native producer receipt does not match successful actual recorded execution')
+    return {'receipt': receipt_file, 'buildRecords': records, 'sourceTreeSha256': source_hash,
+            'runtimeOutputsVerified': len(runtime),
+            'scope': 'Matching recorded source, successful producer commands and current runtime bytes; not complete application source closure'}
+
+
 def collect(options):
     target = platform.system().lower()
     require(target in ('linux', 'windows') and platform.machine().lower() in ('amd64', 'x86_64'),
@@ -545,7 +600,7 @@ def collect(options):
               'platform': target, 'buildIdentity': identity, 'nativeSourceCollectionComplete': False,
               'runtimeInputBindingComplete': False, 'correspondingSourceComplete': False,
               'reproducibleRebuildPerformed': False, 'families': records, 'failures': [],
-              'bindingLimit': 'Current prefix/runtime byte equality and original builder records; Linux receipts have no build-time output hashes',
+              'bindingLimit': 'Current source/configuration/prefix equality; producer-time output hashes are verified only when the original builder recorded them',
               'outstandingFamilies': ['project', 'qt-sdk-source-binding', 'qt-sdk-icu', 'rust-and-toolchain',
                                       'system-source-packages', 'appimage-runtime', 'build-tool-source-closure']}
     try:
@@ -621,6 +676,11 @@ def collect(options):
                 record['configuration'] = codec_configuration(family, source, build, prefix, arguments, source_output, inputs,
                                                                cygpath=cygpath, receipt=selected)
             record['source'] = archive_source(family, source, package, output, source_output, inputs)
+            produced = producer_receipt(family, selected.get('sourceBuildReceipt'), workspace, prefix,
+                                        record['source'], runtime, source_output, inputs)
+            if produced is not None:
+                record['sourceBuildReceipt'] = produced
+                record['buildTimeOutputHashesVerified'] = True
             record['collected'] = True
         require(all(snapshot(path) == digest for path, digest in inputs.items()), 'Original native inputs changed during collection')
         materials.meta.verify_inventory(installed, files)

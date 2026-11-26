@@ -15,7 +15,7 @@
     {
       "path": "src/app/RecordingController.cpp",
       "blob": "c46d9997c88f0d4b569323a9eb04585403e4464c",
-      "use": "Adapt four outside work-area candidates into the existing shared RecordingWorkspace; retain independently verified per-screen mapping and existing source/session/claim ownership."
+      "use": "Reuse verified per-screen outside work-area candidates in the unified RecordingController and ScrollController. Preserve one source/session owner with continuous native checks and same-authorization refresh."
     },
     {
       "path": "src/ui/qt/RecordingWindow.cpp",
@@ -165,5 +165,10 @@
       }
     ],
     "validation": "Strict fixed-SDK build and actual unavailable/cancel/queued terminal tests passed locally. Dedicated first-replacement-frame pixel probe compiled; Sway execution pending CI, GNOME/Plasma/physical presentation and missing-stop-route workflows remain release gates."
+  },
+  "integration": {
+    "pr6": "ba9358443207b9fa349de2bc0f47cebc0b13aa5c",
+    "pr7": "6b7acf2371df6ca228cd6537f605f68e88fc21d4",
+    "contract": "One controller per journey. PR6 immutable control snapshot, shared recording toolbar and SHAPE validation combine with PR7 stop-token native adapters, producer barrier and fixed E/T final recording interval."
   }
 }

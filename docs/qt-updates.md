@@ -16,8 +16,9 @@
 路径及预算规则。`src/core/UpdateManifest.h` 进一步集中同一份发行、manifest、
 build-info 和所选目录验证；Qt QJson 与旧 Windows WinRT JSON 只提供只读字段、
 官方 URL 解析和 Unicode 路径比较适配。`UpdatePackageHeader.h` 共享有界类型
-检查。旧 [Windows 桥接](updates.md) 已接入这些规则和真实流式适配，但仍须
-单独完成 Windows、真实完整包与旧版到 Qt 升级门槛；本 Qt 测试不代替 P11a 验收。
+检查。旧 [Windows 桥接](updates.md) 已接入这些规则和真实流式适配；P11a 先按
+原 Windows 生产及受控包契约独立发行，Qt 首发再验证本次实际完整包和升级。
+本 Qt 测试不代替旧 Windows 真实桥接检查，两个阶段的报告与门槛分别记录。
 
 ## 应用拥有任务，页面订阅状态
 
@@ -78,7 +79,7 @@ Qt 更新器不实现另一套 ZIP、DEB、AppImage 或安装器解包引擎。�
 
 ## 唯一发布清单格式
 
-清单均为 UTF-8 JSON。下列字段中的省略符只是格式说明，生成器必须填入真实值。版本来自唯一输入 `build/version.json`，tag 由它生成；不新增 `VERSION` 版本文件。`sourceCommit` 是 40 位小写 Git 提交 SHA。同一 Release 内所有资产使用同一身份。
+清单均为 UTF-8 JSON。下列字段中的省略符只是格式说明，生成器必须填入真实值。版本来自唯一输入 `build/version.json`，tag 由它生成；兼容 `VERSION` 与 Windows props 只作为受校验的生成输出。`sourceCommit` 是 40 位小写 Git 提交 SHA。同一 Release 内所有资产使用同一身份。
 
 `release-manifest.json`：
 
@@ -91,11 +92,13 @@ Qt 更新器不实现另一套 ZIP、DEB、AppImage 或安装器解包引擎。�
   "version": "X.Y.Z",
   "sourceCommit": "<40 lowercase hex>",
   "sourceDirty": false,
+  "developmentOnly": false,
   "assets": [
     {
       "platform": "windows",
       "architecture": "x64",
       "packageKind": "portable-zip",
+      "contentRoot": "portable-zip",
       "name": "huhucapture-vX.Y.Z-windows-x64.zip",
       "size": 123456789,
       "sha256": "<64 lowercase hex>",
@@ -160,7 +163,7 @@ latest API 和 release manifest 各最多 1 MiB，平台 build-info 最多 8 MiB
 路径均拒绝；即使整条元数据 hash 正确，也不能靠 installer 的 Qt 库证明便携包
 完整。这个元数据绑定仍不等于在客户端下载后逐个解包验证了真实 payload。
 
-生成顺序为：准备并验证部署目录 → 生成安装包并计算包哈希 → 生成平台 build-info 并计算其哈希 → 生成 release manifest。这样不形成哈希循环。只有同仓库、同 Release 的资产才能被引用；清单不携带任意下载 URL。
+生成顺序为：准备并验证最终部署目录与真正安装包 → 按冻结的两种 payload 收集完整来源 → 核对原包并生成平台 build-info → 聚合 release manifest。来源档案及源清单使用平台/架构唯一名字；正式 producer 和聚合器要求两个状态标记显式为 false。这样不形成哈希循环。只有同仓库、同 Release 的资产才能被引用；清单不携带任意下载 URL。
 
 ## 文件提交与失败语义
 
@@ -181,6 +184,10 @@ UI 保留 `Cancelled` 和 `DurabilityUnknown` 的不同语义，不把取消显�
 测试专用来源只能由宿主代码显式构造为带端口的 `http://127.0.0.1` 或 `http://[::1]`。它只将规范 GitHub URL 的请求 origin 替换为真实本地 HTTP 服务器，清单里的仓库、tag、规范 URL、长度、哈希和包身份规则仍完整执行。生产应用不暴露这个参数，也不读取环境或配置中的任意更新 URL。
 
 该自动化测试中的 ZIP 是有真实 ZIP 结构、文件 CRC 和注释的传输契约样本，条目明确标明不是可安装产品。它证明下载任务和文件边界，不能证明 Windows / Linux 实际发布包可运行。首个 Qt 包进入 latest 前还须用受控 HTTP 下载本次实际完整包；发布后须另行跑真实 GitHub latest 烟测。安装、升级、卸载、外部网络跳转和干净机器依赖验证的结果应分别记录，不能从本地传输测试推断它们已经通过。
+
+真实完整包入口为 `scripts/test-qt-complete-update.py --package <正式平台输出或 aggregate> --probe <qt_complete_update_probe> --output <新证据目录>`。它先运行同一个正式包验证器，要求实际 computed-complete 来源与当前 SHA/唯一版本，再把原 manifest、build-info 和包字节原样交给已有 loopback HTTP 服务。每种本机包都经过生产 About 控件和 `UpdateService`，在已收到真实部分正文时销毁页面、确认下载继续、重开恢复状态、独立读取最终文件全部 SHA256、检查具体手工安装说明，并等待真正的 `shutdownFinished`。报告明确没有执行安装器；Linux 可以使用 offscreen 渲染这个控件/传输场景，实际桌面安装旅程仍由独立安装 probe 完成。
+
+此入口拒绝开发包和未闭合来源，不生成测试 payload，也不把开发清单改成正式清单。入口已实现不代表已取得正式正例；只有对应 runner 实际保存的 `result.json`、原包 SHA 和本机完成报告才能作为该项证据。
 
 Linux 本地使用固定 Qt 6.12.1 SDK 实际通过严格 Release 编译及默认完整
 loopback HTTP 套件，包括正确 hash 下的跨 contentRoot 拒绝、真实文件重名、

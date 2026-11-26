@@ -132,4 +132,3 @@ AutoStartResult AutoStart::setEnabled(bool enabled, const std::function<bool()>&
 }
 
 } // namespace HuhuCapture::Desktop
-
