@@ -5,6 +5,8 @@
 #include "services/capture/DesktopCapture.h"
 
 #include <QApplication>
+#include <QColorSpace>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QCursor>
 #include <QElapsedTimer>
@@ -118,6 +120,7 @@ public:
     {
         ratio = devicePixelRatioF();
         pixels = QImage(qRound(width() * ratio), qRound(1600 * ratio), QImage::Format_ARGB32);
+        pixels.setColorSpace(QColorSpace::SRgb);
         for (int y = 0; y < pixels.height(); ++y) for (int x = 0; x < pixels.width(); ++x)
             pixels.setPixel(x, y, qRgb((y * 37 + x * 31) % 251, (y * 43 + x * 53) % 251, (y * 71 + x * 19) % 251));
         pixels.setDevicePixelRatio(ratio); repaint();
@@ -140,9 +143,15 @@ QJsonArray point(QPointF value) { return {value.x(), value.y()}; }
 QJsonArray rectangle(QRectF value) { return {value.x(), value.y(), value.width(), value.height()}; }
 QJsonObject imageInfo(const QImage& value)
 {
+    const auto colorSpace = value.colorSpace();
     return {{QStringLiteral("size"), QJsonArray{value.width(), value.height()}},
         {QStringLiteral("format"), static_cast<int>(value.format())},
         {QStringLiteral("ratio"), value.devicePixelRatio()},
+        {QStringLiteral("colorSpace"), QJsonObject{
+            {QStringLiteral("valid"), colorSpace.isValid()},
+            {QStringLiteral("description"), colorSpace.description()},
+            {QStringLiteral("iccSha256"), QString::fromLatin1(QCryptographicHash::hash(
+                colorSpace.iccProfile(), QCryptographicHash::Sha256).toHex())}}},
         {QStringLiteral("dotsPerMeter"), QJsonArray{value.dotsPerMeterX(), value.dotsPerMeterY()}}};
 }
 #ifdef Q_OS_WIN
@@ -450,6 +459,8 @@ void actualNative(const QString& artifacts)
     const auto inspected = media::inspectPng(listed.entries.front().path, {}, {}, &archivedImage);
     require(!exported.failure && !inspected.failure && output == expected && archivedImage == expected,
         "Every archived/exported pixel after cancellation equals the independent real displayed page");
+    require(output.colorSpace() == actualFirst.colorSpace() && archivedImage.colorSpace() == actualFirst.colorSpace(),
+        "The exported and archived scrolling images retain the actual native source color space");
     if (!artifacts.isEmpty())
         require(output.save(artifacts + QStringLiteral("/scroll-complete.png")), "Retain the actual stitched output pixels for review");
     bool controllerStopped{}, workspaceStopped{}, clipboardStopped{}, revealerStopped{};

@@ -13,7 +13,7 @@
 
 项目属于 [huhu](https://github.com/NAMEWTA/huhu) 品牌家族，采用虎虎形象与截图范围角标。产品名称、程序文件、配置目录和发布资产统一使用 `huhucapture`。品牌资产及使用约定见 [品牌说明](docs/brand.md)。
 
-[下载 v0.0.5](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
+[下载最新稳定版](https://github.com/NAMEWTA/huhucapture/releases/latest) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
 
 > **Qt / Linux 重构正在实施：** [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 是唯一主计划。当前正式下载仍为下文的 Windows v0.0.5；根目录 CMake 已接入统一 Qt 应用、真实平台服务及开发包验证入口；完整产品验收和正式双平台安装包发布仍未完成。应用装配与构建见 [Qt 应用](docs/qt-application.md)。实现边界、数据保护、P00–P14 状态与未验证项目见 [迁移状态](docs/qt-migration.md)。
 
@@ -70,6 +70,8 @@
 
 ## 下载与运行
 
+本源码对应 v0.0.6 原生 Windows 更新桥，公开下载状态以 Release 页面为准。Qt Windows / Linux 首发目标仍为 v0.1.0；本次桥接不包含 Qt 或 Linux 程序。
+
 支持 **Windows 10 1803 及以上版本，x64**。从 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases) 下载 `huhucapture.exe` 后即可运行，无需安装。应用及静态依赖不要求另行安装 Visual C++ 运行库。
 
 **只想使用软件：下载 `huhucapture.exe` 即可；需要额外语言和随包许可时，选择便携 ZIP。** 其余文件供故障定位、源码开发或核验下载使用。
@@ -77,8 +79,8 @@
 | 发布文件 | 包含什么 | 什么时候需要 |
 | --- | --- | --- |
 | `huhucapture.exe` | 可直接运行的 Windows x64 单文件，内置简体中文和英语；也是更新器使用的固定文件名 | 日常使用，下载后运行 |
-| `huhucapture-v0.0.5-windows-x64.zip` | 同一份 EXE、`Lang` 额外语言、依赖许可/声明和 `build-info.json` | 想完整保留分发内容，解压后运行其中的 EXE |
-| `huhucapture-v0.0.5-windows-x64-symbols.zip` | 与本次 Release 构建配套的 PDB 调试符号 | 开发者分析崩溃、调用栈或断点时使用；普通运行无需下载 |
+| `huhucapture-vX.Y.Z-windows-x64.zip` | 同一份 EXE、`Lang` 额外语言、依赖许可/声明和 `build-info.json` | 想完整保留分发内容，解压后运行其中的 EXE |
+| `huhucapture-vX.Y.Z-windows-x64-symbols.zip` | 与本次 Release 构建配套的 PDB 调试符号 | 开发者分析崩溃、调用栈或断点时使用；普通运行无需下载 |
 | `build-info.json` | 仓库与源提交 SHA、标签、Windows 版本、架构、工具链、固定依赖和 EXE 的 SHA256 | 提交问题或核对一个文件究竟来自哪次构建 |
 | `SHA256SUMS.txt` | 上述 EXE、两种 ZIP 和构建信息的 SHA256 校验值 | 核对下载是否完整、文件是否与该 Release 一致 |
 | GitHub 自动提供的 `Source code (zip / tar.gz)` | 对应标签的源码快照 | 自行编译或阅读源码；其中不包含已构建的可运行 EXE |
@@ -99,11 +101,13 @@ Get-FileHash .\huhucapture.exe -Algorithm SHA256
 
 ### 更新与默认快捷键
 
-在 **设置 → 关于** 点击 **下载最新版本**，程序会在后台下载本仓库最新稳定版 EXE 到系统“下载”目录（Downloads），并遵循该目录的移动或重定向。界面显示进度，成功后给出实际文件位置，并可直接打开下载文件夹。
+在 **设置 → 关于** 点击 **下载最新版本**，程序会在后台将本仓库最新稳定版保存到系统“下载”目录（Downloads），遵循目录的移动或重定向。界面显示进度，完成后给出实际位置并可打开下载文件夹。
 
-文件使用带版本的名称，例如 `huhucapture-v0.0.5-windows-x64.exe`；已有同名文件时另取不冲突的名称。完成下载并通过大小、SHA256 和版本校验后才生成最终 EXE，失败可重试。后台每日新版本检查仍保留，确认下载后使用同一流程。
+v0.0.6 更新桥识别正式完整包清单，选择 Windows x64 便携 ZIP，校验仓库、版本、架构、依赖清单、长度和 SHA256，边接收边写入文件。没有完整包清单的旧 Release 仍下载单 EXE；清单存在但错误时会报错，不降级成缺依赖的裸程序。已有同名文件时另取新名称，后台每日检查仅提示更高版本，明确确认后才下载。
 
-下载完成后，先退出旧程序，将下载文件改成原程序的文件名（通常为 `huhucapture.exe`），替换日常使用的 EXE 后重新启动。程序不会自动覆盖运行中的文件或执行下载的新版。目录、校验和失败边界见 [更新下载说明](docs/updates.md)。
+旧 EXE 下载完成后，先退出程序，将下载文件改为原程序名再手动替换。**完整 ZIP 必须整个解压到新目录**，不要只复制其中的 EXE；保留旧目录、配置和 Documents 媒体。使用 EXE 旁便携 `config.json` 的用户，应在首次启动新包前将其复制到新 EXE 旁并保留旧原件，按实际 Qt 版本说明核对系统支持与迁移步骤。下载任务不会自动执行、替换或重启程序。详细边界见 [更新下载](docs/updates.md)。
+
+**跳过桥接也可以手动升级。** 桥接只有仍是 latest 时才能被 v0.0.5 的旧更新器发现；Qt 成为 latest 后，v0.0.5 不会回溯历史发行。直接打开 [最新正式发行](https://github.com/NAMEWTA/huhucapture/releases/latest)，在 Assets 选择完整 Windows 安装器 `huhucapture-vX.Y.Z-windows-x64-setup.exe` 或完整便携 ZIP。该手动路径不要求先安装桥接；Qt 的 tag 不会附带旧裸 EXE 伪装兼容。
 
 默认全局截图快捷键改为 **F1**。升级时，旧默认 `Ctrl+Alt+A` 迁移为 F1，其他自定义快捷键保留；仍可在设置的快捷键页面修改。已有 `%appdata%\huhucapture\config.json` 或 EXE 旁的便携配置继续使用。
 
@@ -148,7 +152,7 @@ huhucapture.exe --enter=long --auto-quit=true
 
 ## 开发与维护
 
-使用 Windows x64、Visual Studio 2026（C++ 桌面开发、MSVC v145、ATL 与 Windows SDK）、PowerShell 7、Git 和 Rustup。在仓库根目录运行：
+使用 Windows x64、Visual Studio 2026（C++ 桌面开发、MSVC v145、ATL 与 Windows SDK）、PowerShell 7、Python 3.13、Git 和 Rustup。在仓库根目录运行：
 
 ```powershell
 pwsh ./scripts/build.ps1 -Configuration Release
@@ -157,10 +161,13 @@ pwsh ./scripts/test-windows.ps1
 pwsh ./scripts/smoke.ps1
 pwsh ./scripts/test-windows.ps1 -Gui
 pwsh ./scripts/test-windows.ps1 -Update
+pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore
+pwsh ./scripts/test-legacy-update.ps1 -Configuration Debug
+pwsh ./scripts/test-legacy-update.ps1 -Gui
 pwsh ./scripts/package.ps1
 ```
 
-程序输出到 `artifacts/bin/x64/Release/huhucapture.exe`。首次恢复依赖后可打开 `huhucapture.slnx` 调试。CI 共用这些脚本，只有完整验证通过后才会发布声明的版本。脚本覆盖范围、桌面手工验收和实际证据应分别记录，不能相互替代。
+程序输出到 `artifacts/bin/x64/Release/huhucapture.exe`。首次恢复依赖后可打开 `huhucapture.slnx` 调试。CI 共用这些脚本；独立桥接发布入口只使用当前 main 已完整验证的同一组资产和真实原生报告。脚本覆盖范围、桌面手工验收和实际证据应分别记录，不能相互替代。
 
 产品版本只在 [build/version.json](build/version.json) 中维护。变更后运行 `python scripts/version_source.py --write` 更新兼容生成文件；普通构建、直接 MSBuild 和打包都会拒绝过期版本，运行程序不需要 Python。版本与发布声明规则见[构建与发布](docs/building.md)。
 
@@ -177,6 +184,7 @@ pwsh ./scripts/package.ps1
 | [架构与扩展](docs/architecture.md) | 目录职责、资源所有权、数据流、性能约束 |
 | [更新下载](docs/updates.md) | 系统 Downloads、下载完成条件与文件保护边界 |
 | [构建与发布](docs/building.md) | 固定依赖、本地构建、Actions、版本与资产 |
+| [桥接发行](docs/bridge-release.md) | 一次过渡发行、同源五资产与受控完整包下载证据 |
 | [验证指南](docs/validation.md) | 自动测试范围、证据路径、手工验收 |
 | [贡献指南](CONTRIBUTING.md) | 开发流程、改动边界与提交要求 |
 | [自动化协作约定](AGENTS.md) | 面向代码代理的仓库规范 |

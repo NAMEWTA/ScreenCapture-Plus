@@ -27,7 +27,7 @@ huhucapture 是 C++20、Ling、Win32、Direct2D / DirectWrite 与 Windows 媒体
 | `build`、`scripts` | 固定依赖、Windows 工程和本地/CI 共用入口；生成物放入 `artifacts` |
 | `tests`、`tests/windows` | 纯规则与真实 Windows 能力分层验证，测试入口不进入产品 EXE |
 | `docs` | 设计理由、工程约束、失败语义和验收边界；Markdown 文件名全小写 |
-| `releases` | 版本意图 `publish.json` 与各版本说明；当前发布只接受通过验证的同一提交 |
+| `releases` | 桥接意图 `bridge-publish.json` 与各版本说明；当前发布只接受通过验证的同一提交 |
 | `third_party` | 被分发的依赖源码、许可和来源；恢复的依赖使用 `.deps` |
 
 ```mermaid

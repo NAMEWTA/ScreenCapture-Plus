@@ -7,13 +7,21 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import subprocess
 import sys
 import tomllib
 
 
-def run(arguments, cwd, capture=False):
+def run(arguments, cwd, capture=False, recorder=None):
+    if recorder is not None:
+        output, errors = recorder.run(arguments, cwd=cwd, env=recorder.environment, capture=True)
+        if errors:
+            print(errors, end='', flush=True)
+        if not capture and output:
+            print(output, end='', flush=True)
+        return output, errors
     result = subprocess.run(arguments, cwd=cwd, text=True, encoding="utf-8",
                             errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.stderr:
@@ -42,7 +50,21 @@ def main():
     parser.add_argument("--evidence", type=Path, default=root / "artifacts/native-rust")
     parser.add_argument("--target-dir", type=Path,
                         default=Path(os.environ.get("CARGO_TARGET_DIR", root / "artifacts/cargo/localsend")))
+    parser.add_argument('--source-plan', type=Path,
+                        help='Prepared complete native inputs; build offline in a new target and record execution')
     options = parser.parse_args()
+    recorded = None
+    source_inputs = None
+    target = options.target_dir.resolve()
+    evidence = options.evidence.resolve()
+    if options.source_plan:
+        if options.bootstrap_lock or target.exists() or evidence.exists():
+            raise SystemExit('A source-recorded aggregate requires the locked graph and new target/evidence directories')
+        receipts = runpy.run_path(str(root / 'build/package/application_receipts.py'))
+        recorded = receipts['API']['ExecutionLog'](evidence / 'source-execution',
+                     'windows' if os.name == 'nt' else 'linux', __file__)
+        source_inputs = receipts['SourceInputs'](options.source_plan, recorded)
+        recorded.environment = source_inputs.rust_environment()
     specification = json.loads((root / "build/dependencies.lock.json").read_text(encoding="utf-8"))["qtMigration"]
     native = specification["nativeRust"]
     toolchain = specification["rustToolchain"]
@@ -50,13 +72,17 @@ def main():
     workspace = manifest.parent
     if "+crt-static" in os.environ.get("RUSTFLAGS", "") + os.environ.get("CARGO_ENCODED_RUSTFLAGS", ""):
         raise SystemExit("The Qt aggregate library requires dynamic CRT; remove +crt-static")
-    version, _ = run(["rustc", "+" + toolchain, "--version", "--verbose"], workspace, capture=True)
+    compiler = [str(source_inputs.resolve(source_inputs.plan['rustVendor']['replay']['rustc']))] if source_inputs else ["rustc", "+" + toolchain]
+    version, _ = run(compiler + ["--version", "--verbose"], workspace, capture=True, recorder=recorded)
     if not version.startswith("rustc " + toolchain + " "):
         raise SystemExit("Unexpected Rust toolchain")
     host = next((line.removeprefix("host: ") for line in version.splitlines() if line.startswith("host: ")), "")
     if host not in ("x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"):
         raise SystemExit("The native ABI validation currently targets Windows x64 and Linux amd64")
     cargo = ["cargo", "+" + toolchain, "--color", "never"]
+    if source_inputs:
+        cargo = [str(source_inputs.resolve(source_inputs.plan['rustVendor']['replay']['cargo'])),
+                 '--color', 'never', '--config', str(source_inputs.config), '--offline']
     source_lock = root / "third_party/gifski/upstream-cargo.lock"
     source_bytes = source_lock.read_bytes()
     source_manifest = json.loads((source_lock.parent / "upstream.json").read_text(encoding="utf-8"))
@@ -72,7 +98,6 @@ def main():
             raise SystemExit("Ambiguous upstream codec version: " + name)
         pins[name] = choices[0]
 
-    evidence = options.evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     if options.bootstrap_lock:
         # Let Cargo preserve the existing core lock and add the actual new
@@ -86,15 +111,16 @@ def main():
         versions = {entry["version"] for entry in resolved if entry["name"] == name}
         if versions != {expected}:
             raise SystemExit(f"Codec dependency drift for {name}: {sorted(versions)}; expected {expected}")
-    metadata, _ = run(cargo + ["metadata", "--format-version", "1", "--locked"], workspace, capture=True)
+    metadata, _ = run(cargo + ["metadata", "--format-version", "1", "--locked"], workspace, capture=True, recorder=recorded)
+    if source_inputs:
+        source_inputs.verify_metadata(json.loads(metadata))
     (evidence / "cargo-metadata.json").write_text(metadata, encoding="utf-8")
-    target = options.target_dir.resolve()
-    source_inputs = source_fingerprints(root)
+    fingerprints = source_fingerprints(root)
     # Keep debug information in the production CRT configuration. A Cargo dev
     # build does not turn the Windows Rust standard library into /MDd.
     command = cargo + ["rustc", "-p", native["package"], "--release", "--locked",
                        "--target-dir", str(target), "--", "-C", "debuginfo=2", "--print", "native-static-libs"]
-    output, errors = run(command, workspace, capture=True)
+    output, errors = run(command, workspace, capture=True, recorder=recorded)
     log = output + errors
     (evidence / "build.log").write_text(log, encoding="utf-8")
     matches = re.findall(r"native-static-libs:\s*([^\r\n]+)", log)
@@ -154,19 +180,21 @@ def main():
     library = target / "release" / ("huhucapture_native.lib" if windows else "libhuhucapture_native.a")
     if not library.is_file():
         raise SystemExit("Cargo did not produce the aggregate static library")
-    if source_fingerprints(root) != source_inputs:
+    if source_fingerprints(root) != fingerprints:
         raise SystemExit("Native source files changed during the build")
     result = {
         "schemaVersion": 1, "rustVersion": toolchain, "host": host, "pythonVersion": sys.version,
         "crate": native["package"], "library": library.as_posix(),
         "librarySha256": hashlib.sha256(library.read_bytes()).hexdigest(),
         "cargoLockSha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
-        "sourceFiles": source_inputs,
+        "sourceFiles": fingerprints,
         "nativeLibraries": libraries, "nativeLinkOptions": link_options,
         "nativeLibraryFiles": library_files, "codecPackages": pins,
         "windowsCrt": "MD" if windows else None,
         "bootstrapResolution": options.bootstrap_lock,
     }
+    if source_inputs:
+        result['sourceBuildProof'] = source_inputs.native_proof(library, command)
     (evidence / "build-info.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print("Aggregate native library:", library)
     print("Actual native link libraries:", " ".join(libraries))

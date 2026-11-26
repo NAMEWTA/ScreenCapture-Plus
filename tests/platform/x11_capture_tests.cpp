@@ -9,11 +9,12 @@
 #include "ui/qt/EditorWindow.h"
 
 #include <QApplication>
+#include <QColorSpace>
 #include <QEventLoop>
 #include <QLabel>
 #include <QPainter>
 #include <QPointer>
-#include <QPushButton>
+#include <QToolButton>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
@@ -67,6 +68,7 @@ public:
     {
         setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
         setCursor(Qt::ArrowCursor); resize(320, 300); move(60, 70);
+        page.setColorSpace(QColorSpace::SRgb);
         for (int y = 0; y < page.height(); ++y) for (int x = 0; x < page.width(); ++x)
             page.setPixel(x, y, qRgb((x * 17 + y * 29 + (y >> 4) * 43) % 251,
                 (x * 7 + y * 13 + (y >> 3) * 37) % 253, (x * 3 + y * 19 + (y >> 2) * 11) % 255));
@@ -202,8 +204,8 @@ void scrolling(Pattern& pattern, const capture::ActionRequest& request)
     QString failure; QObject::connect(&controller, &app::ScrollController::operationFailed, &controller, [&](const QString& text) { failure = text; });
     pattern.reset(); require(controller.begin(request), "Open the real shared scrolling controls");
     auto* view = scrollView(); require(view, "The production scroll window exists");
-    auto* start = view->findChild<QPushButton*>(QStringLiteral("scrollStart"));
-    auto* stop = view->findChild<QPushButton*>(QStringLiteral("scrollStop"));
+    auto* start = view->findChild<QToolButton*>(QStringLiteral("scrollStart"));
+    auto* stop = view->findChild<QToolButton*>(QStringLiteral("scrollStop"));
     auto* dimensions = view->findChild<QLabel*>(QStringLiteral("scrollDimensions"));
     require(start && stop && dimensions, "Real scrolling actions and progress are present");
     view->hide(); controller.activate(); require(view->isVisible(), "The global activation path recovers hidden controls");
@@ -215,10 +217,13 @@ void scrolling(Pattern& pattern, const capture::ActionRequest& request)
     require(height >= 340, "The stitched result contains more than the initial screenshot");
     QPointer<ui::EditorWindow> pin;
     QObject::connect(&workspace, &app::MediaWorkspace::editorOpened, &workspace, [&](ui::EditorWindow* window) { pin = window; });
-    view->findChild<QPushButton*>(QStringLiteral("scrollPin"))->click();
+    auto* pinAction = view->findChild<QToolButton*>(QStringLiteral("scrollPin"));
+    require(pinAction, "The actual scrolling pin action is present"); pinAction->click();
     wait([&] { return pin && !controller.busy(); }, "Completed scrolling pixels open in the shared real editor");
     require(equalPixels(pin->canvas()->originalImage(), pattern.page.copy(0, 0, pattern.width(), height)),
         "The pinned scrolling result preserves every actual source row exactly");
+    require(pin->canvas()->originalImage().colorSpace() == request.image.colorSpace(),
+        "The pinned scrolling result retains the actual native source color space");
     int shutdowns{}; QObject::connect(&controller, &app::ScrollController::shutdownFinished, &controller, [&] { ++shutdowns; });
     controller.shutdown(); wait([&] { return shutdowns == 1; }, "Idle scrolling controller shuts down once");
     controller.shutdown(); settle(); require(shutdowns == 1, "Repeated scrolling shutdown is idempotent");
@@ -230,7 +235,8 @@ void scrolling(Pattern& pattern, const capture::ActionRequest& request)
     require(interrupted.begin(request), "Start another owned native scrolling session");
     QPointer<QWidget> hidden = scrollView(); require(hidden, "The second control window exists");
     hidden->move(request.desktopRect->topLeft());
-    hidden->findChild<QPushButton*>(QStringLiteral("scrollStart"))->click();
+    auto* interruptedStart = hidden->findChild<QToolButton*>(QStringLiteral("scrollStart"));
+    require(interruptedStart, "The interrupted scrolling start action is present"); interruptedStart->click();
     wait([&] { return !hidden->isVisible(); }, "Overlapping controls are excluded before native capture");
     interrupted.activate(); require(!hidden->isVisible(), "Hotkey activation waits until the in-flight capture exclusion ends");
     int interruptedShutdowns{};

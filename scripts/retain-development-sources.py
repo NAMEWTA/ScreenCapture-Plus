@@ -21,6 +21,10 @@ BUNDLE.__file__ = str(COLLECTOR)
 # Reuse the collector's checked Git/object/file operations without writing a
 # Python cache into the source checkout. Collection itself still uses its CLI.
 exec(compile(COLLECTOR.read_bytes(), str(COLLECTOR), "exec"), BUNDLE.__dict__)
+RUST_MATERIALS = types.ModuleType("huhucapture_retained_rust_graph")
+_rust_graph_path = ROOT / "build/package/rust_materials.py"
+exec(compile(_rust_graph_path.read_bytes(), str(_rust_graph_path), "exec"), RUST_MATERIALS.__dict__)
+GRAPH_API = types.SimpleNamespace(meta=types.SimpleNamespace(require=BUNDLE.require))
 TOOLCHAIN = "1.97.1"
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 NATIVE_SOURCES = {
@@ -117,10 +121,32 @@ def cargo_environment(private):
     return environment
 
 
+def retain_replay_inputs(source, destination):
+    """Keep only this task's public source cache for later real offline replay."""
+    BUNDLE.require(not destination.exists(), 'Replay source inputs already exist')
+    destination.mkdir(parents=True)
+    retained = {}
+    for name in ('registry/cache', 'registry/index', 'git/db'):
+        original = source / name
+        if not original.is_dir():
+            continue
+        expected = BUNDLE.inventory(original)
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(original, target, symlinks=False)
+        BUNDLE.require(BUNDLE.inventory(original) == expected and BUNDLE.inventory(target) == expected,
+                       'Public replay source cache changed during retention: ' + name)
+        retained[name] = {'treeSha256': BUNDLE.tree_digest(expected), 'files': len(expected)}
+    BUNDLE.require(set(retained) == {'registry/cache', 'registry/index', 'git/db'},
+                   'Actual offline replay inputs are incomplete')
+    return retained
+
+
 class Retention:
-    def __init__(self, output, commit, qt_prefix, *, fetch_locked_sources=False):
+    def __init__(self, output, commit, qt_prefix, *, fetch_locked_sources=False, retain_replay_cache=False):
         self.output, self.commit, self.qt_prefix = output, commit, qt_prefix
         self.fetch_locked_sources = fetch_locked_sources
+        self.retain_replay_cache = retain_replay_cache
         self.materials = []
         self.build_receipts = []
         self.report = {"schemaVersion": 1, "kind": "huhucapture-linux-development-source-retention",
@@ -253,7 +279,45 @@ class Retention:
         self.coverage["actualNativeLibrary"] = {"path": str(library), **BUNDLE.descriptor(library)}
         BUNDLE.require(self.coverage["actualNativeLibrary"]["sha256"] == actual["librarySha256"],
                        "Actual Rust library no longer matches its build record")
-        return metadata
+        return self.source_cache_metadata(actual, metadata)
+
+    def source_cache_metadata(self, actual, metadata):
+        """Use unchanged original cache paths only after the full build graphs agree."""
+        if not actual.get("sourceBuildProof"):
+            return metadata
+
+        def retained_reference(identifier, reference, boundary):
+            original = Path(reference["path"])
+            BUNDLE.require(original.is_absolute() and original.resolve(strict=True).is_relative_to(boundary),
+                           "Prepared Rust provenance escaped its owned workspace")
+            retained = self.material(identifier, original)
+            descriptor = BUNDLE.descriptor(retained)
+            BUNDLE.require(all(descriptor[key] == reference[key] for key in ("size", "sha256")),
+                           "Prepared Rust provenance changed after the actual producer recorded it")
+            return original, BUNDLE.read_json(retained)
+
+        _, proof = retained_reference("native-source-build-proof", actual["sourceBuildProof"],
+                                      ROOT / "artifacts/native-rust")
+        BUNDLE.require(proof.get("kind") == "huhucapture-native-source-build" and proof.get("platform") == "linux" and
+                       proof.get("sourceCommit") == self.commit and
+                       proof.get("library", {}).get("sha256") == actual["librarySha256"],
+                       "Prepared cache metadata belongs to another actual native build")
+        plan_path, plan = retained_reference("native-source-plan", proof["sourcePlan"], ROOT)
+        BUNDLE.require(plan.get("schemaVersion") == 1 and plan.get("platform") == "linux" and
+                       Path(plan["project"]).resolve() == ROOT,
+                       "Prepared source plan belongs to another checkout")
+        originals = [item for item in plan.get("materials", []) if item["id"] == "native-prepared-metadata"]
+        BUNDLE.require(len(originals) == 1, "The original locked source-preparation graph is missing")
+        reference = dict(originals[0])
+        reference["path"] = str((plan_path.parent / reference["path"]).resolve())
+        original, prepared = retained_reference("native-source-cache-metadata", reference, plan_path.parent)
+        BUNDLE.require(RUST_MATERIALS.graph_identity(GRAPH_API, prepared) ==
+                       RUST_MATERIALS.graph_identity(GRAPH_API, metadata),
+                       "Original source-cache graph differs from the actual vendored build graph")
+        self.coverage["sourcePreparedMetadata"] = {
+            "path": str(original), "sha256": reference["sha256"],
+            "meaning": "Original pre-vendor cache paths; complete graph checked against the retained actual build metadata"}
+        return prepared
 
     def registry_archives(self, packages, cache):
         # Rescanning after fetch replaces coverage, not previously retained
@@ -446,9 +510,13 @@ class Retention:
             package = tomllib.loads((directory / "Cargo.toml").read_text(encoding="utf-8"))["package"]
             packages.append({"name": package["name"], "version": package["version"]})
         self.coverage["vendorPackages"] = packages
+        replay_cache = private
+        if self.retain_replay_cache:
+            replay_cache = self.output / 'inputs/replay-cache'
+            self.coverage['retainedReplayInputs'] = retain_replay_inputs(private, replay_cache)
         return {"directory": "inputs/rust-vendor", "registryCache": "inputs/registry-cache",
                 "config": "vendor-config.toml", "noticeReviews": "third_party/rust-notices/upstream.json",
-                "replay": {**executables, "cache": str(private)}}
+                "replay": {**executables, "cache": str(replay_cache)}}
 
     def run(self):
         # The collector must finish its real offline replay before this owned
@@ -533,6 +601,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="New directory under this checkout's ignored artifacts/")
     parser.add_argument("--fetch-locked-sources", action="store_true",
                         help="Fetch the fixed lock into a private cache before offline collection; retain materials but fail on fetch failure")
+    parser.add_argument("--retain-replay-cache", action="store_true",
+                        help="Retain only this task's public registry/Git source inputs for a later real offline source-plan replay")
     args = parser.parse_args()
     retention = None
     try:
@@ -546,7 +616,8 @@ def main():
         qt = args.qt_prefix.resolve(strict=True)
         BUNDLE.require(qt.is_dir(), "Actual Qt prefix is missing")
         output.mkdir(parents=True)
-        retention = Retention(output, args.source_commit, qt, fetch_locked_sources=args.fetch_locked_sources)
+        retention = Retention(output, args.source_commit, qt, fetch_locked_sources=args.fetch_locked_sources,
+                              retain_replay_cache=args.retain_replay_cache)
         result = retention.run()
         print(json.dumps({"output": str(output), "status": retention.report["status"],
                           "complete": False, "archive": retention.report["archive"]}, indent=2))

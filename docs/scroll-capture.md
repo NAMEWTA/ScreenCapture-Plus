@@ -38,6 +38,13 @@ the accumulated result. Native auto-scrolling must preserve the original
 target-window guard: moving the cursor away pauses input instead of scrolling
 a different application.
 
+The controller carries the selected source image's color space through its
+worker, progress previews and completed image. Rebuilding a QImage from the
+stitched BGRA allocation preserves that profile without converting its pixels.
+An untagged authorized source stays untagged. The native pixel fixture declares
+its authored sRGB profile and verifies both exact output pixels and the retained
+source profile through the actual archive/export path.
+
 Manual sources may remain still while the user reads. They use the same exact
 matching and append rules, with only the automatic reached-bottom counter
 disabled. Waiting for manual movement is not evidence that a page ended.

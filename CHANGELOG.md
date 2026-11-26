@@ -1,6 +1,16 @@
 # huhucapture 更新记录
 
-本文件记录公开版本的产品能力与交付内容。发行文件见 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases)，构建和验证方法见 [building.md](docs/building.md) 与 [validation.md](docs/validation.md)。
+本文件记录版本的产品能力与交付内容；尚未公开的声明以实际 Release 状态为准。发行文件见 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases)，构建和验证方法见 [building.md](docs/building.md) 与 [validation.md](docs/validation.md)。
+
+## v0.0.6 — Windows 更新桥
+
+- 保留原生 Windows 单 EXE，增加正式完整包清单选择和流式下载，供后续 Qt 便携包迁移使用；最终 Qt 首发版本仍为 v0.1.0。
+- 验证完整包的仓库、版本、架构、依赖清单、长度和 SHA256，清单错误时明确失败；没有清单的旧 Release 继续使用经过 PE 版本验证的 EXE 回退。
+- 复用实际 Downloads 和排他文件提交，保留同名文件；关于页关闭/重开不会中断应用任务，最终退出取消并回收网络资源。
+- 六种语言增加完整目录解压说明，长说明按实际页面宽度换行。文档明确跳过桥接者可直接手动下载 Qt 完整安装器或 ZIP。
+- 统一 `build/version.json` 为手写版本源；独立桥接发布只接受当前 main 的成功 Windows run、原五项资产与实际 Debug / Release 下载报告。
+
+受控完整包 fixture 用于验证下载契约，不是可安装 Qt 产品。实际原生验证和公开资产以对应 Actions / Release 为准；本版本不声明 Qt、Linux 或实体设备验收完成。
 
 ## 未发布 — Qt 跨平台迁移中
 

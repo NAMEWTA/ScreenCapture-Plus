@@ -26,6 +26,21 @@
       "windowsToolset": "v143",
       "windowsCrt": "MD/MDd",
       "qtbaseLicense": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "sourceDependencies": {
+        "icu": {
+          "repository": "https://github.com/unicode-org/icu.git",
+          "version": "73.2",
+          "commit": "680f521746a3bd6a86f25f25ee50a62d88b489cf",
+          "tag": "release-73-2",
+          "tagObject": "680f521746a3bd6a86f25f25ee50a62d88b489cf",
+          "configure": [
+            "--enable-shared",
+            "--disable-static",
+            "--disable-tests",
+            "--disable-samples"
+          ]
+        }
+      },
       "sourceTools": {
         "qttools": {
           "repository": "https://github.com/qt/qttools.git",

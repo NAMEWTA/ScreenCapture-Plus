@@ -54,6 +54,15 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\src\platform\windows\LegacyUpdateTask.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\platform\windows\FileIdentity.cpp">
+      <Filter>src\platform\windows</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\app\App.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
@@ -126,12 +135,6 @@
     <ClCompile Include="..\..\src\platform\windows\DesktopFiles.cpp">
       <Filter>src\platform\windows</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\src\platform\windows\FileCommitter.cpp">
-      <Filter>src\platform\windows</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\src\platform\windows\FileIdentity.cpp">
-      <Filter>src\platform\windows</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\src\platform\windows\FileHandleStream.cpp">
       <Filter>src\platform\windows</Filter>
     </ClCompile>
@@ -185,9 +188,6 @@
     </ClCompile>
     <ClCompile Include="..\..\src\services\Update.cpp">
       <Filter>src\services</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\src\platform\windows\LegacyUpdateTask.cpp">
-      <Filter>src\platform\windows</Filter>
     </ClCompile>
     <ClCompile Include="..\..\src\ui\AnnotationPanel.cpp">
       <Filter>src\ui</Filter>
@@ -257,6 +257,27 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\src\platform\windows\LegacyUpdateTask.h">
+      <Filter>src\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\FileCommitter.h">
+      <Filter>src\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\platform\FileIdentity.h">
+      <Filter>src\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\UpdatePolicy.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\UpdateManifest.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\UpdatePackageHeader.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\core\ReleasePackage.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\resources\Version.h">
       <Filter>resources</Filter>
     </ClInclude>
@@ -353,12 +374,6 @@
     <ClInclude Include="..\..\src\platform\windows\AudioFormat.h">
       <Filter>src\platform\windows</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\src\platform\FileCommitter.h">
-      <Filter>src\platform</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\src\platform\FileIdentity.h">
-      <Filter>src\platform</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\src\platform\windows\FileHandleStream.h">
       <Filter>src\platform\windows</Filter>
     </ClInclude>
@@ -407,13 +422,7 @@
     <ClInclude Include="..\..\src\recording\VideoMp4.h">
       <Filter>src\recording</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\src\recording\RecordingBackend.h">
-      <Filter>src\recording</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\src\core\FrameSource.h">
-      <Filter>src\core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\src\core\MediaFrame.h">
       <Filter>src\core</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\services\AnnotationRenderer.h">
@@ -439,18 +448,6 @@
     </ClInclude>
     <ClInclude Include="..\..\src\services\Update.h">
       <Filter>src\services</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\src\core\UpdatePolicy.h">
-      <Filter>src\core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\src\core\UpdateManifest.h">
-      <Filter>src\core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\src\core\UpdatePackageHeader.h">
-      <Filter>src\core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\src\platform\windows\LegacyUpdateTask.h">
-      <Filter>src\platform\windows</Filter>
     </ClInclude>
     <ClInclude Include="..\..\src\ui\AnnotationPanel.h">
       <Filter>src\ui</Filter>

@@ -156,21 +156,44 @@ Windows 用同一 `prepare` 入口，另提供实际 `--symbols` 和锁定 `--ns
 | `payloads/installer`、`payloads/portable-zip` | 两份真实 Windows payload，各自含准确标记 |
 | `payloads/appimage`、`payloads/deb` | 最终 AppDir、DEB payload 与实际 DEBIAN 控制文件 |
 | `source-deployment-inventory.json` | 直接复用来源收集器生成的全树 file/symlink 清单及两种产品根 |
-| `transformations.json` | 本次实际工具、argv、退出码、输出日志及变换输入/输出 |
+| `installed-input-inventory.json` | 打包开始前的原始安装目录清单 |
+| `linuxdeploy-output-inventory.json`、`linux-stripped-inventory.json` | Linux 原生部署后与调试分离后的实际中间清单，绑定原命令范围及哈希 |
+| `transformations.json`、`executions/` | 本次实际工具、argv、退出码、完整原始输出日志及变换输入/输出 |
+| `file-transformations.json` | 实际复制、patchelf、objcopy、安装标记和 desktop 改写的逐文件连续输入/输出；由同源码原脚本及成功执行记录绑定 |
 | `prepared.json`、`artifacts/` | 不可换意图的构建身份、payload 哈希及真正包和符号文件 |
 
 Windows 产品根为 `installer` / `portable-zip`。Linux 产品根为 `appimage/usr` / `deb/opt/huhucapture`；两者以外的 AppRun、desktop、启动器和 DEB control 仍属于全树，不能漏出来源映射。最终来源报告的 `deployment.files`、`treeSha256`、`products` 必须精确等于准备阶段的清单。不能只收原始 install prefix，再宣称它覆盖后来被 linuxdeploy 修改的 AppImage。
 
-用 [来源收集器](source-bundles.md) 及实际 producer/material 适配形成 `source-plan.json`，再执行：
+用 [来源计划装配器](source-bundles.md) 验证实际 producer/material 并在冻结目录以外形成 `source-plan.json`，再执行：
 
 ```sh
 python3 scripts/package-qt.py finalize \
   --stage artifacts/packages/linux-prepared --output artifacts/packages/linux \
-  --source-plan artifacts/packages/linux-prepared/source-plan.json \
+  --source-plan artifacts/source-plans/linux/source-plan.json \
   --source-output artifacts/source-complete/linux
 ```
 
 该入口调用真实 `collect --require-complete`。也可提供已经按相同最终 stage 收集的 `--source-bundle` / `--source-manifest` 对；不能同时提供两套来源输入。缺少真实 producer 收据、源码、许可或最终文件映射，收集器必须给出明确 gaps 并失败，打包器不会填空 map、修改 `complete` 或为开发包换标签。
+
+### 保留可独立复核的准备目录
+
+在真实准备步骤成功后，运行：
+
+```sh
+python3 scripts/retain-package-stage.py \
+  --stage artifacts/packages/linux-prepared \
+  --output artifacts/package-stage-linux
+```
+
+Windows 使用同一入口与自己的 stage/output。该步骤先调用原 `verify_prepared`，
+再把原始 JSON、完整 `payloads`、`artifacts`、`executions` 以及 Linux 的两份中间
+清单和 `work/debug` 保存到 tar.gz，保留文件权限、符号链接与空日志。不保留不被
+复核引用的 CPack、再次解包或工具展开副本。随后安全解出到新目录，逐项比对原始
+字节、权限和链接，并真实再次调用 `verify_prepared`。只有全部通过才输出
+`huhucapture-v<version>-<platform>-<architecture>-prepared-stage.tar.gz` 与
+`package-stage-retention.json`。报告绑定归档 SHA256、原 prepared 文件及完整保留
+清单；原 development/release intent 和全部 JSON 保持原字节。此保留记录不替代
+来源完整性或发布门禁，上游源码、构建收据与静态输入仍按各生产者另外完整保留。
 
 来源档案和清单分别命名为 `huhucapture-vX.Y.Z-<platform>-<architecture>-sources.tar.gz` 与 `...-source-manifest.json`。Windows 为 `windows-x64`，Linux 为 `linux-amd64`，避免两端不同内容共用一个名字。至少覆盖 huhucapture、Qt、gifski、LocalSend、FFmpeg、Rust vendor；Linux 另含 libportal、PipeWire、x264 和 AppImage runtime 及其实际静态闭包。需要保留实际补丁、构建参数、原许可、输出映射和重建方法，URL 不是对应源码。
 

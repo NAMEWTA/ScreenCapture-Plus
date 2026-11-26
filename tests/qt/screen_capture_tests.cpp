@@ -137,7 +137,13 @@ int main(int argc, char** argv)
         require(results.at(cancelled).failure.code == Capture::Failure::Code::Cancelled && results.at(cancelled).source.image.isNull(),
             "cancelled native readback never publishes its late pixels");
         require(busy == 0, "a concurrent source request is rejected before it can reuse the active readback buffer");
-        const auto closing = service.request(); service.shutdown(); require(service.request() == 0, "shutdown closes capture admission immediately"); waitFor([&] { return stopped; });
+        // Cancellation may be delivered while the native worker is still
+        // releasing its resources. New admission stays closed until that real
+        // drain completes; a terminal notification alone is not an idle state.
+        waitFor([&] { return !service.busy(); });
+        const auto closing = service.request();
+        require(closing != 0, "the drained native worker accepts the shutdown test request");
+        service.shutdown(); require(service.request() == 0, "shutdown closes capture admission immediately"); waitFor([&] { return stopped; });
         require(results.contains(closing) && results.at(closing).failure.code == Capture::Failure::Code::Cancelled,
             "shutdown reports cancellation before actual native worker resource release");
         std::cout << "PASS actual native capture, per-screen mapping, owned repeated frames, cursor movement, source supersession and cancellation/drain\n";

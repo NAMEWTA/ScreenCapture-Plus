@@ -159,3 +159,46 @@ runner 完成四家族源码收集。完整正向验收必须由上述实际 CI 
 （Git blob `374bd5c1512943439480825f32e448e7871eb61c`）和
 [x264 configure](https://github.com/mirror/x264/blob/3a21e97bf23676a0bf4616df8bc2207c9fd7b1d3/configure)
 （Git blob `71d3a74a0c20e75808eddf95e86a9b4d03b22af4`）。
+
+## Linux 发行版运行库的原始源码包
+
+`scripts/collect-system-source-materials.py` 继续处理 `collect-runtime-materials.py system`
+已经逐字节归属的 dpkg 库。它必须在原 Linux amd64 runner、原安装目录仍未经过
+linuxdeploy/strip 改写时运行；需要该 runner 的真实 dpkg 数据库，以及含精确已安装
+源码版本的 APT `deb-src` 索引。缺索引或旧版本已不在源中时直接失败，不选择 latest、
+修改系统 APT 配置或安装软件。
+
+```sh
+python scripts/collect-system-source-materials.py \
+  --installed artifacts/install/linux \
+  --runtime-materials artifacts/runtime-materials-linux/runtime-materials.json \
+  --output artifacts/system-source-linux
+```
+
+收集先复核真实 ELF、当前 dpkg 所有者、二进制版本、架构及 `source:Package` /
+`source:Version`。它精确下载相同版本 `.deb`，核对原 Packages 字段中的 SHA256，
+真正解包并逐文件比对原运行库；源码则使用 `apt-get source 包名=源码版本`，保留
+原 Sources 字段、`.dsc`、所有 upstream / Debian tar 或 diff。Sources 与 `.dsc`
+必须各自列出同样的原始归档 SHA256；缺项、版本冲突或字节差异都失败。执行真实
+`dpkg-source` 提取，保留已应用 Debian 补丁的完整树、`debian/rules`、changelog、
+copyright，以及原 runtime 收集的 common-license 文本。binNMU 的二进制版本与
+源码版本分别核对，不能简单删后缀或假设两者相同。
+
+输出 `source-plan.json` 可作为来源装配器的额外 `--inputs`。组件采用
+`debian-source` 类型，由正式收集器重新核对原 index、`.dsc`、每个归档，再实际
+提取；不会重新打包一个 tar 并把自算哈希充当独立发行方 pin。系统组件使用
+`system-<source-package>`，真实 OpenSSL 来源使用 `openssl`；Qt 单独固定的 ICU
+仍使用 `icu`，不会被发行版的 `system-icu` 替代。完整的实际命令、日志和退出码
+封存为独立材料，原安装目录和已存在结果不被修改。
+
+该入口保留**来源材料与二进制字节关联**，不生成 `NativeBuild` 收据。当前尚未
+保留可独立离线验证的原始 Release 签名到 Packages / Sources 索引链，正式收集器
+明确保留此缺项；APT 的实际下载日志不能代替该签名链。当次发行方的精确
+`.buildinfo`、配置 / 链接日志和静态输入范围也继续缺失，不能从 `debian/rules`
+推测某次真正使用的参数或填写 `complete`。有可信签名链、精确 `.deb` / `.dsc`
+和 recipes 只说明发行方声明的二进制与源码关系；原构建参数仍需对应实际产物的
+构建记录。
+
+格式依据为 [APT 的精确版本下载](https://manpages.debian.org/bookworm/apt/apt-get.8.en.html)、
+[Debian source package 及 recipes](https://www.debian.org/doc/debian-policy/ch-source.html)
+和 [`.buildinfo` 的源码、二进制、构建依赖及环境字段](https://manpages.debian.org/trixie/dpkg-dev/deb-buildinfo.5.en.html)。

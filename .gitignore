@@ -12,3 +12,7 @@ __pycache__/
 *.log
 /enc_temp_folder/
 **/x64/
+
+# Python maintenance and release validation caches
+__pycache__/
+*.py[cod]

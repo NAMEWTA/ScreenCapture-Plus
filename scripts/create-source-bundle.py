@@ -30,7 +30,7 @@ CARGO_REGISTRY_VENDOR_SOURCE = ("https://github.com/rust-lang/cargo/blob/" +
                                 CARGO_REGISTRY_VENDOR_COMMIT + "/src/cargo/ops/vendor.rs")
 COMMON = {"huhucapture", "localsend", "gifski", "rust-vendor", "rust-toolchain-source", "ffmpeg",
           "qtbase", "qtsvg", "qttranslations"}
-APPIMAGE_STATIC_SOURCES = {"appimage-musl", "appimage-fuse", "appimage-squashfuse", "appimage-zstd",
+APPIMAGE_STATIC_SOURCES = {"appimage-musl", "appimage-gcc", "appimage-fuse", "appimage-squashfuse", "appimage-zstd",
                           "appimage-zlib", "appimage-mimalloc"}
 LINUX = {"qtwayland", "libportal", "pipewire", "x264", "openssl", "icu", "appimage-runtime"} | APPIMAGE_STATIC_SOURCES
 
@@ -385,6 +385,12 @@ def locked_sources(project):
             result[name] = qt["sourceModules"][name]
     if "qttools" in qt.get("sourceTools", {}):
         result["qttools"] = qt["sourceTools"]["qttools"]
+    if "icu" in qt.get("sourceDependencies", {}):
+        result["icu"] = qt["sourceDependencies"]["icu"]
+    for identifier, pin in package_lock.get("runtimeSourceBuild", {}).get("sources", {}).items():
+        require(IDENTIFIER.fullmatch(identifier) and identifier not in result,
+                "A locked runtime source cannot override another component pin")
+        result[identifier] = pin
     return lock, result
 
 
@@ -553,6 +559,13 @@ def json_pointer(value, pointer):
 
 
 def verify_configure_command(command, profile, component, platform):
+    if component == "icu":
+        require(platform == "linux" and len(command) == 4 + len(profile) and
+                Path(command[0]).name == "runConfigureICU" and command[1] == "Linux" and
+                command[2].startswith("--prefix=") and command[2] != "--prefix=" and
+                command[3] == "--libdir=" + command[2].removeprefix("--prefix=") + "/lib" and command[4:] == profile,
+                "ICU command differs from the exact locked Linux shared-library configure profile")
+        return
     if component == "pipewire":
         require(len(command) >= 6 and Path(command[0]).name in ("meson", "meson.py", "meson.exe") and
                 command[1] == "setup" and command[4].startswith("--prefix=") and command[4] != "--prefix=" and
@@ -635,7 +648,7 @@ def replay_vendor(project, specification, expected, destination, toolchain):
 class Collector:
     def __init__(self, plan, plan_directory, stage):
         self.plan, self.base, self.stage = plan, plan_directory, stage
-        self.gaps, self.components, self.materials, self.receipts = [], {}, {}, {}
+        self.gaps, self.components, self.materials, self.receipts, self.source_transformations = [], {}, {}, {}, {}
         self.sources = stage / "sources"
         self.sources.mkdir()
 
@@ -719,6 +732,8 @@ class Collector:
         identifier = item["id"]
         require(IDENTIFIER.fullmatch(identifier) and identifier not in self.components,
                 "Duplicate or invalid source component")
+        if item.get("kind") == "debian-source":
+            return self.collect_debian_source(item)
         destination = self.sources / identifier
         pin = self.pins.get(identifier)
         source_input = item.get("archive") if item.get("kind") == "tar" else item.get("directory")
@@ -775,8 +790,10 @@ class Collector:
                         "Exact source pin is absent from the supplied provenance record")
                 provenance["pinEvidence"] = self.materials[identifier + "-pin-evidence"]
         else:
+            runtime_sources = read_json(self.sources / "huhucapture/build/package/dependencies.lock.json").get(
+                "runtimeSourceBuild", {}).get("sources", {})
             provenance["lockFile"] = "sources/huhucapture/" + ("build/package/dependencies.lock.json"
-                if identifier == "appimage-runtime" else "build/dependencies.lock.json")
+                if identifier == "appimage-runtime" or identifier in runtime_sources else "build/dependencies.lock.json")
         if item.get("sourceSbom"):
             path = self.retain(identifier + "-source-sbom", item["sourceSbom"])
             verify_source_spdx(path, destination)
@@ -785,6 +802,38 @@ class Collector:
                    for entry in files if entry["type"] == "file"):
             self.gap(identifier + ": archive/checkout has no recognizable native/module source files")
         self.component(identifier, provenance, files, None if identifier in COMMON | LINUX else item.get("family"))
+
+    def collect_debian_source(self, item):
+        identifier = item["id"]
+        require(self.platform == "linux" and identifier not in self.pins and set(item) <=
+                {"id", "kind", "sourcePackage", "sourceVersion", "dsc", "sha256", "sourceIndex",
+                 "sourceIndexSha256", "family"},
+                "Debian source material cannot override a locked component or supply unverified patches")
+        helper_path = Path(__file__).resolve().parents[1] / "build/package/debian_sources.py"
+        helper = types.ModuleType("huhucapture_debian_source_materials")
+        helper.__file__ = str(helper_path)
+        exec(compile(helper_path.read_bytes(), str(helper_path), "exec"), helper.__dict__)
+        specification = {**item, "dsc": str(self.path(item["dsc"])),
+                         "sourceIndex": str(self.path(item["sourceIndex"]))}
+        destination = self.sources / identifier
+        provenance, files, originals = helper.extract_source(specification, destination, inventory)
+        retained = []
+        for index, (path, expected) in enumerate(originals):
+            material_id = identifier + "-debian-input-" + str(index)
+            actual = self.retain(material_id, str(path))
+            require(digest(actual) == expected["sha256"] and actual.stat().st_size == expected["size"],
+                    "Original Debian source material changed during retention")
+            retained.append(self.materials[material_id])
+        provenance["retainedOriginals"] = retained
+        # A Sources stanza and matching .dsc establish byte consistency. They
+        # are not the original signed Release -> index chain. The producer's
+        # APT execution is retained separately, without inventing an offline
+        # archive signature or treating this extraction as a binary build.
+        self.gap(identifier + ": original authenticated repository index/signature chain is missing")
+        if not any(Path(entry["path"]).suffix.lower() in (".c", ".cc", ".cpp", ".h", ".hpp", ".rs", ".s")
+                   for entry in files if entry["type"] == "file"):
+            self.gap(identifier + ": Debian source package has no recognizable native source files")
+        self.component(identifier, provenance, files, item.get("family"))
 
     def collect_rust(self):
         specification = self.plan.get("rustVendor")
@@ -944,6 +993,8 @@ class Collector:
                 profiles["x264"] = migration["softwareMedia"]["x264"]["configure"]
             if "pipewire" in source_ids:
                 profiles["pipewire"] = migration["pipewire"]["mesonOptions"]
+            if "icu" in source_ids and self.platform == "linux" and "icu" in migration.get("qt", {}).get("sourceDependencies", {}):
+                profiles["icu"] = migration["qt"]["sourceDependencies"]["icu"]["configure"]
             for component, profile in profiles.items():
                 index = value.get("profileCommands", {}).get(component)
                 if index is None:
@@ -1001,6 +1052,66 @@ class Collector:
         for identifier in self.components:
             if identifier not in used and identifier != "localsend":
                 self.gap(identifier + ": matching source/build-parameter receipt is missing")
+
+    def collect_source_transformations(self):
+        for item in self.plan.get("sourceTransformations", []):
+            require(set(item) == {"id", "stage", "executionMaterial"} and
+                    IDENTIFIER.fullmatch(item["id"]) and item["id"] not in self.source_transformations,
+                    "Invalid or duplicate original source transformation specification")
+            identifier, stage = item["id"], self.path(item["stage"])
+            helper_path = Path(__file__).resolve().parent / "package-qt.py"
+            helper = types.ModuleType("huhucapture_original_package_transformations")
+            helper.__file__ = str(helper_path)
+            scripts = str(helper_path.parent)
+            if scripts not in sys.path:
+                sys.path.insert(0, scripts)
+            exec(compile(helper_path.read_bytes(), str(helper_path), "exec"), helper.__dict__)
+            prepared = helper.verify_prepared(stage)
+            require(prepared["build"]["platform"] == self.platform and all(
+                    prepared["build"][key] == self.identity[key] for key in ("sourceCommit", "product", "repository", "version")),
+                    "Original package transformations belong to another source/build identity")
+            journal = read_json(stage / "transformations.json")
+            execution = read_json(stage / "executions/build-execution.json")
+            bound = helper.lineage_api().validate(stage, journal, execution, helper.source_inventory_api())
+            project = {entry["path"]: entry for entry in self.components["huhucapture"]["files"]}
+            for producer in bound["producerSources"]:
+                source = project.get(producer["path"])
+                require(source is not None and source["type"] == "file" and all(
+                        source[key] == producer[key] for key in ("sha256", "size")),
+                        "Actual transformation producer differs from the retained project source")
+            material = self.materials.get(item["executionMaterial"])
+            require(material is not None, "The original complete packaging execution archive is missing")
+            with tempfile.TemporaryDirectory(prefix="original-package-execution-", dir=self.stage) as temporary:
+                files = extract_tar(self.stage / material["path"], Path(temporary), "huhucapture-sources")
+                require(files == journal["executionInventory"],
+                        "Retained packaging execution archive differs from the original per-file evidence")
+            originals = ["prepared.json", "transformations.json", "file-transformations.json", "installed-input-inventory.json"]
+            originals += [entry["path"] for entry in journal["deploymentStages"]]
+            retained = []
+            for index, name in enumerate(originals):
+                key = "transformation-" + identifier + "-record-" + str(index)
+                self.retain(key, str(stage / relative(name)))
+                retained.append(self.materials[key])
+            self.source_transformations[identifier] = {**bound, "platform": self.platform,
+                "sourceCommit": self.identity["sourceCommit"], "retainedRecords": retained,
+                "executionArchive": material,
+                "scope": "Observed final-file transformations; each mapping must retain its separately verified original source/build receipt"}
+
+    def original_mapping(self, origin, entry):
+        if set(origin) != {"transformation", "output", "input"}:
+            return origin, entry
+        name = entry["path"]
+        require(origin["output"] == name and isinstance(origin["input"], dict) and
+                set(origin["input"]) in ({"receipt", "output"}, {"component", "path"}),
+                "Derived deployment mapping must retain exactly one original source/build origin")
+        transformation = self.source_transformations.get(origin["transformation"])
+        bound = transformation.get("origins", {}).get(name) if transformation else None
+        if bound is None:
+            self.gap("deployment: no unbroken original packaging transformation ancestry for " + name)
+            return None, None
+        require(all(bound["output"][key] == entry[key] for key in ("path", "size", "sha256")),
+                "Derived deployed file differs from the actual final transformation output")
+        return origin["input"], {"type": "file", **bound["input"]}
 
     def collect_deployment(self):
         specification = self.plan.get("deployment")
@@ -1080,8 +1191,12 @@ class Collector:
         for executable_name in executable_names:
             application_mapping = mapping.get(executable_name, {})
             require(isinstance(application_mapping, dict) and
-                    (not application_mapping or set(application_mapping) == {"receipt", "output"}),
-                    "Product executable requires exactly the receipt/output source mapping form")
+                    (not application_mapping or set(application_mapping) in
+                        ({"receipt", "output"}, {"transformation", "output", "input"})),
+                    "Product executable requires its original application receipt, directly or through recorded transformations")
+            application_entry = next(entry for entry in actual if entry["path"] == executable_name)
+            application_mapping, _ = self.original_mapping(application_mapping, application_entry)
+            application_mapping = application_mapping or {}
             application_receipt = self.receipts.get(application_mapping.get("receipt"))
             if not application_receipt or not any(source["id"] == "huhucapture" for source in application_receipt["sources"]):
                 self.gap("deployment: actual product executable is not bound to its application source build receipt: " + executable_name)
@@ -1097,16 +1212,24 @@ class Collector:
                 require((directory / name).resolve().is_relative_to(directory) and (directory / name).resolve().is_file(),
                         "Deployment link is dangling or outside the real installed tree")
                 continue
-            require(set(origin) in ({"component", "path"}, {"receipt", "output"}),
+            require(set(origin) in ({"component", "path"}, {"receipt", "output"}, {"transformation", "output", "input"}),
                     "Deployment source mapping must use exactly one origin form")
+            origin, bound_entry = self.original_mapping(origin, entry)
+            if origin is None:
+                continue
             if "component" in origin:
+                with (directory / name).open("rb") as stream:
+                    native = stream.read(4).startswith((b"MZ", b"\x7fELF"))
+                if native:
+                    self.gap("deployment: native file requires its actual original source build receipt: " + name)
+                    continue
                 component = self.components.get(origin["component"])
                 if component is None:
                     self.gap("deployment: mapped source component missing for " + name)
                     continue
                 matches = [item for item in component["files"] if item["path"] == relative(origin["path"])]
                 require(len(matches) == 1 and matches[0]["type"] == "file" and
-                        all(matches[0][key] == entry[key] for key in ("sha256", "size")),
+                        all(matches[0][key] == bound_entry[key] for key in ("sha256", "size")),
                         "Deployed copied file differs from its exact source: " + name)
             elif "receipt" in origin:
                 receipt = self.receipts.get(origin["receipt"])
@@ -1114,7 +1237,7 @@ class Collector:
                     self.gap("deployment: matching build receipt missing for " + name)
                     continue
                 matches = [item for item in receipt["outputs"] if item["path"] == relative(origin["output"])]
-                require(len(matches) == 1 and all(matches[0][key] == entry[key] for key in ("sha256", "size")),
+                require(len(matches) == 1 and all(matches[0][key] == bound_entry[key] for key in ("sha256", "size")),
                         "Deployed binary/data file differs from its source build receipt: " + name)
             else:
                 raise ValueError("Every deployed file needs real source bytes or a build output receipt: " + name)
@@ -1133,6 +1256,7 @@ class Collector:
         for item in self.plan.get("materials", []):
             self.retain(item["id"], item["path"])
         self.collect_receipts()
+        self.collect_source_transformations()
         deployment = self.collect_deployment()
         for identifier in sorted((COMMON | (LINUX if self.platform == "linux" else set())) - set(self.components)):
             self.gap(identifier + ": required source component is missing")
@@ -1147,7 +1271,7 @@ class Collector:
                   "architecture": "x64" if self.platform == "windows" else "amd64",
                   "complete": not self.gaps, "gaps": sorted(set(self.gaps)),
                   "components": list(self.components.values()), "materials": self.materials,
-                  "buildReceipts": self.receipts, "deployment": deployment,
+                  "buildReceipts": self.receipts, "sourceTransformations": self.source_transformations, "deployment": deployment,
                   "completionScope": "All recorded source/build/deployment inputs verified; independent distribution review remains required"}
         (self.stage / "source-inventory.json").write_bytes(canonical(report))
         return report

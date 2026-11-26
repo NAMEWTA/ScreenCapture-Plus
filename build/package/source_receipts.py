@@ -12,6 +12,7 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import types
 
@@ -22,10 +23,13 @@ bundle.__file__ = str(COLLECTOR)
 exec(compile(COLLECTOR.read_bytes(), str(COLLECTOR), 'exec'), bundle.__dict__)
 ENVIRONMENT = ('CC', 'CXX', 'AR', 'LD', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS',
                'PKG_CONFIG_PATH', 'PKG_CONFIG_LIBDIR', 'CMAKE_PREFIX_PATH', 'QT_ROOT_DIR',
+               'LD_LIBRARY_PATH', 'LIBRARY_PATH', 'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH',
+               'PKG_CONFIG_SYSROOT_DIR', 'LD_PRELOAD', 'ICU_ROOT',
                'INCLUDE', 'LIB', 'VCTOOLSVERSION', 'WINDOWSSDKVERSION', 'SOURCE_DATE_EPOCH',
                'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTUP_TOOLCHAIN', 'CARGO_TARGET_DIR',
+               'RUSTC', 'CARGO_HOME', 'CARGO_NET_OFFLINE', 'CARGO_BUILD_JOBS', 'RUSTUP_AUTO_INSTALL',
                'APPIMAGE_EXTRACT_AND_RUN', 'QMAKE', 'NO_STRIP', 'ARCH', 'EXTRA_PLATFORM_PLUGINS',
-               'NSISDIR', 'NSISCONFDIR')
+               'NSISDIR', 'NSISCONFDIR', 'PATCHELF', 'HUHUCAPTURE_PATCHELF_RECORDING')
 
 
 def identity(path):
@@ -37,6 +41,31 @@ def identity(path):
 def write_new(path, value):
     with path.open('xb') as stream:
         stream.write(bundle.canonical(value))
+
+
+def write_module_plan(workspace, report, platform):
+    """Expose original successful module sources/receipts to final assembly."""
+    workspace = Path(workspace).resolve(strict=True)
+    original = workspace / 'build-info.json'
+    bundle.require(platform in ('linux', 'windows') and report.get('platform') == platform and
+                   report.get('buildComplete') is True and bundle.read_json(original) == report,
+                   'A module source plan requires the unchanged successful native build report')
+    modules = report['sourceModules']
+    bundle.require(modules and len({item['id'] for item in modules}) == len(modules),
+                   'Module source identities are missing or duplicate')
+    for item in modules:
+        receipt = bundle.read_json(item['sourceBuildReceipt']['path'])
+        bundle.require(receipt.get('kind') == 'huhucapture-source-build-receipt' and
+                       receipt.get('platform') == platform and
+                       any(source['id'] == item['id'] for source in receipt['sources']),
+                       'Module lacks its original same-platform source-build receipt')
+    plan = {'schemaVersion': 1, 'platform': platform, 'project': str(ROOT),
+            'sources': [{'id': item['id'], 'directory': item['sourceDirectory']} for item in modules],
+            'buildReceipts': [item['sourceBuildReceipt'] for item in modules],
+            'materials': [{'id': platform + '-qt-source-build', 'path': str(original)}]}
+    path = workspace / 'source-plan-fragment.json'
+    write_new(path, plan)
+    return path
 
 
 class ExecutionLog:
@@ -105,6 +134,14 @@ class ExecutionLog:
                 self.retain_record(path)
         self.retain_record(self.directory / ('execution-' + str(index) + '.json'))
         if result.returncode:
+            # Keep the original complete logs as evidence and expose enough of
+            # the actual failure in the CI job log to diagnose a failed build.
+            for path in (stdout, stderr):
+                with path.open('rb') as stream:
+                    stream.seek(max(0, path.stat().st_size - 16384))
+                    tail = stream.read(16384).decode('utf-8', errors='replace')
+                if tail.strip():
+                    print(str(path) + ' (last 16 KiB):\n' + tail, file=sys.stderr, flush=True)
             raise subprocess.CalledProcessError(result.returncode, command)
         if capture:
             return stdout.read_text(encoding='utf-8', errors='replace'), stderr.read_text(encoding='utf-8', errors='replace')

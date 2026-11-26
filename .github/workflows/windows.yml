@@ -1,4 +1,4 @@
-name: Retained Windows regression baseline
+name: Windows bridge build and regression checks
 
 on:
   push:
@@ -36,6 +36,11 @@ jobs:
           ref: ${{ github.event.release.tag_name || inputs.release_tag || github.sha }}
           persist-credentials: false
 
+      - name: Install the pinned native-test interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+
       - name: Build the release executable and pinned dependencies
         run: ./scripts/build.ps1 -Configuration Release -Version $env:RELEASE_TAG
 
@@ -44,11 +49,6 @@ jobs:
 
       - name: Verify native annotation rendering and PNG export
         run: ./scripts/test-windows.ps1
-
-      - name: Install the pinned native-test interpreter
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.13.17'
 
       - name: Check single-executable tray startup
         run: ./scripts/smoke.ps1

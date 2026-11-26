@@ -19,7 +19,7 @@ CI 保留真实测试日志、PNG 和依赖构建证据。合并和 Issue 进度
 
 ## 如何读取验证结果
 
-本文定义验证范围、执行方式与证据位置。某项检查列在本文中，不代表某次构建已经执行或通过。huhucapture v0.0.5 的构建结果以对应提交的 [Windows Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 为准，发行文件以 [Release](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.5) 的 `build-info.json` 和 SHA256 为准。
+本文定义验证范围、执行方式与证据位置。某项检查列在本文中，不代表某次构建已经执行或通过。本源码准备 v0.0.6 更新桥，构建结果以对应提交的 [Windows Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 为准，发行文件以 [Release](https://github.com/NAMEWTA/huhucapture/releases) 的 `build-info.json` 和 SHA256 为准。
 
 核心测试、离屏渲染、启动检查、脚本 GUI 和人工桌面验收分别记录。报告至少包含提交 SHA、命令、环境、结果与证据；未执行的场景明确写为未执行。更换产品身份或资源后，应重新验证对应提交，不能把先前生成的截图当作本次品牌、版本和程序启动的通过记录。
 
@@ -32,6 +32,8 @@ CI 保留真实测试日志、PNG 和依赖构建证据。合并和 Issue 进度
 | `pwsh ./scripts/test-windows.ps1` | 真实 DWrite / D2D / WIC 离屏合成 | `artifacts/tests/windows` |
 | `pwsh ./scripts/smoke.ps1` | 独立 EXE / 便携配置启动 | 启动与退出日志 |
 | `pwsh ./scripts/test-windows.ps1 -Gui` | 正式编辑器对象、窗口和剪贴板 | `artifacts/tests/windows/gui` |
+| `pwsh ./scripts/test-legacy-update.ps1 -Configuration Debug` | 生产 WinRT 下载器、受控完整包、取消与文件保护 | `artifacts/tests/windows/legacy-update/Debug` |
+| `pwsh ./scripts/test-legacy-update.ps1 -Gui` | Release 流式下载及真实关于页六语关闭/重开 | `artifacts/tests/windows/legacy-update/Release` |
 | `pwsh ./scripts/test-windows.ps1 -Update` | 关于页按钮、真实稳定 Release 下载和系统 Downloads | `artifacts/tests/windows/update` |
 | `pwsh ./scripts/package.ps1` | 版本、PE 依赖、包内容和校验和 | 五项发布资产 |
 | `pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore` | Debug 编译 / 链接，构建设置一致性 | Debug 产物 |
@@ -150,6 +152,14 @@ CRT 要求见 [Rust 桥接](rust-bridge.md)。本机 loopback 不能充当两台
 
 真实窗口消息覆盖的是列出的受控场景。`WM_CHAR` 无法证明 IME 组词与候选窗正常，窗口截图也不能证明多显示器、物理鼠标、硬件录屏和音频设备已完成验收。
 
+## 桥接下载契约与证据
+
+`test-legacy-update.ps1` 在实际 Windows 上构建生产 WinRT 下载器 probe，使用真实 HTTP 与文件系统验证大于 64 MiB 的完整包传输、旧 EXE 回退、同版本重下、已存在文件、错误仓库/架构/hash、缺失依赖、清单不降级、短/长正文、来源跳转、取消和线程退出。Debug 和 Release 分别执行；Release 的 `-Gui` 还打开正式关于页、关闭后重建并检查六种语言完整说明和最小窗口布局。报告包含源 SHA、唯一版本、EXE / probe / fixture 哈希及实际结果，见 [更新下载](updates.md)。
+
+默认 fixture 明确不是可安装 Qt 产品。`controlledPackageContractPassed` 与 `actualCompletePackageRun` 是不同字段；本分支的独立桥接发布要求前者来自实际原生执行且后者为 false，不伪造 Qt 完整包或安装验证。真实 Downloads、原 Windows GUI 和 latest 下载仍是额外必须通过的门槛。Windows 重定向目录、物理混合 DPI、输入法及音视频设备按实际覆盖分别记录，不因 fixture 成功就推断通过。
+
+`tests/version_source_tests.py` 在 Linux 上验证真实版本生成、陈旧派生文件与非法输入拒绝；Windows 上还执行真实 MSBuild / PowerShell。`tests/bridge_release_tests.py` 只证明发布准入拒绝错误声明、路径或证据，不能替代生产 EXE 或实际 native run。发布准入要求整个 main Windows run 成功，不能只引用一个局部通过的测试或已上传 artifact。
+
 ## 真实更新下载
 
 `test-windows.ps1 -Update` 使用独立的 `--verify-update` 测试入口，点击正式关于页的下载按钮，访问 GitHub 当前最新稳定 Release，并验证结果确实写入 Windows 系统 Downloads。它与关闭后台更新的 `-Gui` 模式分开，避免用联网耗时掩盖桌面交互超时。产品 EXE 不暴露该测试参数。
@@ -175,7 +185,7 @@ CRT 要求见 [Rust 桥接](rust-bridge.md)。本机 loopback 不能充当两台
 
 ## 媒体历史与设置的专项验收
 
-这些项目定义 v0.0.5 的可观察契约。自动测试实际覆盖的断言以测试源码与本次运行报告为准，其余项目在真实桌面记录，不能因为功能已经写入代码就标记为通过。
+这些项目保留原生 Windows 的可观察契约。自动测试实际覆盖的断言以测试源码与本次运行报告为准，其余项目在真实桌面记录，不能因为功能已经写入代码就标记为通过。
 
 | 场景 | 需要观察的结果 |
 | --- | --- |
@@ -209,7 +219,7 @@ CRT 要求见 [Rust 桥接](rust-bridge.md)。本机 loopback 不能充当两台
 
 ## 更新下载与跨屏移动验收
 
-更新的成功条件是完整、匹配当前 Release 的 EXE 已写入系统 Downloads。检查必须区分“发现版本”“开始请求”“完整下载”“最终文件提交”四个阶段；不能只看到 HTTP 成功或按钮文案变化就判定下载可用。目录与文件保护契约见 [更新下载](updates.md)。
+更新的成功条件是完整、匹配当前 Release 的所选 ZIP 或旧 EXE 已写入系统 Downloads。检查必须区分“发现版本”“开始请求”“完整下载”“最终文件提交”四个阶段；不能只看到 HTTP 成功或按钮文案变化就判定下载可用。目录与文件保护契约见 [更新下载](updates.md)。
 
 | 场景 | 需要观察的结果 |
 | --- | --- |
@@ -248,7 +258,7 @@ CRT 要求见 [Rust 桥接](rust-bridge.md)。本机 loopback 不能充当两台
 | MP4 与音频 | 主 / 副屏、混合显卡、HEVC 回退；系统声 / 麦克风 / 两者 / 无音源，拔出或无包时可停止且文件可播放 |
 | 二维码和功能入口 | QR 内容复制、镜像码与多码；界面和设置不出现 OCR 按钮或插件安装入口 |
 | 语言和配置 | 空 / 缺键配置、语言缺键 / 格式错误、中英文切换、未知字段；EXE 旁配置优先、两处语言目录不合并 |
-| 更新与命令行 | 稳定 Release 下载到系统 Downloads、完整性校验、重名、目录不可写与请求中退出；只使用同 Release EXE，不自动安装；所有当前 --enter 和 --auto-quit 参数 |
+| 更新与命令行 | 稳定 Release 下载到系统 Downloads、完整性校验、重名、目录不可写与请求中退出；只使用同 Release 的完整包或旧 EXE，不自动安装；所有当前 --enter 和 --auto-quit 参数 |
 
 ## 性能测量
 

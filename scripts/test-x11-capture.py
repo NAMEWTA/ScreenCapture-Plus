@@ -17,6 +17,7 @@ import secrets
 import selectors
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -38,6 +39,18 @@ def stop_owned(process: subprocess.Popen) -> None:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+
+
+def print_probe_logs(artifacts: Path) -> None:
+    for name in ("probe.stdout.log", "probe.stderr.log"):
+        path = artifacts / name
+        if not path.is_file():
+            continue
+        with path.open("rb") as stream:
+            size = stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, size - 65536))
+            tail = stream.read().decode("utf-8", errors="replace")
+        print(f"{path} (last {min(size, 65536)} of {size} bytes):\n{tail}", file=sys.stderr, flush=True)
 
 
 def paused_server_probe(probe: Path, environment: dict, server: subprocess.Popen, artifacts: Path) -> list:
@@ -138,7 +151,8 @@ def main() -> int:
         raise RuntimeError("The capture probe is not executable")
     artifacts = parsed.artifacts.resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
-    (artifacts / "result.json").unlink(missing_ok=True)
+    for name in ("result.json", "probe.stdout.log", "probe.stderr.log"):
+        (artifacts / name).unlink(missing_ok=True)
     try:
         server = host_binary("Xvfb")
         kind = "Xvfb"
@@ -244,6 +258,9 @@ EndSection
                         "initialHandshakeInterruptible": False, "unrelatedConnectionAndRecycledDescriptorChecked": True})
                 (artifacts / "result.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
                 print(f"Real isolated {kind} capture probe passed", flush=True)
+            except Exception:
+                print_probe_logs(artifacts)
+                raise
             finally:
                 stop_owned(process)
     return 0

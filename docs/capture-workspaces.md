@@ -21,6 +21,12 @@ Cancellation restores the adjustable selection; failure retains pixels for retry
 QR recognition and text preparation use the bounded application worker and keep
 their origin and cancellation token through the actual clipboard receipt.
 
+Session completion hides the capture surfaces before their queued destruction
+finishes. The host keeps capture admission closed until the presentation's
+`closed` signal reports that drain. Sequential capture validation waits for both
+the actual output receipt and this presentation barrier before requesting the
+next capture.
+
 ## Recording and scrolling
 
 The recording controller connects the common `RecordingWindow`, `RecordingSession`,

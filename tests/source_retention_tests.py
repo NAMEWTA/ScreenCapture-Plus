@@ -39,6 +39,27 @@ def archive(path, name):
 
 
 class SourceRetentionTests(unittest.TestCase):
+    def test_retained_replay_inputs_exclude_credentials_and_unrelated_cargo_state(self):
+        with tempfile.TemporaryDirectory(prefix='retained-public-cargo-') as temporary:
+            root = Path(temporary).resolve()
+            private = root / 'private'
+            for name, value in (('registry/cache/public/package.crate', b'original source archive'),
+                                ('registry/index/public/config.json', b'public registry metadata'),
+                                ('git/db/locked/config', b'[core]\n bare = true\n'),
+                                ('credentials.toml', b'never retain'), ('config.toml', b'never inherit'),
+                                ('target/objects', b'not corresponding source')):
+                write(private / name, value)
+            kept = root / 'kept'
+            result = profile.retain_replay_inputs(private, kept)
+            self.assertEqual(set(result), {'registry/cache', 'registry/index', 'git/db'})
+            self.assertEqual(sorted(item['path'] for item in profile.BUNDLE.inventory(kept)),
+                             ['git/db/locked/config', 'registry/cache/public/package.crate',
+                              'registry/index/public/config.json'])
+            shutil.rmtree(private)
+            self.assertEqual((kept / 'registry/cache/public/package.crate').read_bytes(), b'original source archive')
+            with self.assertRaisesRegex(ValueError, 'already exist'):
+                profile.retain_replay_inputs(kept, kept)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="source-retention-contract-")
         # Match production ROOT: Windows TEMP may use an 8.3 directory alias,
@@ -200,6 +221,42 @@ class SourceRetentionTests(unittest.TestCase):
             escaped.native_receipt("ffmpeg", plan, workspace)
         self.assertEqual(escaped.build_receipts, [])
         self.assertFalse(any(item["input"] == str(outside) for item in escaped.report["retainedMaterials"]))
+
+    def test_prepared_cache_metadata_preserves_both_paths_and_rejects_a_different_graph(self):
+        # These JSON fixtures check retention and graph identity only. They are
+        # not fed to a build or presented as real Cargo execution evidence.
+        package_id = profile.REGISTRY + "#alpha@1.0.0"
+        prepared = {"packages": [{"id": package_id, "name": "alpha", "version": "1.0.0",
+                     "source": profile.REGISTRY, "manifest_path": str(self.original_cache / "alpha/Cargo.toml")}],
+                    "resolve": {"nodes": [{"id": package_id, "features": [], "deps": []}]},
+                    "workspace_members": [], "workspace_default_members": []}
+        metadata_path = self.root / ".deps/native-build-sources/cargo-metadata.json"
+        write(metadata_path, profile.BUNDLE.canonical(prepared))
+        metadata_identity = profile.BUNDLE.descriptor(metadata_path)
+        plan_path = metadata_path.with_name("source-plan.json")
+        plan = {"schemaVersion": 1, "platform": "linux", "project": str(self.root),
+                "materials": [{"id": "native-prepared-metadata", "path": str(metadata_path), **metadata_identity}]}
+        write(plan_path, profile.BUNDLE.canonical(plan))
+        proof_path = self.root / "artifacts/native-rust/source-execution/proof.json"
+        proof = {"kind": "huhucapture-native-source-build", "platform": "linux", "sourceCommit": self.commit,
+                 "library": {"sha256": "2" * 64},
+                 "sourcePlan": {"path": str(plan_path), **profile.BUNDLE.descriptor(plan_path)}}
+        write(proof_path, profile.BUNDLE.canonical(proof))
+        receipt = {"librarySha256": "2" * 64,
+                   "sourceBuildProof": {"path": str(proof_path), **profile.BUNDLE.descriptor(proof_path)}}
+        actual = json.loads(json.dumps(prepared))
+        actual["packages"][0]["manifest_path"] = str(self.root / ".deps/native-build-sources/vendor/alpha/Cargo.toml")
+        retention = self.retention()
+        original_bytes = metadata_path.read_bytes()
+        self.assertEqual(retention.source_cache_metadata(receipt, actual), prepared)
+        self.assertEqual(metadata_path.read_bytes(), original_bytes)
+        self.assertIn("/vendor/", actual["packages"][0]["manifest_path"])
+        actual["resolve"]["nodes"][0]["features"] = ["different-feature"]
+        with self.assertRaisesRegex(ValueError, "differs from the actual vendored build graph"):
+            self.retention("changed-graph").source_cache_metadata(receipt, actual)
+        write(metadata_path, profile.BUNDLE.canonical(actual))
+        with self.assertRaisesRegex(ValueError, "changed after the actual producer"):
+            self.retention("changed-preparation").source_cache_metadata(receipt, actual)
 
     def test_locked_runtime_archive_uses_a_retained_snapshot_in_the_tar_plan(self):
         original, pin = self.appimage_archive_fixture()

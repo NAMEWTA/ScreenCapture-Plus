@@ -5,12 +5,12 @@
     <_HuhuVersionSource>$(MSBuildThisFileDirectory)..\version.json</_HuhuVersionSource>
     <_HuhuVersionTemplate>$(MSBuildThisFileDirectory)Version.props.in</_HuhuVersionTemplate>
     <_HuhuVersionCompatibility>$(MSBuildThisFileDirectory)..\..\VERSION</_HuhuVersionCompatibility>
-    <_HuhuVersionSourceSha256>260f271ca96cd7a6861b819471df4356c8daef3fa146c03f9ae37f9569c04553</_HuhuVersionSourceSha256>
+    <_HuhuVersionSourceSha256>7b98b5051902a1c467c19a05e92914dc6cd4484e6b9e28b8a4c3ad0d5c9b72c6</_HuhuVersionSourceSha256>
     <_HuhuVersionTemplateSha256>f8c584473682fe1d8ee4cbf4d0a5340d84103649b3c81cf6f90325a9563fd5d6</_HuhuVersionTemplateSha256>
-    <_HuhuGeneratedProductVersion>0.0.5</_HuhuGeneratedProductVersion>
+    <_HuhuGeneratedProductVersion>0.0.6</_HuhuGeneratedProductVersion>
     <VersionMajor Condition="'$(VersionMajor)'==''">0</VersionMajor>
     <VersionMinor Condition="'$(VersionMinor)'==''">0</VersionMinor>
-    <VersionPatch Condition="'$(VersionPatch)'==''">5</VersionPatch>
+    <VersionPatch Condition="'$(VersionPatch)'==''">6</VersionPatch>
     <VersionRevision Condition="'$(VersionRevision)'==''">0</VersionRevision>
   </PropertyGroup>
   <Target Name="ValidateHuhuProductVersion" BeforeTargets="PrepareForBuild;ResourceCompile">

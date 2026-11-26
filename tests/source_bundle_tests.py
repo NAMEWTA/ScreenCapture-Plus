@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("source_bundle", ROOT / "scripts/create-source-bundle.py")
 bundle = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bundle)
+DEBIAN_SPEC = importlib.util.spec_from_file_location("debian_sources", ROOT / "build/package/debian_sources.py")
+debian = importlib.util.module_from_spec(DEBIAN_SPEC)
+DEBIAN_SPEC.loader.exec_module(debian)
 
 
 def command(directory, *args):
@@ -63,6 +66,82 @@ class SourceBundleTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    @unittest.skipIf(os.name == "nt", "Actual dpkg-source replay runs on Linux")
+    def test_actual_debian_source_replays_packaging_patches_and_rejects_changed_archives(self):
+        self.assertIsNotNone(shutil.which("dpkg-source"), "The Debian source contract requires real dpkg-source")
+        source = self.root / "source-fixture-1.0"
+        original = {"source.c": "int original_value = 1;\n", "LICENSE": "Original source fixture notice\n"}
+        for name, data in original.items():
+            write(source / name, data)
+        source_archive(self.root / "source-fixture_1.0.orig.tar.gz", original, "source-fixture-1.0")
+        write(source / "debian/source/format", "3.0 (quilt)\n")
+        write(source / "debian/control", "Source: source-fixture\nSection: devel\nPriority: optional\n"
+              "Maintainer: Source contract <source@example.invalid>\nStandards-Version: 4.6.2\n"
+              "Rules-Requires-Root: no\n\nPackage: source-fixture\nArchitecture: any\nDescription: Source contract only\n")
+        write(source / "debian/changelog", "source-fixture (1.0-1) unstable; urgency=low\n\n"
+              "  * Actual dpkg-source contract fixture.\n\n -- Source contract <source@example.invalid>  Thu, 26 Nov 2026 00:00:00 +0000\n")
+        write(source / "debian/copyright", "Original Debian packaging fixture notice\n")
+        write(source / "debian/rules", "#!/usr/bin/make -f\n%:\n\t@:\n")
+        (source / "debian/rules").chmod(0o755)
+        write(source / "debian/patches/series", "actual-change.patch\n")
+        write(source / "debian/patches/actual-change.patch", "--- a/source.c\n+++ b/source.c\n@@ -1 +1 @@\n"
+              "-int original_value = 1;\n+int original_value = 2;\n")
+        command(self.root, "dpkg-source", "--build", str(source))
+        dsc = self.root / "source-fixture_1.0-1.dsc"
+        description = debian.control_stanzas(dsc.read_text(), clear_signed=True)[0]
+        archives = debian.checksum_files(description)
+        files = {dsc.name: debian.identity(dsc), **archives}
+        # This is an offline parsing/replay fixture made from the real source
+        # package above; it makes no APT authentication or product build claim.
+        index = self.root / "Sources-fixture.txt"
+        write(index, "Package: source-fixture\nVersion: 1.0-1\nDirectory: pool/test/source-fixture\nChecksums-Sha256:\n" +
+              "".join(" " + item["sha256"] + " " + str(item["size"]) + " " + name + "\n" for name, item in files.items()))
+        specification = {"id": "system-source-fixture", "kind": "debian-source", "sourcePackage": "source-fixture",
+                         "sourceVersion": "1.0-1", "dsc": str(dsc), "sha256": debian.identity(dsc)["sha256"],
+                         "sourceIndex": str(index), "sourceIndexSha256": debian.identity(index)["sha256"]}
+        output = self.root / "replayed"
+        provenance, replayed, inputs = debian.extract_source(specification, output, bundle.inventory)
+        self.assertEqual((output / "source.c").read_text(), "int original_value = 2;\n")
+        self.assertEqual(provenance["format"], "3.0 (quilt)")
+        self.assertEqual({path.name for path, _ in inputs}, {*files, index.name})
+        stage = self.root / "collection"; stage.mkdir()
+        collector = bundle.Collector({}, self.root, stage)
+        collector.platform, collector.pins = "linux", {}
+        collector.collect_source(specification)
+        component = collector.components["system-source-fixture"]
+        self.assertEqual(component["files"], replayed)
+        self.assertIn("debian/copyright", component["licenses"])
+        self.assertEqual(collector.receipts, {}, "Source collection must not manufacture a binary build receipt")
+        collector.lock = {"qtMigration": {}}
+        collector.collect_receipts()
+        self.assertIn("system-source-fixture: matching source/build-parameter receipt is missing", collector.gaps)
+        with self.assertRaisesRegex(ValueError, "exact installed source package/version"):
+            debian.validate_source({**specification, "sourceVersion": "1.0-2"})
+        archive = self.root / next(iter(archives))
+        with archive.open("ab") as stream:
+            stream.write(b"changed original archive")
+        with self.assertRaisesRegex(ValueError, "original SHA256"):
+            debian.validate_source(specification)
+
+    def test_debian_source_checksums_reject_ambiguous_or_unsafe_entries(self):
+        with self.assertRaisesRegex(ValueError, "Duplicate or invalid"):
+            debian.control_stanzas("Source: fixture\nsource: another\n")
+        with self.assertRaisesRegex(ValueError, "Unsafe"):
+            debian.checksum_files({"checksums-sha256": "a" * 64 + " 1 ../archive.tar.gz"})
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
+            debian.checksum_files({"checksums-sha256": ("a" * 64 + " 1 archive.tar.gz\n") * 2})
+        with self.assertRaisesRegex(ValueError, "Checksums-Sha256"):
+            debian.checksum_files({"files": "b" * 32 + " 1 archive.tar.gz"})
+        script = importlib.util.spec_from_file_location("system_sources", ROOT / "scripts/collect-system-source-materials.py")
+        system = importlib.util.module_from_spec(script); script.loader.exec_module(system)
+        package = {"binaryPackage": "libfixture:amd64", "version": "1.0-1+b1", "architecture": "amd64",
+                   "sourcePackage": "source-fixture", "sourceVersion": "1.0-1"}
+        text = ("Package: libfixture\nVersion: 1.0-1+b1\nArchitecture: amd64\nSource: source-fixture (1.0-1)\n"
+                "SHA256: " + "a" * 64 + "\nSize: 123\n")
+        self.assertEqual(system.selected_binary_index(text, package)["source"], "source-fixture (1.0-1)")
+        with self.assertRaisesRegex(ValueError, "source association"):
+            system.selected_binary_index(text, {**package, "sourceVersion": "1.0-1+b1"})
 
     def test_actual_patched_git_export_keeps_input_index_and_refs(self):
         source = self.root / "upstream"
@@ -182,6 +261,13 @@ class SourceBundleTests(unittest.TestCase):
         bundle.verify_configure_command(command, meson, "pipewire", "linux")
         with self.assertRaisesRegex(ValueError, "exact locked"):
             bundle.verify_configure_command(command + ["-Dtests=enabled"], meson, "pipewire", "linux")
+        icu = ["--enable-shared", "--disable-static", "--disable-tests", "--disable-samples"]
+        command = ["/source/icu4c/source/runConfigureICU", "Linux", "--prefix=/prefix", "--libdir=/prefix/lib", *icu]
+        bundle.verify_configure_command(command, icu, "icu", "linux")
+        for changed in (command + ["--enable-static"], command[:3] + ["--libdir=/different/lib"] + command[4:],
+                        command[:1] + ["Linux/gcc"] + command[2:], command[:-1]):
+            with self.assertRaisesRegex(ValueError, "exact locked Linux"):
+                bundle.verify_configure_command(changed, icu, "icu", "linux")
 
     def test_exact_registry_archive_detects_rewritten_vendor_checksums(self):
         vendor, cache = self.root / "vendor", self.root / "cache"
@@ -552,7 +638,7 @@ class SourceBundleTests(unittest.TestCase):
         self.assertFalse(result["complete"])
         self.assertEqual(result["buildReceipts"], {})
 
-    def test_runtime_static_input_requirement_includes_mimalloc_and_runtime_binding(self):
+    def test_runtime_static_input_requirement_includes_allocator_compiler_and_runtime_binding(self):
         # This tests the final presence rule after receipt validation. These are
         # contract values, not invented files or an asserted official build.
         previous_five = {"appimage-musl", "appimage-fuse", "appimage-squashfuse", "appimage-zstd", "appimage-zlib"}
@@ -560,9 +646,32 @@ class SourceBundleTests(unittest.TestCase):
                    "staticInputs": [{"component": name} for name in sorted(previous_five)]}
         self.assertFalse(bundle.appimage_static_inputs_present({"contract": receipt}))
         receipt["staticInputs"].append({"component": "appimage-mimalloc"})
+        self.assertFalse(bundle.appimage_static_inputs_present({"contract": receipt}))
+        receipt["staticInputs"].append({"component": "appimage-gcc"})
         self.assertTrue(bundle.appimage_static_inputs_present({"contract": receipt}))
         receipt["sources"] = [{"id": "another-built-component"}]
         self.assertFalse(bundle.appimage_static_inputs_present({"contract": receipt}))
+
+    def test_runtime_source_lock_does_not_override_pins_and_retains_its_real_lock_file(self):
+        project, _, dep = self.project_fixture()
+        path = project / "build/package/dependencies.lock.json"
+        lock = bundle.read_json(path)
+        lock["runtimeSourceBuild"] = {"sources": {"appimage-gcc": lock["tools"]["appimageRuntime"]}}
+        write_json(path, lock)
+        command(project, "git", "add", "build/package/dependencies.lock.json")
+        command(project, "git", "commit", "--quiet", "-m", "Pin actual runtime compiler source fixture")
+        plan = {"schemaVersion": 1, "project": str(project), "platform": "linux",
+                "sources": [{"id": "appimage-gcc", "directory": str(dep)}]}
+        plan_path = self.root / "runtime-compiler-plan.json"
+        write_json(plan_path, plan)
+        result = bundle.collect(plan_path, self.root / "runtime-compiler-out")
+        source = next(item for item in result["components"] if item["id"] == "appimage-gcc")
+        self.assertEqual(source["source"]["lockFile"], "sources/huhucapture/build/package/dependencies.lock.json")
+        self.assertFalse(result["complete"])
+        lock["runtimeSourceBuild"]["sources"]["ffmpeg"] = lock["tools"]["appimageRuntime"]
+        write_json(path, lock)
+        with self.assertRaisesRegex(ValueError, "cannot override"):
+            bundle.locked_sources(project)
 
     def test_dirty_project_and_missing_exact_pin_are_not_silently_exported(self):
         project, _, dep = self.project_fixture()
@@ -668,7 +777,7 @@ class SourceBundleTests(unittest.TestCase):
         mixed["bin/huhucapture"].update(component="huhucapture", path="source.c")
         clear_deployment_materials()
         write_json(map_path, mixed)
-        with self.assertRaisesRegex(ValueError, "exactly the receipt/output"):
+        with self.assertRaisesRegex(ValueError, "requires its original application receipt"):
             collector.collect_deployment()
         clear_deployment_materials()
         write_json(map_path, valid_map)

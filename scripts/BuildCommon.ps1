@@ -60,22 +60,6 @@ function Get-ProductVersion {
     return $value
 }
 
-function Write-ProductVersionProps {
-    $value = Get-ProductVersion
-    $parts = $value.Split('.')
-    $source = Join-Path $RepoRoot 'build/version.json'
-    $sha256 = (Get-FileHash $source -Algorithm SHA256).Hash
-    $template = Get-Content (Join-Path $RepoRoot 'build/windows/Version.props.in') -Raw -Encoding utf8
-    $content = $template.Replace('@PRODUCT_VERSION@', $value).Replace('@SOURCE_SHA256@', $sha256)
-    $content = $content.Replace('@VERSION_MAJOR@', $parts[0]).Replace('@VERSION_MINOR@', $parts[1]).Replace('@VERSION_PATCH@', $parts[2])
-    $directory = Join-Path $ArtifactsRoot 'generated'
-    New-Item $directory -ItemType Directory -Force | Out-Null
-    $path = Join-Path $directory 'Version.props'
-    if (-not (Test-Path $path) -or [IO.File]::ReadAllText($path) -cne $content) {
-        [IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
-    }
-}
-
 function Get-ReleaseVersion([string] $Value) {
     # Tags are data, never executable shell text. Keep all resource components within WORD.
     if ($Value -notmatch '^v?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {

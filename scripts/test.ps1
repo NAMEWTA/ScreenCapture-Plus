@@ -87,3 +87,10 @@ foreach ($test in $tests) {
     & $executable
     Assert-NativeSuccess "Running $($test.Name)"
 }
+
+& python (Join-Path $PSScriptRoot 'version_source.py') --check
+Assert-NativeSuccess 'Checking the single product version source'
+foreach ($test in @('version_source_tests.py', 'bridge_release_tests.py')) {
+    & python (Join-Path $RepoRoot "tests/$test")
+    Assert-NativeSuccess "Running $test"
+}

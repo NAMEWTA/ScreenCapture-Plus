@@ -8,7 +8,7 @@
 
 ## 入口及输出
 
-要求 Python 3.11 或更新版本和 Git。常规收集不需要 Qt、编译器或联网。只有明确提供 `rustVendor.replay` 时才执行已安装的固定 Cargo/Rust 工具，用 `--locked --offline` 实际重做 vendor，不编译产品。
+要求 Python 3.11 或更新版本和 Git。常规收集不需要 Qt、编译器或联网。明确提供 `rustVendor.replay` 时执行已安装的固定 Cargo/Rust 工具，用 `--locked --offline` 实际重做 vendor；提供 Linux `debian-source` 时执行 `dpkg-source` 重放原源码包及 Debian 补丁。两者均不编译产品。
 
 ```sh
 python3 scripts/create-source-bundle.py collect \
@@ -103,6 +103,15 @@ Qt 其他模块、系统库、Rust 工具链源码及 AppImage 内嵌依赖必�
 这个 qtsvg 提交与文件哈希来自当前 Linux Qt 6.12.1 SDK 的真实 SBOM。使用另一份 SDK 时，必须重新核对它实际提供的来源记录。QtBase 的同类记录与主锁提交一致；当前 QtWayland、QtTranslations 的二进制 SBOM 只有版本，没有完整 Git SHA，不能把 `6.12.1` 猜成一个提交。QtWayland 的 source SPDX 提供逐文件 SHA1，可核对给定真实源码；它不自动补出缺失的提交或原始档案来源。QtBase SBOM 中的 ICU 为 73.2，不能用 Ubuntu 的另一版本 ICU 源码替代。
 
 `sourceSbom` 可选，支持实际 Qt source SPDX 的 tag/value 文件清单；提供后每个记录文件必须存在且字节一致。它是附加证据，不代替完整上游树、许可证、构建参数或精确来源。
+
+Linux 系统库可由 [原始 dpkg 源码收集入口](native-source-materials.md) 产生
+`kind: "debian-source"`，计划保留精确 `sourcePackage`、`sourceVersion`、`dsc` /
+`sha256` 和 `sourceIndex` / `sourceIndexSha256`。这些必须是原 Sources 字段、
+`.dsc` 及其相邻的全部真实源归档。收集器重新核对两层 SHA256 后，用实际
+`dpkg-source` 在私有副本上应用 Debian patches，保留 recipes 和原通知；不能
+覆盖项目锁中的 Qt/ICU 等组件，也不能额外注入未记录补丁。当前原始发行方
+Release 签名 / 索引链及对应构建收据未闭合时继续列为缺项，不因来源包可提取
+就认定最终二进制完整。
 
 `kind: "tar"` 可收集实际源 tar/gzip/xz/bzip2 档案：提供 `archive`、`sha256` 和可选的单一根目录 `prefix`。额外来源仍须提供指向该 SHA256 的 `pinEvidence`。固定 AppImage runtime 可直接使用打包工具锁中已核对的 `sourceArchive.sha256`。未知 tar 组件如有受控补丁，以 `patches: [{"path": "...", "sha256": "..."}]` 给出，并原样保留。
 
@@ -229,6 +238,93 @@ Windows 对应 `installer`、`portable-zip` 两个 root，均使用 `huhucapture
 
 ## CI 接入顺序与当前边界
 
+### 从实际材料装配最终部署计划
+
+`scripts/assemble-source-plan.py` 填补材料收集与 `package-qt.py finalize`
+之间的装配步骤。它读取一个或多个真实来源计划及生产者已经生成的
+`receipt-plan.json`，先复用主收集器验证源码、锁定补丁、许可、原始 crate、
+真实 offline vendor replay 和构建输出记录，再对 `prepare` 的冻结部署目录
+建立逐文件映射。相对路径按各自输入计划所在目录解析；crate 许可内的源码路径
+及固定 noticeReviews 路径仍保留其原有含义。
+
+```sh
+python scripts/assemble-source-plan.py \
+  --inputs artifacts/native-build-sources/source-plan.json \
+  --inputs .deps/qt-runtime-linux/source-plan-fragment.json \
+  --inputs artifacts/native-source-plan-linux/source-plan-fragment.json \
+  --inputs artifacts/system-source-linux/source-plan.json \
+  --receipt-plan artifacts/application-source-receipt/receipt-plan.json \
+  --stage artifacts/packages/linux-prepared \
+  --output artifacts/source-plan/linux
+
+python scripts/package-qt.py finalize \
+  --stage artifacts/packages/linux-prepared \
+  --output artifacts/packages/linux \
+  --source-plan artifacts/source-plan/linux/source-plan.json \
+  --source-output artifacts/source-complete/linux
+```
+
+其中每份输入必须已经由实际同一提交/平台的来源准备或构建步骤产生；这些示例
+路径本身不是材料。`--inputs`、`--receipt-plan` 可以重复，但互相矛盾的组件、
+receipt、项目或平台会失败。输出目录必须是新目录，不能覆盖冻结 payload 或
+候选包。装配前后都重新执行原有 `verify_prepared`，来源提交、版本和包身份
+必须相同，部署字节不能发生变化。
+
+已验证构建记录的输出与最终文件的大小、SHA256 完全一致时可直接映射；
+原生 ELF/PE 必须有构建记录，不会因源码目录恰好包含一个相同二进制就获得
+构建来源。直接复制的源码或通知按精确字节映射。多个相同候选无法唯一决定时，
+报告保留歧义，可以通过 `--source-map` 指定真实来源，仍由主收集器逐项验证。
+工具不从文件名猜测版本，也不从预期命令重造 receipt。
+
+输出为 `source-plan.json`、`deployment-source-map.json`、`source-plan-report.json`
+和原始输入计划快照。报告列出未映射文件、候选来源、源码哈希、已验证 receipt
+及全部已有缺项。装配成功只表示这些材料可以交给正式收集器；不会生成 Release、
+填写 `complete` 或解除门禁。`finalize` 仍真实执行
+`create-source-bundle.py --require-complete`。linuxdeploy/objcopy 改写过的字节
+还必须通过下述原始逐文件变换链；只有变换前的 receipt 时继续报告缺项。
+
+装配同时保留此次打包的原始输入清单、linuxdeploy 后与调试分离后的两份 Linux
+清单，以及真实命令、退出状态和完整原始输出日志。每份中间清单都绑定实际执行
+命令的连续索引范围及文件哈希；独立复核要求所有命令成功、原始日志未变、最终
+输出仍与冻结 payload 一致。这些材料帮助定位字节发生变化的生产边界，本身不
+充当缺失的上游源码或构建收据。旧候选若没有这些当时保留的材料，需重新运行
+真实准备步骤，不能从最终文件倒填中间记录。
+
+`file-transformations.json` 在实际复制、标记生成和 ELF 变换执行点记录输入/输出
+路径、大小、SHA256 及原始命令索引。Linux 从已锁定 linuxdeploy 镜像提取它本身的
+patchelf，利用该固定版本支持的 `PATCHELF` 环境入口调用记录包装器；包装器仍执行
+同一 patchelf，并保留每次真实调用、退出码和完整 stdout/stderr。只接纳上游该版本
+使用的 `--print-rpath` 与 `--set-rpath`，其他操作直接失败。`objcopy` 的调试分离与
+debuglink 绑定其真实命令及实际调试文件。安装标记、DEB desktop 修改绑定原始字节、
+构建身份与本次实际执行的脚本，脚本原件再与保留的项目源码逐字节核对。
+
+装配器产生的 `sourceTransformations` 指向原始准备目录和完整执行材料；来源映射的
+派生形式如下，保留原生产者 receipt，而不是创建另一份编译记录：
+
+```json
+{
+  "transformation": "packaging",
+  "output": "appimage/usr/bin/huhucapture",
+  "input": {"receipt": "application", "output": "bin/huhucapture"}
+}
+```
+
+消费端独立验证最终字节、逐步连续的 before/after、原始成功命令及完整日志，然后
+对原始安装输入重新核对已有构建 receipt；所有原源码、构建记录与静态输入保持原样。
+记录以外的改写、中间缺步、linuxdeploy 新复制的系统库都不会继承其他文件的来源；
+这些仍是缺项，必须补各自真实生产材料。仅凭阶段清单、相似路径或补写 JSON 不会
+建立变换关系。旧准备目录缺少原始逐文件记录时必须重新真实执行 `prepare`。
+
+后续还要再次执行 offline vendor replay 时，固定 Linux 保留流程需显式添加
+`--retain-replay-cache`。该选项只把此次任务私有 cache 中的
+`registry/cache`、`registry/index`、`git/db` 复制到 `inputs/replay-cache`，
+逐字节核对前后清单，并让输出计划指向这些保留输入。不会复制 Cargo home
+根目录的配置、credentials 或构建 target；默认的临时 cache 生命周期不变。
+后续 replay 仍在另一临时副本执行固定工具链，保留 cache 不是一次成功 replay
+的替代证明。
+
+### 所需执行顺序
+
 1. 同 SHA 干净检出并记录版本、主依赖锁和 Cargo.lock。依赖来源按照固定锁准备；保留构建器使用的真实上游目录和补丁状态，不在任务结束前删除。
 2. 保留完整 vendor、原始注册表包、实际固定工具链源码、真实 Qt 来源/SBOM及许可。Linux 还要按最终部署字节查清 OpenSSL、ICU、其他 native 库和 AppImage 内嵌依赖的实际源版本。宿主 compositor、PipeWire daemon、glibc loader 和驱动不因开发 SDK 包含它们就自动成为产品部署输入。
 3. 用第一次收集结果取得精确源码身份；构建任务记录真正执行的参数、工具、配置/链接证据、静态输入与输出。任何源码或配置变化都必须重新匹配记录，不能继续使用旧哈希。
@@ -238,6 +334,48 @@ Windows 对应 `installer`、`portable-zip` 两个 root，均使用 `huhucapture
 目前没有通过此工具产生并审核一份实际双平台完整对应源码包。完整原始 Qt/发行版/Rust/runtime 源码和匹配构建记录未全部供应时，工具应报告未完成；这是预期行为。它不解除 P11/P12 的正式发行、干净机器安装、实际桌面和长期录制验收门槛。
 
 Windows Qt 原签名插件与原 SPDX 的完整字节差异不通过 PE 归一化消除。[独立 Qt 源码构建入口](windows-qt-source-build.md)从锁定 qtbase、qtsvg、Qttools 和 qttranslations 生成新的统一前缀，使用相同 producer 收据和 Qt 自身 SPDX 检查；需要先在真实原生 CI 构建并完成应用验证，再用于正式部署。原 SDK 与新构建材料各自保留来源，不互相替代。
+
+### 在真实 Rust 与应用构建边界记录来源
+
+已有 `native-rust/build-info.json` 的锁和输出哈希不能补成构建前源码证据。新的正式来源路径必须从干净的同 SHA checkout 开始，使用新的准备、Cargo target、CMake build、install 和 evidence 目录。先按项目锁安装 Rust 工具链及平台 SDK，再执行：
+
+```sh
+python scripts/prepare-native-build-sources.py --output artifacts/native-build-sources
+python scripts/build-native-rust.py \
+  --source-plan artifacts/native-build-sources/source-plan.json \
+  --target-dir artifacts/cargo/localsend \
+  --evidence artifacts/native-rust
+```
+
+第一步真实执行固定 Cargo 的 `fetch --locked`、原始 metadata 和离线 `vendor`，保留完整 gifski Git 源码、原始目录替换配置与 `.crate` 缓存位置，并在聚合库尚不存在时核对官方 Rust 源码、实际编译器和标准库文件。工具链报告明确记为 `preparedBeforeAggregateBuild: true`、`aggregateBuildBound: false`。第二步先独立导出项目、核对全部 vendor/原始包和标准库来源、再次真实离线 replay，再用相同固定 Cargo 和已核对的绝对 vendor 路径构建到新 target；私有 Cargo home 排除继承的目录替换与编译包装器。源码、配置、编译器、标准库或实际输出在前后发生变化都会失败。原 `build-info.json` 的 ABI 字段保持兼容，另加本次执行所得 `sourceBuildProof`，不会给旧 aggregate 倒造证明。
+
+平台依赖和真实许可证准备好后，使用应用包装器替换该应用的原 configure、build 和 install 三个调用。Linux 的实际入口例如：
+
+```sh
+python scripts/build-application-with-sources.py \
+  --source-plan artifacts/native-build-sources/source-plan.json \
+  --native-receipt artifacts/native-rust/build-info.json \
+  --build-directory artifacts/cmake/application-linux \
+  --installed artifacts/install/linux \
+  --evidence artifacts/application-source-receipt \
+  --cmake-argument=-DHUHUCAPTURE_RUNTIME_LICENSES="$PWD/artifacts/runtime-licenses" \
+  --cmake-argument=-DHUHUCAPTURE_OPENSSL_RUNTIME_DIR=/usr/lib/x86_64-linux-gnu
+ctest --preset qt-application-linux
+```
+
+Windows 使用 `application-windows`、`install/windows`、`application-source-receipt` 路径和实际 Windows runtime license 目录；包装器选用现有 VS 2022 x64/v143、RelWithDebInfo 配置。每个额外 CMake 选项须独立传入一个 `--cmake-argument=<参数>`，包括平台测试所需的真实 fixture 路径。现有 CTest 预设继续指向相同实际 build 目录，应用测试和安装测试仍需执行。
+
+应用包装器在 configure 前独立检查原 Rust 执行证明及全部源身份，并读取 CMake 真正生成的 file API link model，确认即将链接的是该聚合库的准确路径；相同字节但未链接的另一个文件不能替代。只有真实 configure、build、install 成功、安装后二进制嵌入身份与源码一致、原输入及工具再次核对无变化，才写出 `artifacts/application-source-receipt/source-build-receipt.json` 和 `receipt-plan.json`。保留材料包括命令退出码、日志、完整源码清单、工具身份、实际 CMake cache/install/file API/link 工程记录、原 Rust 执行记录和实际静态库。receipt 的产品输出覆盖实际应用可执行文件及本次 CMake 生成的身份、安装标记；安装器复制进来的 Qt DLL、其他运行库和后续打包变换仍须各自真实来源。
+
+最终装配使用 `artifacts/native-build-sources/source-plan.json` 的标准 `sources`/`rustVendor`/`materials`，以及应用 `receipt-plan.json`。Qt 源码 builder 成功后另生成 `<Qt workspace>/source-plan-fragment.json`，直接引用原模块源码与 producer receipts。上述准备、源码目录、原始缓存和 build records 必须一直保留到最终来源装配结束；安装目录被部署工具改写后，必须另外绑定真实变换链。此路径实际运行成功也只闭合对应应用和 Rust 输入，不能替代 Qt、发行版系统库、AppImage 静态依赖与最终部署映射的各自完整性检查。
+
+各 native 依赖使用同一轮 builder 的原始报告生成独立 fragment，不把后续开发留存 profile 的另一个 vendor 目录合入正式计划：
+
+```sh
+python scripts/collect-native-build-plans.py --output artifacts/native-source-plan-linux
+```
+
+此入口在 Linux 固定选择 libportal、PipeWire、x264 和 FFmpeg 的实际工作目录；Windows 同命令可使用 `artifacts/native-source-plan-windows` 输出目录，且只选择原 `Release/MD` FFmpeg producer。脚本核对锁定源码及补丁、原 `build-info.json` 与 `receipt-plan.json` 一致性、成功执行 journal、真实 builder 文件、工具/环境、原 prefix 内所有已记录输出的准确字节，并保留原收据副本。输出 `source-plan-fragment.json` 没有 `rustVendor`，可与构建前准备的 Rust 源计划、Qt 模块 fragment 和应用 receipt 无重复合并。旧 Linux 开发 profile 仍独立保留 incomplete 证据；它的 `collection-plan.json` 不应同时输入这个正式装配路径。Rust 的 ABI `build-info.json` 也不是标准 receipt-plan；其真实构建证明与 aggregate 已由应用 producer 检查并保留在应用 receipt 中。
 
 ### 保留现有 Linux 应用 CI 的真实来源
 

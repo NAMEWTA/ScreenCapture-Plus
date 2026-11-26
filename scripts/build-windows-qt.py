@@ -99,7 +99,7 @@ def checked_checkout(source, pin):
                    'Qt source checkout is not clean')
 
 
-def restore_tools(source, pin, recorder, environment):
+def restore_tools(source, pin, recorder, environment, *, component='Qttools'):
     source.mkdir()
     for arguments in (('init', '--quiet'), ('config', 'core.autocrlf', 'false'),
                       ('remote', 'add', 'origin', pin['repository']),
@@ -113,7 +113,7 @@ def restore_tools(source, pin, recorder, environment):
     tag = 'refs/tags/' + pin['tag']
     bundle.require(bundle.git(source, 'rev-parse', tag).decode().strip() == pin['tagObject'] and
                    bundle.git(source, 'rev-parse', tag + '^{commit}').decode().strip() == pin['commit'],
-                   'The real Qttools release tag object differs from the reviewed lock')
+                   'The real ' + component + ' release tag object differs from the reviewed lock')
     checked_checkout(source, pin)
 
 
@@ -130,9 +130,12 @@ def configuration_records(build):
     return paths
 
 
-def verify_generated_spdx(prefix, version):
+def verify_generated_spdx(prefix, version, modules=('qtbase', 'qtsvg', 'qttools', 'qttranslations')):
     records = []
-    for module in ('qtbase', 'qtsvg', 'qttools', 'qttranslations'):
+    bundle.require(modules and len(set(modules)) == len(modules) and
+                   all(module in ('qtbase', 'qtsvg', 'qtwayland', 'qttools', 'qttranslations') for module in modules),
+                   'Select each actual Qt SPDX module once')
+    for module in modules:
         path = prefix / 'sbom' / (module + '-' + version + '.spdx.json')
         document = bundle.read_json(path)
         bundle.require(document.get('spdxVersion') == 'SPDX-2.3', 'Qt did not generate the required original SPDX format')
@@ -244,8 +247,8 @@ def build(options):
                 'commit': pins[name]['commit'], 'sourceDirectory': str(source), 'sourceBuildReceipt': plan})
         report['generatedSbom'] = verify_generated_spdx(prefix, qt['version'])
         report['runtime'] = verify_runtime(prefix)
-        for name in ('windeployqt', 'lrelease', 'lconvert'):
-            control.run([str(prefix / 'bin' / (name + '.exe')), '-version' if name != 'windeployqt' else '--version'],
+        for name, argument in (('windeployqt', '--version'), ('lrelease', '-version'), ('lconvert', '-help')):
+            control.run([str(prefix / 'bin' / (name + '.exe')), argument],
                         cwd=workspace, env=environment)
         reference_qms = {path.name: API['identity'](path) for path in (reference / 'translations').glob('*.qm')}
         built_qms = {Path(item['path']).name: {key: item[key] for key in ('size', 'sha256')}
@@ -283,6 +286,7 @@ def main():
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print('Windows Qt source build failed: ' + str(error), file=sys.stderr)
         return 1
+    API['write_module_plan'](options.workspace, result, 'windows')
     print(json.dumps({'prefix': result['prefix'], 'buildComplete': True, 'correspondingSourceComplete': False,
                       'sourceModules': len(result['sourceModules']), 'translations': len(result['runtime']['translations'])}, indent=2))
     return 0

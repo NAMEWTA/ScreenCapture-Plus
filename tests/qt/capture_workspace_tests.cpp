@@ -66,7 +66,7 @@ protected:
 struct Journey {
     QTemporaryDir directory;
     app::DesktopApplicationPaths paths;
-    unsigned completed{}, failed{}, exits{};
+    unsigned completed{}, presentationsClosed{}, failed{}, exits{};
     std::vector<QPointer<ui::EditorWindow>> editors;
     std::shared_ptr<media::MediaArchiveService> archive;
     std::unique_ptr<app::DesktopApplication> host;
@@ -103,6 +103,10 @@ struct Journey {
         mediaOwner = host->findChild<app::MediaWorkspace*>();
         require(model && native && mediaOwner, "The host owns one common capture/session/media pipeline");
         QObject::connect(model, &cap::CaptureSession::closed, host.get(), [this] { ++completed; });
+        QObject::connect(&window(), &ui::CaptureWindow::closed, host.get(), [this] {
+            ++presentationsClosed;
+            require(presentationsClosed == completed, "The actual capture presentation closes once after its session completes");
+        });
         QObject::connect(mediaOwner, &app::MediaWorkspace::editorOpened, host.get(),
             [this](ui::EditorWindow* view) { editors.push_back(view); });
     }
@@ -115,7 +119,9 @@ struct Journey {
     bool startCapture() { return host->activate({}); }
     bool captureBusy() const
     {
-        return native->busy() || model->stage() == cap::Stage::Selecting ||
+        // Session completion hides the surfaces immediately, but the host keeps
+        // admission closed until CaptureWindow drains its queued destruction.
+        return native->busy() || presentationsClosed != completed || model->stage() == cap::Stage::Selecting ||
             model->stage() == cap::Stage::Adjusting || model->stage() == cap::Stage::Submitting;
     }
     void stop()
@@ -143,7 +149,11 @@ QRect selectActual(Journey& journey, ColorWindow& pattern)
     waitFor([&] { return pattern.windowHandle() && pattern.windowHandle()->isExposed() && pattern.paints; },
         "Expose and paint the actual desktop source window");
     const auto failures = journey.failed;
-    require(journey.startCapture(), "Admit an actual native desktop capture journey");
+    const bool admitted = journey.startCapture();
+    if (!admitted) std::cerr << "ADMISSION completed=" << journey.completed
+        << " presentationsClosed=" << journey.presentationsClosed << " nativeBusy=" << journey.native->busy()
+        << " stage=" << static_cast<int>(journey.session().stage()) << '\n';
+    require(admitted, "Admit an actual native desktop capture journey");
     waitFor([&] { return journey.session().stage() == cap::Stage::Selecting || journey.failed != failures; },
         "The real desktop source reaches shared selection");
     require(journey.failed == failures, "Native capture must succeed rather than falling back to a placeholder");
@@ -178,7 +188,8 @@ void actualDesktop()
     auto selected = selectActual(journey, pattern);
     auto expected = journey.session().snapshot().image.copy(selected);
     require(journey.session().request(cap::Action::Clipboard) != 0, "Request shared capture-to-clipboard output");
-    waitFor([&] { return journey.completed == 1 || journey.failed; }, "Actual archive and clipboard receipt complete the capture");
+    waitFor([&] { return (journey.completed == 1 && !journey.captureBusy()) || journey.failed; },
+        "Actual archive/clipboard receipt and capture presentation drain complete the journey");
     require(!journey.failed && !journey.captureBusy(), "A successful receipt closes the captured selection journey");
     auto listed = journey.listing();
     require(!listed.failure && listed.entries.size() == 1 && listed.entries.front().kind == media::Kind::Png,
@@ -192,7 +203,8 @@ void actualDesktop()
     selected = selectActual(journey, pattern);
     expected = journey.session().snapshot().image.copy(selected);
     require(journey.session().request(cap::Action::Edit) != 0, "Open selected pixels in the existing production editor");
-    waitFor([&] { return journey.completed == 2 && journey.editors.size() == 1; }, "Editor admission ends the capture once");
+    waitFor([&] { return journey.completed == 2 && !journey.captureBusy() && journey.editors.size() == 1; },
+        "Editor admission and presentation drain end the capture once");
     auto editor = journey.editors.back();
     require(editor && editor->isVisible() && editor->canvas()->originalImage() == expected,
         "Capture editing uses the shared editor and the actual selected image");
@@ -201,7 +213,8 @@ void actualDesktop()
     selected = selectActual(journey, pattern);
     expected = journey.session().snapshot().image.copy(selected);
     require(journey.session().request(cap::Action::Pin) != 0, "Pin the same actual native capture through the shared media owner");
-    waitFor([&] { return journey.completed == 3 && journey.editors.size() == 2; }, "Pin admission completes exactly one capture");
+    waitFor([&] { return journey.completed == 3 && !journey.captureBusy() && journey.editors.size() == 2; },
+        "Pin admission and presentation drain complete exactly one capture");
     editor = journey.editors.back();
     require(editor && editor->isVisible() && editor->canvas()->originalImage() == expected,
         "Pin uses the same document/canvas implementation without replacing the source");
@@ -242,7 +255,8 @@ void actualDesktop()
             if (view->objectName() == QStringLiteral("recordingWindow")) options = view;
             if (view->objectName() == QStringLiteral("applicationLauncher")) launcher = view;
         }
-        return journey.completed == 5 && !journey.window().visible() && recording->busy() && options && options->isVisible();
+        return journey.completed == 5 && !journey.captureBusy() && !journey.window().visible() &&
+            recording->busy() && options && options->isVisible();
     }, "Actual recording options take ownership after the capture windows close");
     if (!QSystemTrayIcon::isSystemTrayAvailable())
         require(launcher && !launcher->isVisible(), "No-tray launcher remains hidden for the complete recording journey");

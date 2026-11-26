@@ -14,6 +14,7 @@
 #include "ui/qt/ToolbarControls.h"
 #include <QApplication>
 #include <QCloseEvent>
+#include <QColorSpace>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -214,13 +215,14 @@ struct SourceContract {
     quint64 generation{}, sessionId{}, sourceId{};
 };
 
-QImage takeImage(Capture::ScrollAccumulator& accumulator)
+QImage takeImage(Capture::ScrollAccumulator& accumulator, const QColorSpace& colorSpace)
 {
     if (accumulator.pixels().empty()) return {};
     auto* bytes = new std::vector<std::uint8_t>(accumulator.takePixels());
     QImage image(static_cast<const uchar*>(bytes->data()), accumulator.width(), accumulator.height(),
         static_cast<qsizetype>(accumulator.width()) * 4, QImage::Format_ARGB32,
         [](void* context) { delete static_cast<std::vector<std::uint8_t>*>(context); }, bytes);
+    image.setColorSpace(colorSpace);
     return image;
 }
 bool delay(std::stop_token stop, std::chrono::milliseconds duration)
@@ -231,7 +233,8 @@ bool delay(std::stop_token stop, std::chrono::milliseconds duration)
 }
 ScrollResult runScroll(QRect region, std::unique_ptr<Core::FrameSource> stream,
     std::stop_token stop, std::function<void(Progress)> progress,
-    std::shared_ptr<Core::CaptureControls> controls, std::optional<SourceContract> expectedSource)
+    std::shared_ptr<Core::CaptureControls> controls, std::optional<SourceContract> expectedSource,
+    const QColorSpace& colorSpace)
 {
     struct StopSource {
         std::unique_ptr<Core::FrameSource>& source;
@@ -288,8 +291,11 @@ ScrollResult runScroll(QRect region, std::unique_ptr<Core::FrameSource> stream,
     auto publish = [&](QString detail = {}) {
         const auto size = Core::makeImagePreview(accumulator.pixels(), accumulator.width(), accumulator.height(),
             360.f, 360, 4096, preview);
-        if (size) progress({QImage(preview.data(), size->width, size->height, size->width * 4, QImage::Format_ARGB32).copy(),
-            accumulator.width(), accumulator.height(), std::move(detail)});
+        if (size) {
+            auto image = QImage(preview.data(), size->width, size->height, size->width * 4, QImage::Format_ARGB32).copy();
+            image.setColorSpace(colorSpace);
+            progress({std::move(image), accumulator.width(), accumulator.height(), std::move(detail)});
+        }
     };
     bool failed{}; QString detail;
     try {
@@ -330,7 +336,7 @@ ScrollResult runScroll(QRect region, std::unique_ptr<Core::FrameSource> stream,
     if (stream) stream->stopAndWait();
     stream.reset(); native.reset();
     if (detail.isEmpty()) detail = QStringLiteral("long.finished");
-    return {takeImage(accumulator), detail, failed};
+    return {takeImage(accumulator, colorSpace), detail, failed};
 }
 }
 
@@ -703,14 +709,15 @@ struct ScrollController::State {
         });
         watcher->setFuture(QtConcurrent::run(&pool,
             [selected = region, source = std::move(reader), token = stop.get_token(),
-                controlState = controls, contract = sourceContract, mailbox = progressMailbox]() mutable {
+                controlState = controls, contract = sourceContract, mailbox = progressMailbox,
+                colorSpace = image.colorSpace()]() mutable {
                 struct CloseProgress {
                     std::shared_ptr<Detail::ScrollProgressMailbox>& mailbox;
                     ~CloseProgress() { mailbox->close(); }
                 } close{mailbox};
                 return runScroll(selected, std::move(source), token,
                     [mailbox](Progress progress) { mailbox->publish(std::move(progress)); },
-                    std::move(controlState), contract);
+                    std::move(controlState), contract, colorSpace);
             }));
     }
     void authorize()

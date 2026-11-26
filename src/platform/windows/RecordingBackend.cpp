@@ -2,6 +2,7 @@
 #include "platform/windows/NativeGifRecording.h"
 #include "platform/windows/NativeMp4Recording.h"
 
+#include <windows.h>
 #include <memory>
 
 namespace HuhuCapture::Recording {

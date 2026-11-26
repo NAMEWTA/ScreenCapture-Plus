@@ -30,9 +30,15 @@ if(BUILD_TESTING)
     add_test(NAME source_receipts COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/source_receipts_tests.py")
     set_tests_properties(source_receipts PROPERTIES TIMEOUT 90)
+    add_test(NAME application_receipts COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/application_receipts_tests.py")
+    set_tests_properties(application_receipts PROPERTIES TIMEOUT 90)
     add_test(NAME windows_qt_builder COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/windows_qt_builder_tests.py")
     set_tests_properties(windows_qt_builder PROPERTIES TIMEOUT 60)
+    add_test(NAME linux_qt_builder COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/linux_qt_builder_tests.py")
+    set_tests_properties(linux_qt_builder PROPERTIES TIMEOUT 60)
     add_test(NAME bridge_release COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/bridge_release_tests.py")
     set_tests_properties(bridge_release PROPERTIES TIMEOUT 60)

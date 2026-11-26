@@ -259,10 +259,20 @@ def verify_distribution(spec, archive, identity, output, source_output):
 def collect(options):
     # Locate original inputs before creating output directories or command logs.
     # Even an accidentally supplied sysroot subdirectory must remain read-only.
-    receipt_path = options.native_receipt.resolve(strict=True)
-    receipt = materials.meta.json_read(receipt_path)
-    library = (options.native_library or Path(receipt['library'])).resolve(strict=True)
-    lock, _, _ = native.verify_build_inputs(materials, receipt, library)
+    receipt_path = options.native_receipt.resolve(strict=True) if options.native_receipt else None
+    receipt = materials.meta.json_read(receipt_path) if receipt_path else None
+    library = (options.native_library or Path(receipt['library'])).resolve(strict=True) if receipt else None
+    if receipt:
+        lock, _, _ = native.verify_build_inputs(materials, receipt, library)
+        host = receipt['host']
+    else:
+        materials.meta.require(options.prepare_for_build and options.native_library is None,
+                               'A pre-build collection has no aggregate library to certify')
+        lock = materials.meta.json_read(ROOT / 'build/dependencies.lock.json')['qtMigration']
+        verbose = materials.command('rustc', '+' + lock['rustToolchain'], '-Vv')
+        matches = re.findall(r'^host: (x86_64-(?:pc-windows-msvc|unknown-linux-gnu))$', verbose, re.MULTILINE)
+        materials.meta.require(len(matches) == 1, 'Expected the actual supported native Rust host')
+        host = matches[0]
     sysroot_probe = materials.real_directory(Path(materials.command('rustc', '+' + lock['rustToolchain'], '--print', 'sysroot')))
     materials.meta.require(not options.output.resolve().is_relative_to(sysroot_probe) and
                            not options.source_output.resolve().is_relative_to(sysroot_probe),
@@ -273,10 +283,11 @@ def collect(options):
     report = {'schemaVersion': 1, 'scope': 'Actual locked rustup source, target standard library and compiler notice bytes',
               'standardLibraryInputBindingComplete': False, 'standardLibrarySourceMaterialsCollected': False,
               'upstreamNoticeSetComplete': False, 'correspondingSourceComplete': False,
+              'aggregateBuildBound': False, 'preparedBeforeAggregateBuild': receipt is None,
               'compilerSourceStatus': 'not-collected; rust-src is the standard-library source distribution',
               'components': [], 'failures': []}
     try:
-        identity = toolchain_identity(lock['rustToolchain'], receipt['host'], output)
+        identity = toolchain_identity(lock['rustToolchain'], host, output)
         sysroot = identity['sysroot']
         materials.meta.require(sysroot == sysroot_probe, 'The actual Rust toolchain changed during collection')
         manifest_path = sysroot / 'lib/rustlib/multirust-channel-manifest.toml'
@@ -287,7 +298,10 @@ def collect(options):
         specifications = distribution_specifications(identity, manifest)
         materials.meta.require((sysroot / 'lib/rustlib/src/rust/library/.cargo/config.toml').is_file(),
                                'Install the locked official rust-src component with rustup before collection')
-        originals = {'native-build-info.json': receipt_path, 'multirust-channel-manifest.toml': manifest_path}
+        originals = {'dependency-lock.json': ROOT / 'build/dependencies.lock.json',
+                     'multirust-channel-manifest.toml': manifest_path}
+        if receipt_path:
+            originals['native-build-info.json'] = receipt_path
         for name, original in originals.items():
             materials.copy_original(original, output / 'evidence' / name)
             materials.copy_original(original, source_output / name)
@@ -304,13 +318,18 @@ def collect(options):
             if spec['family'] == 'rust-src':
                 result['retainedSourceArchive'] = {'path': archive.name, 'location': 'source-output',
                                                   **materials.copy_original(archive, source_output / archive.name)}
-        native.verify_build_inputs(materials, receipt, library)
-        materials.meta.require(manifest_path.read_bytes() == manifest_bytes and
-                               materials.unchanged_digest(receipt_path) == materials.unchanged_digest(output / 'evidence/native-build-info.json'),
-                               'Original toolchain/native build evidence changed during source collection')
+        if receipt:
+            native.verify_build_inputs(materials, receipt, library)
+            materials.meta.require(materials.unchanged_digest(receipt_path) ==
+                                   materials.unchanged_digest(output / 'evidence/native-build-info.json'),
+                                   'Original native build evidence changed during source collection')
+            report['nativeBuild'] = {'receiptSha256': native.file_digest(receipt_path),
+                                    'aggregateSha256': receipt['librarySha256'],
+                                    'cargoLockSha256': receipt['cargoLockSha256']}
+            report['aggregateBuildBound'] = True
+        materials.meta.require(manifest_path.read_bytes() == manifest_bytes,
+                               'Original toolchain manifest changed during source collection')
         report['toolchain'] = {key: str(value) if isinstance(value, Path) else value for key, value in identity.items()}
-        report['nativeBuild'] = {'receiptSha256': native.file_digest(receipt_path),
-                                'aggregateSha256': receipt['librarySha256'], 'cargoLockSha256': receipt['cargoLockSha256']}
         report['originalManifest'] = {'sha256': hashlib.sha256(manifest_bytes).hexdigest(), 'date': manifest['date']}
         report['standardLibraryInputBindingComplete'] = True
         report['standardLibrarySourceMaterialsCollected'] = True
@@ -327,7 +346,10 @@ def collect(options):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--native-receipt', type=Path, required=True, help='Original same-build native-rust/build-info.json')
+    phase = parser.add_mutually_exclusive_group(required=True)
+    phase.add_argument('--native-receipt', type=Path, help='Original same-build native-rust/build-info.json')
+    phase.add_argument('--prepare-for-build', action='store_true',
+                       help='Verify the installed official toolchain before building; does not certify an aggregate')
     parser.add_argument('--native-library', type=Path, help='Explicit relocated aggregate with the exact original receipt hash')
     parser.add_argument('--output', type=Path, required=True, help='Empty runtime notice and verification evidence directory')
     parser.add_argument('--source-output', type=Path, required=True, help='Separate empty full-source archive directory')

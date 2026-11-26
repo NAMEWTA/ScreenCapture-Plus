@@ -41,6 +41,7 @@
 | 怎样用固定源码生成实际 HEVC Main / Main10 回归输入？ | [HEVC 样本与复用记录](hevc-fixtures.md) |
 | 项目继承自哪里，如何保留上游归属与许可？ | [上游致谢](upstream.md) |
 | 实际运行文件怎样绑定原始通知和完整对应源码材料？ | [发行材料](distribution-materials.md)、[原生源码材料](native-source-materials.md)、[Rust 工具链材料](rust-toolchain-materials.md) |
+| 怎样从固定源码构建新的 Qt 运行前缀并记录真实来源？ | [Windows Qt 源码构建](windows-qt-source-build.md)、[Linux Qt 与 ICU 源码构建](linux-qt-source-build.md) |
 | 一个需求应该放在哪个模块、由谁拥有资源？ | [架构与扩展](architecture.md) |
 | 文件、目录、代码与文档应该怎样命名和组织？ | [工程约定](conventions.md) |
 | 截图与视频如何长期保存，历史操作影响哪些文件？ | [媒体历史](media-history.md) |
@@ -48,6 +49,7 @@
 | 为什么批注保持稳定编号，导出为何会增加画布？ | [批注设计](annotations.md) |
 | 点击更新后文件保存到哪里，失败或重名怎样处理？ | [更新下载](updates.md) |
 | 怎样构建、发布、辨别发行文件和定位问题？ | [构建与发布](building.md) |
+| 如何独立发布一次旧 Windows 到完整包的更新桥？ | [桥接发行](bridge-release.md) |
 | 自动检查证明了什么，还需要怎样的桌面验收？ | [验证边界](validation.md) |
 | 怎样维护图标，哪些资产是源文件？ | [品牌资源](brand.md) |
 | 怎样添加语言并保持编码、回退与布局正确？ | [语言约定](languages.md) |

@@ -28,6 +28,22 @@ sys.dont_write_bytecode = True
 _spec = importlib.util.spec_from_file_location('huhucapture_package_metadata', ROOT/'build/package/metadata.py')
 meta = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(meta)
 _execution_log = None
+_file_lineage = None
+
+
+def lineage_api():
+    path = ROOT/'build/package/source_transforms.py'
+    module = types.ModuleType('huhucapture_packaging_file_transformations')
+    module.__file__ = str(path)
+    exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+    return module
+
+
+def copy_package_tree(source, destination):
+    if _file_lineage is None:
+        shutil.copytree(source,destination,symlinks=True)
+    else:
+        _file_lineage.copy_tree(source,destination)
 
 
 def source_inventory_api():
@@ -86,8 +102,10 @@ def marker(prefix: Path, kind: str):
     identity = meta.json_read(destination.with_name('build-identity.json'), 16384)
     meta.require(identity.get('platform') == platform and identity.get('architecture') == architecture,
                  'Copied package tree has a different native identity')
-    destination.write_text(json.dumps({'schemaVersion':1, 'product':'huhucapture', 'version':identity['version'],
-                                      'platform':platform, 'architecture':architecture, 'packageKind':kind}, indent=2)+'\n')
+    if _file_lineage is None:
+        destination.write_bytes(lineage_api().marker_bytes(identity,kind))
+    else:
+        _file_lineage.write_marker(destination,identity,kind)
 
 
 def verify_source(build: dict, development: bool):
@@ -266,7 +284,7 @@ def verify_windows_symbols(symbols: Path, executable: Path, build: dict):
 
 
 def prepare_appdir(installed: Path, appdir: Path, tools: dict, qmake: Path):
-    shutil.copytree(installed, appdir/'usr', symlinks=True)
+    copy_package_tree(installed, appdir/'usr')
     marker(appdir/'usr', 'appimage')
     environment = linux_environment(qmake)
     # A directly referenced custom AppRun keeps the original long-lived AppImage
@@ -278,7 +296,13 @@ def prepare_appdir(installed: Path, appdir: Path, tools: dict, qmake: Path):
                  '--icon-file', appdir/'usr/share/icons/hicolor/scalable/apps/io.github.NAMEWTA.huhucapture.svg',
                  '--custom-apprun', ROOT/'build/package/AppRun']
     for exclusion in exclusions: arguments += ['--exclude-library', exclusion]
+    if _file_lineage is not None:
+        environment=_file_lineage.patchelf_environment(tools['linuxdeploy'],environment,run)
     run(arguments, env=environment)
+    if _file_lineage is not None:
+        _file_lineage.collect_patchelf()
+        environment.pop('PATCHELF')
+        environment.pop('HUHUCAPTURE_PATCHELF_RECORDING')
     runtime_license = appdir/'usr/share/huhucapture/licenses/appimage-runtime'
     runtime_license.mkdir(parents=True, exist_ok=True)
     copy_exclusive(tools['appimageRuntimeLicense'],runtime_license/'LICENSE')
@@ -305,9 +329,17 @@ def split_debug(prefix: Path, destination: Path):
         meta.require(identity is not None, 'ELF with debug data has no build-id: '+str(relative))
         original = meta.descriptor(path)
         debug = destination/relative.with_name(relative.name+'.debug'); debug.parent.mkdir(parents=True,exist_ok=True)
+        debug_command=len(_execution_log.commands) if _execution_log is not None else None
         run([objcopy,'--only-keep-debug',path,debug])
-        run([objcopy,'--strip-debug',path])
-        run([objcopy,'--add-gnu-debuglink='+str(debug),path])
+        if _file_lineage is None:
+            run([objcopy,'--strip-debug',path])
+            run([objcopy,'--add-gnu-debuglink='+str(debug),path])
+        else:
+            _file_lineage.mutation(path,[objcopy,'--strip-debug',path],run,operation='objcopy-strip-debug')
+            _file_lineage.mutation(path,[objcopy,'--add-gnu-debuglink='+str(debug),path],run,
+                                  operation='objcopy-add-debuglink',debugCommandIndex=debug_command,
+                                  debugInput={'path':str(debug),**{key:original_value for key,original_value
+                                      in meta.descriptor(debug).items() if key in ('size','sha256')}})
         records.append({'path':relative.as_posix(),'buildId':identity.group(1), 'input':original,
                         'runtimeSha256':meta.sha256(path),
                         'debug':debug.relative_to(destination).as_posix(), 'debugSha256':meta.sha256(debug)})
@@ -335,32 +367,36 @@ def linux_deb(appdir: Path, output: Path, workspace: Path, version: str, root: P
     # absent. This pipeline requires the actual ELF dependency calculation.
     tool('dpkg-shlibdeps'); tool('file')
     (root/'opt').mkdir(parents=True)
-    shutil.copytree(appdir/'usr', root/'opt/huhucapture', symlinks=True)
+    copy_package_tree(appdir/'usr', root/'opt/huhucapture')
     marker(root/'opt/huhucapture','deb')
     (root/'usr/bin').mkdir(parents=True)
     shutil.copy2(ROOT/'build/package/deb-launcher',root/'usr/bin/huhucapture')
     (root/'usr/bin/huhucapture').chmod(0o755)
     for folder in ('applications','icons'):
-        shutil.copytree(root/'opt/huhucapture/share'/folder,root/'usr/share'/folder,symlinks=True)
+        copy_package_tree(root/'opt/huhucapture/share'/folder,root/'usr/share'/folder)
     # The control action must resolve to the primary's exact persistent binary.
     # Its IPC-only child needs no PipeWire setup; ordinary startup retains the
     # existing /usr/bin launcher. Never relax identity checks for arbitrary
     # shell wrappers or hard-code this DEB path in the shared AppImage entry.
     for base in (root/'opt/huhucapture/share', root/'usr/share'):
         desktop = base/'applications/io.github.NAMEWTA.huhucapture.desktop'
-        text = desktop.read_text(encoding='utf-8')
-        action = 'Exec=huhucapture --action=finish-capture\n'
-        meta.require(text.count(action) == 1, 'The installed desktop finish action is missing or ambiguous')
-        desktop.write_text(text.replace(action, 'Exec=/opt/huhucapture/bin/huhucapture --action=finish-capture\n'),
-                           encoding='utf-8', newline='\n')
+        if _file_lineage is None:
+            desktop.write_bytes(lineage_api().desktop_bytes(desktop.read_bytes()))
+        else:
+            _file_lineage.write_desktop(desktop)
     config = workspace/'CPackDEBConfig.cmake'
+    # CPack places its _CPack_Packages scratch tree beside the generated DEB.
+    # Keep that actual build output in the workspace and promote only the
+    # declared package into the immutable artifact directory.
+    cpack_output = workspace/'cpack-output'
+    cpack_output.mkdir()
     settings = {
         'CPACK_GENERATOR':'DEB', 'CPACK_PACKAGE_NAME':'huhucapture', 'CPACK_PACKAGE_VERSION':version,
         'CPACK_PACKAGE_VENDOR':'NAMEWTA', 'CPACK_PACKAGE_CONTACT':'https://github.com/NAMEWTA/huhucapture/issues',
         'CPACK_PACKAGE_DESCRIPTION_SUMMARY':'Screen capture, annotation, recording and LAN sharing with Qt 6',
         'CPACK_PACKAGE_DESCRIPTION':'Complete Qt 6 desktop application for screen capture, annotation, recording, scrolling capture and LAN sharing.',
         'CPACK_PACKAGE_FILE_NAME':output.stem, 'CPACK_DEBIAN_FILE_NAME':output.name,
-        'CPACK_PACKAGE_DIRECTORY':str(output.parent), 'CPACK_PACKAGING_INSTALL_PREFIX':'/',
+        'CPACK_PACKAGE_DIRECTORY':str(cpack_output), 'CPACK_PACKAGING_INSTALL_PREFIX':'/',
         'CPACK_DEBIAN_PACKAGE_ARCHITECTURE':'amd64', 'CPACK_DEBIAN_PACKAGE_SECTION':'graphics',
         'CPACK_DEBIAN_PACKAGE_SHLIBDEPS':'ON', 'CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS':str(root/'opt/huhucapture/lib'),
         'CPACK_DEBIAN_PACKAGE_DEPENDS':'xdg-desktop-portal, ca-certificates', 'CPACK_DEBIAN_PACKAGE_RECOMMENDS':'pipewire',
@@ -370,6 +406,7 @@ def linux_deb(appdir: Path, output: Path, workspace: Path, version: str, root: P
     config.write_text('\n'.join('set('+key+' '+cmake_quote(value)+')' for key,value in settings.items())+
                       '\nset(CPACK_INSTALLED_DIRECTORIES '+cmake_quote(root)+' "/")\n')
     run([tool('cpack'),'--config',config,'-G','DEB'],cwd=workspace)
+    copy_exclusive(cpack_output/output.name,output)
     dpkg = tool('dpkg-deb')
     fields = run([dpkg,'--field',output,'Package','Version','Architecture'],capture=True)
     meta.require('Package: huhucapture' in fields and 'Version: '+version in fields and 'Architecture: amd64' in fields,
@@ -412,7 +449,7 @@ def prepare(args):
     clean build identity and frozen payloads are verified again by finalize.
     Development preparation can only produce development metadata afterward.
     """
-    global _execution_log
+    global _execution_log, _file_lineage
     installed = args.installed.resolve(); stage = args.stage.resolve()
     meta.require(installed.is_dir(), 'The actual CMake-installed tree is required')
     meta.require(not stage.is_relative_to(installed) and not installed.is_relative_to(stage),
@@ -430,15 +467,17 @@ def prepare(args):
     payloads=stage/'payloads'; payloads.mkdir()
     output=stage/'artifacts'; output.mkdir()
     workspace=stage/'work'; workspace.mkdir()
-    packages, extra_assets, transforms = [], [], []
+    packages, extra_assets, transforms, deployment_stages = [], [], [], []
     execution=execution_api().ExecutionLog(stage/'executions',platform,Path(__file__).resolve())
     execution.retain_record(ROOT/'build/package/dependencies.lock.json')
     execution.retain_record(stage/'installed-input-inventory.json')
+    lineage=lineage_api().Recorder(stage,installed,execution,collector)
     _execution_log=execution
+    _file_lineage=lineage
     try:
         if platform == 'windows':
-            portable=payloads/'portable-zip'; shutil.copytree(installed,portable,symlinks=True); marker(portable,'portable-zip')
-            installer=payloads/'installer'; shutil.copytree(installed,installer,symlinks=True); marker(installer,'installer')
+            portable=payloads/'portable-zip'; copy_package_tree(installed,portable); marker(portable,'portable-zip')
+            installer=payloads/'installer'; copy_package_tree(installed,installer); marker(installer,'installer')
             meta.audit_tree(portable,'portable-zip',development=args.development)
             meta.audit_tree(installer,'installer',development=args.development)
             zip_path=output/meta.asset_name(version,'portable-zip'); zip_tree(portable,zip_path)
@@ -455,10 +494,21 @@ def prepare(args):
             paths,provenance=verify_tools(args.tools,workspace/'tools')
             qmake=args.qmake.resolve()
             meta.require(run([qmake,'-query','QT_VERSION'],capture=True).strip() == build['qtVersion'], 'Packager Qt SDK does not match the actual binary')
-            appdir=payloads/'appimage'; environment=prepare_appdir(installed,appdir,paths,qmake)
+            appdir=payloads/'appimage'; first_command=len(execution.commands)
+            environment=prepare_appdir(installed,appdir,paths,qmake)
             deployed = collector.inventory(appdir)
             meta.json_write(stage/'linuxdeploy-output-inventory.json',deployed)
+            deployment_stages.append({'operation':'native-deployment',
+                'commands':list(range(first_command,len(execution.commands))),
+                'inventory':meta.descriptor(stage/'linuxdeploy-output-inventory.json'),
+                'path':'linuxdeploy-output-inventory.json','root':'appimage'})
+            first_command=len(execution.commands)
             symbols=workspace/'debug'; transforms=split_debug(appdir/'usr',symbols)
+            meta.json_write(stage/'linux-stripped-inventory.json',collector.inventory(appdir))
+            deployment_stages.append({'operation':'split-debug',
+                'commands':list(range(first_command,len(execution.commands))),
+                'inventory':meta.descriptor(stage/'linux-stripped-inventory.json'),
+                'path':'linux-stripped-inventory.json','root':'appimage'})
             symbol_path=output/f'huhucapture-v{version}-linux-amd64-debug.tar.zst';tar_zstd(symbols,symbol_path,workspace)
             extra_assets.append(meta.descriptor(symbol_path))
             deb_path=output/meta.asset_name(version,'deb'); linux_deb(appdir,deb_path,workspace,version,payloads/'deb')
@@ -477,6 +527,7 @@ def prepare(args):
             build['packagingTools']=provenance
     finally:
         _execution_log=None
+        _file_lineage=None
     products=package_products(platform)
     for product in products:
         actual,_=meta.audit_tree(payloads/product['root'],product['packageKind'],development=args.development)
@@ -485,17 +536,20 @@ def prepare(args):
     meta.require(collector.inventory(installed)==original, 'Packaging changed the original CMake-installed input')
     files=collector.inventory(payloads)
     meta.json_write(stage/'source-deployment-inventory.json',files)
+    file_transformations=lineage.finish({key:value for key,value in build.items() if key != 'packagingTools'},files)
     execution_record=execution.raw_record(
         {'buildIdentity':{key:value for key,value in build.items() if key != 'packagingTools'},
          'installedInput':original},
         {'deploymentTreeSha256':collector.tree_digest(files),'files':files,'products':products,
-         'artifacts':[*packages,*extra_assets]})
+         'artifacts':[*packages,*extra_assets],'deploymentStages':deployment_stages,'fileTransformations':file_transformations})
     meta.json_write(stage/'transformations.json',{'schemaVersion':1, 'kind':'huhucapture-package-transformations',
         'buildIdentity':{key:value for key,value in build.items() if key != 'packagingTools'},
         'installedInput':meta.descriptor(stage/'installed-input-inventory.json'),
         'packagerSha256':meta.sha256(Path(__file__)), 'commands':execution.commands, 'debugTransforms':transforms,
         'executionRecord':{**meta.descriptor(execution_record),'path':'executions/build-execution.json'},
         'executionInventory':collector.inventory(stage/'executions'),
+        'deploymentStages':deployment_stages,
+        'fileTransformations':file_transformations,
         'deploymentTreeSha256':collector.tree_digest(files), 'products':products,
         'artifacts':[*packages,*extra_assets]})
     prepared={'schemaVersion':1,'kind':'huhucapture-prepared-packages',
@@ -507,6 +561,75 @@ def prepare(args):
     meta.json_write(stage/'prepared.json',prepared)
     print('Prepared actual immutable payloads and candidate packages; corresponding sources must bind this final stage before release finalization.')
     return prepared
+
+
+def verify_transformations(stage: Path, platform: str):
+    """Verify original packaging execution, including retained intermediate bytes.
+
+    These records prove packaging observations, not the upstream source lineage
+    of a changed binary. Final per-file source mappings remain independently
+    checked by the source collector.
+    """
+    collector=source_inventory_api()
+    transformations=meta.json_read(stage/'transformations.json',32*1024*1024)
+    meta.require(transformations.get('schemaVersion')==1 and
+                 transformations.get('kind')=='huhucapture-package-transformations',
+                 'Unknown packaging transformation record')
+    stages=transformations.get('deploymentStages',[])
+    meta.require(isinstance(stages,list) and all(isinstance(item,dict) for item in stages),
+                 'Invalid native deployment/debug stage records')
+    meta.require([item.get('operation') for item in stages] ==
+                 (['native-deployment','split-debug'] if platform=='linux' else []),
+                 'Original native deployment/debug stage inventories are missing')
+    previous=-1
+    for item in stages:
+        expected_path={'native-deployment':'linuxdeploy-output-inventory.json',
+                       'split-debug':'linux-stripped-inventory.json'}[item['operation']]
+        meta.require(item.get('path')==expected_path and item.get('root')=='appimage' and
+                     meta.descriptor(stage/expected_path)==item.get('inventory') and
+                     isinstance(item.get('commands'),list) and item['commands'] and
+                     all(type(index) is int and 0<=index<len(transformations['commands']) for index in item['commands']) and
+                     item['commands']==list(range(item['commands'][0],item['commands'][-1]+1)) and
+                     item['commands'][0]>previous,
+                     'Native deployment/debug stage identity or executed-command range changed')
+        previous=item['commands'][-1]
+    execution_record=transformations.get('executionRecord',{})
+    meta.require(execution_record.get('path')=='executions/build-execution.json' and
+                 meta.descriptor(stage/'executions/build-execution.json')==
+                    {key:value for key,value in execution_record.items() if key != 'path'} and
+                 collector.inventory(stage/'executions')==transformations.get('executionInventory'),
+                 'Actual packaging execution records or original logs changed')
+    recorded=meta.json_read(stage/'executions/build-execution.json',32*1024*1024)
+    meta.require(recorded.get('schemaVersion')==1 and recorded.get('kind')=='huhucapture-build-execution' and
+                 recorded.get('platform')==platform and recorded.get('commands')==transformations.get('commands') and
+                 recorded.get('commandOrigins')=={} and
+                 recorded.get('outputs',{}).get('deploymentStages')==stages,
+                 'Packaging stage inventories differ from the original successful execution record')
+    commands=recorded.get('commands',[]); executions=recorded.get('executions',[])
+    meta.require(commands and len(executions)==len(commands) and
+                 all(isinstance(record,dict) and record.get('commandIndex')==index and
+                     record.get('arguments')==commands[index] and type(record.get('exitCode')) is int and
+                     record['exitCode']==0 for index,record in enumerate(executions)),
+                 'Packaging requires every original executed command to have succeeded')
+    producer=recorded.get('producer',{})
+    meta.require(producer.get('sha256')==transformations.get('packagerSha256'),
+                 'Packaging producer differs from the original retained script')
+    original=Path(producer['path']).parent.parent
+    def retained_path(value):
+        name=Path(value).relative_to(original).as_posix()
+        path=stage/'executions'/collector.relative(name)
+        meta.require(path.is_file() and not path.is_symlink() and path.resolve().is_relative_to((stage/'executions').resolve()),
+                     'Original packaging evidence is missing or outside its retained directory')
+        return path
+    for record in [producer,*recorded.get('records',[])]:
+        observed=meta.descriptor(retained_path(record['path']))
+        meta.require(all(observed[key]==record.get(key) for key in ('size','sha256')),
+                     'Retained original packaging input or log differs')
+    for index,record in enumerate(executions):
+        meta.require(meta.json_read(stage/'executions'/('execution-'+str(index)+'.json'),32*1024*1024)==record,
+                     'Original per-command packaging execution record differs')
+        retained_path(record['stdout']); retained_path(record['stderr'])
+    return transformations,recorded
 
 
 def verify_prepared(stage: Path):
@@ -525,13 +648,20 @@ def verify_prepared(stage: Path):
                  'Prepared deployment changed after source collection')
     meta.require(meta.descriptor(stage/'transformations.json')==prepared['transformations'],
                  'Actual packaging transformation records changed')
-    transformations=meta.json_read(stage/'transformations.json',32*1024*1024)
-    execution_record=transformations.get('executionRecord',{})
-    meta.require(execution_record.get('path')=='executions/build-execution.json' and
-                 meta.descriptor(stage/'executions/build-execution.json')==
-                    {key:value for key,value in execution_record.items() if key != 'path'} and
-                 collector.inventory(stage/'executions')==transformations.get('executionInventory'),
-                 'Actual packaging execution records or original logs changed')
+    transformations,recorded=verify_transformations(stage,build['platform'])
+    original=meta.json_read(stage/'installed-input-inventory.json',32*1024*1024)
+    identity={key:value for key,value in build.items() if key != 'packagingTools'}
+    meta.require(transformations.get('buildIdentity')==identity and
+                 transformations.get('installedInput')==meta.descriptor(stage/'installed-input-inventory.json') and
+                 recorded.get('inputs')=={'buildIdentity':identity,'installedInput':original},
+                 'Original packaging input inventory or actual build identity differs')
+    for key,value in {'deploymentTreeSha256':prepared['deployment']['treeSha256'],
+                      'products':expected,'artifacts':[*prepared['packages'],*prepared['additionalAssets']]}.items():
+        meta.require(recorded['outputs'].get(key)==value and transformations.get(key)==value,
+                     'Original packaging execution differs from the frozen final '+key)
+    meta.require(recorded['outputs'].get('files')==actual,
+                 'Original packaging execution differs from the frozen final file inventory')
+    lineage_api().validate(stage,transformations,recorded,collector)
     for product in expected:
         identity,_=meta.audit_tree(stage/'payloads'/product['root'],product['packageKind'],development=development)
         meta.require(identity=={key:value for key,value in build.items() if key != 'packagingTools'},

@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
-import types
+import struct
 import zipfile
 
 from version_source import read_version
@@ -26,11 +26,26 @@ PURPOSE = 'legacy-windows-bridge'
 RELEASE_MARKER = '<!-- huhucapture:legacy-windows-bridge:v1 -->'
 SHA = re.compile(r'[0-9a-f]{40}')
 VERSION = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)')
-meta_path = ROOT / 'build/package/metadata.py'
-meta = types.ModuleType('bridge_asset_metadata')
-meta.__file__ = str(meta_path)
-exec(compile(meta_path.read_bytes(), str(meta_path), 'exec'), meta.__dict__)
-require = meta.require
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def verify_executable_machine(path):
+    """Read the actual x64 executable header before any release mutation."""
+    with Path(path).open('rb') as stream:
+        prefix = stream.read(64)
+        require(len(prefix) == 64 and prefix[:2] == b'MZ', 'Missing actual PE DOS header')
+        offset = struct.unpack_from('<I', prefix, 60)[0]
+        require(64 <= offset <= 1024 * 1024, 'Invalid PE header offset')
+        stream.seek(offset)
+        header = stream.read(26)
+    require(len(header) == 26 and header[:4] == b'PE\0\0', 'Missing actual PE signature')
+    require(struct.unpack_from('<H', header, 4)[0] == 0x8664 and
+            struct.unpack_from('<H', header, 24)[0] == 0x20b, 'Bridge PE must be x64 PE32+')
+    characteristics = struct.unpack_from('<H', header, 22)[0]
+    require(characteristics & 0x0002 and not characteristics & 0x2000,
+            'Bridge PE must be an executable, not a DLL')
 
 
 def command(arguments, *, payload=None):
@@ -106,10 +121,14 @@ def archive_files(path, maximum):
         folded = set()
         total = 0
         for member in members:
-            raw = member.filename
+            # ZipInfo normalizes host separators (and truncates NUL) while
+            # reading on Windows. Validate the original archive spelling so
+            # malformed names cannot become acceptable after that conversion.
+            raw = member.orig_filename
             relative = PurePosixPath(raw)
-            require('\\' not in raw and not relative.is_absolute() and
-                    all(part not in ('..', '.') for part in relative.parts) and ':' not in raw,
+            parts = (raw[:-1] if raw.endswith('/') else raw).split('/')
+            require(raw == member.filename and '\\' not in raw and '\0' not in raw and
+                    not relative.is_absolute() and all(part not in ('', '..', '.') for part in parts) and ':' not in raw,
                     'Legacy ZIP contains an unsafe path')
             if member.is_dir():
                 continue
@@ -132,7 +151,7 @@ def verify_assets(directory, source_commit, version, *, root=ROOT):
     assets = {name: descriptor(directory / name) for name in names(version)}
     require(0 < assets['huhucapture.exe']['size'] <= 64 * 1024 * 1024,
             'Bridge EXE must remain directly downloadable by v0.0.5')
-    require(meta.machine(directory / 'huhucapture.exe') == 'windows', 'Bridge must be the actual x64 Windows executable')
+    verify_executable_machine(directory / 'huhucapture.exe')
     info = load_json(directory / 'build-info.json', 16 * 1024 * 1024)
     require(info.get('repository') == REPOSITORY and info.get('commit') == source_commit and
             info.get('tag') == 'v' + version and info.get('executableVersion') == version + '.0' and

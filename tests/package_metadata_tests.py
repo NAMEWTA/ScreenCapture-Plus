@@ -19,6 +19,8 @@ metadata=importlib.util.module_from_spec(spec);spec.loader.exec_module(metadata)
 sys.path.insert(0,str(ROOT/'scripts'))
 spec=importlib.util.spec_from_file_location('package_qt',ROOT/'scripts/package-qt.py')
 packager=importlib.util.module_from_spec(spec);spec.loader.exec_module(packager)
+spec=importlib.util.spec_from_file_location('retained_package_stage',ROOT/'scripts/retain-package-stage.py')
+retention=importlib.util.module_from_spec(spec);spec.loader.exec_module(retention)
 
 
 def nsis_layout_fixture(root):
@@ -34,6 +36,96 @@ def nsis_layout_fixture(root):
 
 
 class MetadataBoundaries(unittest.TestCase):
+    @unittest.skipIf(os.name=='nt', 'The real ELF/debug transformation contract requires Linux binutils')
+    def test_original_transformation_stages_logs_and_success_status_are_bound(self):
+        # Build and strip a tiny real ELF. This tests retained execution evidence
+        # only: it never manufactures a huhucapture product or prepared package.
+        for name in ('cc','objcopy','readelf'):
+            self.assertIsNotNone(shutil.which(name), 'The real transformation contract requires '+name)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);stage=root/'stage';stage.mkdir()
+            source=root/'probe.c';source.write_text('int main(void) { return 0; }\n')
+            executable=root/'probe'
+            subprocess.run([shutil.which('cc'),'-g','-Wl,--build-id',str(source),'-o',str(executable)],check=True)
+            appdir=stage/'payloads/appimage';(appdir/'usr/bin').mkdir(parents=True)
+            collector=packager.source_inventory_api()
+            execution=packager.execution_api().ExecutionLog(stage/'executions','linux',packager.__file__)
+            stages=[]
+            def snapshot(operation,filename,first):
+                path=stage/filename;metadata.json_write(path,collector.inventory(appdir))
+                stages.append({'operation':operation,'commands':list(range(first,len(execution.commands))),
+                               'inventory':metadata.descriptor(path),'path':filename,'root':'appimage'})
+            packager._execution_log=execution
+            try:
+                packager.run([sys.executable,'-c','import shutil,sys; shutil.copy2(sys.argv[1],sys.argv[2])',
+                              executable,appdir/'usr/bin/huhucapture'])
+                (appdir/'usr/bin/retained-probe-alias').symlink_to('huhucapture')
+                snapshot('native-deployment','linuxdeploy-output-inventory.json',0)
+                first=len(execution.commands)
+                transforms=packager.split_debug(appdir/'usr',stage/'debug')
+                snapshot('split-debug','linux-stripped-inventory.json',first)
+            finally:
+                packager._execution_log=None
+            self.assertEqual(len(transforms),1)
+            self.assertNotEqual(transforms[0]['input']['sha256'],transforms[0]['runtimeSha256'])
+            raw=execution.raw_record({}, {'deploymentStages':stages})
+            journal={'schemaVersion':1,'kind':'huhucapture-package-transformations',
+                     'commands':execution.commands,'deploymentStages':stages,
+                     'packagerSha256':metadata.sha256(Path(packager.__file__)),
+                     'executionRecord':{**metadata.descriptor(raw),'path':'executions/build-execution.json'},
+                     'executionInventory':collector.inventory(stage/'executions')}
+            metadata.json_write(stage/'transformations.json',journal)
+            observed,recorded=packager.verify_transformations(stage,'linux')
+            self.assertEqual(observed,journal)
+            self.assertTrue(all(item['exitCode']==0 for item in recorded['executions']))
+            # Roundtrip these real compile/objcopy records without pretending
+            # that this narrow fixture is an actual prepared product stage.
+            roots=['transformations.json','executions','payloads','debug',
+                   'linuxdeploy-output-inventory.json','linux-stripped-inventory.json']
+            unused=stage/'work/cpack-output';unused.mkdir(parents=True)
+            (unused/'not-retained').write_bytes(b'An unreferenced packaging scratch file.\n')
+            selected=retention.selected_inventory(stage,roots)
+            archive=root/'actual-transformation-stage.tar.gz'
+            archived=retention.write_archive(stage,roots,archive,selected)
+            restored=root/'archive-roundtrip'
+            retention.extract_archive(archive,restored,archived)
+            self.assertEqual(retention.selected_inventory(restored,roots),selected)
+            packager.verify_transformations(restored,'linux')
+            self.assertEqual((restored/'executions/logs/0.stderr.log').read_bytes(),b'')
+            self.assertTrue((restored/'payloads/appimage/usr/bin/retained-probe-alias').is_symlink())
+            self.assertTrue((restored/'payloads/appimage/usr/bin/huhucapture').stat().st_mode & 0o111)
+            self.assertFalse((restored/'work').exists())
+            with archive.open('ab') as stream:
+                stream.write(b'tampered retained archive')
+            with self.assertRaisesRegex(ValueError,'original digest'):
+                retention.extract_archive(archive,root/'tampered-roundtrip',archived)
+            with self.assertRaises(ValueError):
+                retention.retain(stage,root/'not-a-complete-stage')
+            self.assertFalse((root/'not-a-complete-stage').exists())
+            # Artifact relocation must preserve the same original producer paths
+            # without requiring the producer's checkout still to be present.
+            moved=root/'retained-stage';shutil.copytree(stage,moved);shutil.rmtree(stage)
+            packager.verify_transformations(moved,'linux')
+            inventory=moved/'linuxdeploy-output-inventory.json';saved=inventory.read_bytes()
+            inventory.write_bytes(saved+b'\n')
+            with self.assertRaisesRegex(ValueError,'stage identity'):
+                packager.verify_transformations(moved,'linux')
+            inventory.write_bytes(saved)
+            log=moved/'executions/logs/0.stderr.log';log.write_bytes(b'changed original log\n')
+            with self.assertRaisesRegex(ValueError,'original logs changed'):
+                packager.verify_transformations(moved,'linux')
+            log.write_bytes(b'')
+            # Rehashing a deliberately altered journal cannot turn a recorded
+            # nonzero command into an accepted successful execution.
+            raw=moved/'executions/build-execution.json'
+            altered=metadata.json_read(raw);altered['executions'][0]['exitCode']=23
+            raw.write_text(json.dumps(altered)+'\n')
+            journal['executionRecord']={**metadata.descriptor(raw),'path':'executions/build-execution.json'}
+            journal['executionInventory']=collector.inventory(moved/'executions')
+            (moved/'transformations.json').write_text(json.dumps(journal)+'\n')
+            with self.assertRaisesRegex(ValueError,'every original executed command'):
+                packager.verify_transformations(moved,'linux')
+
     def test_stable_manifest_requires_explicit_false_flags(self):
         original={'schemaVersion':1,'product':'huhucapture','repository':'NAMEWTA/huhucapture',
                   'version':'0.0.5','tag':'v0.0.5','sourceCommit':'1'*40,

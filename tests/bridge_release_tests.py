@@ -60,12 +60,20 @@ class BridgeReleaseAdmission(unittest.TestCase):
 
     def test_real_archive_paths_and_case_collisions_are_rejected(self):
         for names in (('../escape.txt',), ('/absolute.txt',), ('C:/drive.txt',),
-                      ('folder\\escape.txt',), ('same.txt', 'SAME.txt')):
+                      ('folder\\escape.txt',), ('./escape.txt',), ('folder//escape.txt',),
+                      ('nul\0hidden.txt',), ('same.txt', 'SAME.txt')):
             with self.subTest(names=names), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'not-a-package.zip'
                 with zipfile.ZipFile(path, 'x') as archive:
                     for name in names:
-                        archive.writestr(name, b'Owned archive admission fixture, never a product.')
+                        # ZipInfo construction sanitizes Windows separators.
+                        # Write the exact malformed metadata, never an already
+                        # normalized safe name that would make this test false.
+                        member = zipfile.ZipInfo('fixture.txt')
+                        member.filename = member.orig_filename = name
+                        archive.writestr(member, b'Owned archive admission fixture, never a product.')
+                with zipfile.ZipFile(path) as archive:
+                    self.assertEqual([member.orig_filename for member in archive.infolist()], list(names))
                 with self.assertRaisesRegex(ValueError, 'unsafe path|duplicate'):
                     bridge.archive_files(path, 1024)
 

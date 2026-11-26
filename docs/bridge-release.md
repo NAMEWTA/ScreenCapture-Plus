@@ -6,7 +6,7 @@
 
 ## 显式声明与实际输入
 
-维护者先选择下一个尚未占用的稳定版本，更新唯一的 `build/version.json` 及其生成文件，编写对应发行说明，再增加单独的 `releases/bridge-publish.json`。以下仅展示声明格式，不代表该版本已经建立或发布：
+独立桥接已在 main 的 PR #8 选择 v0.0.6，统一更新 `build/version.json` 及其生成文件，并提供匹配的发行说明。以下是实际 `releases/bridge-publish.json`；声明和合并存在不代表资产已经公开：
 
 ```json
 {

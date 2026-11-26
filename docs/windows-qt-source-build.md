@@ -16,14 +16,14 @@ SignTool 实际移除签名后，完整 SHA1 仍不匹配原 SPDX。官方
 先在初始化过 MSVC v143 x64 的原生 runner 中，安装 CMake、Ninja、Python 和
 `spdx-tools`、`reuse`。Qt 自己通过这些原生支持的工具生成源 SPDX 和验证 SPDX
 2.3 JSON；此入口要求生成及验证依赖存在，缺失时失败，脚本不临时安装工具。
-当前可明确固定 `spdx-tools==0.8.5`、`reuse==6.3.0`，实际版本、程序及 Python
+当前可明确固定 `spdx-tools==0.8.5`、`reuse[charset-normalizer]==6.3.0`，实际版本、程序及 Python
 文件身份会进入原执行记录。
 
 保留 `install-qt-action` 得到的原 Windows SDK，仅将其路径传给
 `--reference-sdk`。原 Qt 模块检出继续使用已有恢复入口；所有构建输出进入另一个新目录：
 
 ```powershell
-python -m pip install spdx-tools==0.8.5 reuse==6.3.0
+python -m pip install spdx-tools==0.8.5 "reuse[charset-normalizer]==6.3.0"
 python scripts/restore-qt-module-sources.py `
   --platform windows --workspace .deps/qt-module-sources
 python scripts/build-windows-qt.py `
@@ -81,7 +81,8 @@ Qttools 只请求 Linguist 所需工具，关闭 QDoc、Designer、Assistant 等
 结束时逐项核对新安装文件与 Qt 自己生成的四份 SPDX 文档中完整 SHA1，包括
 多配置共有文件；不能用新来源记录遮蔽签名后的字节变化。还检查实际 x64 PE
 库/工具、两个配置的 Windows/Schannel/generic 插件及产品使用的翻译文件。
-最后真实运行 windeployqt、lrelease、lconvert 的版本命令。此处仅是工具运行，
+最后真实运行 windeployqt、lrelease 的版本命令和 lconvert 的 `-help`；固定
+Qttools 源码的 lconvert 不支持 `-version`。此处仅是工具运行，
 应用 GUI、TLS、安装与物理桌面能力仍需各自原生测试。
 
 报告记录新 QM 与原 SDK QM 的实际逐字节比较，给出相同和不同/缺失路径；它不会
