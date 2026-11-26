@@ -371,6 +371,7 @@
         "--disable-lto",
         "--without-isl",
         "--disable-shared",
+        "CFLAGS_FOR_TARGET=-g -O2 -fPIC",
         "CXXFLAGS_FOR_TARGET=-g -O2 -fPIC"
       ],
       "musl": [

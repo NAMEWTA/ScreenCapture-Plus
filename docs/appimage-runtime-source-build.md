@@ -218,20 +218,24 @@ after independent evidence validation succeeds.
 
 ## Actual compiler support and exception handling
 
-GCC's target C++ libraries use the explicit configure assignment
-`CXXFLAGS_FOR_TARGET=-g -O2 -fPIC`. This preserves GCC 9.4.0's default target
-optimization/debug flags and adds position-independent code for the static
-`libstdc++` objects used by the C++ static-PIE probe. The original top-level
-`configure.ac` supports this assignment. In this version, libstdc++'s configure
+GCC's target libraries use the explicit configure assignments
+`CFLAGS_FOR_TARGET=-g -O2 -fPIC` and `CXXFLAGS_FOR_TARGET=-g -O2 -fPIC`.
+These preserve GCC 9.4.0's default target optimization/debug flags and add
+position-independent code for both C and C++ objects. The static `libstdc++`
+archive includes C objects: its original libsupc++ Makefile compiles
+`libiberty/cp-demangle.c` with `CC` and `CFLAGS`, independently of `CXXFLAGS`.
+Both assignments are required by the C++ static-PIE probe. The original
+top-level `configure.ac` supports these assignments. In this version, libstdc++'s configure
 clears its automatic PIC flags when shared libraries are disabled and later
 resets libtool's `pic_mode`; merely adding `--with-pic` does not establish the
-required static object flags. The producer quotes the complete assignment as
+required static object flags. The producer quotes each complete assignment as
 one shell argument in the actual retained `config.mak`.
 
-The fixed original GCC/libstdc++ configure files and the generated target
-library configuration records are retained. Neither the original source bytes
-nor libgcc/musl's existing configuration is changed. This setting addresses the
-target C++ probe's static library link requirement; it is not evidence that the
+The fixed original GCC/libstdc++ configure and Makefiles, original C demangler,
+and generated target library configuration records are retained. The original
+source bytes, host compiler flags and musl configuration are unchanged; the
+two assignments apply to GCC's target libraries. These settings address the
+target C++ probe's static library link requirement; they are not evidence that the
 final C runtime has linked or run. The real target probe and final runtime
 still have to pass their complete link, ELF, input and execution checks.
 

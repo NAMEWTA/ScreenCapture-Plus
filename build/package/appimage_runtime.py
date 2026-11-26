@@ -70,6 +70,7 @@ def profile():
                    configuration['musl'] == ['--disable-shared'] and
                    configuration['gcc'] == ['--disable-libquadmath', '--disable-decimal-float',
                        '--disable-libitm', '--disable-fixed-point', '--disable-lto', '--without-isl', '--disable-shared',
+                       'CFLAGS_FOR_TARGET=-g -O2 -fPIC',
                        'CXXFLAGS_FOR_TARGET=-g -O2 -fPIC'],
                    'The reviewed source-built static musl toolchain configuration changed')
     bundle.require(value['runtimeLinkProfile'] == ['-std=gnu99', '-Os', '-D_FILE_OFFSET_BITS=64', '-fPIE',
