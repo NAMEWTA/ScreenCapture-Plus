@@ -43,6 +43,44 @@ The actual build compares the patch bytes and canonical SHA1 records with the
 restored original musl-cross-make source. It preserves the complete original
 archives and Git checkouts for later source collection.
 
+The runtime source also has one project adaptation,
+[`portable-directory-path.patch`](../third_party/appimage/portable-directory-path.patch),
+under the original file's MIT terms. The fixed upstream `portable_option`
+function could write beyond `fullpath` when `readlink` filled the buffer and
+could overflow `portable_dir` when adding `.home` or `.config`. It now rejects
+a full readlink buffer before writing its terminator and checks the complete
+`snprintf` result before passing the path to `mkdir`. Oversized paths report an
+error and exit with `EXIT_FAILURE`; no truncated path reaches `mkdir`.
+The existing names, successful directory creation, and upstream status after
+a `mkdir` failure are preserved. The help and main path branches receive the
+same full-buffer guard before their terminator writes, keeping their original
+negative-result handling and `EXIT_EXECERROR` status. Main reports the positive
+oversize result with `ENAMETOOLONG`. The API-boundary tests do not assert that
+the current Linux `/proc/self/exe` implementation produces that full return.
+This patch does not change environment-variable copying or other runtime logic.
+
+[`runtime-patch.json`](../third_party/appimage/runtime-patch.json) binds the
+original source file's Git blob and SHA256, the exact patch, and both complete
+23-file source inventories. The package lock fixes that review and patch.
+Restoration preserves the original source archive, applies the patch only in
+its disposable extraction with strict `git apply --check` / `git apply`, and
+retains the actual commands, tool identity, exit codes and complete logs.
+Final runtime verification requires this original execution and the complete
+patched inventory. Source collection independently replays the same exact
+patch from the original archive. The old official binary's hash is unchanged;
+the adapted source belongs to the newly built runtime.
+
+The standalone workflow runs the real original-archive regression explicitly
+after restoring packaging tools. It checks producer/collector agreement,
+tamper rejection and host GCC compilation of the original and patched upstream
+function and the original help/main path blocks with `-Wall -Werror`. The
+unmodified code is compiled to check its diagnostic; boundary cases execute
+only the guarded code. Real symlink/directory cases and injected readlink
+boundary returns test complete paths, original exit codes and failure before
+`mkdir` or path use.
+These host regression results do not replace the full target compiler, final
+static link, or compressed AppImage extraction/execution gates.
+
 Archive extraction preserves each original regular file's modification time,
 including the ordering between distributed `configure`, `Makefile.in`, and
 their maintainer inputs. It restores directory times after creating their

@@ -41,6 +41,10 @@ jobs:
           python tests/runtime_diagnostics_tests.py -v
       - name: Restore unchanged original reviewed packaging tools and source assets
         run: python scripts/restore-packaging-tools.py --platform linux --output .deps/runtime-packaging-tools
+      - name: Replay the exact original runtime patch and compile path boundary regressions
+        env:
+          HUHUCAPTURE_TEST_APPIMAGE_RUNTIME_ARCHIVE: ${{ github.workspace }}/.deps/runtime-packaging-tools/appimageRuntime/source.tar.gz
+        run: python tests/appimage_runtime_tests.py RuntimePortablePathTests -v
       - name: Build every runtime, musl, CRT and compiler-support input from fixed source
         run: |
           python scripts/build-appimage-runtime.py \

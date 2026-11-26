@@ -378,6 +378,190 @@ class NativeFileTests(unittest.TestCase):
         self.assertFalse((self.root/'failed-receipt/source-build-receipt.json').exists())
 
 
+@unittest.skipUnless(sys.platform == 'linux' and shutil.which('gcc'),
+                     'The original runtime bounds regression uses a real Linux C compiler')
+class RuntimePortablePathTests(unittest.TestCase):
+    def test_actual_original_archive_patch_collection_and_compiled_path_boundaries(self):
+        configured = os.environ.get('HUHUCAPTURE_TEST_APPIMAGE_RUNTIME_ARCHIVE')
+        archive = Path(configured) if configured else ROOT / '.deps/runtime-packaging-tools/appimageRuntime/source.tar.gz'
+        if not configured and not archive.is_file():
+            self.skipTest('Restore the original runtime archive or set HUHUCAPTURE_TEST_APPIMAGE_RUNTIME_ARCHIVE')
+        self.assertTrue(archive.is_file() and not archive.is_symlink())
+        lock = BUNDLE.read_json(ROOT / 'build/package/dependencies.lock.json')
+        pin = {**lock['tools']['appimageRuntime'],
+               'archivePrefix': 'type2-runtime-' + lock['tools']['appimageRuntime']['commit']}
+        review = HELPER['runtime_patch_review'](pin)
+        original_archive = HELPER['file_identity'](archive)
+        with tempfile.TemporaryDirectory(prefix='actual-runtime-path-') as value:
+            root = Path(value)
+            pristine = root / 'pristine'
+            original_files = BUNDLE.extract_tar(archive, pristine, pin['archivePrefix'])
+            self.assertEqual(BUNDLE.tree_digest(original_files), review['pristineTreeSha256'])
+            workspace = root / 'workspace'; workspace.mkdir()
+            for name in ('sources', 'source-inputs', 'checkouts', 'downloads'):
+                (workspace / name).mkdir()
+            recorder = BUILDER['API']['ExecutionLog'](workspace / 'control', 'linux',
+                                                       ROOT / 'scripts/build-appimage-runtime.py')
+            restored = BUILDER['restore_input']('appimage-runtime', pin, workspace, recorder,
+                                                 BUILDER['clean_environment'](), original_archive=archive)
+            manifest = BUNDLE.read_json(restored['manifest']['path'])
+            replay = BUNDLE.read_json(manifest['patchReplay']['path'])
+            actual = BUNDLE.read_json(recorder.raw_record({}, {}))
+            HELPER['verify_runtime_patch_replay'](pin, replay, actual, restored['directory'])
+            self.assertEqual(len(original_files), 23)
+            self.assertEqual(restored['sourceTreeSha256'], review['patchedTreeSha256'])
+            self.assertEqual(HELPER['file_identity'](archive), original_archive)
+
+            (root / 'collected').mkdir()
+            collector = BUNDLE.Collector({}, root, root / 'collected')
+            collector.platform, collector.pins, collector.exported_project = 'linux', {'appimage-runtime': pin}, ROOT
+            copied = collector.sources / 'huhucapture/build/package/dependencies.lock.json'
+            copied.parent.mkdir(parents=True)
+            shutil.copyfile(ROOT / 'build/package/dependencies.lock.json', copied)
+            collector.collect_source(restored['collection'])
+            component = collector.components['appimage-runtime']
+            self.assertEqual(component['files'], restored['files'])
+            self.assertEqual(component['source']['pristineTreeSha256'], review['pristineTreeSha256'])
+            self.assertEqual(component['source']['sourceTreeSha256'], review['patchedTreeSha256'])
+            self.assertEqual(component['source']['archiveSha256'], original_archive['sha256'])
+            self.assertEqual(len(component['source']['patches']), 1)
+            self.assertFalse(collector.receipts)
+            with self.assertRaisesRegex(ValueError, 'cannot be overridden'):
+                (root / 'override').mkdir()
+                rejected = BUNDLE.Collector({}, root, root / 'override')
+                rejected.platform, rejected.pins, rejected.exported_project = 'linux', {'appimage-runtime': pin}, ROOT
+                rejected.collect_source({**restored['collection'], 'patches': []})
+
+            source = restored['directory'] / review['sourceFile']['path']
+            saved = source.read_bytes()
+            source.write_bytes(saved + b'\n/* unrecorded change */\n')
+            with self.assertRaisesRegex(ValueError, 'complete patched runtime source'):
+                HELPER['source_inventory']('appimage-runtime', pin, restored['directory'])
+            source.write_bytes(saved)
+            retained_patch = Path(replay['patch']['path']); saved_patch = retained_patch.read_bytes()
+            retained_patch.write_bytes(saved_patch + b'\n')
+            with self.assertRaisesRegex(ValueError, 'build evidence changed'):
+                HELPER['verify_runtime_patch_replay'](pin, replay, actual, restored['directory'])
+            retained_patch.write_bytes(saved_patch)
+            changed = copy.deepcopy(replay); changed['commands'] = list(reversed(changed['commands']))
+            with self.assertRaisesRegex(ValueError, 'missing or reordered'):
+                HELPER['verify_runtime_patch_replay'](pin, changed, actual, restored['directory'])
+            changed_execution = copy.deepcopy(actual)
+            changed_execution['executions'][replay['commands'][-1]]['arguments'].append('--reject')
+            with self.assertRaisesRegex(ValueError, 'actually executed strict'):
+                HELPER['verify_runtime_patch_replay'](pin, replay, changed_execution, restored['directory'])
+
+            # Compile the exact original/patched upstream function, not a Python
+            # reimplementation. Ordinary cases use real readlink/mkdir syscalls;
+            # the wrapper injects API boundary returns unavailable as real Linux
+            # symlink payloads. This is a host regression, not a target build.
+            prelude = r'''
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#define EXIT_EXECERROR 127
+static long injected_length = -2;
+static ssize_t observed_readlink(const char* path, char* output, size_t size) {
+    if (injected_length == -2) return readlink(path, output, size);
+    if (injected_length < 0) { errno = EIO; return -1; }
+    size_t written = (size_t)injected_length < size ? (size_t)injected_length : size;
+    memset(output, 'x', written);
+    return injected_length;
+}
+static int observed_mkdir(const char* path, mode_t mode) {
+    printf("mkdir:%zu:%s\n", strlen(path), path);
+    return injected_length >= 0 ? 0 : mkdir(path, mode);
+}
+static void observed_print_help(const char* path) { printf("help:%s\n", path); }
+#define readlink observed_readlink
+#define mkdir observed_mkdir
+#define print_help observed_print_help
+'''
+            main = r'''
+#undef readlink
+#undef mkdir
+int main(int argc, char** argv) {
+    if (argc == 2 && strcmp(argv[1], "path-max") == 0) { printf("%d\n", PATH_MAX); return 0; }
+    if (argc != 5) return 90;
+    injected_length = strtol(argv[1], NULL, 10);
+    if (strcmp(argv[2], "help-fragment") == 0) { checked_help("appimage-help", argv[3]); return 23; }
+    if (strcmp(argv[2], "main-fragment") == 0) { unsetenv("TARGET_APPIMAGE"); checked_main_path(argv[3]); return 23; }
+    portable_option(strcmp(argv[2], "null") == 0 ? NULL : argv[2], argv[3], argv[4]);
+    return 23;
+}
+'''
+            options = ['-std=gnu99', '-Os', '-D_FILE_OFFSET_BITS=64', '-fPIE',
+                       '-ffunction-sections', '-fdata-sections', '-Wall', '-Werror']
+            for name, source_file in (('original', pristine / review['sourceFile']['path']), ('patched', source)):
+                full = source_file.read_text()
+                function = 'void portable_option(' + full.split('void portable_option(', 1)[1].split('\nbool extract_appimage(', 1)[0]
+                help_block = full.split('    /* Print the help and then exit */', 1)[1].split(
+                    '    /* Just print the runtime version and then exit */', 1)[0]
+                main_block = full.split('    // calculate full path of AppImage', 1)[1].split(
+                    '    if (getenv("APPIMAGE_EXTRACT_AND_RUN")', 1)[0]
+                fragments = '\nstatic void checked_help(const char* arg, const char* appimage_path) {' + help_block + '}\n'
+                fragments += '\nstatic void checked_main_path(const char* appimage_path) {' + main_block + \
+                             '    printf("main:%s\\n", fullpath);\n}\n'
+                test_source = root / (name + '.c'); test_source.write_text(prelude + function + fragments + main)
+                result = subprocess.run(['gcc', *options, str(test_source), '-o', str(root / name)],
+                                        capture_output=True, text=True)
+                if name == 'original':
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('format-overflow', result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+            executable = root / 'patched'
+            capacity = int(subprocess.check_output([str(executable), 'path-max']))
+            image = root / 'payload.AppImage'; image.write_bytes(b'Path-only fixture, not a runtime image.\n')
+            link = root / 'image-link'; link.symlink_to(image)
+            def run(length, option, name, target=link):
+                return subprocess.run([str(executable), str(length), option, str(target), name],
+                                      capture_output=True, text=True, timeout=10)
+            for name in ('home', 'config'):
+                option = 'appimage-portable-' + name
+                normal = run(-2, option, name)
+                self.assertEqual(normal.returncode, 0, normal.stderr)
+                self.assertTrue(Path(str(image) + '.' + name).is_dir())
+                existing = run(-2, option, name)
+                self.assertEqual(existing.returncode, 0)  # Preserve upstream mkdir failure status.
+                self.assertIn('Error creating portable', existing.stderr)
+                maximum = capacity - len(name) - 2
+                fitting = run(maximum, option, name)
+                self.assertEqual(fitting.returncode, 0, fitting.stderr)
+                self.assertEqual(fitting.stdout, 'mkdir:' + str(capacity - 1) + ':' + 'x' * maximum + '.' + name + '\n')
+                for length in (maximum + 1, capacity - 1, capacity):
+                    rejected = run(length, option, name)
+                    self.assertEqual(rejected.returncode, 1)
+                    self.assertEqual(rejected.stdout, '')
+                    self.assertIn('too long', rejected.stderr)
+                unreadable = run(-2, option, name, image)
+                self.assertEqual(unreadable.returncode, 1)
+                self.assertEqual(unreadable.stdout, '')
+                self.assertIn('Error getting realpath', unreadable.stderr)
+                for argument in ('null', 'unrelated'):
+                    ignored = run(capacity, argument, name)
+                    self.assertEqual(ignored.returncode, 23)
+                    self.assertEqual(ignored.stdout + ignored.stderr, '')
+            for branch, prefix, success in (('help-fragment', 'help:', 0), ('main-fragment', 'main:', 23)):
+                normal = run(-2, branch, 'home')
+                self.assertEqual(normal.returncode, success, normal.stderr)
+                self.assertEqual(normal.stdout, prefix + str(image) + '\n')
+                fitting = run(capacity - 1, branch, 'home')
+                self.assertEqual(fitting.returncode, success, fitting.stderr)
+                self.assertEqual(fitting.stdout, prefix + 'x' * (capacity - 1) + '\n')
+                for length in (-1, capacity):
+                    rejected = run(length, branch, 'home')
+                    self.assertEqual(rejected.returncode, 127)
+                    self.assertEqual(rejected.stdout, '')
+                    self.assertTrue(rejected.stderr)
+            self.assertEqual(HELPER['file_identity'](archive), original_archive)
+            self.assertEqual(BUNDLE.inventory(pristine), original_files)
+
+
 @unittest.skipUnless(sys.platform=='linux', 'The exact original header profile is Linux-only')
 class HeaderPathTests(unittest.TestCase):
     def test_actual_archive_keeps_external_license_texts_separate_and_native_gaps_open(self):

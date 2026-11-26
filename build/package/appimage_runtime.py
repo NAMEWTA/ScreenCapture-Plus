@@ -26,7 +26,8 @@ PRODUCERS = ('scripts/build-appimage-runtime.py', 'build/package/appimage_runtim
              'build/package/source_receipts.py', 'scripts/create-source-bundle.py',
              'build/package/toolchain_patches.py', 'third_party/appimage/toolchain-patches/cowpatch.sh',
              'third_party/appimage/toolchain-patches/upstream.json', 'build/package/linux_header_paths.py',
-             'build/package/source_checkout.py', 'build/package/toolchain-eh-probe.cpp')
+             'build/package/source_checkout.py', 'build/package/toolchain-eh-probe.cpp',
+             'third_party/appimage/runtime-patch.json', 'third_party/appimage/portable-directory-path.patch')
 TOOLCHAIN_FILES = ('libgcc.a', 'libgcc_eh.a', 'crtbeginS.o', 'crtendS.o',
                    'rcrt1.o', 'crti.o', 'crtn.o', 'libc.a')
 EH_COMPILE_FLAGS = ['-std=c++11', '-O2', '-fPIE', '-fexceptions', '-fno-inline']
@@ -43,6 +44,7 @@ def profile():
     bundle.require(runtime['repository'] == 'https://github.com/AppImage/type2-runtime' and
                    runtime['commit'] == 'dd6cebedcbddde9c82f89b011e8e1d40b6e43868',
                    'The reviewed original type-2 runtime revision changed')
+    runtime_patch_review(runtime)
     for name, pin in value['sources'].items():
         HEADERS['source_profile'](name, pin)
         if 'sourceArchive' in pin:
@@ -84,7 +86,55 @@ def file_identity(path):
 
 
 def source_inventory(component, pin, directory):
-    return HEADERS['source_inventory'](component, pin, directory, bundle.__dict__)
+    files = HEADERS['source_inventory'](component, pin, directory, bundle.__dict__)
+    if component == 'appimage-runtime':
+        review = runtime_patch_review(pin)
+        bundle.require(bundle.tree_digest(files) == review['patchedTreeSha256'],
+                       'The complete patched runtime source differs from its reviewed original and patch')
+    return files
+
+
+def runtime_patch_review(pin):
+    specification = pin.get('sourcePatchReview', {})
+    bundle.require(specification.get('path') == 'third_party/appimage/runtime-patch.json' and
+                   bundle.digest(ROOT / specification['path']) == specification.get('sha256'),
+                   'The exact runtime source patch review changed')
+    review = bundle.read_json(ROOT / specification['path'])
+    bundle.require(review.get('schemaVersion') == 1 and review.get('license') == 'MIT' and
+                   review['repository'] == pin['repository'] and review['commit'] == pin['commit'] and
+                   review['originalArchiveSha256'] == pin['sourceArchive']['sha256'] and
+                   review['sourceFile']['path'] == 'src/runtime/runtime.c' and
+                   pin.get('patches') == [review['patch']] and
+                   review['patch']['path'] == 'third_party/appimage/portable-directory-path.patch' and
+                   bundle.digest(ROOT / review['patch']['path']) == review['patch']['sha256'] and
+                   all(bundle.HEX64.fullmatch(review[key]) for key in ('pristineTreeSha256', 'patchedTreeSha256')),
+                   'The reviewed runtime adaptation is not bound to its original source and exact patch')
+    return review
+
+
+def verify_runtime_patch_replay(pin, replay, control, directory):
+    review = runtime_patch_review(pin)
+    bundle.require(replay.get('schemaVersion') == 1 and replay.get('kind') == 'huhucapture-strict-runtime-source-patch' and
+                   file_identity(checked_record(replay['review'])) == file_identity(ROOT / pin['sourcePatchReview']['path']) and
+                   file_identity(checked_record(replay['archive'])) ==
+                       {key: pin['sourceArchive'][key] for key in ('size', 'sha256')} and
+                   file_identity(checked_record(replay['patch'])) == file_identity(ROOT / review['patch']['path']) and
+                   bundle.tree_digest(replay['pristineFiles']) == review['pristineTreeSha256'] and
+                   replay['patchedTreeSha256'] == review['patchedTreeSha256'] and
+                   bundle.tree_digest(source_inventory('appimage-runtime', pin, directory)) == review['patchedTreeSha256'],
+                   'Runtime patch replay lost its exact original, patch, or complete source inventories')
+    patch = replay['patch']['path']
+    expected = [bundle.git_command(directory, 'init', '--quiet'),
+                bundle.git_command(directory, 'apply', '--check', '--whitespace=nowarn', patch),
+                bundle.git_command(directory, 'apply', '--whitespace=nowarn', patch)]
+    indices = replay.get('commands', [])
+    bundle.require(len(indices) == len(expected) and all(type(index) is int for index in indices) and
+                   indices == sorted(set(indices)), 'Runtime patch commands are missing or reordered')
+    for index, arguments in zip(indices, expected):
+        bundle.require(0 <= index < len(control['executions']), 'Runtime patch has no original executed command')
+        actual = control['executions'][index]
+        bundle.require(actual['exitCode'] == 0 and actual['arguments'] == arguments and actual['cwd'] == str(directory),
+                       'Runtime source patch differs from the actually executed strict Git commands')
 
 
 def verify_checkout_policy(checkout, retained):
@@ -444,6 +494,9 @@ def validate_report(directory, report):
     bundle.require(control['inputs']['sources'] == inputs and control['outputs'] ==
                    {'runtime': report['runtime'], 'linkClosure': report['linkClosure']},
                    'Runtime restoration and final build evidence disagree')
+    original = bundle.read_json(checked_record(inputs['appimage-runtime']['manifest']))
+    verify_runtime_patch_replay(original['pin'], bundle.read_json(checked_record(original['patchReplay'])),
+                                control, directory / 'sources/appimage-runtime')
     for name in PATCHES['ARCHIVES']:
         original = bundle.read_json(checked_record(inputs[name]['manifest']))
         replay = bundle.read_json(checked_record(original['patchReplay']))

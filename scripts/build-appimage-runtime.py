@@ -88,6 +88,14 @@ def restore_input(name, pin, workspace, recorder, environment, *, original_archi
                        ('size' not in spec or archive.stat().st_size == spec['size']), 'Original source archive changed')
         files = bundle.extract_tar(archive, directory, pin['archivePrefix'],
                                    path_profile=HEADERS['source_profile'](name, pin))
+        runtime_review = HELPER['runtime_patch_review'](pin) if name == 'appimage-runtime' else None
+        if runtime_review:
+            source = directory / runtime_review['sourceFile']['path']
+            expected = runtime_review['sourceFile']['original']
+            bundle.require(bundle.tree_digest(files) == runtime_review['pristineTreeSha256'] and
+                           API['identity'](source) == {key: expected[key] for key in ('size', 'sha256')} and
+                           bundle.object_digest('blob', source.read_bytes()) == expected['gitBlob'],
+                           'The runtime archive does not contain the unchanged reviewed original source')
         patches = []
         for item in pin.get('patches', []):
             path = ROOT / bundle.relative(item['path'])
@@ -97,6 +105,29 @@ def restore_input(name, pin, workspace, recorder, environment, *, original_archi
         if 'patchApplication' in pin:
             actual = PATCHES['apply'](name, directory, patches, pin, ROOT, bundle.__dict__,
                                       recorder=recorder, environment=environment)
+            replay_path = workspace / 'source-inputs' / (name + '-patch-replay.json')
+            API['write_new'](replay_path, actual)
+            recorder.retain_record(replay_path)
+            patch_replay = descriptor(replay_path)
+        elif runtime_review:
+            # Apply only to this disposable archive extraction. The retained
+            # original archive and the older official runtime stay unchanged.
+            retained_patch = Path(recorder.retain_record(patches[0])['path'])
+            actual = {'schemaVersion': 1, 'kind': 'huhucapture-strict-runtime-source-patch',
+                      'archive': descriptor(recorder.retain_record(archive)['path']),
+                      'review': descriptor(recorder.retain_record(ROOT / pin['sourcePatchReview']['path'])['path']),
+                      'patch': descriptor(retained_patch), 'pristineFiles': files, 'commands': []}
+            git_env = bundle.git_environment()
+            actual['commands'].append(recorder.run(bundle.git_command(directory, 'init', '--quiet'),
+                                                    cwd=directory, env=git_env))
+            try:
+                for arguments in (('apply', '--check', '--whitespace=nowarn', str(retained_patch)),
+                                  ('apply', '--whitespace=nowarn', str(retained_patch))):
+                    actual['commands'].append(recorder.run(bundle.git_command(directory, *arguments),
+                                                            cwd=directory, env=git_env))
+            finally:
+                shutil.rmtree(directory / '.git')
+            actual['patchedTreeSha256'] = bundle.tree_digest(HELPER['source_inventory'](name, pin, directory))
             replay_path = workspace / 'source-inputs' / (name + '-patch-replay.json')
             API['write_new'](replay_path, actual)
             recorder.retain_record(replay_path)
@@ -587,6 +618,7 @@ def build_runtime(options):
               'buildComplete': False, 'staticClosureComplete': False, 'correspondingSourceComplete': False, 'failures': [],
               'scope': 'A new static PIE runtime from complete actual source producers; not reproduction of the old official asset',
               'configurationDifferences': ['GCC 9.4.0/musl 1.2.6 source-built static target toolchain replaces floating Alpine/Clang inputs',
+                  'The fixed runtime source has one reviewed portable-directory bounds patch; the original source archive and official runtime binary remain unchanged',
                   'Git sources use original Git blob bytes, retaining original LF/CRLF and disabling working-tree conversions before first checkout',
                   'Source release archives preserve their original regular-file and directory mtimes before applying the unchanged original patches',
                   'Every canonical cross-make patch is retained; target shared toolchain libraries are disabled',
