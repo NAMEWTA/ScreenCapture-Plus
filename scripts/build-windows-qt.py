@@ -20,6 +20,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 API = runpy.run_path(str(ROOT / 'build/package/source_receipts.py'))
 bundle = API['bundle']
+CHECKOUT = runpy.run_path(str(ROOT / 'build/package/source_checkout.py'))
 CONFIGURATIONS = ('RelWithDebInfo', 'Debug')
 
 
@@ -95,14 +96,18 @@ def checked_checkout(source, pin):
                    'Qt source checkout differs from its locked commit')
     bundle.require(bundle.git(source, 'remote', 'get-url', 'origin').decode().strip() == pin['repository'],
                    'Qt checkout has another original repository')
+    CHECKOUT['verify_policy'](source)
     bundle.require(not bundle.git(source, 'status', '--porcelain', '--untracked-files=normal').strip(),
                    'Qt source checkout is not clean')
 
 
 def restore_tools(source, pin, recorder, environment, *, component='Qttools'):
     source.mkdir()
-    for arguments in (('init', '--quiet'), ('config', 'core.autocrlf', 'false'),
-                      ('remote', 'add', 'origin', pin['repository']),
+    for arguments in (('init', '--quiet'), ('config', 'core.autocrlf', 'false')):
+        recorder.run(bundle.git_command(source, *arguments), cwd=source, env=environment)
+    CHECKOUT['install_policy'](source)
+    CHECKOUT['retain_policy'](source, recorder)
+    for arguments in (('remote', 'add', 'origin', pin['repository']),
                       ('-c', 'protocol.https.allow=always', 'fetch', '--depth=1', '--no-tags', 'origin', pin['commit']),
                       ('checkout', '--detach', 'FETCH_HEAD'),
                       ('-c', 'protocol.https.allow=always', 'fetch', '--depth=1', '--no-tags', 'origin',
@@ -206,6 +211,7 @@ def build(options):
               'correspondingSourceComplete': False, 'failures': [],
               'scope': 'New shared MSVC Qt runtime, tools and translations; not a reproduction of the signed SDK',
               'sdkConfigurationDifferences': ['Actual local compiler/tools/prefix, not the old vendor paths',
+                  'Original Git blob bytes on both hosts; upstream working-tree text/encoding/filter conversion is disabled',
                   'Schannel TLS used by this Windows product; no unrelated OpenSSL SDK or PostgreSQL input',
                   'Bundled Qt image/text dependencies retained inside the full pinned qtbase source',
                   'Only Linguist tools requested from Qttools; no QDoc/Designer/Assistant application'],
@@ -230,6 +236,7 @@ def build(options):
                                            name, source, pins[name], prefix)
             recorder.retain_record(lock_path)
             recorder.retain_record(baseline)
+            CHECKOUT['retain_policy'](source, recorder)
             for program in ('cl', 'link', 'lib', 'ninja', 'reuse', sys.executable):
                 recorder.observe_tool(program, environment)
             command = configure_command(name, source, directory, prefix, Path(sys.executable).resolve())
@@ -242,6 +249,7 @@ def build(options):
                 recorder.run(['cmake', '--build', str(directory), '--config', variant, '--parallel', str(options.jobs)],
                              cwd=workspace, env=environment)
                 recorder.run(['cmake', '--install', str(directory), '--config', variant], cwd=workspace, env=environment)
+            CHECKOUT['verify_policy'](source)
             plan = recorder.finish(configure_index=configuration, configuration_files=configuration_records(directory))
             report['sourceModules'].append({'id': name, 'repository': pins[name]['repository'],
                 'commit': pins[name]['commit'], 'sourceDirectory': str(source), 'sourceBuildReceipt': plan})

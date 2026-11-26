@@ -202,3 +202,52 @@ copyright，以及原 runtime 收集的 common-license 文本。binNMU 的二进
 格式依据为 [APT 的精确版本下载](https://manpages.debian.org/bookworm/apt/apt-get.8.en.html)、
 [Debian source package 及 recipes](https://www.debian.org/doc/debian-policy/ch-source.html)
 和 [`.buildinfo` 的源码、二进制、构建依赖及环境字段](https://manpages.debian.org/trixie/dpkg-dev/deb-buildinfo.5.en.html)。
+
+### Ubuntu 原始构建记录
+
+在上述系统来源收集成功后，可以独立运行：
+
+```sh
+python scripts/collect-launchpad-build-records.py \
+  --system-sources artifacts/system-source-linux/system-sources.json \
+  --series noble \
+  --output artifacts/launchpad-build-records-linux
+```
+
+`--series` 必须是原 runner 的准确 Ubuntu 发行代号。输入是原收集器成功输出，
+不能只提供包名或自行填写一个哈希。收集器重新核对所保留 `.deb` 和 Packages 原文的
+完整 SHA256 / 大小，再执行真实 `dpkg-deb --field`，分别核对二进制版本、源码
+版本和 amd64 架构。所有输入通过后，才从 Ubuntu primary archive 查询准确版本
+的 binary publication，并追随其实际 `build_link`；不会根据文件名构造 build ID，
+或在多个不同构建中选择第一条。原发布记录的来源、架构和版本必须完全一致，
+构建记录须属于同一 Ubuntu series、同源版本与架构，状态为成功。primary 中
+复制的安全更新还必须保留与实际构建 archive 一致的 `copied_from_archive_link`。
+
+采集只允许 HTTPS 的官方 Launchpad / API / librarian 域名，每次重定向都再次
+验证域名，限制请求大小、分页与总下载量。HTTP 拒绝、缺失记录、空的三件套 URL、
+歧义或校验失败均返回非零并保留已取得的原始证据；不会切换镜像绕过拒绝。
+API 响应、`.changes`、`.buildinfo` 和压缩或未压缩的 build log 按原字节保存。
+`.changes` 必须以 SHA256 / 大小绑定原 `.buildinfo`，两个记录各自必须绑定输入
+的准确 `.deb`；共同列出的其他文件哈希也必须一致。Source 的括号版本单独解析，
+保留 binNMU 与 source version 的差异。原有安装树与 `.deb` 内文件的对应关系仍
+由前一阶段的实际解包校验负责，这个入口不会为最终变换后的 ELF 创建新映射。
+
+成功状态 `original-build-records-bound-to-debs` 只说明这些原记录与已保留二进制
+字节相符。报告继续记录原收集器的 gaps，并明确当前缺少的 Release 签名链、
+`.changes` / `.buildinfo` 签名验证、完整实际 configure / link / 静态输入和可信
+producer receipt。解析 clear-signed 包装不等于验证签名；自行计算 build log 的
+SHA256 也不等于发行方提供过该摘要。`Installed-Build-Depends` 和 `Environment`
+原字段作为观察保留，不据此补造实际命令或 `NativeBuild` 收据。
+
+输出 `materials-plan.json` 可作为后续装配器额外 `--inputs`，只含真实材料，
+不会提供 `sources`、`buildReceipts` 或完整性声明。原生 Ubuntu 工作流在系统
+源码采集成功后执行此入口，保留实际系统版本、标准输出、标准错误、退出码和
+原始材料；失败会阻止消费该材料计划。正向结果以真实工作流产物为准。离线测试
+使用明确标注的 HTTP 样本和本机真正生成的 dpkg 测试包，不能代替实际 Ubuntu
+API、原签名和发行方构建的正向验收。
+
+接口依据为 [Launchpad 1.0 官方 API](https://api.launchpad.net/1.0.html)、
+[Debian `.changes` 格式](https://manpages.debian.org/trixie/dpkg-dev/deb-changes.5.en.html)
+以及 Canonical 的原始采集流程
+[`ubuntu-package-buildinfo` 固定提交](https://github.com/canonical/ubuntu-package-buildinfo/blob/a93a2e22d80909d07c1cd00fbe99d4d8c271dd02/ubuntu_package_buildinfo/cli.py)。
+本项目独立实现 API 和校验适配，不复制或依赖该 GPL 工具的代码。

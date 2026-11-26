@@ -27,9 +27,15 @@ if(BUILD_TESTING)
     add_test(NAME native_source_materials COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/native_source_materials_tests.py")
     set_tests_properties(native_source_materials PROPERTIES TIMEOUT 60)
+    add_test(NAME launchpad_build_records COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/launchpad_build_records_tests.py")
+    set_tests_properties(launchpad_build_records PROPERTIES TIMEOUT 60)
     add_test(NAME source_receipts COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/source_receipts_tests.py")
     set_tests_properties(source_receipts PROPERTIES TIMEOUT 90)
+    add_test(NAME source_checkout COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/source_checkout_tests.py")
+    set_tests_properties(source_checkout PROPERTIES TIMEOUT 90)
     add_test(NAME application_receipts COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/application_receipts_tests.py")
     set_tests_properties(application_receipts PROPERTIES TIMEOUT 90)

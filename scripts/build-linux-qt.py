@@ -171,6 +171,7 @@ def build_icu(workspace, source, prefix, pin, environment, control, jobs, lock_p
     recorder = API['NativeBuild'](workspace / 'icu-source-receipt', 'linux', __file__, 'icu', source, pin, prefix)
     recorder.retain_record(lock_path)
     recorder.retain_record(WINDOWS_HELPER)
+    SHARED['CHECKOUT']['retain_policy'](source, recorder)
     for program in ('gcc', 'g++', 'make', 'ar', 'ld', 'pkg-config', sys.executable):
         recorder.observe_tool(program, environment)
     command = [str(source / 'icu4c/source/runConfigureICU'), 'Linux', '--prefix=' + str(prefix),
@@ -181,6 +182,7 @@ def build_icu(workspace, source, prefix, pin, environment, control, jobs, lock_p
     runtime = verify_icu(prefix, pin, recorder, environment)
     records = [build / name for name in ('config.log', 'config.status', 'Makefile', 'icudefs.mk',
                                         'config/Makefile.inc', 'config/icu.pc', 'config/pkgdata.inc')]
+    SHARED['CHECKOUT']['verify_policy'](source)
     plan = recorder.finish(configure_index=configuration, configuration_files=records)
     return {'id': 'icu', 'repository': pin['repository'], 'commit': pin['commit'],
             'sourceDirectory': str(source), 'sourceBuildReceipt': plan, 'runtime': runtime}
@@ -248,6 +250,7 @@ def build(options):
               'dependencyLockSha256': lock_identity['sha256'],
               'scope': 'New native Linux Qt/ICU runtime, tools and translations; not a reproduction of vendor SDK bytes',
               'sdkConfigurationDifferences': ['Actual local GCC/tools/prefix, not the old vendor paths or compiler build',
+                  'Original Git blob bytes; upstream working-tree text/encoding/filter conversion is disabled',
                   'ICU 73.2 comes from its exact official source/tag and newly recorded shared-library build',
                   'Qt keeps bundled JPEG/PNG/PCRE/HarfBuzz/DoubleConversion and system zlib/FreeType/Fontconfig',
                   'Only Linguist tools requested from Qttools; no QDoc/Designer/Assistant application',
@@ -274,6 +277,7 @@ def build(options):
                                            name, source, pins[name], prefix)
             for path in (lock_path, baseline, WINDOWS_HELPER, RESTORE_HELPER):
                 recorder.retain_record(path)
+            SHARED['CHECKOUT']['retain_policy'](source, recorder)
             for program in ('gcc', 'g++', 'ninja', 'pkg-config', 'reuse', sys.executable):
                 recorder.observe_tool(program, environment)
             configuration = recorder.run(configure_command(name, source, directory, prefix, Path(sys.executable).resolve()),
@@ -281,6 +285,7 @@ def build(options):
             features = verify_configuration(name, directory, prefix)
             recorder.run(['cmake', '--build', str(directory), '--parallel', str(options.jobs)], cwd=workspace, env=environment)
             recorder.run(['cmake', '--install', str(directory)], cwd=workspace, env=environment)
+            SHARED['CHECKOUT']['verify_policy'](source)
             plan = recorder.finish(configure_index=configuration,
                                    configuration_files=SHARED['configuration_records'](directory))
             report['sourceModules'].append({'id': name, 'repository': pins[name]['repository'], 'commit': pins[name]['commit'],

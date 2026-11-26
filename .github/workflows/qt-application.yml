@@ -309,13 +309,27 @@ jobs:
         if: ${{ !cancelled() && steps.prepared.outcome == 'success' }}
         run: python scripts/retain-package-stage.py --stage artifacts/packages/linux-prepared --output artifacts/package-stage-linux
       - name: Retain exact distro sources from the original deployed library identities
+        id: system_sources
         if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
         run: python scripts/collect-system-source-materials.py --installed artifacts/install/linux --runtime-materials artifacts/runtime-materials-linux/runtime-materials.json --output artifacts/system-source-linux
+      - name: Retain original Ubuntu build records bound to the exact runtime packages
+        id: ubuntu_build_records
+        if: ${{ !cancelled() && steps.system_sources.outcome == 'success' }}
+        shell: bash
+        run: |
+          cp /etc/os-release artifacts/launchpad-build-records-linux.os-release
+          ubuntu_series="$(python -c 'import platform; print(platform.freedesktop_os_release()["VERSION_CODENAME"])')"
+          launchpad_status=0
+          python scripts/collect-launchpad-build-records.py --system-sources artifacts/system-source-linux/system-sources.json --series "$ubuntu_series" --output artifacts/launchpad-build-records-linux > artifacts/launchpad-build-records-linux.stdout.log 2> artifacts/launchpad-build-records-linux.stderr.log || launchpad_status=$?
+          printf '%s\n' "$launchpad_status" > artifacts/launchpad-build-records-linux.exit-code.txt
+          cat artifacts/launchpad-build-records-linux.stdout.log
+          cat artifacts/launchpad-build-records-linux.stderr.log >&2
+          exit "$launchpad_status"
       - name: Assemble actual Linux sources and producer records for the final payloads
-        if: ${{ !cancelled() && steps.prepared.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prepared.outcome == 'success' && steps.ubuntu_build_records.outcome == 'success' }}
         run: |
           python scripts/collect-native-build-plans.py --output artifacts/native-source-plan-linux
-          python scripts/assemble-source-plan.py --inputs artifacts/native-build-sources/source-plan.json --inputs .deps/qt-runtime-linux/source-plan-fragment.json --inputs artifacts/native-source-plan-linux/source-plan-fragment.json --inputs artifacts/system-source-linux/source-plan.json --receipt-plan artifacts/application-source-receipt/receipt-plan.json --stage artifacts/packages/linux-prepared --output artifacts/source-plan/linux
+          python scripts/assemble-source-plan.py --inputs artifacts/native-build-sources/source-plan.json --inputs .deps/qt-runtime-linux/source-plan-fragment.json --inputs artifacts/native-source-plan-linux/source-plan-fragment.json --inputs artifacts/system-source-linux/source-plan.json --inputs artifacts/launchpad-build-records-linux/materials-plan.json --receipt-plan artifacts/application-source-receipt/receipt-plan.json --stage artifacts/packages/linux-prepared --output artifacts/source-plan/linux
       - name: Finalize exact Linux bytes with the required source-completeness boundary
         id: packages
         if: ${{ !cancelled() && steps.prepared.outcome == 'success' }}
@@ -381,6 +395,11 @@ jobs:
             artifacts/source-plan/linux/
             artifacts/source-complete/linux/
             artifacts/system-source-linux/
+            artifacts/launchpad-build-records-linux/
+            artifacts/launchpad-build-records-linux.os-release
+            artifacts/launchpad-build-records-linux.stdout.log
+            artifacts/launchpad-build-records-linux.stderr.log
+            artifacts/launchpad-build-records-linux.exit-code.txt
             artifacts/native-source-plan-linux/
             artifacts/application-source-receipt/
             artifacts/native-build-sources/execution/

@@ -308,6 +308,10 @@
           {
             "path": "third_party/patches/portal-wlr/0006-cancel-delayed-capture-with-current-frame.patch",
             "sha256": "214fc8e39097c29b8be16f627cb9f561c58387e1c481f24f72bda2d4afa6713f"
+          },
+          {
+            "path": "third_party/patches/portal-wlr/0007-renew-copy-session-on-consumer-resume.patch",
+            "sha256": "dbc6402670d18a99c0493ba54fc47eef8183819d8773462c7c2d233cb5041520"
           }
         ]
       },

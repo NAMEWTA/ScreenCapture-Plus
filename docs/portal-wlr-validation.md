@@ -125,22 +125,65 @@ requires a live streaming instance and a held buffer. The negotiated FPS delay,
 graph trigger and every application pixel/identity assertion are unchanged.
 
 This is a local correction to the controlled producer, not an upstream release
-or a repair to the user's Portal service. Its native build and positive refresh
-still require a new CI result. The existing shared-source and independent
-first-frame probes remain the acceptance checks; neither discards an invalid
-first image or grants a second authorization to hide reconnect failures.
+or a repair to the user's Portal service. Native compilation and the three
+direct scenarios subsequently passed with this timer correction. The dedicated
+first-frame probe exposed the separate stationary-source problem below. The
+existing shared-source and independent first-frame probes remain the acceptance
+checks; neither discards an invalid first image or grants a second authorization
+to hide reconnect failures.
+
+## A stationary source after consumer replacement
+
+The [native refresh result](https://github.com/NAMEWTA/huhucapture/actions/runs/45811133095/job/139879170949)
+records 7,680 visible control pixels in the initial witness. After its consumer
+disconnects, the producer pauses, cancels the in-flight frame and removes the
+four old buffers. The replacement consumer negotiates four buffers and starts
+one ext frame. The source is now stationary: no damage or ready event follows
+before the unchanged five-second format deadline. The probe accepts no seed and
+still drains its source owners. The previous duplicate-frame protocol error is
+absent. Exact original evidence digests are retained in `upstream.json`.
+
+This is consistent with the locked protocol's
+[`capture` contract](https://github.com/wayland-mirror/wayland-protocols/blob/71da8bd7f9fd3ea7c5d87ad19ca087eeca137673/staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml):
+after the first successful frame of an ext copy session, a compositor may wait
+indefinitely for the source content to change. Declaring a client buffer fully
+damaged specifies which pixels need copying; it does not require new source
+content or force completion of that later frame.
+
+`0007-renew-copy-session-on-consumer-resume.patch` closes that backend copy
+session when a streaming PipeWire producer pauses, including when no buffer is
+held. It retains the selected target, Portal authorization and PipeWire node.
+The first resumed process creates a fresh backend session, then waits for the
+initial buffer constraints before it dequeues storage. Only the asynchronous
+`done` callback, after updating the constraints and checking the instance is
+still live, resumes the existing producer graph. This gives the new consumer
+the protocol's first-frame behavior without another authorization or synthetic
+screen damage.
+
+The new session's first batch is compared with the retained dimensions, formats,
+strides, device and modifiers. Identical constraints keep the existing PipeWire
+negotiation, avoiding a repeated pause/recreate cycle. Actual changes still use
+the original parameter-update path; no format or size restriction is relaxed.
+
+Pause cancels the prior frame and FPS timer; close clears partial constraints
+from the old session. Each temporary image-source proxy is released after
+session creation, as permitted by the locked
+[`destroy` contract](https://github.com/wayland-mirror/wayland-protocols/blob/71da8bd7f9fd3ea7c5d87ad19ca087eeca137673/staging/ext-image-capture-source/ext-image-capture-source-v1.xml).
+Initial setup also requires a complete constraint batch. Terminal or superseded
+callbacks cannot schedule capture. The client pixel, authorization-identity,
+socket-lifetime and first-frame assertions remain unchanged.
 
 ## Verification and support boundary
 
 The fixed source blobs and license have been checked by their Git object IDs.
-All six patches apply in order with `git apply --check`; the resulting source
+All seven patches apply in order with `git apply --check`; the resulting source
 bytes match the reviewed backports and local corrections. The diagnostic client
 compiled with the fixed Qt 6.12.1 SDK and strict GCC 14 warnings. This workspace
 lacks the compositor's host development headers and cannot create the private
-Unix sockets required by the native desktop. The five-patch producer compiled
+Unix sockets required by the native desktop. The six-patch producer compiled
 and passed direct capture, resize and daemon loss in the run above. Native
-compilation with 0006, shared-source refresh, the dedicated first-frame check
-and Release remain CI work; earlier results cannot cover these new changes.
+compilation with 0007, the dedicated stationary first-frame check and Release
+remain CI work; earlier results cannot cover these new changes.
 
 A previously executed native PipeWire client check confirmed that disconnect
 can emit `UNCONNECTED` synchronously. It did not use a compositor or validate

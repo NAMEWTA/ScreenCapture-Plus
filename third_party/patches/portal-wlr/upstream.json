@@ -223,6 +223,43 @@
         "nativeProducerCompilationAfter0006": false,
         "positiveRefreshAfter0006": false
       }
+    },
+    {
+      "file": "0007-renew-copy-session-on-consumer-resume.patch",
+      "sha256": "dbc6402670d18a99c0493ba54fc47eef8183819d8773462c7c2d233cb5041520",
+      "kind": "project-local backend copy-session renewal after 0001-0006",
+      "purpose": "A new consumer must receive the first current frame even when the authorized source is stationary; the protocol permits indefinite source-damage waiting for subsequent frames of one ext copy session.",
+      "changes": [
+        "Pause disarms retry and delayed capture, cancels the held frame, and closes the backend copy session even when no buffer is held. Portal authorization, selected target and PipeWire node are preserved.",
+        "The first resumed producer process creates the new ext session but cannot dequeue until its initial constraint batch has completed. The done callback updates parameters before enabling readiness and triggers only the existing live initialized producer.",
+        "A field-by-field comparison of dimensions, formats, strides, device and modifiers avoids re-advertising an identical first constraint batch and causing a pause/recreate cycle. Genuine changes retain the original negotiation path.",
+        "Session close discards partial pending constraints. Current constraints remain available to the existing PipeWire node. New session creation destroys its temporary image-source proxy after create_session.",
+        "Initial synchronous setup also rejects incomplete constraints; terminal or superseded callbacks cannot mark a session ready or schedule capture."
+      ],
+      "protocolSources": [
+        {
+          "repository": "https://gitlab.freedesktop.org/wayland/wayland-protocols.git",
+          "mirror": "https://github.com/wayland-mirror/wayland-protocols",
+          "commit": "71da8bd7f9fd3ea7c5d87ad19ca087eeca137673",
+          "path": "staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml",
+          "blob": "1ac43696a086262d707ab7363c22eb77e4f9d092",
+          "purpose": "Initial constraints must precede capture; only the first successful frame is exempt from indefinite source-content-change waiting."
+        },
+        {
+          "repository": "https://gitlab.freedesktop.org/wayland/wayland-protocols.git",
+          "mirror": "https://github.com/wayland-mirror/wayland-protocols",
+          "commit": "71da8bd7f9fd3ea7c5d87ad19ca087eeca137673",
+          "path": "staging/ext-image-capture-source/ext-image-capture-source-v1.xml",
+          "blob": "b31a5da3eb6d77eed9da508e388fae62232d9d8d",
+          "purpose": "The source proxy may be destroyed by the client at any time."
+        }
+      ],
+      "license": "MIT; unchanged retained upstream license.txt and project-local MIT adaptation",
+      "verification": {
+        "orderedSevenPatchReplay": true,
+        "nativeProducerCompilationAfter0007": false,
+        "positiveStationaryRefreshAfter0007": false
+      }
     }
   ],
   "validation": {
@@ -240,8 +277,8 @@
       "PipeWire 1.6.11 native client/socketpair experiment observed CONNECTING then UNCONNECTED within the pw_stream_disconnect call; it sent no fabricated daemon response and did not exercise capture."
     ],
     "notRun": [
-      "Local validation-desktop C compilation (host libdrm/gbm/systemd/inih development packages unavailable)",
-      "Producer compilation and positive resize after patch 0005; native first-frame refresh with all patches remains unverified.",
+      "Local validation-desktop C compilation (host libdrm/gbm/systemd/inih development packages unavailable); this workspace also rejects AF_UNIX bind/listen.",
+      "Native producer compilation and positive dedicated first-frame refresh with patch 0007; previous native results do not validate the new patch.",
       "GNOME, Plasma, physical displays and a user's external Portal installation",
       "Native legacy pre-buffer close, initial failed/dmabuf-only events, unsupported Y_INVERT, add-buffer failure and retry-starvation destruction under an actual compositor"
     ],
@@ -281,6 +318,23 @@
       "evidenceFiles": {
         "artifacts/cmake/qt-validation/live-source/Debug/capture/portal-wlr.log": "f88fb604bdaa60a55677623314da4b7b920f585b90793ecafe071ea91b808a4a",
         "artifacts/cmake/qt-validation/live-source/Debug/capture/result.json": "7d6054a990d6147642db104e3b0d2118f31bedd025842d2a26a9635e89720eb0"
+      }
+    },
+    "afterDelayedCaptureCancellation": {
+      "applicationCommit": "ca52ac77eccc53256f7fffa913aa514255d14dc2",
+      "run": 45811133095,
+      "job": 139879170949,
+      "artifact": 15114322815,
+      "artifactSha256": "caf860e487f13d0dd83a9ef7217cb84d3d8991c7d8256d0a8a8d0f40095333fa",
+      "producerCompiled": true,
+      "directCapturePassed": true,
+      "resizePassed": true,
+      "daemonLossPassed": true,
+      "dedicatedFirstFrameRefreshPassed": false,
+      "observed": "The initial witness contains 7680 control pixels. The old consumer pauses and removes its four buffers; the new consumer negotiates four buffers and starts exactly one ext frame. On the stationary source no damage or ready event follows before the unchanged five-second format deadline. The old duplicate-frame protocol error is absent. The probe fails without accepting a seed, and source owners drain.",
+      "evidenceFiles": {
+        "artifacts/cmake/qt-validation/live-refresh/Debug/capture/portal-wlr.log": "5a9060c560889c758267879faf26dc1c206bdc7ac5a2d2f7a7cdf2066bd76b7d",
+        "artifacts/cmake/qt-validation/live-refresh/Debug/capture/result.json": "3c73fb8f974c99167b6eb399bedfbca3b25e4808bf90b6730975847ebd71ea23"
       }
     }
   },

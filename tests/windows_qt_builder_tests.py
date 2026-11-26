@@ -105,7 +105,8 @@ class WindowsQtBuilderTests(unittest.TestCase):
         checked = mock.Mock()
         environment = {'GIT_CONFIG_NOSYSTEM': '1'}
         with mock.patch.object(bundle, 'git', side_effect=[pin['tagObject'].encode(), pin['commit'].encode()]), \
-                mock.patch.dict(build['restore_tools'].__globals__, {'checked_checkout': checked}):
+                mock.patch.dict(build['restore_tools'].__globals__, {'checked_checkout': checked}), \
+                mock.patch.dict(build['CHECKOUT'], {'install_policy': mock.Mock(), 'retain_policy': mock.Mock()}):
             build['restore_tools'](source, pin, recorder, environment)
         commands = [call.args[0] for call in recorder.run.call_args_list]
         fetched = [command for command in commands if 'fetch' in command]

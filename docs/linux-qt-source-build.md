@@ -55,6 +55,15 @@ python scripts/build-linux-qt.py \
 目录，不能嵌套在源码或原 SDK 中，也不能包含它们。失败后的目录和日志保留；
 下一次执行必须选择另一个新目录，不能覆盖原记录。
 
+Qt 模块、Qttools 与 ICU 共用
+[原始 Git 字节检出配置](windows-qt-source-build.md#原始-git-字节的检出配置)。
+`core.autocrlf=false` 本身不会覆盖上游 `eol=crlf`，Linux 上同样可能转换 ICU 的
+`vendor/double-conversion/upstream/msvc/testrunner.cmd`。恢复入口在新空仓库
+第一次 checkout 前安装 `.git/info/attributes`，关闭 text/eol/filter/ident/
+working-tree-encoding 内容转换，原 LF 和原 CRLF 分别保持原始字节。实际
+producer records 保留 policy 和 helper，构建前后核验且不修补旧输入；严格的
+Git blob 比较仍保持不变。这是明确记录的新源码构建配置，不代表重现原 SDK。
+
 ## 六个真实来源生产者
 
 | 顺序 | 固定源码 | 主要实际输出 |

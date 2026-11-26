@@ -1,0 +1,283 @@
+From: huhucapture contributors <huhucapture@users.noreply.github.com>
+Subject: [PATCH] Renew the backend copy session before a consumer resumes
+
+Project-local correction against Portal-wlr 0.8.1 plus patches 0001-0006.
+The locked ext-image-copy-capture protocol permits an indefinite wait on
+unchanged content after a session's first successful frame. A new PipeWire
+consumer therefore needs a fresh backend copy session of the same target.
+The Portal authorization, selected source and PipeWire node remain alive.
+
+Close the copy session on STREAMING-to-PAUSED even without a held buffer.
+Before dequeue, create the replacement session and wait for its asynchronous
+initial constraints.done. Only then resume the existing producer graph.
+Cancel the old frame/FPS work and clear partial constraints on close; retain
+the current negotiated constraints for the existing PipeWire node. Release
+the temporary source proxy after the new session retains the source.
+
+This introduces no synthetic damage, replacement pixels, first-frame drop,
+new authorization, relaxed deadline or changed native acceptance assertion.
+License: MIT, as the unchanged upstream LICENSE and this project.
+
+Protocol: wayland-protocols 1.41, 71da8bd7f9fd3ea7c5d87ad19ca087eeca137673
+  ext-image-copy-capture-v1.xml blob 1ac43696a086262d707ab7363c22eb77e4f9d092
+  ext-image-capture-source-v1.xml blob b31a5da3eb6d77eed9da508e388fae62232d9d8d
+
+diff --git a/include/ext_image_copy.h b/include/ext_image_copy.h
+index 02d24ab4e2ba95cfd18169496736352b0a21dc81..d11a7e256d14d28433cd63abd960fd2a0999ca6e 100644
+--- a/include/ext_image_copy.h
++++ b/include/ext_image_copy.h
+@@ -6,6 +6,7 @@
+ void xdpw_ext_ic_frame_capture(struct xdpw_screencast_instance *cast);
+ void xdpw_ext_ic_frame_cancel(struct xdpw_screencast_instance *cast);
+ int xdpw_ext_ic_session_init(struct xdpw_screencast_instance *cast);
++bool xdpw_ext_ic_session_ready(struct xdpw_screencast_instance *cast);
+ void xdpw_ext_ic_session_close(struct xdpw_screencast_instance *cast);
+ 
+ #endif
+diff --git a/include/screencast_common.h b/include/screencast_common.h
+index a905c7c280f62eb180c7d2c05a80a7492059c838..87e9ffc8f2a51776fa769f9dc3849a95b4c56f1c 100644
+--- a/include/screencast_common.h
++++ b/include/screencast_common.h
+@@ -171,6 +171,7 @@ struct xdpw_buffer_constraints {
+ struct xdpw_screencast_ext_session {
+ 	struct ext_image_copy_capture_session_v1 *capture_session;
+ 	struct ext_image_copy_capture_frame_v1 *frame;
++	bool constraints_ready;
+ };
+ 
+ struct xdpw_screencast_wlr_session {
+diff --git a/include/wlr_screencast.h b/include/wlr_screencast.h
+index 24f7ca1c2804109b038872d69732411179e44084..4298dcd8295f013c302a9b80f631e36f7338b29a 100644
+--- a/include/wlr_screencast.h
++++ b/include/wlr_screencast.h
+@@ -27,6 +27,7 @@ bool xdpw_wlr_target_from_data(struct xdpw_screencast_context *ctx, struct xdpw_
+ void xdpw_wlr_frame_capture(struct xdpw_screencast_instance *cast);
+ void xdpw_wlr_frame_cancel(struct xdpw_screencast_instance *cast);
+ int xdpw_wlr_session_init(struct xdpw_screencast_instance *cast);
++bool xdpw_wlr_session_ready(struct xdpw_screencast_instance *cast);
+ void xdpw_wlr_session_close(struct xdpw_screencast_instance *cast);
+ 
+ #endif
+diff --git a/src/screencast/ext_image_copy.c b/src/screencast/ext_image_copy.c
+index 2a24b5d801e7b0b190bea1ac5755186fed0cf6ec..f206b02287ef1aaf4b727e0e4ea75bef7726f472 100644
+--- a/src/screencast/ext_image_copy.c
++++ b/src/screencast/ext_image_copy.c
+@@ -117,9 +117,51 @@ static void ext_session_dmabuf_format(void *data,
+ 	free(fmt_name);
+ }
+ 
++static bool ext_constraints_equal(const struct xdpw_buffer_constraints *left,
++		const struct xdpw_buffer_constraints *right) {
++	if (left->width != right->width || left->height != right->height ||
++			left->dmabuf_device != right->dmabuf_device ||
++			left->shm_formats.size != right->shm_formats.size ||
++			left->dmabuf_format_modifier_pairs.size != right->dmabuf_format_modifier_pairs.size) {
++		return false;
++	}
++	const struct xdpw_shm_format *lfmt, *rfmt;
++	wl_array_for_each(lfmt, &left->shm_formats) {
++		bool found = false;
++		wl_array_for_each(rfmt, &right->shm_formats) {
++			if (lfmt->fourcc == rfmt->fourcc && lfmt->stride == rfmt->stride) {
++				found = true;
++				break;
++			}
++		}
++		if (!found) {
++			return false;
++		}
++	}
++	const struct xdpw_format_modifier_pair *lpair, *rpair;
++	wl_array_for_each(lpair, &left->dmabuf_format_modifier_pairs) {
++		bool found = false;
++		wl_array_for_each(rpair, &right->dmabuf_format_modifier_pairs) {
++			if (lpair->fourcc == rpair->fourcc && lpair->modifier == rpair->modifier) {
++				found = true;
++				break;
++			}
++		}
++		if (!found) {
++			return false;
++		}
++	}
++	return true;
++}
++
+ static void ext_session_done(void *data,
+ 		struct ext_image_copy_capture_session_v1 *ext_image_copy_capture_session_v1) {
+ 	struct xdpw_screencast_instance *cast = data;
++	if (cast->destroy_pending ||
++			ext_image_copy_capture_session_v1 != cast->ext_session.capture_session) {
++		return;
++	}
++	bool first_constraints = !cast->ext_session.constraints_ready;
+ 
+ 	logprint(TRACE, "ext: done handler");
+ 
+@@ -131,16 +173,28 @@ static void ext_session_done(void *data,
+ 		fmt->stride = bpp * cast->pending_constraints.width;
+ 	}
+ 
++	bool reuse_constraints = first_constraints &&
++		ext_constraints_equal(&cast->current_constraints, &cast->pending_constraints);
+ 	if (xdpw_buffer_constraints_move(&cast->current_constraints, &cast->pending_constraints)) {
+ 		logprint(DEBUG, "ext: buffer constraints changed");
+ 		xdpw_gbm_device_update(cast);
+-		pwr_update_stream_param(cast);
+-		return;
++		// Re-advertising an identical first batch can pause the node again.
++		// Real constraint changes keep the existing renegotiation path.
++		if (!reuse_constraints) {
++			pwr_update_stream_param(cast);
++		}
+ 	}
+ 
+-	if (!cast->initialized) {
++	if (cast->destroy_pending ||
++			ext_image_copy_capture_session_v1 != cast->ext_session.capture_session) {
+ 		return;
+ 	}
++	cast->ext_session.constraints_ready = true;
++	if (first_constraints && cast->initialized && cast->pwr_stream_state && cast->stream) {
++		// A resumed session is asynchronous. Its first process callback waits
++		// here before it can dequeue a buffer or send capture requests.
++		pw_stream_trigger_process(cast->stream);
++	}
+ }
+ 
+ static void ext_session_stopped(void *data,
+@@ -254,6 +308,7 @@ static const struct ext_image_copy_capture_frame_v1_listener ext_frame_listener
+ };
+ 
+ static void ext_register_session_cb(struct xdpw_screencast_instance *cast) {
++	cast->ext_session.constraints_ready = false;
+ 	struct ext_image_capture_source_v1 *source = NULL;
+ 	switch (cast->target->type) {
+ 	case MONITOR:
+@@ -274,13 +329,13 @@ static void ext_register_session_cb(struct xdpw_screencast_instance *cast) {
+ 			cast->target->with_cursor ? EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_OPTIONS_PAINT_CURSORS : 0);
+ 	ext_image_copy_capture_session_v1_add_listener(cast->ext_session.capture_session,
+ 			&ext_session_listener, cast);
++	// The capture session retains its source independently of this proxy.
++	ext_image_capture_source_v1_destroy(source);
+ 	logprint(TRACE, "ext: session callbacks registered");
+ }
+ 
+ static void ext_register_frame_cb(struct xdpw_screencast_instance *cast) {
+-	if (!cast->ext_session.capture_session) {
+-		ext_register_session_cb(cast);
+-	}
++	assert(cast->ext_session.capture_session && cast->ext_session.constraints_ready);
+ 	cast->ext_session.frame = ext_image_copy_capture_session_v1_create_frame(
+ 			cast->ext_session.capture_session);
+ 	ext_image_copy_capture_frame_v1_add_listener(cast->ext_session.frame,
+@@ -303,6 +358,10 @@ static void ext_register_frame_cb(struct xdpw_screencast_instance *cast) {
+ 
+ void xdpw_ext_ic_frame_capture(struct xdpw_screencast_instance *cast) {
+ 	logprint(TRACE, "ext: start screencopy");
++	if (cast->destroy_pending || !cast->pwr_stream_state ||
++			!cast->ext_session.constraints_ready) {
++		return;
++	}
+ 	if (cast->current_frame.xdpw_buffer == NULL) {
+ 		logprint(ERROR, "ext: started frame without buffer");
+ 		return;
+@@ -320,10 +379,24 @@ void xdpw_ext_ic_frame_cancel(struct xdpw_screencast_instance *cast) {
+ 
+ void xdpw_ext_ic_session_close(struct xdpw_screencast_instance *cast) {
+ 	xdpw_ext_ic_frame_cancel(cast);
++	cast->ext_session.constraints_ready = false;
+ 	if (cast->ext_session.capture_session) {
+ 		ext_image_copy_capture_session_v1_destroy(cast->ext_session.capture_session);
+ 		cast->ext_session.capture_session = NULL;
+ 	}
++	// A partial constraint batch belongs only to the session just destroyed.
++	xdpw_buffer_constraints_finish(&cast->pending_constraints);
++	xdpw_buffer_constraints_init(&cast->pending_constraints);
++}
++
++bool xdpw_ext_ic_session_ready(struct xdpw_screencast_instance *cast) {
++	if (cast->destroy_pending) {
++		return false;
++	}
++	if (!cast->ext_session.capture_session) {
++		ext_register_session_cb(cast);
++	}
++	return cast->ext_session.constraints_ready;
+ }
+ 
+ int xdpw_ext_ic_session_init(struct xdpw_screencast_instance *cast) {
+@@ -334,8 +407,11 @@ int xdpw_ext_ic_session_init(struct xdpw_screencast_instance *cast) {
+ 	}
+ 	ext_register_session_cb(cast);
+ 
+-	// process at least one frame so that we know
+-	// some of the metadata required for the pipewire
+-	// remote state connected event
+-	return wl_display_roundtrip(cast->ctx->state->wl_display);
++	// Initial stream creation also needs the complete first constraint batch.
++	if (wl_display_roundtrip(cast->ctx->state->wl_display) < 0 ||
++			!cast->ext_session.constraints_ready) {
++		xdpw_ext_ic_session_close(cast);
++		return -1;
++	}
++	return 0;
+ }
+diff --git a/src/screencast/pipewire_screencast.c b/src/screencast/pipewire_screencast.c
+index 4534908ff4d7c988254b934fe5242dd2cd3dec8a..cbd26921b898caa09343a26365f9dff69adfd170 100644
+--- a/src/screencast/pipewire_screencast.c
++++ b/src/screencast/pipewire_screencast.c
+@@ -377,12 +377,19 @@ static void pwr_handle_stream_state_changed(void *data,
+ 		pw_stream_trigger_process(cast->stream);
+ 		break;
+ 	case PW_STREAM_STATE_PAUSED:
+-		if (old == PW_STREAM_STATE_STREAMING && cast->current_frame.pw_buffer) {
+-			if (!xdpw_pwr_enqueue_buffer(cast)) {
++		cast->pwr_stream_state = false;
++		pwr_disarm_process_retry(cast);
++		if (old == PW_STREAM_STATE_STREAMING) {
++			if (cast->current_frame.pw_buffer && !xdpw_pwr_enqueue_buffer(cast)) {
+ 				return;
+ 			}
++			xdpw_wlr_frame_cancel(cast);
++			// An ext session may wait forever for content changes after its
++			// first successful frame. Resume needs a fresh backend session,
++			// even when pause found no held buffer. Authorization and node stay.
++			xdpw_wlr_session_close(cast);
+ 		}
+-		// fall through
++		break;
+ 	default:
+ 		cast->pwr_stream_state = false;
+ 		pwr_disarm_process_retry(cast);
+@@ -661,6 +668,11 @@ static void pwr_handle_stream_on_process(void *data) {
+ 		return;
+ 	}
+ 
++	if (!xdpw_wlr_session_ready(cast)) {
++		// ext-image-copy capture is forbidden before its initial done event.
++		return;
++	}
++
+ 	xdpw_pwr_dequeue_buffer(cast);
+ 	if (!cast->current_frame.pw_buffer) {
+ 		logprint(WARN, "pipewire: unable to export buffer, dropping frame");
+diff --git a/src/screencast/wlr_screencast.c b/src/screencast/wlr_screencast.c
+index fbff4f2ffa99d56e374531eb9a485a921dba78ca..bb1f811308ac8d258e2eb95ba95df4497e36afa6 100644
+--- a/src/screencast/wlr_screencast.c
++++ b/src/screencast/wlr_screencast.c
+@@ -83,6 +83,14 @@ void xdpw_wlr_session_close(struct xdpw_screencast_instance *cast) {
+ 	}
+ }
+ 
++bool xdpw_wlr_session_ready(struct xdpw_screencast_instance *cast) {
++	if (cast->ctx->ext_image_copy_capture_manager
++			&& cast->ctx->ext_output_image_capture_source_manager) {
++		return xdpw_ext_ic_session_ready(cast);
++	}
++	return !cast->destroy_pending;
++}
++
+ int xdpw_wlr_session_init(struct xdpw_screencast_instance *cast) {
+ 	if (cast->ctx->ext_image_copy_capture_manager
+ 			&& cast->ctx->ext_output_image_capture_source_manager) {

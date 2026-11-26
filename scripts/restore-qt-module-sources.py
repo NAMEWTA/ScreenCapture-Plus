@@ -10,11 +10,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+CHECKOUT = runpy.run_path(str(ROOT / 'build/package/source_checkout.py'))
+GIT = CHECKOUT['COLLECTOR']
 
 
 def require(condition, message):
@@ -59,8 +63,7 @@ def pinned_modules(qt, platform_name):
 
 
 def run(arguments, directory, log):
-    environment = os.environ.copy()
-    environment['GIT_TERMINAL_PROMPT'] = '0'
+    environment = GIT['git_environment']()
     environment['LC_ALL'] = 'C.UTF-8'
     log.write(('Running: ' + ' '.join(map(str, arguments)) + '\n').encode('utf-8')); log.flush()
     subprocess.run(list(map(str, arguments)), cwd=directory, env=environment,
@@ -68,8 +71,7 @@ def run(arguments, directory, log):
 
 
 def git_output(source, *arguments):
-    return subprocess.check_output(['git', '-C', str(source), *arguments], text=True,
-                                   encoding='utf-8', errors='strict').strip()
+    return GIT['git'](source, *arguments).decode('utf-8', errors='strict').strip()
 
 
 def restore(workspace, modules, report):
@@ -78,13 +80,17 @@ def restore(workspace, modules, report):
         source = workspace / name
         print('Restoring original Qt source: ' + name, flush=True)
         with (workspace / (name + '.git.log')).open('xb') as log:
-            run(['git', 'init', source], workspace, log)
-            # Do not turn original license/source LF bytes into a working-copy
-            # platform conversion. Git archive later retains original Git data.
-            run(['git', 'config', 'core.autocrlf', 'false'], source, log)
-            run(['git', 'remote', 'add', 'origin', module['repository']], source, log)
-            run(['git', 'fetch', '--depth=1', '--no-tags', 'origin', module['commit']], source, log)
-            run(['git', '-c', 'advice.detachedHead=false', 'checkout', '--detach', 'FETCH_HEAD'], source, log)
+            source.mkdir()
+            run(GIT['git_command'](source, 'init', '--quiet'), source, log)
+            run(GIT['git_command'](source, 'config', 'core.autocrlf', 'false'), source, log)
+            # core.autocrlf=false alone is overridden by upstream eol=crlf.
+            # Install the explicit raw-blob profile before the first checkout.
+            profile = CHECKOUT['install_policy'](source)
+            log.write(('Original Git source-byte profile: ' + json.dumps(profile) + '\n').encode('utf-8')); log.flush()
+            run(GIT['git_command'](source, 'remote', 'add', 'origin', module['repository']), source, log)
+            run(GIT['git_command'](source, '-c', 'protocol.https.allow=always', 'fetch', '--depth=1',
+                                  '--no-tags', 'origin', module['commit']), source, log)
+            run(GIT['git_command'](source, '-c', 'advice.detachedHead=false', 'checkout', '--detach', 'FETCH_HEAD'), source, log)
             actual = git_output(source, 'rev-parse', 'HEAD')
             require(actual == module['commit'], 'Fetched Qt revision differs from the dependency lock: ' + name)
             tag_evidence = None
@@ -94,7 +100,8 @@ def restore(workspace, modules, report):
                 # Never create a local tag to make a selected commit appear to
                 # have upstream release evidence.
                 reference = 'refs/tags/' + tag
-                run(['git', 'fetch', '--depth=1', '--no-tags', 'origin', reference + ':' + reference], source, log)
+                run(GIT['git_command'](source, '-c', 'protocol.https.allow=always', 'fetch', '--depth=1',
+                                      '--no-tags', 'origin', reference + ':' + reference), source, log)
                 tag_commit = git_output(source, 'rev-parse', reference + '^{commit}')
                 require(tag_commit == actual, 'The actual official Qt release tag points to a different commit')
                 tag_evidence = {'reference': reference, 'object': git_output(source, 'rev-parse', reference),
@@ -102,8 +109,10 @@ def restore(workspace, modules, report):
             require(git_output(source, 'status', '--porcelain', '--untracked-files=normal') == '',
                     'The newly restored Qt source is not clean: ' + name)
             require(git_output(source, 'rev-parse', 'HEAD') == module['commit'], 'Qt checkout changed during restoration')
+            require(CHECKOUT['verify_policy'](source) == profile, 'The original Qt checkout profile changed')
             report['modules'].append({**module, 'sourceDirectory': str(source),
                                       'tree': git_output(source, 'rev-parse', 'HEAD^{tree}'),
+                                      'sourceCheckoutProfile': profile,
                                       'officialTag': tag_evidence, 'sdkSourceBinding': 'pending-actual-sdk-collector'})
 
 
@@ -127,7 +136,7 @@ def main():
         report = {'schemaVersion': 1, 'qtVersion': qt['version'], 'platform': options.platform,
                   'dependencyLockSha256': hashlib.sha256(lock_bytes).hexdigest(),
                   'restorationComplete': False, 'correspondingSourceComplete': False,
-                  'scope': 'Original fixed Git modules; SDK binding and source archive are verified by the material collector',
+                  'scope': 'Original fixed Git blob bytes, without checkout conversion; SDK binding and source archive remain separate proof',
                   'modules': [], 'failures': [], 'outstandingSourceFamilies': ['qt-sdk-icu', 'qttranslations-sdk-source-binding']}
         restore(workspace, modules, report)
         require(lock_path.read_bytes() == lock_bytes, 'The dependency lock changed during Qt source restoration')

@@ -52,6 +52,34 @@ Qttools 源由新空 workspace 中的受控 Git 操作取得，完整 commit 与
 origin 精确匹配；脚本不 reset、clean 或修补这些原输入。所有 source build receipts
 使用同一 `source_receipts.py`，在配置前和构建结束后独立核对源树。
 
+### 原始 Git 字节的检出配置
+
+此源码构建采用 `original-git-blob-bytes-v1`：在全新独立 Git 仓库第一次
+checkout 之前，`build/package/source_checkout.py` 写入受控的
+`.git/info/attributes`，内容为：
+
+```gitattributes
+* -text -eol -filter -ident -working-tree-encoding
+```
+
+仅设置 `core.autocrlf=false` 不足以保存原始字节；上游 `.gitattributes` 中的
+`eol=crlf` 仍会转换文件，例如 Qt 的 `bin/qmake-and-qtpaths-wrapper.bat.in`。
+Git 官方文档说明
+[`info/attributes` 具有最高属性优先级](https://git-scm.com/docs/gitattributes)。
+这里显式禁用工作树内容转换，使原 LF 和原 CRLF 都保持其 Git blob 字节，
+与 `git archive` 的原始文件内容一致；不是将所有文件转换为同一种换行。
+
+该 helper 拒绝已检出的工作树、非空目录、已有 policy 或链接到别处的 Git
+管理目录，不修补旧 `.deps`。它不改上游 `.gitattributes`、Git index、commit
+或 source hash。各真实 Qt/ICU producer 保留 policy 和 helper 的原字节，
+构建前后再次核验 policy。原 source collector 的逐文件 Git 字节检查保持不变；
+源码或 policy 被改动仍然失败。新构建报告明确记录此配置与原厂 SDK 的差异，
+不将其宣称为原厂 SDK 的逐字节复刻。
+
+`tests/source_checkout_tests.py` 用真实 Git 仓库验证普通 checkout 的转换失败、
+原 LF/CRLF 与 `.bat.in`/`.cmd` 的完整保留、干净状态和 index/refs 不变，以及
+ident、encoding、filter 与篡改拒绝。这些合同不代表原生 Qt 已重新编译成功。
+
 固定 Qt 源表明 `windeployqt` 已属于
 [qtbase 的 tools](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/tools/CMakeLists.txt)，
 不是为该工具引入另一套 Qttools。Qttools 的
