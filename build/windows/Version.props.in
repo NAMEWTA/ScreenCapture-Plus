@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Generated from build/version.json by scripts/version_source.py. Do not edit. -->
+  <PropertyGroup>
+    <_HuhuVersionSource>$(MSBuildThisFileDirectory)..\version.json</_HuhuVersionSource>
+    <_HuhuVersionTemplate>$(MSBuildThisFileDirectory)Version.props.in</_HuhuVersionTemplate>
+    <_HuhuVersionCompatibility>$(MSBuildThisFileDirectory)..\..\VERSION</_HuhuVersionCompatibility>
+    <_HuhuVersionSourceSha256>@HUHU_VERSION_SOURCE_SHA256@</_HuhuVersionSourceSha256>
+    <_HuhuVersionTemplateSha256>@HUHU_VERSION_TEMPLATE_SHA256@</_HuhuVersionTemplateSha256>
+    <_HuhuGeneratedProductVersion>@HUHU_PRODUCT_VERSION@</_HuhuGeneratedProductVersion>
+    <VersionMajor Condition="'$(VersionMajor)'==''">@HUHU_VERSION_MAJOR@</VersionMajor>
+    <VersionMinor Condition="'$(VersionMinor)'==''">@HUHU_VERSION_MINOR@</VersionMinor>
+    <VersionPatch Condition="'$(VersionPatch)'==''">@HUHU_VERSION_PATCH@</VersionPatch>
+    <VersionRevision Condition="'$(VersionRevision)'==''">0</VersionRevision>
+  </PropertyGroup>
+  <Target Name="ValidateHuhuProductVersion" BeforeTargets="PrepareForBuild;ResourceCompile">
+    <Error Condition="!Exists('$(_HuhuVersionSource)') or !Exists('$(_HuhuVersionTemplate)') or !Exists('$(_HuhuVersionCompatibility)')" Text="Version inputs are missing. Run python scripts/version_source.py --write from a complete checkout." />
+    <GetFileHash Files="$(_HuhuVersionSource)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_HuhuActualVersionSourceSha256" />
+    </GetFileHash>
+    <GetFileHash Files="$(_HuhuVersionTemplate)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_HuhuActualVersionTemplateSha256" />
+    </GetFileHash>
+    <Error Condition="'$(_HuhuActualVersionSourceSha256)'!='$(_HuhuVersionSourceSha256)' or '$(_HuhuActualVersionTemplateSha256)'!='$(_HuhuVersionTemplateSha256)'" Text="Generated Version.props is stale. Run python scripts/version_source.py --write after editing build/version.json." />
+    <PropertyGroup>
+      <_HuhuVersionDocument>$([System.IO.File]::ReadAllText('$(_HuhuVersionSource)'))</_HuhuVersionDocument>
+      <_HuhuSourceProductVersion>$([System.Text.RegularExpressions.Regex]::Replace('$(_HuhuVersionDocument)', '(?s)\A.*&quot;version&quot;\s*:\s*&quot;([0-9]+\.[0-9]+\.[0-9]+)&quot;.*\z', '$1'))</_HuhuSourceProductVersion>
+      <_HuhuCompatibilityProductVersion>$([System.IO.File]::ReadAllText('$(_HuhuVersionCompatibility)').Trim())</_HuhuCompatibilityProductVersion>
+    </PropertyGroup>
+    <Error Condition="'$(_HuhuSourceProductVersion)'!='$(_HuhuGeneratedProductVersion)' or '$(_HuhuCompatibilityProductVersion)'!='$(_HuhuGeneratedProductVersion)'" Text="Generated version values disagree with build/version.json. Run python scripts/version_source.py --write." />
+    <Error Condition="'$(VersionMajor).$(VersionMinor).$(VersionPatch)'!='$(_HuhuGeneratedProductVersion)' or '$(VersionRevision)'!='0'" Text="Build version overrides must match build/version.json with revision zero." />
+  </Target>
+  <ItemDefinitionGroup>
+    <ResourceCompile>
+      <PreprocessorDefinitions>HUHU_VERSION_MAJOR=$(VersionMajor);HUHU_VERSION_MINOR=$(VersionMinor);HUHU_VERSION_PATCH=$(VersionPatch);HUHU_VERSION_REVISION=$(VersionRevision);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+  </ItemDefinitionGroup>
+</Project>

@@ -1,0 +1,98 @@
+name: Publish the declared legacy Windows bridge
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: 'Exact current main source with reviewed bridge-publish.json and matching version'
+        type: string
+        required: true
+      windows_run:
+        description: 'Successful same-source retained Windows production workflow run ID'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Both publication paths serialize stable/latest changes. Neither rebuilds or
+# uploads another platform's assets and neither resumes an existing draft.
+concurrency:
+  group: huhucapture-stable-release
+  cancel-in-progress: false
+
+jobs:
+  admission:
+    if: github.ref == 'refs/heads/main' && github.repository == 'NAMEWTA/huhucapture'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source_commit: ${{ steps.admit.outputs.source_commit }}
+      package_id: ${{ steps.admit.outputs.package_id }}
+      evidence_id: ${{ steps.admit.outputs.evidence_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+      - name: Admit only the declared successful old Windows production artifacts
+        id: admit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WINDOWS_RUN: ${{ inputs.windows_run }}
+        run: python scripts/publish-bridge-release.py admit --source-commit "$SOURCE_COMMIT" --windows-run "$WINDOWS_RUN"
+
+  publish:
+    needs: admission
+    runs-on: windows-2025
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.admission.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+      - name: Restore the exact tested five-asset Windows package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.admission.outputs.package_id }}
+          run-id: ${{ inputs.windows_run }}
+          github-token: ${{ github.token }}
+          path: artifacts/bridge-release/package
+          merge-multiple: true
+      - name: Restore the matching original native regression evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.admission.outputs.evidence_id }}
+          run-id: ${{ inputs.windows_run }}
+          github-token: ${{ github.token }}
+          path: artifacts/bridge-release/evidence
+          merge-multiple: true
+      - name: Verify actual legacy assets and controlled bridge contract
+        env:
+          SOURCE_COMMIT: ${{ needs.admission.outputs.source_commit }}
+        run: |
+          python scripts/publish-bridge-release.py verify --source-commit $env:SOURCE_COMMIT --package artifacts/bridge-release/package --evidence artifacts/bridge-release/evidence
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Publish only the independently declared legacy Windows bridge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ needs.admission.outputs.source_commit }}
+          WINDOWS_RUN: ${{ inputs.windows_run }}
+        run: |
+          ./scripts/publish-release.ps1 -SourceCommit $env:SOURCE_COMMIT -WindowsRun $env:WINDOWS_RUN -PackageDirectory artifacts/bridge-release/package -EvidenceDirectory artifacts/bridge-release/evidence

@@ -1,16 +1,14 @@
 # 构建与发布
 
-本地和 GitHub Actions 使用同一组脚本，避免本地可构建、发布时却采用另一套依赖与参数。默认构建版本为 **v0.0.5**，Windows 文件版本为 **0.0.5.0**。版本号来自 [Version.props](../build/windows/Version.props)，发布意图来自 [publish.json](../releases/publish.json)。
+本地与 GitHub Actions 使用同一套旧 Windows 生产入口。此版本准备 **v0.0.6 更新桥**，Windows 文件版本为 **0.0.6.0**；实际公开版本以 [Releases](https://github.com/NAMEWTA/huhucapture/releases) 为准。唯一手写版本源为 [build/version.json](../build/version.json)，`VERSION` 与 `build/windows/Version.props` 是受检的派生文件。
 
-## 环境与依赖决策
+## 环境与依赖
 
-目标为 Windows 10 1803 及以上、x64。开发环境使用 Visual Studio 2026 的 C++ 桌面组件、MSVC v145、ATL、Windows SDK，以及 PowerShell 7、Git 和 Rustup。依赖版本与提交的唯一来源是 [依赖锁文件](../build/dependencies.lock.json)。
+目标仍为 Windows 10 1803 及以上、x64。使用 Visual Studio 2026 的 C++ 桌面组件、MSVC v145、ATL、Windows SDK、PowerShell 7、Git 和 Rustup；Python 3.13 用于维护、受控 HTTP 测试与发布验证。依赖版本及来源由 [依赖锁文件](../build/dependencies.lock.json) 指定。
 
-Ling 和 Yoga 通过仓库工程包装并建立项目引用，gifski 构建为 Rust 静态库。应用和依赖使用静态 CRT，保持单 EXE 分发；Debug 同样使用 `/MT` 以匹配静态依赖，同时保留符号、运行时检查和未优化调试信息。不要通过加入运行时 DLL 掩盖不一致的 CRT 配置。
+Ling、Yoga 和 gifski 静态链接。应用及依赖使用 `/MT`，Debug 仍保留符号、运行时检查和未优化信息。桥接复用 Windows WinRT 网络与文件 API，不引入 Qt 或新的运行库。升级依赖仍须修改锁文件、许可和实际编译验证，不能修改恢复目录伪装升级。
 
-恢复脚本核对远端、固定提交和本地修改。升级依赖应更新锁文件、检查 API 与许可，执行原生构建；不能只修改 `.deps` 中的源码。新增架构需补齐完整依赖链和验收，不只是增加一个 MSBuild 平台名。
-
-## 本地入口
+## 本地验证入口
 
 在仓库根目录执行：
 
@@ -19,81 +17,55 @@ pwsh ./scripts/build.ps1 -Configuration Release
 pwsh ./scripts/test.ps1
 pwsh ./scripts/test-windows.ps1
 pwsh ./scripts/smoke.ps1
-pwsh ./scripts/test-windows.ps1 -Gui
-pwsh ./scripts/test-windows.ps1 -Update
+pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore
+pwsh ./scripts/test-legacy-update.ps1 -Configuration Debug
 pwsh ./scripts/package.ps1
+pwsh ./scripts/test-windows.ps1 -Gui
+pwsh ./scripts/test-legacy-update.ps1 -Gui
+pwsh ./scripts/test-windows.ps1 -Update
 ```
 
-Release EXE 位于 `artifacts/bin/x64/Release/huhucapture.exe`。首次依赖恢复后，可以打开 `huhucapture.slnx` 调试。改动构建参数或依赖时还执行：
+Release EXE 在 `artifacts/bin/x64/Release/huhucapture.exe`。首次恢复依赖后可以打开 `huhucapture.slnx`。产物放在 `artifacts`，依赖在 `.deps`，均不提交。
+
+`test.ps1` 编译并执行全部标准 C++20 核心测试，解析实际 PowerShell 脚本，还执行版本源与发布准入测试。Windows 版本源检查实际调用 MSBuild 和 PowerShell，拒绝过期派生文件及版本参数覆盖。Linux 上纯规则测试不证明 Windows 编译、原生窗口、网络下载或设备行为已通过，具体边界见 [验证指南](validation.md)。
+
+`test-legacy-update.ps1` 编译并运行生产 WinRT 下载器 probe，受控 HTTP 服务提供真实旧 EXE 与大于 64 MiB 的完整包传输 fixture；`-Gui` 另驱动真实关于页、实际 Downloads 和六种语言。该 fixture 不是可安装 Qt 产品。`test-windows.ps1 -Update` 仍点击正式下载按钮访问实际 GitHub latest，联网失败会使检查失败，不能用 fixture 替代。
+
+## 单一版本源
+
+版本变更只编辑 `build/version.json`，随后明确生成并核验派生文件：
 
 ```powershell
-pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore
+python scripts/version_source.py --write
+python scripts/version_source.py --check
 ```
 
-生成物集中在 `artifacts`，依赖恢复到 `.deps`，两者均不提交。测试的能力边界、证据和物理设备验收见 [验证指南](validation.md)。
+稳定版本为规范 `MAJOR.MINOR.PATCH`，每段为 0 至 65535，Windows 第四段固定 0。MSBuild 导入的 `Version.props` 校验源文件和模板的真实哈希，以及 `VERSION`、资源版本的相等性。构建不自动修复过期生成文件；`build.ps1 -Version` 和 `package.ps1 -Version` 只能核对同一个版本。
 
-`test-windows.ps1 -Update` 会访问真实 GitHub 稳定 Release，并通过正式关于页将 EXE 下载到系统 Downloads；测试只清理本次拥有的下载。该模式使用独立的 90 秒测试进程超时，常规 `-Gui` 保持 45 秒。联网失败会使更新下载检查失败，不能用既有 artifact 替代这项门槛。运行时的文件与失败规则见 [更新下载](updates.md)。
+## 原 Windows 五项资产
 
-## 发行资产的分工
-
-| 资产 | 发布理由 |
+| 资产 | 用途与必要条件 |
 | --- | --- |
-| `huhucapture.exe` | 用户直接运行的单文件，也是更新器查找的固定资产名 |
-| `huhucapture-<tag>-windows-x64.zip` | 同一 EXE 加语言、许可/声明与构建信息，适合完整保存分发内容 |
-| `huhucapture-<tag>-windows-x64-symbols.zip` | 同构建 PDB，供调试器解释地址与调用栈，单独分发以控制普通用户下载量 |
-| `build-info.json` | 源提交、版本、架构、工具链、锁定依赖和 EXE 哈希，为故障报告与构建追溯提供依据 |
-| `SHA256SUMS.txt` | 核验其余四项下载内容是否与发布资产一致 |
+| `huhucapture.exe` | 可直接运行；真实 x64 EXE、版本与品牌一致，不超过旧下载器的 64 MiB 上限 |
+| `huhucapture-vX.Y.Z-windows-x64.zip` | 同一 EXE、六种语言、依赖许可与 build-info；旧原生产品不含 Qt DLL |
+| `huhucapture-vX.Y.Z-windows-x64-symbols.zip` | 同一次 Release 构建的实际 PDB，供故障定位 |
+| `build-info.json` | 源 SHA、版本、架构、配置、工具链、依赖锁和 EXE 哈希 |
+| `SHA256SUMS.txt` | 其余四项实际资产的 SHA256 |
 
-符号包有独立维护价值，因此保留。删除它会失去定位发行版崩溃的重要材料。PDB 必须匹配生成发行 EXE 的同一次构建；同源代码或同版本号重新编译不能保证匹配。普通使用无需下载它，调试加载步骤与全部下载选项见 [README](../README.md#为什么保留-symbolszip)。
+GitHub 自动生成的源码 ZIP / tar.gz 不属于这五项可运行资产。EXE、PDB 和元数据必须来自同一构建；重新编译同版本不保证符号匹配。Windows 打包检查实际产品资源与 PE 依赖，拒绝额外的 MSVC、Ling、Yoga 或 gifski DLL。
 
-GitHub 自动提供的源码 ZIP / tar.gz 是标签快照，不属于这五项构建资产，也不是可运行程序。便携 ZIP 包含依赖许可；分发不能因单 EXE 便利而删除必要声明。
+## CI 与独立桥接发布
 
-## CI 与发布门槛
+[Windows workflow](../.github/workflows/windows.yml) 只构建、验证并保留 artifact，push、PR、release 事件以及手工旧标签回归都不上传 Release 资产。main 上用于新发行的 run 必须完整完成 Debug、Release、GUI、实际 latest 下载及桥接检查；标签回归跳过的步骤不能拿来满足新发行准入。
 
-[Windows 工作流](../.github/workflows/windows.yml) 固定 Actions 提交，检出触发事件的精确源码。构建任务只具有读取权限，发布任务在全部验证通过后才获得写入发行资产的权限。
+`windows-x64` 保留五项资产，`windows-render-checks` 保留原生、GUI 和 Debug / Release 桥接报告；失败尽量保留 `windows-build-logs`。打包 artifact 在后续 GUI 检查前可能已经上传，能下载 artifact 不代表 run 已全部成功。
 
-| 入口 | 行为 |
-| --- | --- |
-| Pull request | 完整验证与 artifact，供审阅；不发布 |
-| main push | 完整验证后按显式声明发布，已有正式版本保持不变 |
-| Release `published` | 检出指定 tag 验证，并上传到该已存在 Release |
-| 手工运行，不填标签 | 验证所选提交并保存 artifact |
-| 手工运行，填写已存在 Release 标签 | 检出该 tag 重建和上传，供恢复使用 |
+唯一新发布入口是 [windows-bridge-release.yml](../.github/workflows/windows-bridge-release.yml)。它只在规范仓库当前 `main` 接受显式 `source_commit` 和成功的同 SHA `windows_run`，使用原 artifact，不重新构建。声明见 [bridge-publish.json](../releases/bridge-publish.json)，必须和唯一版本源、[v0.0.6 说明](../releases/v0.0.6.md) 一致。历史 `releases/publish.json` 不触发新发布。
 
-新版本声明发布要求 Release / Debug、核心与脚本检查、原生渲染、单 EXE 启动、真实窗口/剪贴板、真实更新下载和打包门槛全部通过。Debug 与真实更新下载在常规 main、PR 和不填标签的手工构建中执行；Release 事件及填写标签的恢复构建不执行这两项，避免待上传资产的版本成为 latest 后，下载门槛反过来阻止它上传首批资产。打包核对版本与产品资源，检查 PE 依赖，拒绝意外增加外部 MSVC、Ling、Yoga 或 gifski DLL。
-
-`windows-x64` 保留 EXE、便携包、符号、构建信息和校验和；`windows-render-checks` 保留原生、GUI 与更新下载报告及图片；失败时尽量保留 `windows-build-logs`。具体保留期以工作流为准。程序 artifact 可能在后续 GUI 检查前已经上传，因此“能下载 artifact”本身不证明完整构建成功。
-
-## 声明新版本
-
-发行所指向的提交必须同时包含相互匹配的：
-
-1. `build/windows/Version.props` 默认版本；
-2. `releases/publish.json` 的稳定 tag 与说明路径；
-3. `releases/<tag>.md`、更新记录和当前下载说明。
-
-发布声明示例：
-
-```json
-{
-  "schemaVersion": 1,
-  "tag": "v0.0.5",
-  "notes": "releases/v0.0.5.md"
-}
-```
-
-稳定标签使用 `vMAJOR.MINOR.PATCH`，Windows 第四段固定为 0，各数字分量受 Windows 版本资源范围约束。可在手工预发布流程使用后缀，但内置更新器只处理稳定三段版本。构建参数覆盖版本时，构建与打包必须使用同一个标签。
-
-main 构建成功后，[声明发布脚本](../scripts/publish-release.ps1) 使用本次已验证的 artifact，核对仓库、源 SHA、main 当前头、版本、架构、五个资产和哈希。只有一致才创建新 tag 和 Release。它不会通过重新构建另一份内容来完成这次发布，也不会自行推导下一个版本号。
-
-已有正式 Release 时不再重复发布。main 已前进时旧运行不发布过时提交，新的运行重新完成验证。发布并发串行化；GitHub token 创建的发布不依赖再触发一轮构建来补资产。
+发布器核验原 Windows 全部门槛、真实下载报告、实际五资产和当前 main，拒绝已有 tag、Release、draft 或第二次桥接。通过后创建固定 tag 与未公开 draft，上传原字节并核对 GitHub 的长度及 SHA256，最后才公开为 latest。完整准入和流程见 [独立桥接发行](bridge-release.md)。
 
 ## 失败与恢复
 
-编译、测试或打包失败时修复原因再运行，不能跳过失败检查。Runner 或网络临时失败可重跑失败任务；对应源码未改变时，无需为一次重跑修改版本号。
+构建或检查失败时修复原因，不跳过门槛。网络或 runner 临时故障可对同一源码重跑；main 已前进则必须使用新的成功 run。禁止移动已存在的 tag 或使用 `--clobber` 替换发行资产。
 
-如果留下同名草稿或未发布 tag，先核对它指向的 SHA、成功构建和资产元数据。声明脚本会停止而不移动已有引用，维护者应完成匹配的草稿/标签流程，不能通过强行覆盖掩盖不一致。
-
-已有 Release 可通过手工标签入口重建和上传，但需要保持 EXE、PDB、构建信息与哈希作为同一组，不能只替换其中一个文件。源码修复发布新的补丁版本，保留旧版本的可追溯性。
-
-问题报告引用实际 [Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 与 [Release](https://github.com/NAMEWTA/huhucapture/releases)。本文定义流程，不表示某个待发布提交已通过全部检查。
+中断留下的新 tag 或 draft 会使下一次自动尝试拒绝。维护者须核对其 SHA、原 run、已上传字节与声明，再单独处理；脚本不会自行删除、覆盖或认领它。源码修复应使用新的版本，保留旧发行可追溯性。本文描述可执行流程，不声明未运行的检查已经通过。

@@ -82,7 +82,9 @@ and documentation rules live in [conventions](docs/conventions.md).
 - Use lowercase `huhucapture` for product, executable, solution, configuration,
   and release filenames; use `HuhuCapture` for the C++ namespace. Runtime brand
   values belong in `src/app/Brand.h`; version values belong in
-  `build/windows/Version.props`. Keep updater and package metadata consistent.
+  `build/version.json`. Regenerate `VERSION` and `build/windows/Version.props`
+  using `python scripts/version_source.py --write`; never edit derived values.
+  Keep updater and package metadata consistent.
 - Follow [docs/brand.md](docs/brand.md) for SVG, PNG, and ICO assets. Brand family
   association does not imply an unimplemented integration with another product.
 - Keep `Lang/*.json` UTF-16 with BOM. Update embedded and external translations
@@ -111,6 +113,8 @@ pwsh ./scripts/test-windows.ps1
 pwsh ./scripts/smoke.ps1
 pwsh ./scripts/test-windows.ps1 -Gui
 pwsh ./scripts/test-windows.ps1 -Update
+pwsh ./scripts/test-legacy-update.ps1 -Gui
+pwsh ./scripts/test-legacy-update.ps1 -Configuration Debug
 pwsh ./scripts/package.ps1
 ```
 
@@ -130,7 +134,10 @@ coverage. None proves physical input, IME composition, mixed DPI, or audio worke
 Record actual commands, results, and untested boundaries according to
 [docs/validation.md](docs/validation.md). Do not claim checks that did not run.
 
-Normal stable releases are declared by `releases/publish.json`, matched by
-`Version.props` and `releases/<tag>.md`. The main workflow publishes only after
-all required checks pass; an already published declaration is left unchanged.
-See [docs/building.md](docs/building.md) for asset validation and recovery steps.
+The independent P11a bridge is declared only by `releases/bridge-publish.json`,
+matched by `build/version.json` and `releases/<tag>.md`. The Windows build workflow
+only validates and retains artifacts. The separate bridge publication workflow
+requires current main, its successful same-source Windows run, the original five
+assets and actual Debug / Release native bridge evidence. Controlled package
+fixtures prove download behavior, never Qt installation or P12 acceptance.
+See [docs/bridge-release.md](docs/bridge-release.md) for publication and recovery.
