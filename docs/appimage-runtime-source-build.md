@@ -43,6 +43,39 @@ The actual build compares the patch bytes and canonical SHA1 records with the
 restored original musl-cross-make source. It preserves the complete original
 archives and Git checkouts for later source collection.
 
+## Exact original toolchain patch application
+
+Only the three locked musl/GCC/binutils archives use the named
+`musl-cross-make-cowpatch-v1` profile. The canonical
+[`Makefile`](https://github.com/richfelker/musl-cross-make/blob/5e8042e63de29f8473fc3b0b831a587ba284e1a8/Makefile)
+concatenates each directory's original patches in filename order and sends them
+through its original
+[`cowpatch.sh`](https://github.com/richfelker/musl-cross-make/blob/5e8042e63de29f8473fc3b0b831a587ba284e1a8/cowpatch.sh)
+to GNU `patch -p1`. Some canonical binutils hunks require GNU patch's default
+fuzz limit of two; strict `git apply` does not implement that matching rule.
+The producer executes the retained, byte-identical script with `-p1 -N -t -F2`:
+the fuzz limit is explicit, reversed/already-applied patches are rejected, and
+failure is noninteractive. It never enables whitespace-insensitive matching or
+changes an original archive or patch to make the operation succeed.
+
+The lock fixes both the complete pristine inventory digest and the complete
+patched inventory digest for each archive. These inventories include every
+regular file, executable mode and symbolic link, including GNU patch's `.orig`
+backups and any copy-on-write output. Source preparation uses independent fully
+materialized copies, so it does not recreate the original recipe's optional
+lazy symlink scaffold. Unexpected copied, backup, reject or temporary files
+change the inventory and fail verification; backups are not discarded.
+
+The helper retains the actual original combined patch and script used by each
+command, the helper itself, GNU patch/shell identities, actual arguments,
+return codes and full stdout/stderr. Each source manifest references its
+`source-inputs/<component>-patch-replay.json`. Runtime validation binds that
+record to the original executed command and retained bytes. The source collector
+independently applies the same pinned recipe to the retained original archive,
+checks both complete inventories again and includes its own actual replay
+record in source materials. A collection plan cannot choose another profile.
+All other source patches keep the existing strict `git apply` behavior.
+
 ## Run on a real Linux amd64 host
 
 The workspace must be new, separate from the packaging tools, and use a simple
@@ -172,8 +205,15 @@ arguments merely to relocate a report.
 
 Offline tests use real local compiler/archiver output to validate parsers,
 static ELF checks, exact MD5-field boundaries, original patch identities,
-source recognition, environment isolation and failure handling. They do not
+source recognition, environment isolation and failure handling. Real GNU patch
+fixtures also prove fuzz-two behavior, original command retention, backup-tree
+checking and nonzero failure handling. The three complete original toolchain
+archives have been replayed locally with GNU patch 2.8, and an independent
+collector replay of binutils matches the producer's entire inventory. These
+source-preparation checks do not establish success of the CI host's GNU patch
+version or compilation of the toolchain and runtime. The offline tests do not
 execute the full musl toolchain/runtime build. Native success requires the
 dedicated CI's actual completed report and retained evidence. At implementation
-time, local source download returned HTTP 403; no native build success was
-inferred from these offline tests.
+time, local source download returned HTTP 403; the original toolchain archives
+used for local replay came from the retained failed native build artifact. No
+native runtime build success was inferred from source preparation or fixtures.

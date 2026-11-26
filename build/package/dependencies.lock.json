@@ -121,7 +121,12 @@
             "path": "third_party/appimage/toolchain-patches/musl-1.2.6/cve-2026-6042.diff",
             "sha256": "444fa70e52ca158fb7d4bad560637790bbf8f72e80b82fff840dd66fa83091e3"
           }
-        ]
+        ],
+        "patchApplication": {
+          "profile": "musl-cross-make-cowpatch-v1",
+          "pristineTreeSha256": "afa899d48771482e49bbf7fd99b49a0a456ecf22d7b9bfef2fa3b62a71f200d6",
+          "patchedTreeSha256": "79b8b7baee477fb15c732ac55a99a825b1e148677f8e153489deff62b6415404"
+        }
       },
       "appimage-gcc": {
         "version": "9.4.0",
@@ -210,7 +215,12 @@
             "path": "third_party/appimage/toolchain-patches/gcc-9.4.0/0020-sh-fdpic-pr114641.diff",
             "sha256": "29037ce2782f2af2aa0225326a1c645538139f3feaa1c238037699edc12f78f2"
           }
-        ]
+        ],
+        "patchApplication": {
+          "profile": "musl-cross-make-cowpatch-v1",
+          "pristineTreeSha256": "5326972b76178eb6bb045e7c36ca770e7fdd344178139ec6ee5b5b9035a5568c",
+          "patchedTreeSha256": "3fd21f82a3a0c07adc24eb74e200c7544adc488f9fab315c123571abcbb54fbd"
+        }
       },
       "appimage-binutils": {
         "version": "2.44",
@@ -239,7 +249,12 @@
             "path": "third_party/appimage/toolchain-patches/binutils-2.44/0004-s390x-pie-symbol-binding.diff",
             "sha256": "15f00d52ead1717f9efb1ab8fb3559a81aeb623018576344d3bb3b58747ab420"
           }
-        ]
+        ],
+        "patchApplication": {
+          "profile": "musl-cross-make-cowpatch-v1",
+          "pristineTreeSha256": "47363c29be8fca08a6fb68dcc6c5318317e63f019d3a38994e6f3d5cdbb80996",
+          "patchedTreeSha256": "a273e2e17b4c0625904237c34a385fe23eb61765b488076d948430be8015769c"
+        }
       },
       "appimage-gmp": {
         "version": "6.3.0",

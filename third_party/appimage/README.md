@@ -20,6 +20,12 @@ original path and Git blob at
 [`richfelker/musl-cross-make@5e8042e`](https://github.com/richfelker/musl-cross-make/tree/5e8042e63de29f8473fc3b0b831a587ba284e1a8).
 The builder compares every retained patch with the actual fixed Git source;
 the offline contract independently verifies every original Git blob hash.
+The adjacent `cowpatch.sh` is also the exact original Git blob, including its
+permission notice. The `application` record identifies the original Makefile
+and script blobs and the explicit noninteractive GNU patch arguments. Only the
+three original toolchain archives use this recipe. Complete pristine and
+patched inventory hashes, including backup/copy files, are fixed in the lock;
+the builder and source collector independently check the complete output.
 
 [`source-reviews.json`](source-reviews.json) identifies the original canonical
 cross-make archive SHA1 records and the separately reviewed SHA256 records.

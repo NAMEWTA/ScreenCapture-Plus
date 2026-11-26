@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline contracts with real local ar/ELF files, not a runtime-build claim."""
 import hashlib
+import copy
 import os
 from pathlib import Path
 import runpy
@@ -17,9 +18,47 @@ BUILDER = runpy.run_path(str(ROOT / 'scripts/build-appimage-runtime.py'))
 BUNDLE = HELPER['bundle']
 sys.path.insert(0, str(ROOT / 'scripts'))
 PACKAGE = runpy.run_path(str(ROOT / 'scripts/package-qt.py'))
+PATCHES = HELPER['PATCHES']
 
 
 class ProfileTests(unittest.TestCase):
+    def test_canonical_patch_profile_is_narrow_and_complete(self):
+        _, _, profile = HELPER['profile']()
+        for name in PATCHES['ARCHIVES']:
+            pin = profile['sources'][name]
+            PATCHES['validate_profile'](name,pin,ROOT)
+            for change in ({'profile':'unknown'}, {'pristineTreeSha256':'0'},
+                           {'patchedTreeSha256':'0'}):
+                altered=copy.deepcopy(pin)
+                altered['patchApplication'].update(change)
+                with self.assertRaisesRegex(ValueError,'patch profile'):
+                    PATCHES['validate_profile'](name,altered,ROOT)
+            altered=copy.deepcopy(pin); altered['patches'].reverse()
+            with self.assertRaisesRegex(ValueError,'patch set'):
+                PATCHES['validate_profile'](name,altered,ROOT)
+            altered=copy.deepcopy(pin); altered['sourceArchive']['sha256']='0'*64
+            with self.assertRaisesRegex(ValueError,'exact source archive'):
+                PATCHES['validate_profile'](name,altered,ROOT)
+        with self.assertRaisesRegex(ValueError,'patch profile'):
+            PATCHES['validate_profile']('unreviewed-source',pin,ROOT)
+
+    def test_original_cowpatch_script_tampering_is_rejected(self):
+        _, _, profile = HELPER['profile']()
+        with tempfile.TemporaryDirectory() as value:
+            project=Path(value)
+            for path in ('third_party/appimage/toolchain-patches/upstream.json', PATCHES['RECIPE']['cowpatch']['path']):
+                target=project/path; target.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(ROOT/path,target)
+            target.write_bytes(target.read_bytes()+b'\n# changed original script\n')
+            with self.assertRaisesRegex(ValueError,'exact Git blob'):
+                PATCHES['validate_profile']('appimage-musl',profile['sources']['appimage-musl'],project)
+
+    def test_collection_plan_cannot_supply_a_patch_application_profile(self):
+        with tempfile.TemporaryDirectory() as value:
+            root=Path(value); collector=BUNDLE.Collector({},root,root)
+            with self.assertRaisesRegex(ValueError,'cannot override'):
+                collector.collect_source({'id':'appimage-musl','patchApplication':{'profile':'anything'}})
+
     def test_exact_static_toolchain_and_original_asset_pins_coexist(self):
         _, lock, profile = HELPER['profile']()
         self.assertEqual(lock['tools']['appimageRuntime']['sha256'],
@@ -165,6 +204,97 @@ class NativeFileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Unsuccessful'):
             failed.raw_record({}, {})
         self.assertFalse((self.root/'failed-receipt/source-build-receipt.json').exists())
+
+
+@unittest.skipUnless(sys.platform=='linux' and shutil.which('patch') and shutil.which('sh'),
+                     'Canonical patch replay requires the real native GNU patch and POSIX shell')
+class CanonicalPatchReplayTests(unittest.TestCase):
+    """Small execution fixtures; the complete original archives are checked separately."""
+    def setUp(self):
+        self.temporary=tempfile.TemporaryDirectory(prefix='canonical-patch-tests-')
+        self.root=Path(self.temporary.name)
+        self.source=self.root/'source'; self.source.mkdir()
+        before=b'actual-one\nactual-two\nkeep-before\nint value = 1;\nkeep-after\nactual-three\nactual-four\n'
+        (self.source/'source.c').write_bytes(before)
+        (self.source/'LICENSE').write_bytes(b'Actual patch execution fixture.\n')
+        self.patch=self.root/'original.patch'
+        self.patch.write_bytes(b'--- a/source.c\n+++ b/source.c\n@@ -1,7 +1,7 @@\n'
+                               b' expected-one\n expected-two\n keep-before\n-int value = 1;\n+int value = 2;\n'
+                               b' keep-after\n expected-three\n expected-four\n')
+        expected=self.root/'expected'; shutil.copytree(self.source,expected)
+        (expected/'source.c').write_bytes(before.replace(b'value = 1',b'value = 2'))
+        (expected/'source.c.orig').write_bytes(before)
+        self.expected=BUNDLE.inventory(expected)
+        self.profile={'profile':PATCHES['PROFILE'],
+                      'pristineTreeSha256':BUNDLE.tree_digest(BUNDLE.inventory(self.source)),
+                      'patchedTreeSha256':BUNDLE.tree_digest(self.expected)}
+        self.pin={'patches':[{'path':'original.patch','sha256':BUNDLE.digest(self.patch)}]}
+        self.originals=[{'path':'original.patch','blob':BUNDLE.object_digest('blob',self.patch.read_bytes())}]
+        self.recorder=HELPER['API']['ExecutionLog'](self.root/'execution','linux',Path(__file__))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def fixture_profile(self):
+        # Production validation above admits only three exact upstream archives.
+        # This fixture changes that boundary only inside this test's mock scope;
+        # the real command, complete output checks and retention remain active.
+        return mock.patch.dict(PATCHES['apply'].__globals__,{'validate_profile':lambda *args:
+            (self.profile,self.originals,ROOT/PATCHES['RECIPE']['cowpatch']['path'])})
+
+    def replay(self):
+        return PATCHES['apply']('native-patch-fixture',self.source,[self.patch],self.pin,self.root,
+                                BUNDLE.__dict__,recorder=self.recorder)
+
+    def test_actual_fuzz_two_recipe_retains_backups_and_original_execution(self):
+        with self.assertRaisesRegex(ValueError,'patch does not apply'):
+            BUNDLE.apply_patches(self.source,[self.patch])
+        self.assertFalse((self.source/'.git').exists())
+        with self.fixture_profile():
+            result=self.replay()
+            self.assertEqual(BUNDLE.inventory(self.source),self.expected)
+            self.assertIn('fuzz 2',result['executions'][1]['stdout'])
+            self.assertEqual([item['path'] for item in result['backupFiles']],['source.c.orig'])
+            execution=BUNDLE.read_json(self.recorder.raw_record({},{}))
+            PATCHES['verify_replay']('native-patch-fixture',self.pin,self.root,result,self.expected,
+                                     BUNDLE.__dict__,execution,self.source)
+            changed=copy.deepcopy(result); changed['executions'][1]['stdout']='invented success'
+            with self.assertRaisesRegex(ValueError,'actual original command'):
+                PATCHES['verify_replay']('native-patch-fixture',self.pin,self.root,changed,self.expected,
+                                         BUNDLE.__dict__,execution,self.source)
+            (self.source/'source.c.orig').unlink()
+            with self.assertRaisesRegex(ValueError,'complete source output'):
+                PATCHES['verify_replay']('native-patch-fixture',self.pin,self.root,result,
+                                         BUNDLE.inventory(self.source),BUNDLE.__dict__,execution,self.source)
+
+    def test_changed_original_bytes_and_incomplete_post_tree_are_rejected(self):
+        with self.fixture_profile():
+            original=self.patch.read_bytes(); self.patch.write_bytes(original+b'\n')
+            with self.assertRaisesRegex(ValueError,'patch byte changed'):
+                self.replay()
+            self.patch.write_bytes(original)
+            (self.source/'unrecorded.c').write_bytes(b'not an original input\n')
+            with self.assertRaisesRegex(ValueError,'before patching'):
+                self.replay()
+            (self.source/'unrecorded.c').unlink()
+            self.assertEqual(self.recorder.executions,[])
+            self.profile['patchedTreeSha256']=BUNDLE.tree_digest(
+                [item for item in self.expected if item['path']!='source.c.orig'])
+            with self.assertRaisesRegex(ValueError,'including copy-on-write/backup'):
+                self.replay()
+
+    def test_actual_failed_hunk_retains_nonzero_exit_and_original_output(self):
+        self.patch.write_bytes(self.patch.read_bytes().replace(b'keep-before',b'missing-context'))
+        self.pin['patches'][0]['sha256']=BUNDLE.digest(self.patch)
+        self.originals[0]['blob']=BUNDLE.object_digest('blob',self.patch.read_bytes())
+        with self.fixture_profile(), self.assertRaises(subprocess.CalledProcessError):
+            self.replay()
+        actual=self.recorder.executions[-1]
+        self.assertEqual(actual['exitCode'],1)
+        self.assertIn('FAILED',Path(actual['stdout']).read_text())
+        self.assertTrue((self.source/'source.c.rej').is_file())
+        with self.assertRaisesRegex(ValueError,'Unsuccessful'):
+            self.recorder.raw_record({}, {})
 
 
 if __name__=='__main__':

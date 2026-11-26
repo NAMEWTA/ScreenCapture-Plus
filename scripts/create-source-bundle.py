@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -747,6 +748,7 @@ class Collector:
         identifier = item["id"]
         require(IDENTIFIER.fullmatch(identifier) and identifier not in self.components,
                 "Duplicate or invalid source component")
+        require("patchApplication" not in item, "A collection plan cannot override the locked patch application recipe")
         if item.get("kind") == "debian-source":
             return self.collect_debian_source(item)
         destination = self.sources / identifier
@@ -770,6 +772,8 @@ class Collector:
             patches.append(retained)
             patch_records.append({"path": self.materials[f"{identifier}-patch-{index}"]["path"], "sha256": patch["sha256"]})
         if item.get("kind", "git") == "git":
+            require(not pin or "patchApplication" not in pin,
+                    "The original toolchain patch recipe requires its exact source archive")
             commit = pin["commit"] if pin else item.get("commit")
             require(not pin or item.get("commit", commit) == commit, "Plan overrides a locked Git revision")
             provenance, files = export_git(self.path(item["directory"]), commit, destination, patches)
@@ -785,10 +789,22 @@ class Collector:
             require(digest(retained) == expected, "Source archive changed while being retained")
             files = extract_tar(retained, destination, item.get("prefix", ""))
             pristine = tree_digest(files)
-            apply_patches(destination, patches)
+            replay_material = None
+            if pin and "patchApplication" in pin:
+                helper = runpy.run_path(str(Path(__file__).resolve().parents[1] / "build/package/toolchain_patches.py"))
+                actual = helper["apply"](identifier, destination, patches, pin, self.exported_project, globals())
+                with tempfile.TemporaryDirectory(prefix="original-patch-replay-") as temporary:
+                    record = Path(temporary) / "patch-replay.json"
+                    record.write_bytes(canonical(actual))
+                    self.retain(identifier + "-patch-replay", str(record))
+                replay_material = self.materials[identifier + "-patch-replay"]
+            else:
+                apply_patches(destination, patches)
             files = inventory(destination)
             provenance = {"kind": "tar", "archiveSha256": expected,
                           "pristineTreeSha256": pristine, "sourceTreeSha256": tree_digest(files)}
+            if replay_material:
+                provenance["patchReplay"] = replay_material
             exact_pin = expected
         else:
             raise ValueError("Unsupported source type; supply real Git sources or a pinned source tar archive")

@@ -13,6 +13,7 @@ import struct
 
 ROOT = Path(__file__).resolve().parents[2]
 API = runpy.run_path(str(ROOT / 'build/package/source_receipts.py'))
+PATCHES = runpy.run_path(str(ROOT / 'build/package/toolchain_patches.py'))
 bundle = API['bundle']
 SOURCE_IDS = {'appimage-toolchain-build', 'appimage-musl', 'appimage-gcc', 'appimage-binutils',
               'appimage-gmp', 'appimage-mpc', 'appimage-mpfr', 'appimage-linux-headers',
@@ -20,7 +21,9 @@ SOURCE_IDS = {'appimage-toolchain-build', 'appimage-musl', 'appimage-gcc', 'appi
 STATIC_IDS = {'appimage-musl', 'appimage-gcc', 'appimage-fuse', 'appimage-squashfuse',
               'appimage-zstd', 'appimage-zlib', 'appimage-mimalloc'}
 PRODUCERS = ('scripts/build-appimage-runtime.py', 'build/package/appimage_runtime.py',
-             'build/package/source_receipts.py', 'scripts/create-source-bundle.py')
+             'build/package/source_receipts.py', 'scripts/create-source-bundle.py',
+             'build/package/toolchain_patches.py', 'third_party/appimage/toolchain-patches/cowpatch.sh',
+             'third_party/appimage/toolchain-patches/upstream.json')
 
 
 def profile():
@@ -51,6 +54,10 @@ def profile():
         for patch in pin.get('patches', []):
             path = ROOT / bundle.relative(patch['path'])
             bundle.require(bundle.digest(path) == patch['sha256'], 'A reviewed upstream patch changed')
+        if name in PATCHES['ARCHIVES']:
+            PATCHES['validate_profile'](name, pin, ROOT)
+        else:
+            bundle.require('patchApplication' not in pin, 'Unexpected source patch application profile')
     configuration = value['toolchainConfiguration']
     bundle.require(configuration['common'] == ['--disable-nls'] and
                    configuration['musl'] == ['--disable-shared'] and
@@ -292,6 +299,11 @@ def validate_report(directory, report):
     bundle.require(control['inputs']['sources'] == inputs and control['outputs'] ==
                    {'runtime': report['runtime'], 'linkClosure': report['linkClosure']},
                    'Runtime restoration and final build evidence disagree')
+    for name in PATCHES['ARCHIVES']:
+        original = bundle.read_json(checked_record(inputs[name]['manifest']))
+        replay = bundle.read_json(checked_record(original['patchReplay']))
+        PATCHES['verify_replay'](name, specification['sources'][name], ROOT, replay,
+                                 original['files'], bundle.__dict__, control, directory / 'sources' / name)
     installation_owners = {}
     phases = executions['appimage-toolchain']['outputs']['installationPhases']
     expected_phases = [('appimage-musl', 'install-musl'), ('appimage-gcc', 'install-gcc'),

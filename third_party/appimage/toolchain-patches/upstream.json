@@ -133,5 +133,23 @@
       "upstreamPath": "patches/musl-1.2.6/cve-2026-6042.diff",
       "blob": "9b39420ea3c5103e1bdc43f18438f3b35366e8ce"
     }
-  ]
+  ],
+  "application": {
+    "profile": "musl-cross-make-cowpatch-v1",
+    "makefile": {
+      "upstreamPath": "Makefile",
+      "blob": "d8b8d35e0ba41608f577122f857ec8abb752964a"
+    },
+    "cowpatch": {
+      "path": "third_party/appimage/toolchain-patches/cowpatch.sh",
+      "upstreamPath": "cowpatch.sh",
+      "blob": "c79c9d9a27c9180aa16dff14c80461c67b3027dd"
+    },
+    "arguments": [
+      "-p1",
+      "-N",
+      "-t",
+      "-F2"
+    ]
+  }
 }

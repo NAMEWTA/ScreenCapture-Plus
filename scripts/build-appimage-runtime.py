@@ -21,6 +21,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = runpy.run_path(str(ROOT / 'build/package/appimage_runtime.py'))
 API, bundle = HELPER['API'], HELPER['bundle']
+PATCHES = HELPER['PATCHES']
 TARGET = 'x86_64-linux-musl'
 TOOLCHAIN_INPUTS = ('appimage-toolchain-build', 'appimage-gcc', 'appimage-binutils', 'appimage-musl',
                     'appimage-gmp', 'appimage-mpc', 'appimage-mpfr', 'appimage-linux-headers')
@@ -74,6 +75,7 @@ def fetch_archive(pin, path, recorder, environment):
 
 def restore_input(name, pin, workspace, recorder, environment, *, original_archive=None):
     directory = workspace / 'sources' / name
+    patch_replay = None
     if 'sourceArchive' in pin:
         archive = Path(original_archive) if original_archive is not None else workspace / 'downloads' / (name + '-' + pin['sourceArchive']['url'].split('/')[-1])
         if original_archive is None:
@@ -88,7 +90,15 @@ def restore_input(name, pin, workspace, recorder, environment, *, original_archi
             bundle.require(bundle.digest(path) == item['sha256'], 'An original source patch changed')
             recorder.retain_record(path)
             patches.append(path)
-        bundle.apply_patches(directory, patches)
+        if 'patchApplication' in pin:
+            actual = PATCHES['apply'](name, directory, patches, pin, ROOT, bundle.__dict__,
+                                      recorder=recorder, environment=environment)
+            replay_path = workspace / 'source-inputs' / (name + '-patch-replay.json')
+            API['write_new'](replay_path, actual)
+            recorder.retain_record(replay_path)
+            patch_replay = descriptor(replay_path)
+        else:
+            bundle.apply_patches(directory, patches)
         files = bundle.inventory(directory)
         collection = {'id': name, 'kind': 'tar', 'archive': str(archive), 'prefix': pin['archivePrefix']}
     else:
@@ -113,7 +123,8 @@ def restore_input(name, pin, workspace, recorder, environment, *, original_archi
         collection = {'id': name, 'directory': str(checkout)}
     source_hash = bundle.tree_digest(files)
     record = workspace / 'source-inputs' / (name + '.json')
-    API['write_new'](record, {'id': name, 'pin': pin, 'sourceTreeSha256': source_hash, 'files': files})
+    API['write_new'](record, {'id': name, 'pin': pin, 'sourceTreeSha256': source_hash, 'files': files,
+                            **({'patchReplay': patch_replay} if patch_replay else {})})
     recorder.retain_record(record)
     return {'id': name, 'directory': directory, 'files': files, 'sourceTreeSha256': source_hash,
             'manifest': descriptor(record), 'collection': collection, 'pin': pin}
@@ -540,6 +551,14 @@ def build_runtime(options):
         for patch in patch_provenance['patches']:
             bundle.require((ROOT / patch['path']).read_bytes() == (cross / patch['upstreamPath']).read_bytes(),
                            'A retained toolchain patch differs from the actual fixed original Git source')
+        for source in ('makefile', 'cowpatch'):
+            original = patch_provenance['application'][source]
+            data = (cross / original['upstreamPath']).read_bytes()
+            bundle.require(bundle.object_digest('blob', data) == original['blob'],
+                           'The actual canonical toolchain patch recipe changed')
+            if source == 'cowpatch':
+                bundle.require(data == (ROOT / original['path']).read_bytes(),
+                               'The executed original cowpatch script differs from its restored source')
         bundle.require((ROOT / 'third_party/appimage/libfuse-mount.patch').read_bytes() ==
                        (inputs['appimage-runtime']['directory'] / 'patches/libfuse/mount.c.diff').read_bytes(),
                        'The retained fuse patch differs from the locked original runtime source')
