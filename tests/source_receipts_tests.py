@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Actual producer command/source/output contracts; no product build claim."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,31 @@ class SourceReceiptsTests(unittest.TestCase):
     def producer(self, name='receipt'):
         return receipts['NativeBuild'](self.root / name, 'linux' if os.name != 'nt' else 'windows',
                                        __file__, 'fixture', self.source, self.pin, self.prefix)
+
+    def test_identical_installed_notices_use_their_original_copy_paths(self):
+        payload = self.root / 'licenses-payload'
+        rust_path = 'rust-src/lib/rustlib/src/rust/library/vendor/example/LICENSE'
+        compact = hashlib.sha256(rust_path.encode('utf-8')).hexdigest()[:16]
+        pairs = {
+            'project/ffmpeg-examples/LICENSE': ('huhucapture', 'third_party/ffmpeg-examples/LICENSE'),
+            'collected-qt/qt/modules/qtbase/LICENSES/Apache-2.0.txt': ('qtbase', 'LICENSES/Apache-2.0.txt'),
+            'collected-rust/rust/crates/example-1.0.0/LICENSE': ('rust-vendor', 'example-1.0.0/LICENSE'),
+            'collected-rust-toolchain/rust-toolchain/rust-src/' + compact + '/LICENSE':
+                ('rust-toolchain-source', rust_path),
+        }
+        expected, components = {}, {}
+        for notice, (component, original) in pairs.items():
+            name = 'appimage/usr/share/huhucapture/licenses/' + notice
+            path = payload / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'Identical notice bytes\n')
+            file = receipts['identity'](path)
+            components[component] = {'files': [{'path': original, 'type': 'file', **file}]}
+            expected[name] = {'component': component, 'path': original}
+        components['qttools'] = {'files': [{'path': 'LICENSES/Apache-2.0.txt', 'type': 'file', **file}]}
+        mapping, unresolved = source_plan['proposed_mapping'](payload, bundle.inventory(payload), components, {}, [])
+        self.assertEqual(mapping, expected)
+        self.assertEqual(unresolved, [])
 
     def test_copied_package_marker_resolves_its_posix_identity_sibling(self):
         transforms = source_plan['package'].lineage_api()

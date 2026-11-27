@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import sys
@@ -104,6 +105,36 @@ def merge_plans(plans):
     return result
 
 
+def installed_notice_origins(name, candidates):
+    _, boundary, notice = name.partition('/licenses/')
+    if not boundary:
+        return []
+    if notice.startswith('project/'):
+        expected = {'component': 'huhucapture', 'path': 'third_party/' + notice.removeprefix('project/')}
+        return [candidate for candidate in candidates if candidate == expected]
+    qt_prefix = 'collected-qt/qt/modules/'
+    if notice.startswith(qt_prefix):
+        component, _, path = notice.removeprefix(qt_prefix).partition('/')
+        expected = {'component': component, 'path': path}
+        return [candidate for candidate in candidates if candidate == expected]
+    crate_prefix = 'collected-rust/rust/crates/'
+    if notice.startswith(crate_prefix):
+        expected = {'component': 'rust-vendor', 'path': notice.removeprefix(crate_prefix)}
+        return [candidate for candidate in candidates if candidate == expected]
+    rust_prefix = 'collected-rust-toolchain/rust-toolchain/rust-src/'
+    if notice.startswith(rust_prefix):
+        compact_path = notice.removeprefix(rust_prefix)
+        result = []
+        for candidate in candidates:
+            if candidate.get('component') == 'rust-toolchain-source':
+                path = candidate['path']
+                archive_id = hashlib.sha256(path.encode('utf-8')).hexdigest()[:16]
+                if compact_path == archive_id + '/' + PurePosixPath(path).name:
+                    result.append(candidate)
+        return result
+    return []
+
+
 def proposed_mapping(directory, files, components, receipts, products, supplied=None, transformations=None,
                      microsoft_runtime=None):
     """Use only verified equal bytes; ambiguity stays a gap for explicit review."""
@@ -178,8 +209,10 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
         if not candidates and not native and name not in applications:
             candidates = source_index.get(key, [])
         if len(candidates) > 1:
-            exact_path = [item for item in candidates if name == item.get('output', item.get('path')) or
-                          name.endswith('/' + item.get('output', item.get('path')))]
+            exact_path = installed_notice_origins(name, candidates)
+            if not exact_path:
+                exact_path = [item for item in candidates if name == item.get('output', item.get('path')) or
+                              name.endswith('/' + item.get('output', item.get('path')))]
             if len(exact_path) == 1:
                 candidates = exact_path
         if not candidates:

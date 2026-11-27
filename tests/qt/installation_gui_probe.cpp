@@ -410,17 +410,10 @@ QJsonArray windowList(const std::vector<NativeWindow>& windows)
 { QJsonArray values; for (const auto& window : windows) values.append(window.json()); return values; }
 QString nativeCaptureTitle()
 {
-    // qt_main explicitly sets applicationDisplayName. Qt 6.12.1's native
-    // QPA window title appends it with a platform separator, while QWidget's
-    // logical windowTitle remains "Screen capture". Inspect the actual native
-    // caption here; never accept an arbitrary product/error window by prefix.
-    const auto brand = QString::fromWCharArray(HuhuCapture::Brand::name.data(),
+    // CaptureWindow::Surface uses the product name. Qt preserves the native
+    // title when it already ends with the configured application display name.
+    return QString::fromWCharArray(HuhuCapture::Brand::name.data(),
         static_cast<qsizetype>(HuhuCapture::Brand::name.size()));
-#ifdef Q_OS_WIN
-    return QStringLiteral("Screen capture - ") + brand;
-#else
-    return QStringLiteral("Screen capture \u2014 ") + brand;
-#endif
 }
 }
 
@@ -531,17 +524,27 @@ int main(int argc, char** argv)
             const auto root = product.processId(); evidence.insert(QStringLiteral("launcherPid"), root);
             const auto captureTitle = nativeCaptureTitle();
             evidence.insert(QStringLiteral("expectedNativeTitle"), captureTitle);
+            const auto isCaptureSurface = [&](const NativeWindow& window) {
+                return window.title == captureTitle &&
+                    std::any_of(before.desktop.displays.begin(), before.desktop.displays.end(),
+                        [&](const auto& display) { return window.rectangle == display.pixels; });
+            };
             std::vector<NativeWindow> visible;
             NativeWindow capture;
             const bool opened = observe([&] {
                 visible = windows.visible(root);
-                for (const auto& window : visible) if (window.title == captureTitle && !window.rectangle.isEmpty()) { capture = window; return true; }
+                for (const auto& window : visible) {
+                    if (isCaptureSurface(window) && window.rectangle.contains(marker->rectangle)) {
+                        capture = window;
+                        return true;
+                    }
+                }
                 return product.state() == QProcess::NotRunning;
             }, 45000);
             evidence.insert(QStringLiteral("visibleWindows"), windowList(visible));
             require(opened && capture.id && product.state() != QProcess::NotRunning, "The actual installed product opens its visible native screenshot-selection UI");
             require(std::none_of(visible.begin(), visible.end(), [&](const auto& window) {
-                return !window.title.isEmpty() && window.title != captureTitle;
+                return !window.title.isEmpty() && !isCaptureSurface(window);
             }), "Normal one-shot startup must not open an error dialog or another product window");
             const auto actualExecutable = executablePath(capture.pid);
             require(!actualExecutable.isEmpty() && digest(actualExecutable) == expected, "The visible GUI is the exact packaged product executable");
@@ -571,7 +574,7 @@ int main(int argc, char** argv)
             const auto afterSelection = windows.visible(root);
             evidence.insert(QStringLiteral("windowsAfterSelection"), windowList(afterSelection));
             require(std::none_of(afterSelection.begin(), afterSelection.end(), [&](const auto& window) {
-                return !window.title.isEmpty() && window.title != captureTitle;
+                return !window.title.isEmpty() && !isCaptureSurface(window);
             }), "The actual native selection must not open a product error dialog");
             evidence.insert(QStringLiteral("nativeSelectionObserved"), true);
             require(windows.close(capture, root), "Submit the native window-close protocol to this owned application window");

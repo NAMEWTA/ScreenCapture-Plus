@@ -54,11 +54,9 @@ manifest；包内运行探针读取实际产品 PE 的 manifest 字节并核对�
 或超时均失败。`controlRejections` 保留各自 PID、返回码和诊断，然后才继续
 原本的截图拖选与关闭旅程。此检查不代替成功的主实例控制或 GNOME 菜单验收。
 
-探针读取系统的原生窗口标题。产品显式设置 `applicationDisplayName` 后，固定
-Qt 6.12.1 的 [`QPlatformWindow::formatWindowTitle`](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/gui/kernel/qplatformwindow.cpp)
-附加产品名；XCB 使用 ` — `，Windows 使用 ` - `。因此逻辑 QWidget 标题
-`Screen capture` 不是实际系统标题。探针精确匹配平台格式，并继续核对进程归属、
-原始可执行文件 hash、包内模块和拖选后的像素；不以标题前缀接受任何产品窗口。
+共享截图窗口将原生标题设为 `huhucapture`。Qt 的窗口标题已有产品名时会原样保留。
+探针同时核对完整标题、真实显示器像素范围及进程归属，再核对可执行文件哈希、
+包内模块和拖选后的像素。[Qt 窗口标题实现](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/gui/kernel/qplatformwindow.cpp)
 
 提交 `659cc9d7f882e3fd1d92cdb6f2360ed2c31ab735` 的
 [完整应用 CI](https://github.com/NAMEWTA/huhucapture/actions/runs/45649036685)
