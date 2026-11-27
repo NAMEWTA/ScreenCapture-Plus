@@ -1,11 +1,5 @@
 {
   "schemaVersion": 1,
-  "rustToolchain": "1.88.0",
-  "rustTarget": "x86_64-pc-windows-msvc",
-  "ling": {
-    "repository": "https://github.com/xland/Ling.git",
-    "commit": "2ae45005b2863b004b4432bfe85d6e63d7ee44ca"
-  },
   "gifski": {
     "repository": "https://github.com/ImageOptim/gifski.git",
     "version": "1.34.0",

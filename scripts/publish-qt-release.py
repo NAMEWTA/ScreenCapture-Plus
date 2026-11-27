@@ -66,8 +66,11 @@ def declaration(manifest, expected):
     return tag,body
 
 
-def verify_bridge(path: Path, manifest, assets):
+def verify_bridge(path: Path, manifest, assets, bridge):
     evidence=package.meta.json_read(path,8*1024*1024)
+    require(evidence.get('sourceCommit')==bridge['sourceCommit'] and evidence.get('tag')==bridge['tag'] and
+            evidence.get('configuration')=='Release' and evidence.get('nativeExecutable')==bridge['executable'],
+            'Legacy About evidence must use the historical published bridge source and original executable')
     actual=evidence.get('actualCompletePackage')
     require(evidence.get('actualCompletePackageRun') is True and isinstance(actual,dict) and
             actual.get('actualAboutPassed') is True, 'Qt release requires its actual complete package and native About journey')
@@ -108,7 +111,7 @@ def verify_workflows(commit, application_run):
     require(expected<=set(actual) and all(actual[name].get('conclusion')=='success' for name in expected),
             'Native application, installation, cross-platform media or formal aggregate job did not pass')
     checked={'qt-application.yml':int(application_run)}
-    for workflow in ('qt-validation.yml','localsend-validation.yml','video-inspection-validation.yml','windows.yml'):
+    for workflow in ('qt-validation.yml','localsend-validation.yml','video-inspection-validation.yml'):
         runs=[]
         for page in api(f'actions/workflows/{workflow}/runs?head_sha={commit}&status=success&per_page=100',pages=True):
             runs += page['workflow_runs']
@@ -140,7 +143,13 @@ def verify_published_bridge(version):
             all(entry.get('state')=='uploaded' and type(entry.get('size')) is int and entry['size']>0 and
                 isinstance(entry.get('digest'),str) and entry['digest'].startswith('sha256:') for entry in assets),
             'Published bridge no longer has its five original complete Windows assets')
-    return bridge['html_url']
+    reference=api('git/ref/tags/'+tag)['object']
+    require(reference.get('type')=='commit' and package.meta.HEX40.fullmatch(reference.get('sha','')),
+            'The P11a tag must identify the original exact source commit')
+    executable=next(entry for entry in assets if entry['name']=='huhucapture.exe')
+    return {'tag':tag,'sourceCommit':reference['sha'],'url':bridge['html_url'],
+            'executable':{'name':executable['name'],'size':executable['size'],
+                          'sha256':executable['digest'].removeprefix('sha256:')}}
 
 
 def publish(args, manifest, assets):
@@ -149,9 +158,9 @@ def publish(args, manifest, assets):
             'Publishing is restricted to the explicit canonical main release workflow')
     tag,body=declaration(manifest,args.source_commit)
     require(args.bridge_evidence is not None, 'Actual complete-package About evidence is required before any tag mutation')
-    verify_bridge(args.bridge_evidence,manifest,assets)
-    checked=verify_workflows(args.source_commit,args.application_run)
     bridge_release=verify_published_bridge(manifest['version'])
+    verify_bridge(args.bridge_evidence,manifest,assets,bridge_release)
+    checked=verify_workflows(args.source_commit,args.application_run)
     existing=[]
     for page in api('releases?per_page=100',pages=True): existing += page
     require(not any(release.get('tag_name')==tag for release in existing),
@@ -185,7 +194,7 @@ def publish(args, manifest, assets):
             'GitHub did not return the requested published stable release')
     require(api('releases/latest').get('id')==release['id'], 'Published release was not observed as latest')
     print(json.dumps({'release':published['html_url'],'sourceCommit':args.source_commit,
-                      'assetCount':len(assets),'validationRuns':checked,'bridgeRelease':bridge_release},indent=2))
+                      'assetCount':len(assets),'validationRuns':checked,'bridgeRelease':bridge_release['url']},indent=2))
 
 
 def main():
@@ -198,9 +207,11 @@ def main():
     args=parser.parse_args(); args.package=args.package.resolve()
     try:
         manifest,assets=package.verify_aggregate(args.package,expected_commit=args.source_commit,expected_version=read_version(ROOT))
-        if args.bridge_evidence: verify_bridge(args.bridge_evidence,manifest,assets)
         if args.command=='publish': publish(args,manifest,assets)
-        else: print(f'Verified {len(assets)} exact same-source release assets. No network mutation or publication was performed.')
+        else:
+            if args.bridge_evidence:
+                verify_bridge(args.bridge_evidence,manifest,assets,verify_published_bridge(manifest['version']))
+            print(f'Verified {len(assets)} exact same-source release assets. No network mutation or publication was performed.')
         return 0
     except (ValueError,RuntimeError,OSError,KeyError,TypeError,subprocess.SubprocessError) as error:
         print('Qt release refused; existing tags/assets retained:',error,file=sys.stderr)

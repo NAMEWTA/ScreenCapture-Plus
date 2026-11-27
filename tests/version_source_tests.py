@@ -125,10 +125,9 @@ file(WRITE "${CMAKE_BINARY_DIR}/actual-version.txt" "${PROJECT_VERSION}")
         version_source.write_generated(self.root)
         self.configure(True)
 
-    @unittest.skipUnless(os.name == "nt", "Native MSBuild and PowerShell checks run on the Windows build host")
+    @unittest.skipUnless(os.name == "nt", "The generated MSBuild property contract runs on Windows")
     def test_native_windows_readers_and_overrides(self):
         msbuild = shutil.which("MSBuild.exe")
-        pwsh = shutil.which("pwsh.exe")
         if not msbuild:
             vswhere = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
             self.assertTrue(vswhere.is_file(), "The installed Visual Studio discovery tool is required")
@@ -138,44 +137,28 @@ file(WRITE "${CMAKE_BINARY_DIR}/actual-version.txt" "${PROJECT_VERSION}")
             candidate = Path(installation) / "MSBuild/Current/Bin/MSBuild.exe"
             self.assertTrue(installation and candidate.is_file(), "An actual installed MSBuild is required")
             msbuild = str(candidate)
-        self.assertTrue(msbuild and pwsh, "Windows version validation requires actual MSBuild and PowerShell")
         write(self.root / "validate.proj", '''<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 <Import Project="build/windows/Version.props" />
 <Target Name="PrepareForBuild" /><Target Name="ResourceCompile" />
 <Target Name="Build" DependsOnTargets="PrepareForBuild;ResourceCompile" />
 </Project>
 ''')
-        for relative in ("scripts/BuildCommon.ps1", "build/dependencies.lock.json"):
-            destination = self.root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / relative, destination)
-        write(self.root / "validate.ps1", ". (Join-Path $PSScriptRoot 'scripts/BuildCommon.ps1')\nGet-ProductVersion\n")
-
         def check(success, *properties):
             result = subprocess.run([msbuild, str(self.root / "validate.proj"), "/nologo", "/v:minimal", *properties],
                                     text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             self.assertEqual(result.returncode == 0, success, result.stdout)
 
-        def powershell(success):
-            result = subprocess.run([pwsh, "-NoProfile", "-File", str(self.root / "validate.ps1")],
-                                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            self.assertEqual(result.returncode == 0, success, result.stdout)
-
         check(True)
-        powershell(True)
         check(False, "/p:VersionPatch=6")
         check(False, "/p:VersionRevision=1")
         self.source({"schemaVersion": 1, "version": "0.0.6"})
         check(False)
-        powershell(False)
         version_source.write_generated(self.root)
         check(True)
-        powershell(True)
         props = self.root / "build/windows/Version.props"
         write(props, props.read_text().replace("0.0.6", "0.0.7").replace(">6</VersionPatch>", ">7</VersionPatch>"))
         write(self.root / "VERSION", "0.0.7\n")
         check(False)
-        powershell(False)
 
 
 if __name__ == "__main__":

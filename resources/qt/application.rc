@@ -1,4 +1,0 @@
-#include "winres.h"
-#include "Version.h"
-1 ICON "logo.ico"
-#include "version-info.rc"

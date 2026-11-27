@@ -1,8 +1,10 @@
 # 独立的旧 Windows 桥接发行
 
+此页记录已发布的 [v0.0.6](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.6) Windows 更新桥。其构建、验证与发布入口保存在同名源码标签。Qt 发行从该标签的精确提交构建独立探针，验证下载本次完整候选包。
+
 [Issue #5 §13.3 / §13.5](https://github.com/NAMEWTA/huhucapture/issues/5) 明确要求先发布一次旧架构更新桥接，再交付 Qt 双平台完整包。桥接沿用原 Windows 构建与五项资产，使用受控完整包下载契约 fixture 验证新能力；它不受尚未完成的 Qt 对应源码收集或 Linux 安装门槛阻塞。
 
-`windows.yml` 继续承担原 Release / Debug、核心、原生渲染、托盘启动、真实 GUI / 剪贴板、旧 latest 下载和桥接 HTTP / About 检查。普通 push、PR、已有 release 事件都不发布新资产。独立 [windows-bridge-release.yml](../.github/workflows/windows-bridge-release.yml) 只接受手动调度，且只能在规范仓库的当前 `main` 上执行。
+`windows.yml` 继续承担原 Release / Debug、核心、原生渲染、托盘启动、真实 GUI / 剪贴板、旧 latest 下载和桥接 HTTP / About 检查。普通 push、PR、已有 release 事件都不发布新资产。独立 [windows-bridge-release.yml](https://github.com/NAMEWTA/huhucapture/blob/v0.0.6/.github/workflows/windows-bridge-release.yml) 只接受手动调度，且只能在规范仓库的当前 `main` 上执行。
 
 ## 显式声明与实际输入
 

@@ -6,7 +6,7 @@ huhucapture 基于 [xland / ScreenCapture](https://github.com/xland/ScreenCaptur
 
 本项目记录的继承快照为 ScreenCapture 提交 [`5e4713e2fbe333873abff911424a212923489ccd`](https://github.com/xland/ScreenCapture/commit/5e4713e2fbe333873abff911424a212923489ccd)，其提交说明为 `2.5.15`。可从该快照的 [ReadMe.md](https://github.com/xland/ScreenCapture/blob/5e4713e2fbe333873abff911424a212923489ccd/ReadMe.md) 了解原项目的功能与使用方式。固定链接用于追溯继承内容；后续维护应同时查阅上游当前代码，并记录真正引入的修复与版本。
 
-Ling 是当前 Windows 窗口与界面的基础。实际构建采用的版本由 [依赖锁文件](../build/dependencies.lock.json) 统一管理，其他依赖及继承的 C 源码来源由 [第三方声明](../third_party/NOTICE.md) 记录。没有可靠记录的第三方原始版本，不通过猜测补写。
+Ling 为 v0.0.6 及更早 Windows 版本提供了界面基础；当前应用使用 Qt。实际构建采用的版本由 [依赖锁文件](../build/dependencies.lock.json) 统一管理，其他依赖及继承的 C 源码来源由 [第三方声明](../third_party/NOTICE.md) 记录。没有可靠记录的第三方原始版本，不通过猜测补写。
 
 ## 本项目的维护范围
 

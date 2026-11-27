@@ -25,7 +25,7 @@ huhucapture 在 `main` 维护。修改围绕一个可观察的问题，说明改
 
 优先复用当前成熟实现，其次固定 Issue 引用的上游源码，再选择成熟库。纯规则在 `src/core` 和无平台头的编辑模型，系统资源在 `src/platform`，编码、图像与持久化在服务层，窗口负责交互协调。新增目标登记到 CMake；仍由现有 Windows 产品调用的文件也登记到其工程与 filters。依赖修改同步锁文件、源码归属、可重放补丁与许可。
 
-现有 Windows 单 EXE 是迁移回归基线，P12 未验收前保留其构建；P13 才清除旧生产架构。Qt 的动态库部署与 Windows / Linux 完整安装包须走新的验收门槛，不能把旧单 EXE 的运行要求套用到新架构。
+统一 Qt 产品使用 CMake 和本平台原生后端。完整包部署 Qt 动态库，历史 Windows 单 EXE 的构建入口保存在其发行标签。
 
 明确句柄、缓冲、图形和线程的拥有关系，停止工作线程后再释放资源。复制、保存、编码和归档不能用模糊的成功状态掩盖失败。媒体清理只影响应用管理的范围；编辑器、媒体文件和 Windows 剪贴板各有自己的生命周期。
 
@@ -48,23 +48,11 @@ huhucapture 在 `main` 维护。修改围绕一个可观察的问题，说明改
 保持包的原始构建身份；开发包用于取得实际证据，同版本重装与跨版本升级
 分别记录。独立测试程序不随产品安装，也不给产品增加跳过真实初始化的入口。
 
-仍在维护的 Windows 回归入口为：
-
-```powershell
-pwsh ./scripts/build.ps1 -Configuration Release
-pwsh ./scripts/test.ps1
-pwsh ./scripts/test-windows.ps1
-pwsh ./scripts/smoke.ps1
-pwsh ./scripts/test-windows.ps1 -Gui
-pwsh ./scripts/test-windows.ps1 -Update
-pwsh ./scripts/package.ps1
-```
-
 依赖与构建设置变化还运行 Debug。其他平台的 C++20 核心测试仅证明纯规则，不能报告 Windows 窗口、IME、DPI、GPU 或音频已通过。
 
 提交说明包含问题、用户可观察的变化、实际命令和结果、未执行的边界。性能结论附同机同场景测量，无法测量时只描述减少的具体工作量。不要提交 `.deps`、`artifacts`、个人配置、IDE 状态或临时日志。
 
-准备发布时，同步唯一版本源、显式声明和该版本说明。旧 Windows 基线继续使用原发行门槛；Qt 首版还须完成桥接、对应源码及四种完整包的同源聚合与实际验收。开发包和组件测试不能授权正式发布。不要手动改写二进制版本或混合来自不同构建的发行文件。
+准备发布时，同步唯一版本源、显式声明和该版本说明。Qt 首版须验证已发布更新桥与四种完整包、来源及安装验证。开发包和组件测试不能授权正式发布。不要手动改写二进制版本或混合来自不同构建的发行文件。
 
 原生采流测试的桌面也必须可复现：[受控 Wayland 桌面](docs/validation-desktop.md)
 固定 compositor、Portal backend 与构建输入，各自保留来源和许可证。不要把

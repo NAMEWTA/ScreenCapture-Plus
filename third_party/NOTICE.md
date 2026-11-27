@@ -15,17 +15,15 @@ root MIT license also contains `Copyright (c) 2020 - 2026 ThorVG Project`, which
 remains in [LICENSE](https://github.com/NAMEWTA/huhucapture/blob/main/LICENSE). New huhucapture work is credited to NAMEWTA.
 
 The application source retains the license in the repository root. The following
-components retain their own copyright notices and license terms. The release ZIP
-includes the license texts; installing only `huhucapture.exe` does not require
-these text files at runtime.
+components retain their own copyright notices and license terms. Complete release packages include their applicable license and notice texts.
 
 | Component | Source and revision | License | Usage |
 | --- | --- | --- | --- |
-| Ling | https://github.com/xland/Ling/tree/2ae45005b2863b004b4432bfe85d6e63d7ee44ca | MIT | Windows GUI, statically linked |
-| Yoga | `yoga/` in the pinned Ling checkout; original project https://github.com/react/yoga | MIT | Layout engine, statically linked |
+| Ling | https://github.com/xland/Ling/tree/2ae45005b2863b004b4432bfe85d6e63d7ee44ca | MIT | Historical Windows UI through v0.0.6 |
+| Yoga | `yoga/` in the pinned Ling checkout; original project https://github.com/react/yoga | MIT | Historical Windows layout through v0.0.6 |
 | gifski | https://github.com/ImageOptim/gifski/tree/1060eab4500a20f27e2fa3ab7e85473d0e921cbd (1.34.0) | AGPL-3.0-or-later | Existing active GIF encoder, statically linked |
 | quirc | https://github.com/dlbeer/quirc; sources inherited from ScreenCapture commit `5e4713e2fbe333873abff911424a212923489ccd` | ISC | QR-code recognition |
-| cgif | https://github.com/dloebl/cgif; sources inherited from the same ScreenCapture commit | MIT | Existing alternate GIF encoder |
+| cgif | https://github.com/dloebl/cgif; sources inherited from the same ScreenCapture commit | MIT | Historical alternate GIF encoder through v0.0.6 |
 
 The inherited upstream revisions of `cgif` and `quirc` were not recorded, so the
 table names the exact inherited snapshot rather than inventing a version.

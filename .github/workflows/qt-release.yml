@@ -30,6 +30,8 @@ jobs:
     outputs:
       source_commit: ${{ steps.admit.outputs.source_commit }}
       candidate_id: ${{ steps.admit.outputs.candidate_id }}
+      bridge_commit: ${{ steps.admit.outputs.bridge_commit }}
+      bridge_tag: ${{ steps.admit.outputs.bridge_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -58,6 +60,7 @@ jobs:
           release.require(release.package.meta.HEX40.fullmatch(source) is not None, 'Exact source SHA required')
           release.require(release.command(['git', 'rev-parse', 'HEAD']).strip() == source, 'Requested source must be current main')
           release.verify_workflows(source, run)
+          bridge = release.verify_published_bridge(release.read_version(release.ROOT))
           artifacts = []
           for page in release.api(f'actions/runs/{run}/artifacts?per_page=100', pages=True):
               artifacts += page['artifacts']
@@ -66,6 +69,7 @@ jobs:
           release.require(len(matches) == 1 and matches[0]['size_in_bytes'] > 0, 'One live formal candidate artifact is required')
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
               stream.write(f'source_commit={source}\ncandidate_id={matches[0]["id"]}\n')
+              stream.write(f'bridge_commit={bridge["sourceCommit"]}\nbridge_tag={bridge["tag"]}\n')
           print('Admitted exact formal aggregate artifact', matches[0]['id'], 'from successful run', run)
           PY
 
@@ -100,31 +104,39 @@ jobs:
         run: |
           python scripts/publish-qt-release.py verify --package artifacts/release-candidate --source-commit $env:SOURCE_COMMIT
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Build the retained native About implementation from the exact source
+      - name: Check out the published bridge source for its native About regression
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.admission.outputs.bridge_commit }}
+          path: artifacts/legacy-bridge
+          persist-credentials: false
+      - name: Build the historical Release and link its native About test
         shell: pwsh
-        run: ./scripts/build.ps1 -Configuration Release
+        working-directory: artifacts/legacy-bridge
+        run: |
+          ./scripts/build.ps1 -Configuration Release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./scripts/test-legacy-update.ps1 -Gui
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Download the actual complete package through WinRT and the real About page
         shell: pwsh
-        run: ./scripts/test-legacy-update.ps1 -Gui -RealPackageDirectory artifacts/release-candidate -RequireRealPackage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE_TAG: ${{ needs.admission.outputs.bridge_tag }}
+        run: |
+          gh release download $env:BRIDGE_TAG --repo NAMEWTA/huhucapture --pattern huhucapture.exe --dir artifacts/published-bridge
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $legacy = 'artifacts/legacy-bridge/artifacts/tests/windows'
+          python scripts/test-legacy-update.py --bridge-source artifacts/legacy-bridge --configuration Release --probe "$legacy/legacy-update/Release/LegacyUpdateProbe.exe" --gui-probe "$legacy/gui/GuiIntegrationTests.exe" --legacy-executable artifacts/published-bridge/huhucapture.exe --output artifacts/qt-bridge-test --real-package-directory artifacts/release-candidate --require-real-package
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Bind the native complete-package About evidence to the aggregate
         shell: pwsh
         env:
           SOURCE_COMMIT: ${{ needs.admission.outputs.source_commit }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          @'
-          import json
-          from pathlib import Path
-          import shutil
-          root = Path('artifacts/tests/windows/legacy-update/Release')
-          matches = [path for path in root.glob('run-*/result.json')
-                     if json.loads(path.read_text(encoding='utf-8')).get('actualCompletePackageRun') is True]
-          if len(matches) != 1:
-              raise SystemExit('One actual complete-package About report is required')
-          target = Path('artifacts/release-evidence/legacy-about.json')
-          target.parent.mkdir(parents=True)
-          shutil.copyfile(matches[0], target)
-          '@ | python
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path artifacts/release-evidence | Out-Null
+          Copy-Item -LiteralPath artifacts/qt-bridge-test/result.json -Destination artifacts/release-evidence/legacy-about.json
           python scripts/publish-qt-release.py verify --package artifacts/release-candidate --source-commit $env:SOURCE_COMMIT --bridge-evidence artifacts/release-evidence/legacy-about.json
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -140,10 +152,10 @@ jobs:
         with:
           name: qt-actual-legacy-about-diagnostics-${{ github.run_id }}
           path: |
-            artifacts/tests/windows/legacy-update/**/*.json
-            artifacts/tests/windows/legacy-update/**/*.log
-            artifacts/tests/windows/legacy-update/**/*.png
-            artifacts/*legacy-update*.binlog
+            artifacts/qt-bridge-test/**/*.json
+            artifacts/qt-bridge-test/**/*.log
+            artifacts/qt-bridge-test/**/*.png
+            artifacts/legacy-bridge/artifacts/*legacy-update*.binlog
           if-no-files-found: ignore
           retention-days: 14
 

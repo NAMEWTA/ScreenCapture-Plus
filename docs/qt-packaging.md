@@ -220,9 +220,9 @@ python3 scripts/package-qt.py aggregate \
 
 `qt-application.yml` 的普通 PR/push 继续产生明确的开发包；只有 main 上显式 `release_candidate` 调度可以准备正式候选。两个原生 job 必须完成实际安装旅程及 production Qt About 对本平台两个完整包的下载验证，Windows 原始 MP3 还须通过 Linux 解码，然后才能聚合为 `qt-release-candidate-<source SHA>`。真实材料未闭合时，formal job 在 finalize 阻断，不能用普通开发产物补位。
 
-Qt 完整包公开发行只由 `qt-release.yml` 显式调度。它先核对当前 main、相同 SHA 的全部必要 workflow 和成功正式候选；Windows 再用本次原始 aggregate 跑旧 WinRT/关于页的完整包正例。`publish-qt-release.py` 读取匹配的 `releases/publish.json` 与说明，并核对 P11a 独立桥接已经实际发布。它拒绝已有 tag、Release 或 draft，先创建新 tag 和未公开 draft，上传每项原字节并核对 GitHub 返回的名称、长度及 SHA256，最后才公开为 latest。没有 `--clobber`，不会移动 tag 或修复未知 draft；中断留下的 draft/tag 须单独核对处理。
+Qt 完整包公开发行只由 `qt-release.yml` 显式调度。它先核对当前 main、相同 SHA 的全部必要 workflow 和成功正式候选；Windows 再从 v0.0.6 固定源码构建原生关于页探针，并用已发布的原始 EXE 和本次聚合产物验证完整包下载。`publish-qt-release.py` 读取匹配的 `releases/publish.json` 与说明，并核对 P11a 独立桥接已经实际发布。它拒绝已有 tag、Release 或 draft，先创建新 tag 和未公开 draft，上传每项原字节并核对 GitHub 返回的名称、长度及 SHA256，最后才公开为 latest。没有 `--clobber`，不会移动 tag 或修复未知 draft；中断留下的 draft/tag 须单独核对处理。
 
-旧 `windows.yml` 只保留构建、桥接、真实 GUI 和已有裸 EXE 下载回归，原两条自动发布路径已移除。Issue 明确的 P11a 例外由独立 `windows-bridge-release.yml` 与受限的 `publish-release.ps1` / `publish-bridge-release.py` 实现：仅显式声明、当前 main、同 SHA 旧 Windows 五资产及真实受控下载/关于页证据可发布，不能发布 Qt/Linux，也不等待本节的完整来源闭合。两条发行 workflow 共用不取消的串行组，见 [桥接发行](bridge-release.md)。P12 物理/最低系统验收和用户迁移说明仍是发行决策的独立门槛。
+旧 Windows 更新桥已作为 [v0.0.6](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.6) 发布。旧产品的构建、验证和五项资产发行流程保存在该源码标签。Qt 稳定发行继续核对已发布桥接的标签、原始 Windows EXE 与实际完整包下载证据。
 
 ## 已有自动化和仍需完成的验收
 

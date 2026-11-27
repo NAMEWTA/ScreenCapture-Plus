@@ -9,7 +9,6 @@ target_compile_features(huhucapture_version INTERFACE cxx_std_20)
 
 # The default builds independent contracts. HUHUCAPTURE_BUILD_APP explicitly
 # assembles the unified Qt product with its real platform and media services.
-# Stable Windows delivery stays on the retained build until P12 acceptance.
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
@@ -51,9 +50,6 @@ if(BUILD_TESTING)
     add_test(NAME linux_qt_builder COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/linux_qt_builder_tests.py")
     set_tests_properties(linux_qt_builder PROPERTIES TIMEOUT 60)
-    add_test(NAME bridge_release COMMAND "${Python3_EXECUTABLE}"
-        "${PROJECT_SOURCE_DIR}/tests/bridge_release_tests.py")
-    set_tests_properties(bridge_release PROPERTIES TIMEOUT 60)
 endif()
 option(HUHUCAPTURE_BUILD_APP "Build the unified Qt desktop application" OFF)
 option(HUHUCAPTURE_X11_TESTS "Run real X11 clipboard, capture and shortcut tests" ON)

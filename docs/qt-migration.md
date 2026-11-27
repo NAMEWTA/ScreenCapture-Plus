@@ -1,14 +1,8 @@
-# Qt 跨平台迁移状态与边界
+# Qt 迁移的代码与验证范围
 
-[Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 是唯一主实施计划，包含 P00–P14 的依赖、F01–F15 功能合同及发布验收。[Issue #4](https://github.com/NAMEWTA/huhucapture/issues/4) 仅补充 Linux 与局域网协议依据。本页记录代码已经承担的职责和仍然存在的门槛，不另建一份与 Issue 竞争的实施方案。
+[Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 定义统一迁移计划，[Issue #4](https://github.com/NAMEWTA/huhucapture/issues/4) 补充 Linux 和 LocalSend。当前生产定义使用 CMake，在 Windows 和 Linux 装配同一个 Qt 应用。
 
-## 当前构建是什么
-
-当前正式版本仍是 v0.0.5 的 Windows 产品。根目录 CMake 默认构建共享合同和平台验证；显式 `HUHUCAPTURE_BUILD_APP=ON` 已装配真正的 Qt 应用、截图/编辑/滚动/录制、设置、历史、局域网和更新服务，并提供安装树与开发包流程。具体职责见 [统一应用](qt-application.md)及[打包说明](qt-packaging.md)。**完整产品及正式双平台发行尚未通过 P12 验收**；编译成功或组件测试通过不代表实体桌面、长时音视频和干净机器安装升级已验收。
-
-迁移目标是一个 C++20 / Qt 6 Widgets 产品，两端使用同一套界面、编辑器状态与应用服务。平台目录只处理真实系统差异。现有 Windows 原生采集、Media Foundation 和 WASAPI 继续复用；Linux 的 Portal 控制面复用固定 libportal，局域网协议复用固定 LocalSend Rust core。
-
-按照 Issue #5 的 P13 依赖，只有 P12 全量验收通过后才删除 Ling、旧生产工程及旧 UI。过渡期间修改共享规则时，现有 Windows 产品必须实际调用它们并继续通过回归，不能另复制一套规则等待最后切换。
+Windows 保留 Win32 采集及 Media Foundation / WASAPI，Linux 使用 X11 或 Portal / PipeWire。两端共用编辑器、媒体、配置、更新和 LocalSend 界面，通过本平台适配请求系统能力。旧 Ling 单 EXE 工程保留在 [v0.0.6 源码标签](https://github.com/NAMEWTA/huhucapture/tree/v0.0.6)。
 
 ## 已接入的公共边界
 
@@ -46,69 +40,24 @@ Windows 已存在的 EXE 旁配置优先；Linux 默认使用调用方提供的�
 
 媒体提交明确区分未提交、已提交、以及已发布但持久化状态未知。发布之后的清理错误不能把最终文件当临时文件删除。Linux 使用同文件系统的无覆盖硬链接发布并同步文件与目录，文件系统不支持时返回失败；Windows 使用独占暂存和无覆盖移动。该合同只接受受控暂存命名空间，不声称能隔离同一用户任意修改应用私有目录的攻击。接收端的类型和完整媒体解码检查仍属于更上层的导入服务。
 
-## 工作包状态
+## 验证与交付
 
-这些状态描述集成范围，不将已经落地的个别文件当作整个工作包验收通过。
+产品验证覆盖共享契约、实际平台进程、媒体、受控桌面和完整安装树。正式包执行同源构建、四种包安装测试、来源闭合和旧桥下载。旧桥的原生 About 探针从 v0.0.6 固定源码构建，使用当前聚合包。
 
-| 工作包 | 当前状态 | 尚未解除的主要门槛 |
-| --- | --- | --- |
-| P00 | 实施与验证中；Qt / gifski / TLS 同进程已在双平台通过 | 完整原生媒体组合、Portal 三类接口实际授权、Linux 音源与许可分发、固定机器性能基线 |
-| P01 | CMake、唯一版本源、统一应用和双平台完整构建工作流已接入 | 同 SHA 构建/包验证结果与完整发行材料 |
-| P02 | 共享设置 / 历史 / 关于窗口已进入真实组件测试 | Linux 桌面完整交互、真实弹层与混合 DPI 拖动 |
-| P03 | 九工具模型、参数、马赛克及 EditorDocument 共用，并接入截图/贴图会话 | 实体桌面交互、混合 DPI、完整备注和真实 IME 验收 |
-| P04 | 原生采集、文件与录制边界已由 Qt 宿主调用 | 截图、热键、窗口 / 光标、COM 与录制全生命周期的真实环境验收 |
-| P05 | Portal 控制面与受控 Sway/PipeWire 数据面已完成指定自动检查 | 物理 X11 / GNOME / Plasma、全局键及真实桌面能力矩阵 |
-| P06 | 配置、语言、二维码、回收、剪贴板、缩略图、lease 和文件发布已接入统一宿主 | 真实桌面交互、介质与系统故障、完整升级迁移旅程 |
-| P07 | CLI/单实例/托盘、设置/历史/关于、截图与输出已由应用统一持有 | 完整双平台用户旅程与物理桌面验收 |
-| P08 | 共用滚动控制器、拼接器、原生/Portal 帧源及输出已接入 | 真实 X11/Wayland/Windows 长图旅程与稳定性 |
-| P09 | 共享录制会话/Qt 工具条、Linux H264/AAC/PipeWire、Windows 原生后端与 GIF 已接入；受控 Windows 无声录制通过末帧覆盖与关闭恢复验证，真实 MP3 音轨由固定 Linux 解码器独立校验 | 实际音源、长时同步及完整桌面录制旅程 |
-| P10 | 上游 core、聚合 C ABI、真实 TLS 归档测试、共享任务 / 设备 UI 及持久身份 / 网卡装配已接入 | 持久化和故障旅程验证、P10a 物理双平台互传与官方客户端互操作；P10b 独立记录 |
-| P11 | 完整包清单/下载和 Windows setup/ZIP、Linux DEB/AppImage 打包已接入 | 同 SHA 实际包验证、旧版桥接、干净机器安装升级卸载 |
-| P12 | 未验收 | F01–F15、真实双屏 / IME / 音视频、性能、稳定性和干净机器升级卸载 |
-| P13 | 等待 P12 | 删除旧生产架构后从干净检出重新验证 |
-| P14 | 文档随实现更新，未进入发布 | 许可证 / 对应源码与同 SHA 全部发行资产、必要验收 |
-
-应用所有权、启动和退出屏障见 [共享 Qt 宿主](qt-application.md)。截图与录屏的接线见 [共享工作区](capture-workspaces.md)，来源与坐标约束见 [采集服务](screen-capture.md) 和 [授权实时源](live-capture-source.md)，长截图的保留规则见 [共享长截图模型](scroll-capture.md)，软件编码和 AAC 尾样本合同见 [Linux 录制](linux-recording.md)。[完整包更新](qt-updates.md)、[同源打包](qt-packaging.md) 和 [实际安装生命周期](installation-validation.md) 分别记录下载、部署与运行验证边界。这些实现尚不代表整个工作包已经验收。
-
-## 集成与验证边界
-
-两个并行实现已收敛到 `QtMain` / `DesktopApplication` 这一条应用路径。共享
-`FrameNormalizer`、`FrameQueue`、`ScrollCaptureModel`、GIF/MP4 编码器、
-`LiveCaptureSource`、更新清单及完整包校验由同一生产入口调用；重复 Qt 宿主、
-Capture/Recording/Scroll Workspace、旧 Qt 采集服务和并行实时编码实现已删除。
-保留的 Ling/MSBuild 产品仍是 P12 以前的 Windows 回归与 P11a 桥接基线。
-
-公共服务测试、完整应用测试、真实 X11/Portal/PipeWire 与 Windows 原生测试分别
-运行。Release 的纯规则测试显式取消 `NDEBUG`，防止 `assert` 被优化掉后产生空通过。
-实际文件/编码/传输测试保留原始输出和失败信息；缺少本地 socket、D-Bus、网卡
-枚举或桌面时记录环境阻塞，交由具备相应能力的原生 CI 运行，不改成替身成功。
-
-完整安装验证读取安装后的 EXE 清单与实际包标识。Windows PMv2 manifest、
-Wayland 隐藏控件后的同授权首帧、真实接收 UI 与停止/关闭资源排空，都必须在
-整合提交上重新验证；先前任一 PR 的通过不能代替新组合的结果。
-
-发行材料从实际构建命令、源文件、已安装输出和最终包中取得。新增生产者收据
-绑定每次真实构建前后源文件与输出；历史元数据缺少这类记录时仍保持未闭合。
-Qt 插件/翻译、原生库、Rust 标准库、包工具和系统运行库的对应源码缺口必须由
-实际材料或可复现的真实构建解决，不能修改 `complete` 或省略包内容使门禁通过。
-
-P11a 旧 Windows 桥接按独立生产五资产门禁发行；P11b/P14 的 Qt Windows/Linux
-正式版要求同 SHA 完整资产、来源与全部必要验收。当前正式版本声明仍保持不变，
-完整重构目标为 v0.1.0。未执行的物理双端互传、实体音源、混合 DPI/IME、长时
-录制和干净机器验收继续保留为未验证。
+实体设备、混合 DPI、系统输入法、物理音源、长时录制及干净机器跨版本升级的人工验证状态应单独记录。具体入口见 [构建与发布](building.md) 和 [验证指南](validation.md)。
 
 ## 平台支持与验证口径
 
-v0.0.5 的下载、单 EXE 与 Windows 10 1803 支持说明只适用于旧产品。Qt 6.12.1 迁移目标采用 Windows 10 **1809** 及以上 x64；新 Qt 包不能标为支持 1803，旧系统仍需使用旧版本。Linux 目标为 amd64，当前 Ubuntu 24.04 CI 已有受控安装旅程证据；最终发行基线、干净机器和桌面支持范围仍须经 P00 / P11 / P12 验证后公布。
+v0.0.6 及更早版本提供 Windows 10 1803 的原生单 EXE。Qt 6.12.1 迁移采用 Windows 10 **1809** 及以上 x64；新 Qt 包不能标为支持 1803，旧系统仍需使用旧版本。Linux 目标为 amd64，当前 Ubuntu 24.04 CI 已有受控安装旅程证据；最终发行基线、干净机器和桌面支持范围仍须经 P00 / P11 / P12 验证后公布。
 
 `qt_image_contract` 验证真实 Qt 像素与导出边界，Windows 另链接保留的原生媒体后端；`qt_annotation_render` 写出完整 PNG 并检查字体和像素；`qt_settings_store` 操作真实文件系统；`windows_audio_format` 用保护页验证格式读取边界。Linux 的 Portal 故障测试使用真实 D-Bus 和不存在的服务，证明错误、取消、晚到回调与释放，不替代授权对话框或 PipeWire 帧采集。
 
 Windows 的字体测试使用原生 `windows` Qt 平台插件；Linux 的离屏文字测试安装实际中文字体。编辑器组件测试创建真实 Qt 控件并直接驱动受控输入，不等同于物理键鼠或系统 IME。Windows `offscreen` 的占位字体引擎不能作为中文字体覆盖证据。PNG 只证明已执行的导出场景，不能证明中文输入法或跨屏拖动。
 
-当前执行环境不能承担实体双屏、音源四组合、GNOME / Plasma 授权、长时录制和空白机器安装验收。这些项保持未验证，并在对应 PR / Issue 留出明确状态。所有必要发布门槛完成以前，不修改正式发布声明、不关闭实施 Issue、不生成声称已经交付双平台产品的正式 Release。
+当前执行环境不能承担实体双屏、音源四组合、GNOME / Plasma 授权、长时录制和空白机器安装验收。这些项保持未验证，并在对应 PR / Issue 留出明确状态。发行结果绑定具体提交和完整资产，人工项目按实际执行范围记录。
 
 ## 固定依赖与复用记录
 
-实际已接入的验证版本集中在 [依赖锁](../build/dependencies.lock.json)，不覆盖仍服务于旧产品的工具链。Qt 使用匹配的 v143 和动态 CRT；C++ 组件分别验证 `/MD` 与 `/MDd`。固定 Rust 标准库使用 release CRT，所以聚合 ABI 目标只接受 Release / RelWithDebInfo 的 `/MD`，不通过屏蔽链接冲突伪装为 Debug 兼容。旧产品的 v145 / `/MT` 在 P13 前保留原验证入口。Qt SDK 资产与最终部署工具的完整哈希清单仍是 P00 待完成项。
+实际已接入的验证版本集中在 [依赖锁](../build/dependencies.lock.json)，旧工具链记录在 v0.0.6 标签。Qt 使用匹配的 v143 和动态 CRT；C++ 组件分别验证 `/MD` 与 `/MDd`。固定 Rust 标准库使用 release CRT，所以聚合 ABI 目标只接受 Release / RelWithDebInfo 的 `/MD`，不通过屏蔽链接冲突伪装为 Debug 兼容。发行清单记录原始包、对应源码和部署证据。
 
 LocalSend 源码来源、逐文件 blob、改动补丁与许可见 [LocalSend core](localsend-core.md)。libportal 的来源、补丁范围、构建与真实桌面 probe 见 [Linux Portal](linux-portal.md)。其他原生实现延续 [上游致谢](upstream.md) 中记录的归属。Qt、gifski、libportal、FFmpeg / x264 各有自己的许可条件；仓库根 MIT 许可不等于最终组合二进制只有 MIT 条款。
