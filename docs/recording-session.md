@@ -27,7 +27,7 @@ MP4 默认 30 fps、最大 120 分钟；MP4 区域向内对齐到宽度 4 / 高�
 
 Windows 原生 MP4 提取在 [`NativeMp4Recording`](../src/platform/windows/NativeMp4Recording.cpp)。它枚举真实 adapter / output，只有单个未旋转输出完整覆盖选区时使用对应 duplication；旋转、跨屏或不适用的 duplication 使用原有 GDI 像素来源，不把跨屏选区裁成一个显示器。每个录制 worker 建立自己的 COM / Media Foundation 生命周期和物理像素 DPI 范围。
 
-旧 [`CapVideo`](../src/recording/CapVideo.cpp) 同样调用这个原生 MP4 边界，GIF 则与 Qt Windows 共用 `NativeGifRecording` 和 `GifEncoder`。新增文件已经在保留的 Windows vcxproj 和 filters 中登记，纯原生实现不依赖应用 PCH。旧工程的 `/MT` 与 Qt 目标的 `/MD` 是两条现有构建入口，不能把两种 CRT 的库混接；新 Qt / Rust 聚合仍使用迁移方案约定的同一动态 CRT。
+Windows 录制由 CMake 装配，MP4 使用原生后端，GIF 使用 `NativeGifRecording` 和共享 `GifEncoder`。Qt 与 Rust 聚合库使用同一动态 CRT。历史 Windows 单 EXE 的录制入口保存在 [v0.0.6](https://github.com/NAMEWTA/huhucapture/blob/v0.0.6/src/recording/CapVideo.cpp)。
 
 ## 来源选择、像素和窗口位置
 

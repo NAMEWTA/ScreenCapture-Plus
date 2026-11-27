@@ -16,7 +16,7 @@
 ### Windows
 
 [`platform/windows/VideoInspection.cpp`](../src/platform/windows/VideoInspection.cpp)
-复用当前生产版 [`MediaHistory.cpp`](../src/services/MediaHistory.cpp) 的 Media Foundation SourceReader、RGB32 媒体类型、CPU 像素复制流程。录制后端仍为现有 MF / WASAPI 路径，没有添加第二个 Windows 录制器。
+沿用 [v0.0.6 媒体历史](https://github.com/NAMEWTA/huhucapture/blob/v0.0.6/src/services/MediaHistory.cpp) 的 Media Foundation SourceReader、RGB32 媒体类型和 CPU 像素复制流程。录制由 MF / WASAPI 后端处理。
 
 原生封面调用以 MTA 初始化当前工作线程的 COM，以平衡的 MFStartup/MFShutdown 管理媒体运行期。文件由只读、拒绝并发写入的 IStream 持有，再包装为 IMFByteStream。只选择第一条视频轨道，检查实际 RGB32 尺寸和 sample 长度；首帧即能返回，不再保留已经被反例证伪的原生全轨完整性实现。
 
