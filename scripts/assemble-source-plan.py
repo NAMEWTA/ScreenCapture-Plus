@@ -104,7 +104,8 @@ def merge_plans(plans):
     return result
 
 
-def proposed_mapping(directory, files, components, receipts, products, supplied=None, transformations=None):
+def proposed_mapping(directory, files, components, receipts, products, supplied=None, transformations=None,
+                     microsoft_runtime=None):
     """Use only verified equal bytes; ambiguity stays a gap for explicit review."""
     supplied = supplied or {}
     bundle.require(isinstance(supplied, dict) and set(supplied) <= {item['path'] for item in files},
@@ -128,6 +129,14 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
             continue
         if entry['type'] == 'symlink':
             mapping[name] = {'linkTarget': entry['target']}
+            continue
+        runtime = (microsoft_runtime or {}).get(PurePosixPath(name).name)
+        if runtime and name in ('installer/' + runtime['name'], 'portable-zip/' + runtime['name']):
+            if all(runtime[field] == entry[field] for field in ('size', 'sha256')):
+                mapping[name] = {'microsoftRuntime': runtime['name']}
+            else:
+                unresolved.append({'path': name, 'reason': 'Microsoft runtime differs from its verified original input',
+                                   'candidateCount': 0, 'candidates': []})
             continue
         observers = [(identifier, item) for identifier, item in (transformations or {}).items()
                      if name in item.get('observedPaths', [])]
@@ -260,8 +269,9 @@ def assemble(inputs, receipt_plans, stage, output, source_map=None):
             bundle.require(collected[key] == build[key], 'Source collection differs from the actual preparation: ' + key)
         files = prepared['deployment']['files']
         supplied = bundle.read_json(source_map.resolve(strict=True)) if source_map else None
-        mapping, unresolved = proposed_mapping(stage / 'payloads', files, collector.components,
-                                               collector.receipts, prepared['products'], supplied, collector.source_transformations)
+        mapping, unresolved = proposed_mapping(stage / 'payloads', files, collector.components, collector.receipts,
+                                               prepared['products'], supplied, collector.source_transformations,
+                                               collector.microsoft_runtime)
         write_new(output / 'deployment-source-map.json', mapping)
         plan['deployment'] = {'directory': str(stage / 'payloads'),
                               'inventory': str(stage / 'source-deployment-inventory.json'),

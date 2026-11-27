@@ -741,6 +741,7 @@ class Collector:
     def __init__(self, plan, plan_directory, stage):
         self.plan, self.base, self.stage = plan, plan_directory, stage
         self.gaps, self.components, self.materials, self.receipts, self.source_transformations = [], {}, {}, {}, {}
+        self.microsoft_runtime = {}
         self.sources = stage / "sources"
         self.sources.mkdir()
 
@@ -1120,6 +1121,20 @@ class Collector:
             missing = f"rust-vendor:{key[0]}@{key[1]}: no retained license/copyright text"
             self.gaps = [gap for gap in self.gaps if gap != missing]
 
+    def collect_microsoft_runtime(self, evidence, records):
+        require(isinstance(evidence, dict) and set(evidence) == {"selection", "report"},
+                "MSVC runtime evidence must identify both original build records")
+        def original(key, suffix):
+            matches = [item for item in records if item["name"].endswith(suffix) and item["sha256"] == evidence[key]]
+            require(len(matches) == 1, "Original MSVC runtime build record is absent or changed: " + key)
+            return self.stage / matches[0]["path"]
+        selection = original("selection", "-msvc-runtime-inputs.txt")
+        report = read_json(original("report", "-msvc-runtime-inputs.json"))
+        helper = runpy.run_path(str(Path(__file__).resolve().parents[1] / "build/package/windows_redistributables.py"))
+        require(report == helper["report"](selection, packaging_metadata()),
+                "Original Microsoft release CRT identity or Authenticode evidence changed")
+        self.microsoft_runtime = {item["name"]: item for item in report["files"]}
+
     def collect_receipts(self):
         for item in self.plan.get("buildReceipts", []):
             identifier = item["id"]
@@ -1175,6 +1190,10 @@ class Collector:
                 record_path = self.retain("receipt-" + identifier + "-record-" + str(index), record["path"])
                 require(digest(record_path) == record["sha256"], "Build evidence file changed after it was recorded")
                 retained_records.append(self.materials["receipt-" + identifier + "-record-" + str(index)])
+            if "microsoftRuntime" in value:
+                require(self.platform == "windows" and identifier == "application-windows" and "huhucapture" in source_ids,
+                        "Only the actual Windows application receipt can identify its Microsoft runtime inputs")
+                self.collect_microsoft_runtime(value["microsoftRuntime"], retained_records)
             require(isinstance(value.get("staticInputs"), list), "Build receipt must enumerate actual static link inputs")
             static_names = set()
             for static_input in value["staticInputs"]:
@@ -1385,7 +1404,8 @@ class Collector:
                 require((directory / name).resolve().is_relative_to(directory) and (directory / name).resolve().is_file(),
                         "Deployment link is dangling or outside the real installed tree")
                 continue
-            require(set(origin) in ({"component", "path"}, {"receipt", "output"}, {"transformation", "output", "input"}),
+            require(set(origin) in ({"component", "path"}, {"receipt", "output"}, {"transformation", "output", "input"},
+                                    {"microsoftRuntime"}),
                     "Deployment source mapping must use exactly one origin form")
             origin, bound_entry = self.original_mapping(origin, entry)
             if origin is None:
@@ -1412,8 +1432,12 @@ class Collector:
                 matches = [item for item in receipt["outputs"] if item["path"] == relative(origin["output"])]
                 require(len(matches) == 1 and all(matches[0][key] == bound_entry[key] for key in ("sha256", "size")),
                         "Deployed binary/data file differs from its source build receipt: " + name)
-            else:
-                raise ValueError("Every deployed file needs real source bytes or a build output receipt: " + name)
+            elif "microsoftRuntime" in origin:
+                original = self.microsoft_runtime.get(origin["microsoftRuntime"])
+                require(self.platform == "windows" and original is not None and
+                        name in ("installer/" + original["name"], "portable-zip/" + original["name"]) and
+                        all(original[key] == entry[key] for key in ("sha256", "size")),
+                        "Deployed Microsoft runtime differs from the verified app-local input: " + name)
         require(inventory(directory) == actual, "Final deployed tree changed during source mapping validation")
         return {"treeSha256": tree_digest(actual), "files": actual, "products": products}
 
@@ -1461,6 +1485,8 @@ class Collector:
                   "components": list(self.components.values()), "materials": self.materials,
                   "buildReceipts": self.receipts, "sourceTransformations": self.source_transformations, "deployment": deployment,
                   "completionScope": "All recorded source/build/deployment inputs verified; independent distribution review remains required"}
+        if self.microsoft_runtime:
+            report["microsoftRuntime"] = list(self.microsoft_runtime.values())
         (self.stage / "source-inventory.json").write_bytes(canonical(report))
         return report
 

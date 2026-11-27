@@ -181,6 +181,9 @@ if(WIN32)
             message(FATAL_ERROR "Runtime must come from the selected release REDIST set: ${_huhu_runtime}")
         endif()
     endforeach()
+    string(JOIN "\n" _huhu_runtime_inputs ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS})
+    file(WRITE "${PROJECT_BINARY_DIR}/package/msvc-runtime-inputs.txt"
+        "${CMAKE_GENERATOR_INSTANCE}\n${_huhu_runtime_inputs}\n")
     install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION . COMPONENT Runtime
         CONFIGURATIONS Release RelWithDebInfo)
     if(MSVC)

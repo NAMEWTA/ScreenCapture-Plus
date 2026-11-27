@@ -43,6 +43,58 @@ class SourceReceiptsTests(unittest.TestCase):
         return receipts['NativeBuild'](self.root / name, 'linux' if os.name != 'nt' else 'windows',
                                        __file__, 'fixture', self.source, self.pin, self.prefix)
 
+    @unittest.skipUnless(os.name == 'nt', 'Requires the actual Windows Visual Studio v143 release runtime')
+    def test_actual_microsoft_runtime_remains_bound_to_its_app_local_bytes(self):
+        fixture = self.root / 'msvc'
+        fixture.mkdir()
+        (fixture / 'CMakeLists.txt').write_text(r'''cmake_minimum_required(VERSION 3.25)
+project(original_msvc_runtime LANGUAGES CXX)
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+include(InstallRequiredSystemLibraries)
+string(JOIN "\n" runtime_inputs ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS})
+file(WRITE "${CMAKE_BINARY_DIR}/msvc-runtime-inputs.txt" "${CMAKE_GENERATOR_INSTANCE}\n${runtime_inputs}\n")
+install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION . CONFIGURATIONS Release)
+''', encoding='utf-8')
+        build = fixture / 'build'
+        subprocess.run(['cmake', '-S', str(fixture), '-B', str(build), '-G', 'Visual Studio 17 2022',
+                        '-A', 'x64', '-T', 'v143'], check=True, capture_output=True)
+        subprocess.run(['cmake', '--install', str(build), '--config', 'Release', '--prefix', str(self.prefix)],
+                       check=True, capture_output=True)
+        meta = bundle.packaging_metadata()
+        helper = runpy.run_path(str(ROOT / 'build/package/windows_redistributables.py'))
+        selection = build / 'msvc-runtime-inputs.txt'
+        report = helper['report'](selection, meta, self.prefix)
+        self.assertEqual(report['kind'], 'microsoft-vc143-release-runtime')
+        stage = self.root / 'collector'; stage.mkdir()
+        collector = bundle.Collector({}, self.root, stage)
+        report_path = self.root / '1-msvc-runtime-inputs.json'
+        receipts['write_new'](report_path, report)
+        selection_record = self.root / '0-msvc-runtime-inputs.txt'
+        shutil.copyfile(selection, selection_record)
+        retained = []
+        for identifier, record in (('selection', selection_record), ('report', report_path)):
+            collector.retain(identifier, str(record))
+            retained.append(collector.materials[identifier])
+        collector.collect_microsoft_runtime({key: collector.materials[key]['sha256'] for key in ('selection', 'report')}, retained)
+
+        payload = self.root / 'payload'
+        filename = 'msvcp140.dll'
+        for folder in ('installer', 'portable-zip', 'installer/plugins'):
+            destination = payload / folder / filename
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.prefix / filename, destination)
+        with (payload / 'portable-zip' / filename).open('ab') as stream:
+            stream.write(b'changed after installation')
+        mapping, unresolved = source_plan['proposed_mapping'](
+            payload, bundle.inventory(payload), {}, {}, [], microsoft_runtime=collector.microsoft_runtime)
+        self.assertEqual(mapping, {'installer/' + filename: {'microsoftRuntime': filename}})
+        self.assertEqual({item['path'] for item in unresolved},
+                         {'installer/plugins/' + filename, 'portable-zip/' + filename})
+        with (self.prefix / filename).open('ab') as stream:
+            stream.write(b'changed installed bytes')
+        with self.assertRaisesRegex(ValueError, 'differs from the original Microsoft file'):
+            helper['report'](selection, meta, self.prefix)
+
     @unittest.skipIf(os.name == 'nt', 'Actual cc/ELF compilation is a Linux producer gate')
     def test_real_compile_binds_checked_source_actual_commands_and_only_new_outputs(self):
         compiler = shutil.which('cc')

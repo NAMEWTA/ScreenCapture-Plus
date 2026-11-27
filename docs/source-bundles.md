@@ -240,6 +240,12 @@ Linux AppImage runtime 除自己的固定源码外，已确认至少使用 `appi
 
 Windows 对应 `installer`、`portable-zip` 两个 root，均使用 `huhucapture.exe`。每个产品目录分别检查实际二进制、相同构建身份、旁置记录和该包类型的安装标记，并独立运行部署审计；不能让另一目录的通过替代它。根目录不能重叠、越界或经由符号链接，包类型不能重复。整个 payloads 的清单和映射仍覆盖 root 外的 AppRun、DEB 控制文件、启动器及全部附加文件。报告保留按 root 排序的 `deployment.products`，与同一完整 `files`、`treeSha256` 供 finalize 再次逐项核对。单目录旧计划仍可用于未完成材料，正式双包聚合必须提供两种真实形态。
 
+Windows 应用构建记录保存 CMake 实际选择的 x64 v143 CRT 原始路径、微软
+Authenticode 签名信息及完整文件哈希。两种包的应用根目录通过 `microsoftRuntime`
+映射逐个核对 DLL 与该 Visual Studio 安装中原始文件的字节，源码归档保留
+校验记录。微软提供这些 DLL 的可再分发形式与条件。
+[Visual Studio 2022 再分发说明](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution)
+
 ## CI 接入顺序与当前边界
 
 ### 从实际材料装配最终部署计划

@@ -131,15 +131,27 @@ def build(options):
                        'Installed application metadata differs from its actual CMake-generated file')
         log.retain_record(original)
         outputs.append({'path': copied.relative_to(installed).as_posix(), **API['identity'](copied)})
-    raw = log.raw_record({'sources': sources.sources, 'nativeLibrary': {'path': str(library), **native_identity}},
-                         {'prefix': str(installed), 'files': outputs})
-    log.retain_record(raw)
     rust_source = sources.components['rust-vendor']['sourceTreeSha256']
     receipt = {'schemaVersion': 1, 'kind': 'huhucapture-source-build-receipt', 'platform': sources.platform,
                'commands': log.commands, 'toolchain': log.tools,
                'environment': {'executions': [e['environment'] for e in log.executions]},
                'sources': sources.sources, 'staticInputs': [{'id': 'huhucapture-native', 'component': 'rust-vendor',
                    'sourceTreeSha256': rust_source, **native_identity}], 'outputs': outputs}
+    if sources.platform == 'windows':
+        helper = runpy.run_path(str(ROOT / 'build/package/windows_redistributables.py'))
+        selection = directory / 'package/msvc-runtime-inputs.txt'
+        evidence_file = evidence / 'msvc-runtime-inputs.json'
+        API['write_new'](evidence_file, helper['report'](selection, meta, installed))
+        receipt['microsoftRuntime'] = {
+            'selection': log.retain_record(selection)['sha256'],
+            'report': log.retain_record(evidence_file)['sha256'],
+        }
+    installed_outputs = {'prefix': str(installed), 'files': outputs}
+    if 'microsoftRuntime' in receipt:
+        installed_outputs['microsoftRuntime'] = receipt['microsoftRuntime']
+    raw = log.raw_record({'sources': sources.sources, 'nativeLibrary': {'path': str(library), **native_identity}},
+                         installed_outputs)
+    log.retain_record(raw)
     path = evidence / 'source-build-receipt.json'
     API['write_new'](path, receipt)
     plan = {'id': 'application-' + sources.platform, 'path': str(path),
