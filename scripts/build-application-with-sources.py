@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import runpy
@@ -44,6 +45,29 @@ def linked_native_library(build, configuration, library):
     return [indices[0], model_path, target_path]
 
 
+def observe_compilers(log, directory, configuration, toolchains):
+    for tool in bundle.read_json(toolchains)['toolchains']:
+        compiler = tool['compiler']['path']
+        if os.name == 'nt' and tool['language'] == 'RC' and compiler == 'rc':
+            # The Visual Studio generator delegates this tool lookup to the
+            # generated MSBuild project rather than using the caller's PATH.
+            command = directory / 'package/msbuild-command.txt'
+            log.retain_record(command)
+            project = directory / 'huhucapture.vcxproj'
+            output, _ = log.run([command.read_text(encoding='utf-8').strip(), str(project),
+                '-nologo', '-p:Configuration=' + configuration, '-p:Platform=x64',
+                '-getProperty:WindowsSdkDir,WindowsTargetPlatformVersion,PreferredToolArchitecture'],
+                cwd=directory, capture=True)
+            properties = json.loads(output)['Properties']
+            sdk = Path(properties['WindowsSdkDir'])
+            version = properties['WindowsTargetPlatformVersion']
+            architecture = properties['PreferredToolArchitecture']
+            bundle.require(sdk.is_absolute() and version and architecture in ('x64', 'x86', 'arm64'),
+                           'MSBuild did not select a versioned Windows SDK resource compiler')
+            compiler = sdk / 'bin' / version / architecture / 'rc.exe'
+        log.observe_tool(compiler)
+
+
 def build(options):
     directory, installed = options.build_directory.resolve(), options.installed.resolve()
     bundle.require(not directory.exists() and not installed.exists() and 1 <= options.jobs <= 64,
@@ -71,8 +95,7 @@ def build(options):
     index = bundle.read_json(next(reply.glob('index-*.json')))
     toolchains = reply / bundle.relative(index['reply']['toolchains-v1']['jsonFile'])
     log.retain_record(toolchains)
-    for tool in bundle.read_json(toolchains)['toolchains']:
-        log.observe_tool(tool['compiler']['path'])
+    observe_compilers(log, directory, options.configuration, toolchains)
     log.run(['cmake', '--build', str(directory), '--config', options.configuration,
              '--parallel', str(options.jobs)], cwd=ROOT)
     log.run(['cmake', '--install', str(directory), '--config', options.configuration,

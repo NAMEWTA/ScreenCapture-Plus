@@ -139,7 +139,16 @@ void nativePixels(Pattern& pattern)
         require(equalPixels(sharedImage, page.copy(0, 80, rectangle.width(), rectangle.height())), "The shared scroll adapter preserves exact source bytes");
     });
 }
-capture::ActionRequest desktopSession(Pattern& pattern)
+capture::ActionRequest scrollSelection(const capture::Snapshot& snapshot, const QRect& desktopRect)
+{
+    capture::ActionRequest request;
+    request.action = capture::Action::Scroll; request.coordinates = snapshot.coordinates; request.screens = snapshot.screens;
+    request.desktopRect = desktopRect;
+    request.sourceRect = desktopRect.translated(-*snapshot.desktopOrigin);
+    request.image = snapshot.image.copy(request.sourceRect);
+    return request;
+}
+capture::Snapshot desktopSession(Pattern& pattern)
 {
     pattern.reset(); capture::DesktopCapture service; service.initialize();
     require(service.capability().canRequest(), "The native X11 capture service is available");
@@ -154,15 +163,11 @@ capture::ActionRequest desktopSession(Pattern& pattern)
     wait([&] { return completed == 1; }, "The actual desktop screenshot worker completes");
     require(snapshot.coordinates == capture::CoordinateSpace::DesktopPixels && snapshot.desktopOrigin && !snapshot.screens.isEmpty(),
         "Physical desktop capture publishes verified per-monitor GUI bindings");
-    capture::ActionRequest request;
-    request.action = capture::Action::Scroll; request.coordinates = snapshot.coordinates; request.screens = snapshot.screens;
-    request.desktopRect = QRect(pattern.mapToGlobal(QPoint()), pattern.size());
-    request.sourceRect = request.desktopRect->translated(-*snapshot.desktopOrigin);
-    request.image = snapshot.image.copy(request.sourceRect);
+    const auto request = scrollSelection(snapshot, QRect(pattern.mapToGlobal(QPoint()), pattern.size()));
     require(equalPixels(request.image, pattern.page.copy(0, 0, pattern.width(), pattern.height())), "The shared desktop snapshot contains exact selected pixels");
     service.shutdown(); wait([&] { return stopped == 1 && !service.busy(); }, "Snapshot shutdown settles every worker and terminal delivery");
     service.shutdown(); settle(); require(stopped == 1, "Snapshot shutdown notification is emitted once");
-    return request;
+    return snapshot;
 }
 void cancellation()
 {
@@ -194,7 +199,7 @@ QWidget* scrollView()
         if (widget->objectName() == QStringLiteral("scrollCaptureWindow")) return widget;
     return nullptr;
 }
-void scrolling(Pattern& pattern, const capture::ActionRequest& request)
+void scrolling(Pattern& pattern, const capture::Snapshot& snapshot)
 {
     QTemporaryDir directory; require(directory.isValid(), "Create isolated output storage");
     auto archive = std::make_shared<HuhuCapture::Media::MediaArchiveService>(directory.path());
@@ -202,6 +207,7 @@ void scrolling(Pattern& pattern, const capture::ActionRequest& request)
     app::MediaWorkspace workspace(archive, clipboard, revealer);
     app::ScrollController controller(archive, workspace);
     QString failure; QObject::connect(&controller, &app::ScrollController::operationFailed, &controller, [&](const QString& text) { failure = text; });
+    const auto request = scrollSelection(snapshot, QRect(pattern.mapToGlobal(QPoint()), pattern.size()));
     pattern.reset(); require(controller.begin(request), "Open the real shared scrolling controls");
     auto* view = scrollView(); require(view, "The production scroll window exists");
     auto* start = view->findChild<QToolButton*>(QStringLiteral("scrollStart"));
@@ -209,7 +215,10 @@ void scrolling(Pattern& pattern, const capture::ActionRequest& request)
     auto* dimensions = view->findChild<QLabel*>(QStringLiteral("scrollDimensions"));
     require(start && stop && dimensions, "Real scrolling actions and progress are present");
     view->hide(); controller.activate(); require(view->isVisible(), "The global activation path recovers hidden controls");
+    view->move(request.desktopRect->topLeft());
     start->click();
+    require(view->isVisible() && !view->frameGeometry().intersects(*request.desktopRect),
+        "Controls move outside a partial selection and keep Stop accessible");
     wait([&] { return !failure.isEmpty() || dimensions->text().split(QChar(u' ')).value(2).toInt() >= 340; }, "Actual scrolling appends new source rows");
     require(failure.isEmpty(), failure.toStdString()); stop->click();
     wait([&] { return !stop->isEnabled(); }, "The real native scrolling worker stops before output");
@@ -229,12 +238,13 @@ void scrolling(Pattern& pattern, const capture::ActionRequest& request)
     controller.shutdown(); settle(); require(shutdowns == 1, "Repeated scrolling shutdown is idempotent");
     pin->close(); settle();
 
-    // Stop while its exclusion interval is awaiting the GUI. This exercises the
-    // stop-aware native capture gate with real widgets and a real worker.
+    // A full desktop selection has no safe area for the controls. The test
+    // supplies the external action needed to stop while the controls are hidden.
     app::ScrollController interrupted(archive, workspace); pattern.reset();
-    require(interrupted.begin(request), "Start another owned native scrolling session");
+    const auto fullDesktop = scrollSelection(snapshot, QRect(*snapshot.desktopOrigin, snapshot.image.size()));
+    interrupted.setExternalStopAvailable(true, QStringLiteral("External finish action"));
+    require(interrupted.begin(fullDesktop), "Start an owned full desktop scrolling session");
     QPointer<QWidget> hidden = scrollView(); require(hidden, "The second control window exists");
-    hidden->move(request.desktopRect->topLeft());
     auto* interruptedStart = hidden->findChild<QToolButton*>(QStringLiteral("scrollStart"));
     require(interruptedStart, "The interrupted scrolling start action is present"); interruptedStart->click();
     wait([&] { return !hidden->isVisible(); }, "Overlapping controls are excluded before native capture");
@@ -261,7 +271,7 @@ int main(int argc, char** argv)
         Pattern pattern; pattern.show();
         wait([&] { return pattern.windowHandle() && pattern.windowHandle()->isExposed(); }, "Expose the actual owned X11 pattern window");
         require(pattern.devicePixelRatioF() == 1, "This native-byte fixture uses an explicit 1:1 X11 test display");
-        nativePixels(pattern); const auto request = desktopSession(pattern); cancellation(); scrolling(pattern, request);
+        nativePixels(pattern); const auto snapshot = desktopSession(pattern); cancellation(); scrolling(pattern, snapshot);
         std::cout << "Real X11 pixels, RandR bindings, XFixes cursor, XTEST scroll, exact stitching, pin output and cancellation/shutdown passed\n";
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

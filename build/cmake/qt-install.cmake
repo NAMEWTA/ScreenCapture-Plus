@@ -58,6 +58,9 @@ if(MSVC)
     configure_file("${PROJECT_SOURCE_DIR}/build/package/version.rc.in"
         "${PROJECT_BINARY_DIR}/package/version.rc" @ONLY)
     target_sources(huhucapture PRIVATE "${PROJECT_BINARY_DIR}/package/version.rc")
+    if(CMAKE_VS_MSBUILD_COMMAND)
+        file(WRITE "${PROJECT_BINARY_DIR}/package/msbuild-command.txt" "${CMAKE_VS_MSBUILD_COMMAND}\n")
+    endif()
 endif()
 file(WRITE "${PROJECT_BINARY_DIR}/package/installation.json"
     "{\n  \"schemaVersion\": 1,\n  \"product\": \"huhucapture\",\n  \"version\": \"${HUHUCAPTURE_VERSION}\",\n  \"platform\": \"${_huhu_platform}\",\n  \"architecture\": \"${_huhu_architecture}\",\n  \"packageKind\": \"${HUHUCAPTURE_PACKAGE_KIND}\"\n}\n")
@@ -138,6 +141,23 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     configure_file("${PROJECT_SOURCE_DIR}/build/package/linux-x264-runtime.cmake.in"
         "${PROJECT_BINARY_DIR}/package/linux-x264-runtime.cmake" @ONLY)
     install(SCRIPT "${PROJECT_BINARY_DIR}/package/linux-x264-runtime.cmake" COMPONENT Runtime)
+
+    # QtCore loads the locked SDK's ICU libraries, including an indirect data
+    # library that generic deployment can omit. Retain the original bytes.
+    file(READ "${PROJECT_SOURCE_DIR}/build/dependencies.lock.json" _huhu_dependencies)
+    string(JSON _huhu_icu_version GET "${_huhu_dependencies}" qtMigration qt sourceDependencies icu version)
+    string(REGEX MATCH "^[0-9]+" _huhu_icu_major "${_huhu_icu_version}")
+    file(REAL_PATH "${_huhu_qt_library_directory}" _huhu_qt_library_real_directory)
+    foreach(_huhu_icu IN ITEMS icuuc icui18n icudata)
+        set(_huhu_icu_library "${_huhu_qt_library_directory}/lib${_huhu_icu}.so.${_huhu_icu_major}")
+        file(REAL_PATH "${_huhu_icu_library}" _huhu_icu_real_library)
+        get_filename_component(_huhu_icu_real_directory "${_huhu_icu_real_library}" DIRECTORY)
+        if(NOT EXISTS "${_huhu_icu_library}" OR NOT _huhu_icu_real_directory STREQUAL _huhu_qt_library_real_directory)
+            message(FATAL_ERROR "Missing locked ICU runtime inside the Qt SDK: ${_huhu_icu_library}")
+        endif()
+        install(CODE "file(INSTALL \"${_huhu_icu_library}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/lib\" FOLLOW_SYMLINK_CHAIN)"
+            COMPONENT Runtime)
+    endforeach()
 endif()
 if(WIN32)
     install(DIRECTORY "${PROJECT_SOURCE_DIR}/Lang" DESTINATION . COMPONENT Runtime)
@@ -175,6 +195,9 @@ if(WIN32)
     endif()
 else()
     set_target_properties(huhucapture PROPERTIES INSTALL_RPATH "$ORIGIN/../lib" INSTALL_RPATH_USE_LINK_PATH FALSE)
+    # ICU's data dependency also needs this search path when a DEB is
+    # launched directly, without the AppImage environment.
+    target_link_options(huhucapture PRIVATE "LINKER:--disable-new-dtags")
     # qopensslbackend resolves OpenSSL with dlopen, so dependency traversal
     # cannot see these SONAMEs. Consume the explicit restored runtime set; do
     # not silently substitute arbitrary host libraries from a search path.

@@ -15,6 +15,35 @@ bundle = helpers['bundle']
 
 
 class ApplicationReceiptsTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Visual Studio resource compilation requires Windows')
+    def test_visual_studio_resource_compiler_uses_project_selected_sdk(self):
+        with tempfile.TemporaryDirectory(prefix='actual-msbuild-resource-proof-') as temporary:
+            root = Path(temporary).resolve()
+            (root / 'main.cpp').write_text('int main() { return 0; }\n')
+            (root / 'probe.rc').write_text('1 RCDATA { 42 }\n')
+            (root / 'CMakeLists.txt').write_text(
+                'cmake_minimum_required(VERSION 3.25)\n'
+                'project(ResourceEvidence LANGUAGES CXX RC)\n'
+                'add_executable(huhucapture main.cpp probe.rc)\n'
+                'file(WRITE "${CMAKE_BINARY_DIR}/package/msbuild-command.txt" "${CMAKE_VS_MSBUILD_COMMAND}\\n")\n')
+            build = root / 'build'
+            query = build / '.cmake/api/v1/query'
+            query.mkdir(parents=True)
+            (query / 'toolchains-v1').touch()
+            subprocess.run(['cmake', '-S', str(root), '-B', str(build), '-G',
+                            'Visual Studio 17 2022', '-A', 'x64', '-T', 'v143'],
+                           check=True, stdout=subprocess.PIPE)
+            toolchains, = (build / '.cmake/api/v1/reply').glob('toolchains-v1-*.json')
+            log = helpers['API']['ExecutionLog'](root / 'evidence', 'windows', Path(__file__))
+            builder['observe_compilers'](log, build, 'Release', toolchains)
+            resource_compiler, = [Path(item['path']) for item in log.tools.values()
+                                  if Path(item['path']).name.lower() == 'rc.exe']
+            self.assertTrue(resource_compiler.is_file())
+            self.assertEqual(len(log.commands), 1)
+            subprocess.run(['cmake', '--build', str(build), '--config', 'Release'],
+                           check=True, stdout=subprocess.PIPE)
+            subprocess.run([str(build / 'Release/huhucapture.exe')], check=True)
+
     @unittest.skipIf(os.name == 'nt', 'This actual host-C++/Ninja fixture runs on Linux')
     def test_actual_link_model_binds_the_linked_archive_and_rejects_an_unlinked_copy(self):
         for program in ('cmake', 'ninja', 'c++', 'ar'):
