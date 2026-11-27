@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -77,6 +78,43 @@ class ProjectNotices(unittest.TestCase):
 
 
 class NativeSourceIndex(unittest.TestCase):
+    def test_qt_source_archive_includes_pinned_submodule_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / 'parent'
+            child = parent / 'child'
+            child.mkdir(parents=True)
+
+            def git(repository, *arguments):
+                return native_materials.git(list(arguments), cwd=repository)
+
+            def commit(repository):
+                git(repository, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                    '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Source fixture')
+                return git(repository, 'rev-parse', 'HEAD')
+
+            for repository in (parent, child):
+                git(repository, 'init', '--quiet')
+                git(repository, 'config', 'core.autocrlf', 'false')
+            (child / 'input.txt').write_bytes(b'Original child source\n')
+            git(child, 'add', 'input.txt')
+            child_commit = commit(child)
+            (parent / 'LICENSE').write_bytes(b'Original module notice\n')
+            git(parent, 'add', 'LICENSE')
+            git(parent, 'update-index', '--add', '--cacheinfo', f'160000,{child_commit},child')
+            parent_commit = commit(parent)
+            spdx = {'package': {'downloadLocation': f'git://code.qt.io/qt/qttools.git@{parent_commit}'}}
+            archives, notices = root / 'archives', root / 'notices'
+            archives.mkdir()
+            notices.mkdir()
+
+            report = qt_materials.retain_module_source(
+                materials, 'qttools', parent, spdx, archives, notices, '6.12.1')
+            self.assertEqual(report['submodules'], [{'path': 'child', 'commit': child_commit, 'submodules': []}])
+            with tarfile.open(archives / report['archive']['path']) as archive:
+                self.assertEqual(archive.extractfile('qttools/child/input.txt').read(), b'Original child source\n')
+                self.assertEqual(archive.extractfile('qttools/LICENSE').read(), b'Original module notice\n')
+
     def test_existing_crlf_blob_is_preserved_but_real_changes_are_rejected(self):
         # Reproduce the actual FFmpeg Windows false mismatch without fetching
         # dependencies or using an unrelated generated build receipt.

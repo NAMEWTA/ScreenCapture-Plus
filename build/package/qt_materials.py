@@ -10,6 +10,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import subprocess
 import tempfile
@@ -241,9 +242,6 @@ def retain_module_source(api, name, checkout, document, source_output, output, v
                      'Qt source checkout must be clean: ' + name)
     commit = api.command('git', '-C', checkout, 'rev-parse', 'HEAD')
     api.meta.require(re.fullmatch(r'[0-9a-f]{40}', commit), 'Qt source has no exact Git commit')
-    tree = api.command('git', '-C', checkout, 'ls-tree', '-r', 'HEAD')
-    api.meta.require(not re.search(r'^160000 ', tree, re.MULTILINE),
-                     'Qt source has uncollected Git submodules: ' + name)
     location = document['package'].get('downloadLocation', '')
     expected = re.fullmatch(r'git://code\.qt\.io/qt/' + re.escape(name) + r'\.git@([0-9a-f]{40})', location)
     binding = 'version-tag-only-not-bound-to-sdk'
@@ -265,16 +263,23 @@ def retain_module_source(api, name, checkout, document, source_output, output, v
             tags = api.command('git', '-C', checkout, 'tag', '--points-at', commit).splitlines()
             api.meta.require('v' + version in tags, 'Unbound Qt source checkout lacks the selected release tag')
     destination = source_output / (name + '-' + commit + '.tar.gz')
-    process = subprocess.Popen(['git', '-C', str(checkout), 'archive', '--format=tar',
-                                '--prefix=' + name + '/', commit], stdout=subprocess.PIPE)
-    try:
-        with destination.open('xb') as target, gzip.GzipFile(filename='', mode='wb', fileobj=target, mtime=0) as archive:
-            shutil.copyfileobj(process.stdout, archive, 1024 * 1024)
-        process.stdout.close()
-        api.meta.require(process.wait() == 0, 'Git could not archive the actual Qt source')
-    finally:
-        if process.poll() is None:
-            process.terminate(); process.wait()
+    tree = api.command('git', '-C', checkout, 'ls-tree', '-r', 'HEAD')
+    submodules = []
+    if re.search(r'^160000 ', tree, re.MULTILINE):
+        # Git archive leaves gitlinks empty. Export the exact child commits
+        # using the same object validation as the complete source bundle.
+        source_api = runpy.run_path(str(api.ROOT / 'scripts/create-source-bundle.py'))
+        with tempfile.TemporaryDirectory(prefix='qt-module-', dir=source_output) as temporary:
+            stage = Path(temporary)
+            source, _ = source_api['export_git'](checkout, commit, stage)
+            source_api['make_archive'](stage, destination, 0, archive_root=name)
+        submodules = source['submodules']
+    else:
+        with subprocess.Popen(['git', '-C', str(checkout), 'archive', '--format=tar',
+                               '--prefix=' + name + '/', commit], stdout=subprocess.PIPE) as process:
+            with destination.open('xb') as target, gzip.GzipFile(filename='', fileobj=target, mtime=0) as archive:
+                shutil.copyfileobj(process.stdout, archive, 1024 * 1024)
+            api.meta.require(process.wait() == 0, 'Git could not archive the actual Qt source')
     notices = []
     candidates = sorted({path for path in checkout.iterdir() if path.is_file() and
                          path.name.upper().startswith(('LICENSE', 'COPYING', 'NOTICE'))} |
@@ -291,7 +296,7 @@ def retain_module_source(api, name, checkout, document, source_output, output, v
                      'Qt source checkout changed during collection')
     return {'module': name, 'repository': 'https://code.qt.io/qt/' + name + '.git', 'commit': commit,
             'sourceBinding': binding, 'archive': {'path': destination.name, **api.unchanged_digest(destination)},
-            'notices': notices}
+            'submodules': submodules, 'notices': notices}
 
 
 def collect(api, options):

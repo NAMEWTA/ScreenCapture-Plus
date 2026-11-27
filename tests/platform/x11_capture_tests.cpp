@@ -215,7 +215,8 @@ void scrolling(Pattern& pattern, const capture::Snapshot& snapshot)
     auto* dimensions = view->findChild<QLabel*>(QStringLiteral("scrollDimensions"));
     require(start && stop && dimensions, "Real scrolling actions and progress are present");
     view->hide(); controller.activate(); require(view->isVisible(), "The global activation path recovers hidden controls");
-    view->move(request.desktopRect->topLeft());
+    // Let the source stay exposed for the exact-pixel journey. The separate
+    // full-screen case below exercises the native control-hide path.
     start->click();
     require(view->isVisible() && !view->frameGeometry().intersects(*request.desktopRect),
         "Controls move outside a partial selection and keep Stop accessible");

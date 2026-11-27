@@ -618,12 +618,13 @@ def validate_cargo_config(path, packages):
     return "\n".join(lines).encode()
 
 
-def make_archive(root, archive, epoch, *, path_profile=None):
+def make_archive(root, archive, epoch, *, path_profile=None, archive_root="huhucapture-sources"):
+    require(relative(archive_root) == archive_root and "/" not in archive_root, "Archive root must be one directory")
     files = inventory(root, path_profile=path_profile)
     with archive.open("xb") as raw, gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0, compresslevel=6) as zipped:
         with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as tar:
             for item in files:
-                info = tarfile.TarInfo("huhucapture-sources/" + item["path"])
+                info = tarfile.TarInfo(archive_root + "/" + item["path"])
                 info.mode, info.mtime, info.uid, info.gid = item["mode"], epoch, 0, 0
                 info.uname = info.gname = ""
                 if item["type"] == "symlink":
@@ -636,7 +637,7 @@ def make_archive(root, archive, epoch, *, path_profile=None):
     require(inventory(root, path_profile=path_profile) == files, "Collected source tree changed during archiving")
     # Reopen and hash every archived entry, not merely the gzip header.
     with tempfile.TemporaryDirectory(prefix="huhucapture-source-verify-") as temp:
-        actual = extract_tar(archive, Path(temp), "huhucapture-sources", path_profile=path_profile)
+        actual = extract_tar(archive, Path(temp), archive_root, path_profile=path_profile)
         require(actual == files, "Written source archive differs from the verified collected tree")
     return descriptor(archive)
 
