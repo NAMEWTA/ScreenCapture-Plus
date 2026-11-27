@@ -1252,6 +1252,8 @@ class Collector:
             execution = read_json(stage / "executions/build-execution.json")
             lineage = helper.lineage_api()
             bound = lineage.validate(stage, journal, execution, helper.source_inventory_api())
+            if self.platform == "linux":
+                bound["debControl"] = helper.verify_deb_control(stage, prepared, execution)
             project = {entry["path"]: entry for entry in self.components["huhucapture"]["files"]}
             for producer in bound["producerSources"]:
                 source = project.get(producer["path"])
@@ -1405,7 +1407,7 @@ class Collector:
                         "Deployment link is dangling or outside the real installed tree")
                 continue
             require(set(origin) in ({"component", "path"}, {"receipt", "output"}, {"transformation", "output", "input"},
-                                    {"microsoftRuntime"}),
+                                    {"microsoftRuntime"}, {"debControl"}),
                     "Deployment source mapping must use exactly one origin form")
             origin, bound_entry = self.original_mapping(origin, entry)
             if origin is None:
@@ -1438,6 +1440,12 @@ class Collector:
                         name in ("installer/" + original["name"], "portable-zip/" + original["name"]) and
                         all(original[key] == entry[key] for key in ("sha256", "size")),
                         "Deployed Microsoft runtime differs from the verified app-local input: " + name)
+            elif "debControl" in origin:
+                transformation = self.source_transformations.get(origin["debControl"], {})
+                control = transformation.get("debControl", {}).get(name)
+                require(self.platform == "linux" and control is not None and
+                        all(control[key] == entry[key] for key in ("size", "sha256")),
+                        "DEB control data differs from the actual CPack package: " + name)
         require(inventory(directory) == actual, "Final deployed tree changed during source mapping validation")
         return {"treeSha256": tree_digest(actual), "files": actual, "products": products}
 

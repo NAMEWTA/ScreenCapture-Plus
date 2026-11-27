@@ -488,6 +488,8 @@ def linux_deb(appdir: Path, output: Path, workspace: Path, version: str, root: P
     }
     config.write_text('\n'.join('set('+key+' '+cmake_quote(value)+')' for key,value in settings.items())+
                       '\nset(CPACK_INSTALLED_DIRECTORIES '+cmake_quote(root)+' "/")\n')
+    if _execution_log is not None:
+        _execution_log.retain_record(config)
     run([tool('cpack'),'--config',config,'-G','DEB'],cwd=workspace)
     copy_exclusive(cpack_output/output.name,output)
     dpkg = tool('dpkg-deb')
@@ -509,6 +511,48 @@ def linux_deb(appdir: Path, output: Path, workspace: Path, version: str, root: P
     # final source mapping, not an inferred reconstruction from package fields.
     run([dpkg,'--control',output,root/'DEBIAN'])
     return root
+
+
+def verify_deb_control(stage, prepared, execution):
+    """Bind control files to the original CPack command and replay extraction."""
+    records = [item for item in execution['records'] if Path(item['inputPath']).name == 'CPackDEBConfig.cmake']
+    if not records:
+        return {}
+    meta.require(len(records) == 1, 'Only one original CPack DEB configuration is expected')
+    record = records[0]
+    original = Path(record['inputPath'])
+    meta.require(original.is_absolute() and original.parent.name == 'work',
+                 'The original CPack DEB configuration must belong to the preparation workspace')
+    retained = stage / 'executions/records' / Path(record['path']).name
+    meta.require(execution_api().identity(retained) == {key: record[key] for key in ('size', 'sha256')},
+                 'Original CPack DEB configuration changed after packaging')
+    original_stage = original.parents[1]
+    package = next(item for item in prepared['packages'] if item['packageKind'] == 'deb')
+    archive = stage / 'artifacts' / package['name']
+    original_archive = original_stage / 'artifacts' / archive.name
+    original_control = original_stage / 'payloads/deb/DEBIAN'
+    commands = execution['commands']
+    builds = [i for i, args in enumerate(commands) if Path(args[0]).name == 'cpack' and
+              args[1:] == ['--config', str(original), '-G', 'DEB']]
+    extracts = [i for i, args in enumerate(commands) if Path(args[0]).name == 'dpkg-deb' and
+                args[1:] == ['--control', str(original_archive), str(original_control)]]
+    meta.require(len(builds) == len(extracts) == 1 and builds[0] < extracts[0],
+                 'Original CPack and dpkg-deb commands do not describe the actual DEB control archive')
+    for index in (builds[0], extracts[0]):
+        program = commands[index][0]
+        recorded = execution['toolchain'][program]
+        meta.require(execution_api().identity(Path(recorded['path'])) == {key: recorded[key] for key in ('size', 'sha256')},
+                     'The original Debian packaging tool has changed: ' + program)
+    dpkg = execution['toolchain'][commands[extracts[0]][0]]['path']
+    with tempfile.TemporaryDirectory(prefix='verified-deb-control-') as temporary:
+        extracted = Path(temporary) / 'DEBIAN'
+        run([dpkg, '--control', archive, extracted])
+        control = meta.inventory(extracted, 'deb/DEBIAN/')
+    meta.require(control == meta.inventory(stage / 'payloads/deb/DEBIAN', 'deb/DEBIAN/') and
+                 {item['path'] for item in control} == {'deb/DEBIAN/control', 'deb/DEBIAN/md5sums'} and
+                 all('linkTarget' not in item for item in control),
+                 'Actual CPack-generated Debian control files differ from the frozen deployment')
+    return {item['path']: item for item in control}
 
 
 def package_products(platform):

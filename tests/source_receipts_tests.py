@@ -43,6 +43,43 @@ class SourceReceiptsTests(unittest.TestCase):
         return receipts['NativeBuild'](self.root / name, 'linux' if os.name != 'nt' else 'windows',
                                        __file__, 'fixture', self.source, self.pin, self.prefix)
 
+    @unittest.skipIf(os.name == 'nt', 'Requires actual Linux CPack and dpkg-deb')
+    def test_deb_control_metadata_is_bound_to_the_original_cpack_artifact(self):
+        stage = self.root / 'deb-stage'
+        artifacts = stage / 'artifacts'
+        payload = stage / 'payloads/deb'
+        work = stage / 'work'
+        for directory in (artifacts, payload, work):
+            directory.mkdir(parents=True)
+        (payload / 'test-installed-file.txt').write_text('A real CPack payload\n', encoding='utf-8')
+        name = 'source-receipt-test.deb'
+        config = work / 'CPackDEBConfig.cmake'
+        config.write_text(f'''set(CPACK_GENERATOR DEB)
+set(CPACK_PACKAGE_NAME source-receipt-test)
+set(CPACK_PACKAGE_VERSION 0.1.0)
+set(CPACK_PACKAGE_CONTACT "Fixture <source@example.invalid>")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Actual CPack source evidence fixture")
+set(CPACK_PACKAGE_DIRECTORY "{artifacts}")
+set(CPACK_DEBIAN_FILE_NAME {name})
+set(CPACK_INSTALLED_DIRECTORIES "{payload}" "/")
+''', encoding='utf-8')
+        log = receipts['ExecutionLog'](stage / 'executions', 'linux', __file__)
+        log.retain_record(config)
+        log.run([shutil.which('cpack'), '--config', config, '-G', 'DEB'], cwd=work)
+        archive = artifacts / name
+        control = payload / 'DEBIAN'
+        log.run([shutil.which('dpkg-deb'), '--control', archive, control], cwd=work)
+        execution = bundle.read_json(log.raw_record({}, {}))
+        prepared = {'packages': [{'packageKind': 'deb', 'name': name}]}
+        verify = source_plan['package'].verify_deb_control
+        bound = verify(stage, prepared, execution)
+        self.assertEqual(set(bound), {'deb/DEBIAN/control', 'deb/DEBIAN/md5sums'})
+        file = control / 'control'
+        with file.open('ab') as stream:
+            stream.write(b'Changed after original CPack generation\n')
+        with self.assertRaisesRegex(ValueError, 'differ from the frozen deployment'):
+            verify(stage, prepared, execution)
+
     @unittest.skipUnless(os.name == 'nt', 'Requires the actual Windows Visual Studio v143 release runtime')
     def test_actual_microsoft_runtime_remains_bound_to_its_app_local_bytes(self):
         fixture = self.root / 'msvc'

@@ -246,6 +246,10 @@ Authenticode 签名信息及完整文件哈希。两种包的应用根目录通�
 校验记录。微软提供这些 DLL 的可再分发形式与条件。
 [Visual Studio 2022 再分发说明](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution)
 
+Linux DEB 的 `control` 和 `md5sums` 由 CPack 根据实际打包输入生成。包准备阶段
+保留原配置和执行记录。源码装配从同一个 DEB 重新提取控制文件，用 `debControl`
+映射核对它们与冻结清单的尺寸和哈希。安装测试对照实际控制归档及文件系统中的安装内容。
+
 ## CI 接入顺序与当前边界
 
 ### 从实际材料装配最终部署计划

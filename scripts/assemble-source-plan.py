@@ -138,6 +138,11 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
                 unresolved.append({'path': name, 'reason': 'Microsoft runtime differs from its verified original input',
                                    'candidateCount': 0, 'candidates': []})
             continue
+        control_origins = [identifier for identifier, item in (transformations or {}).items()
+                           if name in item.get('debControl', {})]
+        if len(control_origins) == 1:
+            mapping[name] = {'debControl': control_origins[0]}
+            continue
         observers = [(identifier, item) for identifier, item in (transformations or {}).items()
                      if name in item.get('observedPaths', [])]
         if observers:
