@@ -1,0 +1,4 @@
+interface:
+  display_name: "环境部署"
+  short_description: "部署、升级或恢复指定环境，核实实际运行版本和业务入口"
+  default_prompt: "使用 $dev-deploy 部署指定目标环境，核对实际制品、业务验证和恢复记录。"

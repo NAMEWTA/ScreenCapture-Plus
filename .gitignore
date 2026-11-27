@@ -1,3 +1,4 @@
+/temp/
 # Build dependencies and output
 /.deps/
 /artifacts/
@@ -16,3 +17,5 @@ __pycache__/
 # Python maintenance and release validation caches
 __pycache__/
 *.py[cod]
+/.agents/dev/worktree/
+/.agents/.skills-hub-backups/
