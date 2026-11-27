@@ -5,6 +5,7 @@
 | 想解决的问题 | 阅读入口 |
 | --- | --- |
 | Qt 重构完成到哪里，哪些能力尚不能当作产品交付？ | [迁移状态与保护边界](qt-migration.md) |
+| 不同平台与桌面的采集入口和验证范围是什么？ | [平台支持](platform-support.md) |
 | 启动参数、一次性实例与主实例动作转发怎样保留原有语义？ | [共享启动与本地 IPC](qt-startup.md) |
 | 主程序如何装配服务、处理无托盘桌面并等待真实退出？ | [Qt 应用生命周期](qt-application.md) |
 | GNOME 桌面完成动作怎样确认能到达当前采集实例？ | [桌面完成动作](desktop-capture-action.md) |
@@ -19,6 +20,7 @@
 | 编辑输出、历史预览和清理怎样由应用连接真实服务？ | [媒体工作区](media-workspace.md) |
 | 二维码怎样共享原解码器、字符转换和像素预算？ | [二维码识别](qr-recognition.md) |
 | 如何构建固定 LocalSend core，验证真实 TLS 与文件提交？ | [LocalSend core 适配](localsend-core.md) |
+| 如何在两台设备之间发送并接收历史媒体？ | [局域网媒体互传](lan-transfer.md) |
 | GIF 与 LocalSend 怎样只链接一个 Rust 库，CRT 和线程如何约束？ | [Rust 聚合库与原生 ABI](rust-bridge.md) |
 | 文件传输如何预留空间、展示进度并等待真实归档终态？ | [共享传输服务](transfer-service.md) |
 | 设备选择、证书确认、接收和任务窗口怎样连接同一传输服务？ | [局域网共享界面](lan-interface.md) |

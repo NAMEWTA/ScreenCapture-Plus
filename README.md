@@ -80,6 +80,8 @@ Windows 和 Linux 使用同一套 Qt 界面和编辑器。平台能力、用户�
 
 Windows 10 1803 可继续使用 [Windows v0.0.6](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.6)。Linux 的 Wayland 授权与全局快捷键取决于桌面环境的 Portal 支持。
 
+各平台的采集方式和适用范围见 [平台支持](docs/platform-support.md)。历史记录中的发送与接收流程见 [局域网媒体互传](docs/lan-transfer.md)。
+
 在 **设置 → 关于** 可以下载本平台的完整更新包。更新器校验清单与文件后将下载保存在系统下载目录。Windows 从 v0.0.6 更新时应把完整 ZIP 解压到新目录。使用更早版本的用户可直接下载安装器或完整 ZIP。
 
 ### 常用操作
