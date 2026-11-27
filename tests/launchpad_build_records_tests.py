@@ -6,6 +6,7 @@ collector's binding/transport contracts, not any Ubuntu producer or signature.
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -155,8 +156,14 @@ class ProtocolTests(Fixture):
         build = {**self.build, 'archive_link': archive}
         with self.assertRaisesRegex(ValueError, 'copy provenance'):
             records.validate_build(build, self.build_link, self.package, self.series, [self.publication])
+        security = {**self.publication, 'copied_from_archive_link': archive}
+        updates = {**self.publication, 'copied_from_archive_link': records.ARCHIVE}
         records.validate_build(build, self.build_link, self.package, self.series,
-                               [{**self.publication, 'copied_from_archive_link': archive}])
+                               [security, updates])
+        for publications in ([updates], [security, self.publication],
+                             [security, {**updates, 'copied_from_archive_link': archive + '-other'}]):
+            with self.subTest(publications=publications), self.assertRaisesRegex(ValueError, 'copy provenance'):
+                records.validate_build(build, self.build_link, self.package, self.series, publications)
 
     def test_publications_do_not_take_the_first_different_producer(self):
         downloader = records.Downloader(self.root)
@@ -215,6 +222,24 @@ class ProtocolTests(Fixture):
     def test_duplicate_api_identity_fields_are_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Duplicate JSON'):
             records.strict_json(b'{"buildstate":"Successfully built","buildstate":"Failed to build"}')
+
+    def test_librarian_retains_gzip_build_log_bytes_without_decoding(self):
+        url = 'https://launchpad.net/buildlog.txt.gz'
+        final = 'https://launchpadlibrarian.net/123/buildlog.txt.gz'
+        headers = {'Content-Encoding': 'x-gzip'}
+        raw = gzip.compress(b'Compiler ran successfully\n', mtime=0)
+        downloader = records.Downloader(self.root)
+        with patch.object(records, 'build_opener') as factory:
+            factory.return_value.open.return_value = Response(final, raw, headers)
+            result = downloader.fetch(url, self.root / 'log.gz', limit=100, build_log=True)
+            self.assertEqual((self.root / 'log.gz').read_bytes(), raw)
+            self.assertEqual(result['headers']['Content-Encoding'], 'x-gzip')
+            factory.return_value.open.return_value = Response(final, raw, headers)
+            with self.assertRaisesRegex(ValueError, 'Encoded HTTP'):
+                downloader.fetch(url, self.root / 'control', limit=100)
+            factory.return_value.open.return_value = Response(final, b'plain text', headers)
+            with self.assertRaisesRegex(ValueError, 'contain gzip bytes'):
+                downloader.fetch(url, self.root / 'not-gzip', limit=100, build_log=True)
 
 
 @unittest.skipUnless(shutil.which('dpkg-deb'), 'Actual dpkg archive integration requires dpkg-deb')

@@ -220,13 +220,16 @@ python scripts/collect-launchpad-build-records.py \
 版本和 amd64 架构。所有输入通过后，才从 Ubuntu primary archive 查询准确版本
 的 binary publication，并追随其实际 `build_link`；不会根据文件名构造 build ID，
 或在多个不同构建中选择第一条。原发布记录的来源、架构和版本必须完全一致，
-构建记录须属于同一 Ubuntu series、同源版本与架构，状态为成功。primary 中
-复制的安全更新还必须保留与实际构建 archive 一致的 `copied_from_archive_link`。
+构建记录须属于同一 Ubuntu series、同源版本与架构，状态为成功。非 primary
+构建必须有一条发布记录的 `copied_from_archive_link` 指向实际构建 archive。
+同一构建在 primary 的 Security 和 Updates 等 pocket 之间复制时，其他发布
+记录的复制来源也可以是 primary。
 
 采集只允许 HTTPS 的官方 Launchpad / API / librarian 域名，每次重定向都再次
 验证域名，限制请求大小、分页与总下载量。HTTP 拒绝、缺失记录、空的三件套 URL、
 歧义或校验失败均返回非零并保留已取得的原始证据；不会切换镜像绕过拒绝。
 API 响应、`.changes`、`.buildinfo` 和压缩或未压缩的 build log 按原字节保存。
+Launchpad librarian 将 `.gz` 构建日志标为 HTTP `x-gzip` 时，保留压缩字节并校验 gzip 文件头。
 `.changes` 必须以 SHA256 / 大小绑定原 `.buildinfo`，两个记录各自必须绑定输入
 的准确 `.deb`；共同列出的其他文件哈希也必须一致。Source 的括号版本单独解析，
 保留 binNMU 与 source version 的差异。原有安装树与 `.deb` 内文件的对应关系仍

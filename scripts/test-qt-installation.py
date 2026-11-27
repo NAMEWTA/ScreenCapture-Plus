@@ -251,6 +251,10 @@ class Validation:
         self.report['packages'] = [{key: item[key] for key in ('name', 'size', 'sha256', 'packageKind')} for item in assets]
 
     def payload(self, kind):
+        return [entry for entry in self.package_inventory(kind)
+                if kind != 'deb' or not entry['path'].startswith('DEBIAN/')]
+
+    def package_inventory(self, kind):
         prefix = kind + '/'
         result = []
         for record in self.info['files']:
@@ -506,6 +510,11 @@ class Validation:
         case = {'kind': 'deb', 'mechanism': 'real-apt-dpkg-install-reinstall-remove-purge', 'preservation': [], 'gui': []}
         self.report['cases'].append(case)
         package = self.packages / self.assets['deb']['name']
+        control = self.output / 'deb-control'
+        self.run(['dpkg-deb', '--control', package, control], tag='deb-extract-control')
+        expected_control = [entry for entry in self.package_inventory('deb') if entry['path'].startswith('DEBIAN/')]
+        meta.require(meta.inventory(control, 'DEBIAN/') == sorted(expected_control, key=lambda entry: entry['path']),
+                     'DEB control archive differs from the recorded package control files')
         self.native_root = root; self.native_started = True
         for index, stage in enumerate(('installed', 'same-package-reinstalled')):
             options = ['--reinstall'] if index else []

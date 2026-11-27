@@ -98,7 +98,7 @@ class Downloader:
         self.records = []
         self.downloaded = 0
 
-    def fetch(self, url, path, *, limit, api=False):
+    def fetch(self, url, path, *, limit, api=False, build_log=False):
         official_url(url, api=api)
         path = Path(path)
         require(not path.exists() and path.resolve().is_relative_to(self.root.resolve()),
@@ -112,7 +112,10 @@ class Downloader:
             with opener.open(request, timeout=30) as response:
                 final = official_url(response.geturl(), api=api)
                 require(response.status == 200, 'Original Launchpad request did not return HTTP 200')
-                require(response.headers.get('Content-Encoding', 'identity').lower() == 'identity',
+                encoding = response.headers.get('Content-Encoding', 'identity').lower()
+                encoded_log = (build_log and not api and encoding in ('gzip', 'x-gzip') and
+                               artifact_name(url) == artifact_name(final) and artifact_name(url).endswith('.gz'))
+                require(encoding == 'identity' or encoded_log,
                         'Encoded HTTP responses cannot replace original artifact bytes')
                 length = response.headers.get('Content-Length')
                 require(length is None or (length.isdigit() and 0 < int(length) <= limit),
@@ -120,6 +123,9 @@ class Downloader:
                 size, digest = 0, hashlib.sha256()
                 with path.open('xb') as stream:
                     while block := response.read(min(1024 * 1024, limit - size + 1)):
+                        if encoded_log and not size:
+                            require(block.startswith(b'\x1f\x8b\x08'),
+                                    'An original gzip build log must contain gzip bytes')
                         size += len(block)
                         self.downloaded += len(block)
                         require(size <= limit and self.downloaded <= MAX_DOWNLOADS,
@@ -131,7 +137,8 @@ class Downloader:
                 record = {'path': path.relative_to(self.root).as_posix(), 'requestedUrl': url,
                           'responseUrl': final, 'httpStatus': response.status, 'size': size,
                           'sha256': digest.hexdigest(), 'headers': {name: response.headers[name]
-                          for name in ('Content-Type', 'ETag', 'Last-Modified') if name in response.headers}}
+                          for name in ('Content-Type', 'Content-Encoding', 'ETag', 'Last-Modified')
+                          if name in response.headers}}
         except HTTPError as error:
             # Preserve a bounded original failure response, including an observed
             # access denial. Do not rewrite its URL or retry through another host.
@@ -318,11 +325,12 @@ def validate_build(build, link, package, series_link, published):
             build.get('buildstate') == 'Successfully built' and build.get('datebuilt'),
             'Original build is not the exact successful Ubuntu source/version/architecture/series build')
     archive = official_url(build.get('archive_link'), api=True)
-    # Ubuntu security/updates can copy a completed binary into the primary
-    # archive. Follow the actual primary publication and retain its copy origin;
-    # never query an arbitrary PPA or infer a build from a versioned filename.
+    # Ubuntu can copy a security build into the primary Security pocket and
+    # then copy the same build between primary pockets. Require a direct copy
+    # from the actual producer alongside any copies within the primary archive.
     if archive != ARCHIVE:
-        require(all(entry.get('copied_from_archive_link') == archive for entry in published),
+        origins = {entry.get('copied_from_archive_link') for entry in published}
+        require(archive in origins and origins <= {archive, ARCHIVE},
                 'Non-primary build archive lacks matching original publication copy provenance')
     for field in ('changesfile_url', 'buildinfo_url', 'build_log_url'):
         official_url(build.get(field))
@@ -424,7 +432,7 @@ def collect(system_sources, series, output, project):
                 name = artifact_name(build_record[field])
                 require(suffix is None or name.endswith(suffix), 'Original build artifact has an unexpected file type')
                 path = directory / 'originals' / name
-                downloader.fetch(build_record[field], path, limit=limit)
+                downloader.fetch(build_record[field], path, limit=limit, build_log=field == 'build_log_url')
                 artifacts[field] = path
             binding = bind_records(package, archive, artifacts['changesfile_url'],
                                    artifacts['buildinfo_url'], artifacts['build_log_url'])
