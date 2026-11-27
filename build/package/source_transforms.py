@@ -316,7 +316,7 @@ def validate(stage, transformations, execution, api):
                 require(identity == value['buildIdentity'] and kind in ('appimage', 'deb', 'installer', 'portable-zip') and
                         destination.endswith('/installation.json') and output_identity == bytes_identity(marker_bytes(identity, kind)) and
                         event['identityInput']['domain'] == 'payload' and
-                        event['identityInput']['path'] == str(Path(destination).with_name('build-identity.json')),
+                        event['identityInput']['path'] == Path(destination).with_name('build-identity.json').as_posix(),
                         'Generated package marker differs from its actual identity/script inputs')
                 identity_origin = current(event['identityInput'])
                 if identity_origin is None:

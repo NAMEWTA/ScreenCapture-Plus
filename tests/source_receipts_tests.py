@@ -43,6 +43,53 @@ class SourceReceiptsTests(unittest.TestCase):
         return receipts['NativeBuild'](self.root / name, 'linux' if os.name != 'nt' else 'windows',
                                        __file__, 'fixture', self.source, self.pin, self.prefix)
 
+    def test_copied_package_marker_resolves_its_posix_identity_sibling(self):
+        transforms = source_plan['package'].lineage_api()
+        stage = self.root / 'marker-stage'
+        payloads = stage / 'payloads'
+        payloads.mkdir(parents=True)
+        identity = {'version': '0.1.0', 'platform': 'windows', 'architecture': 'x64'}
+        receipts['write_new'](self.prefix / 'build-identity.json', identity)
+        (self.prefix / 'installation.json').write_bytes(transforms.marker_bytes(identity, 'portable-zip'))
+        execution = receipts['ExecutionLog'](stage / 'executions', 'windows', __file__)
+        recorder = transforms.Recorder(stage, self.prefix, execution, bundle)
+        execution.run([sys.executable, '-c', 'print("actual packaging fixture")'], cwd=stage)
+        destination = payloads / 'installer'
+        recorder.copy_tree(self.prefix, destination)
+        recorder.write_marker(destination / 'installation.json', identity, 'installer')
+        inventory = bundle.inventory(payloads)
+        mapping = recorder.finish(identity, inventory)
+        raw = bundle.read_json(execution.raw_record({'installedInput': recorder.original},
+                                                   {'files': inventory, 'fileTransformations': mapping}))
+        checked = transforms.validate(stage, {'buildIdentity': identity, 'fileTransformations': mapping}, raw, bundle)
+        self.assertEqual(checked['origins']['installer/installation.json']['input']['path'], 'installation.json')
+
+    @unittest.skipUnless(os.name == 'nt', 'Compares real NTFS checkout modes against the canonical Git archive')
+    def test_windows_native_source_receipt_keeps_git_executable_mode_in_archive(self):
+        (self.source / 'configure').write_bytes(b'#!/bin/sh\n')
+        (self.source / 'COPYING').write_bytes(b'Native source receipt fixture notice\n')
+        bundle.git(self.source, 'add', 'configure', 'COPYING')
+        bundle.git(self.source, 'update-index', '--chmod=+x', 'configure')
+        bundle.git(self.source, 'commit', '--quiet', '-m', 'Tracked executable input')
+        bundle.git(self.source, 'remote', 'add', 'origin', self.pin['repository'])
+        self.pin['commit'] = bundle.git(self.source, 'rev-parse', 'HEAD').decode().strip()
+        producer = receipts['NativeBuild'](self.root / 'receipt', 'windows', __file__,
+                                           'libportal', self.source, self.pin, self.prefix)
+        output = self.prefix / 'actual.bin'
+        producer.run([sys.executable, '-c', 'from pathlib import Path; Path("actual.bin").write_bytes(b"built")'],
+                     cwd=self.prefix)
+        plan = producer.finish()
+        native = runpy.run_path(str(ROOT / 'scripts/collect-native-source-materials.py'))
+        destination = self.root / 'native-source-output'
+        destination.mkdir()
+        inputs = {}
+        record = native['archive_source']('libportal', self.source, self.pin, destination, destination, inputs)
+        archive = bundle.read_json(destination / record['sourceInventory']['path'])['archiveFiles']
+        self.assertEqual(next(item for item in archive if item['path'] == 'configure')['mode'], '100755')
+        bound = native['producer_receipt']('libportal', plan, self.root, self.prefix, record,
+            [{'path': 'actual.bin', 'originalPath': str(output), **receipts['identity'](output)}], destination, inputs)
+        self.assertEqual(bound['sourceTreeSha256'], producer.source_hash)
+
     @unittest.skipIf(os.name == 'nt', 'Requires actual Linux CPack and dpkg-deb')
     def test_deb_control_metadata_is_bound_to_the_original_cpack_artifact(self):
         stage = self.root / 'deb-stage'

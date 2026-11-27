@@ -24,7 +24,7 @@
 #include <vector>
 
 #ifdef Q_OS_WIN
-#include <windows.h>
+#include "windows_clipboard_read.h"
 #include <shellapi.h>
 #else
 #include <QDBusConnection>
@@ -72,28 +72,8 @@ void equalPixels(const QImage& image, const QImage& expected)
 }
 
 #ifdef Q_OS_WIN
-class ClipboardLock final {
-public:
-    ClipboardLock()
-    {
-        waitFor([&] { return opened_ || (opened_ = OpenClipboard(nullptr) != FALSE); }, "the receiving process opens the real Windows clipboard", 3000);
-    }
-    ~ClipboardLock() { if (opened_) CloseClipboard(); }
-private: bool opened_{};
-};
-class GlobalRead final {
-public:
-    explicit GlobalRead(UINT format)
-    {
-        handle_ = static_cast<HGLOBAL>(GetClipboardData(format));
-        require(handle_ != nullptr, "the real Windows clipboard exposes a required format");
-        size = GlobalSize(handle_); data = static_cast<const unsigned char*>(GlobalLock(handle_));
-        require(data != nullptr, "lock the actual transferred clipboard memory");
-    }
-    ~GlobalRead() { if (data) GlobalUnlock(handle_); }
-    const unsigned char* data{}; SIZE_T size{};
-private: HGLOBAL handle_{};
-};
+using Tests::ClipboardLock;
+using Tests::GlobalRead;
 void receiveImage(const QImage& expected)
 {
     ClipboardLock lock;

@@ -515,16 +515,22 @@ def producer_receipt(family, specification, workspace, prefix, source_record, ru
             specification.get('staticFiles') == {} and specification.get('buildRecords'),
             'Unsupported same-run native producer receipt')
     strict = materials.module('huhucapture_native_source_bundle', ROOT / 'scripts/create-source-bundle.py')
-    original_inventory = materials.meta.json_read(source_output / source_record['sourceInventory']['path'])['archiveFiles']
+    source_inventory = materials.meta.json_read(source_output / source_record['sourceInventory']['path'])
+    # The original Git archive preserves executable bits that NTFS cannot
+    # apply to the producer's exported checkout. Verify the receipt with that
+    # checkout's actual mode information and keep the canonical archive intact.
+    windows_modes = {item['path']: item['executable'] for item in source_inventory.get('worktreeFiles', [])
+                     if 'executable' in item} if os.name == 'nt' else {}
     files = []
-    for item in original_inventory:
+    for item in source_inventory['archiveFiles']:
         if item['mode'] == '120000':
             data = item['linkTarget'].encode('utf-8')
             files.append({'path': item['path'], 'type': 'symlink', 'target': item['linkTarget'],
                           'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'mode': 0o777})
         else:
+            executable = windows_modes.get(item['path'], item['mode'] == '100755')
             files.append({'path': item['path'], 'type': 'file', 'size': item['size'], 'sha256': item['sha256'],
-                          'mode': 0o755 if item['mode'] == '100755' else 0o644})
+                          'mode': 0o755 if executable else 0o644})
     source_hash = strict.tree_digest(sorted(files, key=lambda item: item['path']))
     base = Path('families') / family / 'producer'
 

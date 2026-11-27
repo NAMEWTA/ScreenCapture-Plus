@@ -29,9 +29,14 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <vector>
+
+#ifdef Q_OS_WIN
+#include "windows_clipboard_read.h"
+#endif
 
 namespace app = HuhuCapture::Application;
 namespace cap = HuhuCapture::Capture;
@@ -53,6 +58,18 @@ void waitFor(const std::function<bool()>& ready, const char* message)
 }
 template<class Function> auto worker(Function function)
 { return std::async(std::launch::async, std::move(function)).get(); }
+
+QImage receivedClipboardImage()
+{
+#ifdef Q_OS_WIN
+    const HuhuCapture::Tests::ClipboardLock lock;
+    const HuhuCapture::Tests::GlobalRead png(RegisterClipboardFormatW(L"PNG"));
+    require(png.size <= static_cast<SIZE_T>((std::numeric_limits<int>::max)()), "Native PNG fits the clipboard decoder");
+    return QImage::fromData(png.data, static_cast<int>(png.size), "png");
+#else
+    return QApplication::clipboard()->image();
+#endif
+}
 
 class ColorWindow final : public QWidget {
 public:
@@ -197,7 +214,7 @@ void actualDesktop()
     const auto archivedPath = listed.entries.front().path;
     require(QImage(archivedPath).convertToFormat(QImage::Format_ARGB32) == expected.convertToFormat(QImage::Format_ARGB32),
         "The real archive preserves the exact selected physical pixels");
-    require(QApplication::clipboard()->image().convertToFormat(QImage::Format_ARGB32) == expected.convertToFormat(QImage::Format_ARGB32),
+    require(receivedClipboardImage().convertToFormat(QImage::Format_ARGB32) == expected.convertToFormat(QImage::Format_ARGB32),
         "Actual desktop clipboard publication receives the same selected pixels");
 
     selected = selectActual(journey, pattern);
