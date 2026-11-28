@@ -1,6 +1,7 @@
 """Verify original Microsoft release CRT inputs selected by the VS generator."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -21,7 +22,8 @@ $dll = Get-Item -LiteralPath $env:HUHUCAPTURE_CRT_INPUT
 $signature = Get-AuthenticodeSignature -LiteralPath $dll.FullName
 if ($signature.Status -ne 'Valid' -or
     $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') {
-    throw 'The original CRT DLL does not have a trusted Microsoft signature'
+    throw ('{0}: Authenticode status {1}. {2} Signer: {3}' -f
+        $dll.FullName, $signature.Status, $signature.StatusMessage, $signature.SignerCertificate.Subject)
 }
 [pscustomobject]@{
     signer = $signature.SignerCertificate.Subject
@@ -60,9 +62,12 @@ def verify_input(path, metadata):
     metadata.require(metadata.machine(path) == 'windows', 'The Microsoft runtime DLL must be x64 PE')
     before = metadata.descriptor(path)
     shell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    checked = subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-Command', SIGNATURE_COMMAND],
-                             env={**os.environ, 'HUHUCAPTURE_CRT_INPUT': str(path)}, check=True,
-                             capture_output=True, encoding='utf-8', timeout=30)
+    command = base64.b64encode(SIGNATURE_COMMAND.encode('utf-16-le')).decode('ascii')
+    checked = subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-EncodedCommand', command],
+                             env={**os.environ, 'HUHUCAPTURE_CRT_INPUT': str(path)},
+                             capture_output=True, encoding='utf-8', errors='replace', timeout=30)
+    metadata.require(checked.returncode == 0,
+                     f'Cannot verify the original Microsoft CRT DLL {path}: {checked.stderr.strip()}')
     signature = json.loads(checked.stdout)
     metadata.require(metadata.descriptor(path) == before, 'Original CRT DLL changed during signature verification')
     return {'path': str(path), **before, **signature}

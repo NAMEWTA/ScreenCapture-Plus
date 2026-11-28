@@ -616,6 +616,9 @@ jobs:
           artifact-ids: ${{ needs.fixtures.outputs.fixture_id }}
           path: artifacts/video-fixtures
           merge-multiple: true
+      - name: Verify the installed Visual Studio redistributable before building Qt
+        shell: pwsh
+        run: python tests/source_receipts_tests.py SourceReceiptsTests.test_actual_microsoft_runtime_remains_bound_to_its_app_local_bytes -v
       - name: Build one source-attributed Windows Qt prefix
         id: qt_source
         shell: pwsh
