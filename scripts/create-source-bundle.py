@@ -1254,6 +1254,15 @@ class Collector:
             bound = lineage.validate(stage, journal, execution, helper.source_inventory_api())
             if self.platform == "linux":
                 bound["debControl"] = helper.verify_deb_control(stage, prepared, execution)
+                generator = Path(__file__).resolve().parents[1] / "build/package/linuxdeploy_generated.py"
+                linuxdeploy = runpy.run_path(str(generator))
+                lock = self.project / "build/package/dependencies.lock.json"
+                bound["linuxdeployGenerated"], archives = linuxdeploy["verify"](stage, prepared, execution,
+                                                                                lock, helper.source_inventory_api())
+                if archives:
+                    self.retain("linuxdeploy-generated-helper", str(generator))
+                    for key, archive in archives.items():
+                        self.retain(key.lower() + "-generator-source", str(archive))
             project = {entry["path"]: entry for entry in self.components["huhucapture"]["files"]}
             for producer in bound["producerSources"]:
                 source = project.get(producer["path"])
@@ -1407,7 +1416,7 @@ class Collector:
                         "Deployment link is dangling or outside the real installed tree")
                 continue
             require(set(origin) in ({"component", "path"}, {"receipt", "output"}, {"transformation", "output", "input"},
-                                    {"microsoftRuntime"}, {"debControl"}),
+                                    {"microsoftRuntime"}, {"debControl"}, {"linuxdeployGenerated"}),
                     "Deployment source mapping must use exactly one origin form")
             origin, bound_entry = self.original_mapping(origin, entry)
             if origin is None:
@@ -1446,6 +1455,12 @@ class Collector:
                 require(self.platform == "linux" and control is not None and
                         all(control[key] == entry[key] for key in ("size", "sha256")),
                         "DEB control data differs from the actual CPack package: " + name)
+            elif "linuxdeployGenerated" in origin:
+                transformation = self.source_transformations.get(origin["linuxdeployGenerated"], {})
+                generated = transformation.get("linuxdeployGenerated", {}).get(name)
+                require(self.platform == "linux" and generated is not None and
+                        all(generated[key] == entry[key] for key in ("size", "sha256")),
+                        "Generated Linux payload file differs from the locked original generator: " + name)
         require(inventory(directory) == actual, "Final deployed tree changed during source mapping validation")
         return {"treeSha256": tree_digest(actual), "files": actual, "products": products}
 

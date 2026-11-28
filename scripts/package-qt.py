@@ -219,6 +219,8 @@ def verify_tools(root: Path, destination: Path):
             record = meta.descriptor(related)
             meta.require(record['size'] == expected['size'] and record['sha256'] == expected['sha256'],
                          'Packager source/license material differs from its reviewed pin: '+key)
+            if material == 'sourceArchive' and key in ('linuxdeploy', 'linuxdeployPluginQt'):
+                copy_exclusive(related, destination / (key + '-source.tar.gz'))
             if key == 'appimageRuntime' and material == 'licenseRecord':
                 paths['appimageRuntimeLicense'] = related
         provenance.append({'name':key, **specification})

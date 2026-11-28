@@ -174,6 +174,11 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
         if len(control_origins) == 1:
             mapping[name] = {'debControl': control_origins[0]}
             continue
+        generator_origins = [identifier for identifier, item in (transformations or {}).items()
+                             if name in item.get('linuxdeployGenerated', {})]
+        if len(generator_origins) == 1:
+            mapping[name] = {'linuxdeployGenerated': generator_origins[0]}
+            continue
         observers = [(identifier, item) for identifier, item in (transformations or {}).items()
                      if name in item.get('observedPaths', [])]
         if observers:
