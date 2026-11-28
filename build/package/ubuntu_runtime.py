@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import runpy
 import subprocess
 import tempfile
@@ -121,8 +121,9 @@ def collect(collector, system, builds, build_report_path):
         binary_name = name.split(':')[0]
         anchor = proof.prove('binaries', binary_name, package['version'], lambda stanza:
             stanza.get('architecture') == package['architecture'] and stanza.get('size') == str(pin['size']) and
-            stanza.get('sha256') == pin['sha256'] and launchpad['source_field'](stanza.get('source', binary_name),
-                stanza['version']) == (package['sourcePackage'], package['sourceVersion']))
+            stanza.get('sha256') == pin['sha256'] and PurePosixPath(stanza.get('filename', '')).name == archive.name and
+            launchpad['source_field'](stanza.get('source', binary_name), stanza['version']) ==
+                (package['sourcePackage'], package['sourceVersion']))
         if anchor is None:
             continue
         publish = original_build(collector, build_report_path, {**uploads[name], 'series': builds['series']}, record, archive)

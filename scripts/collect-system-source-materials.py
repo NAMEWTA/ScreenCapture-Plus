@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import re
 import sys
@@ -70,10 +70,26 @@ def selected_binary_index(text, package):
     require(match and match[1] == package['sourcePackage'] and
             (match[2] or package['version']) == package['sourceVersion'],
             'APT binary/source association differs from the original installed dpkg package')
-    keys = ('package', 'version', 'architecture', 'sha256', 'size', 'source')
+    keys = ('package', 'version', 'architecture', 'sha256', 'size', 'source', 'filename')
     require(all(all(item.get(key) == selected.get(key) for key in keys) for item in matches),
             'APT indexes disagree about the installed binary package bytes/source')
     return selected
+
+
+def retained_binary_archive(directory, stanza):
+    files = list(directory.iterdir())
+    expected = {'size': int(stanza['size']), 'sha256': stanza['sha256']}
+    require(len(files) == 1 and files[0].suffix == '.deb' and debian.identity(files[0]) == expected,
+            'Downloaded binary package differs from its exact APT index pin')
+    published = PurePosixPath(stanza['filename'])
+    require(published.parts[:1] == ('pool',) and '..' not in published.parts and published.suffix == '.deb',
+            'Expected the original published Ubuntu binary package filename')
+    destination = directory / debian.basename(published.name)
+    # APT encodes an epoch in its local download name. The publisher's .changes
+    # and .buildinfo use the pool filename without the epoch.
+    if files[0] != destination:
+        files[0].rename(destination)
+    return destination
 
 
 def match_extracted_binary(root, origin):
@@ -224,24 +240,23 @@ def collect(options):
             indexed = selected_binary_index(stdout, package)
             downloads = directory / 'download'; downloads.mkdir()
             execute(['apt-get', *APT_AUTH, 'download', package_name + '=' + package['version']], cwd=downloads)
-            debs = list(downloads.iterdir())
-            require(len(debs) == 1 and debs[0].suffix == '.deb' and
-                    debian.identity(debs[0]) == {'size': int(indexed['size']), 'sha256': indexed['sha256']},
-                    'Downloaded binary package differs from its exact APT index pin')
+            archive = retained_binary_archive(downloads, indexed)
             bindings = []
             with tempfile.TemporaryDirectory(prefix='actual-deb-', dir=output) as temporary:
                 extracted = Path(temporary)
-                execute(['dpkg-deb', '--extract', debs[0], extracted], cwd=directory)
+                execute(['dpkg-deb', '--extract', archive, extracted], cwd=directory)
                 for item in records:
                     if item['origin']['package'] == package_name:
                         name = match_extracted_binary(extracted, item['origin'])
                         bindings.append({'installedPath': item['path'], 'root': item.get('root', 'installed'), 'packagePath': name,
                                          **{key: item['origin'][key] for key in ('size', 'sha256')}})
-            report['binaryPackages'].append({**package, 'archive': {'path': str(debs[0]), **debian.identity(debs[0])},
+            archive_pin = debian.identity(archive)
+            observed[archive] = archive_pin
+            report['binaryPackages'].append({**package, 'archive': {'path': str(archive), **archive_pin},
                                              'originalIndex': {'path': str(index), **debian.identity(index)}, 'files': bindings,
                                              'copyright': previous['copyright']})
-            binary_pins[(package_name.split(':', 1)[0], package['version'])] = debian.identity(debs[0])
-            material('debian-binary-' + package_name.replace(':', '_'), debs[0])
+            binary_pins[(package_name.split(':', 1)[0], package['version'])] = archive_pin
+            material('debian-binary-' + package_name.replace(':', '_'), archive)
             material('debian-binary-index-' + package_name.replace(':', '_'), index)
         for family, version in sorted(families.items()):
             identifier = 'openssl' if family == 'openssl' else 'system-' + family
