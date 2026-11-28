@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -601,6 +602,9 @@ def prepare(args):
     execution=execution_api().ExecutionLog(stage/'executions',platform,Path(__file__).resolve())
     execution.retain_record(ROOT/'build/package/dependencies.lock.json')
     execution.retain_record(stage/'installed-input-inventory.json')
+    notice_helper = ROOT/'build/package/installed_notices.py'
+    execution.retain_record(notice_helper)
+    runpy.run_path(str(notice_helper))['record'](installed, execution.directory, original, collector)
     lineage=lineage_api().Recorder(stage,installed,execution,collector)
     _execution_log=execution
     _file_lineage=lineage

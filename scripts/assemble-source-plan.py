@@ -186,6 +186,14 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
         if len(generator_origins) == 1:
             mapping[name] = {'linuxdeployGenerated': generator_origins[0]}
             continue
+        copyright_name = (name.removeprefix('appimage/') if name.startswith('appimage/') else
+                          'usr/' + name.removeprefix('deb/opt/huhucapture/'))
+        copyright_origins = [identifier for identifier, item in (ubuntu_runtime or {}).items()
+                             if item.get('copyright', {}).get('path') == copyright_name and
+                             all(item['copyright'][key] == entry[key] for key in ('size', 'sha256'))]
+        if len(copyright_origins) == 1:
+            mapping[name] = {'ubuntuNotice': copyright_origins[0]}
+            continue
         observers = [(identifier, item) for identifier, item in (transformations or {}).items()
                      if name in item.get('observedPaths', [])]
         if observers:
@@ -249,6 +257,11 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
         if len(candidates) == 1:
             mapping[name] = candidates[0]
         else:
+            notices = [identifier for identifier, item in (transformations or {}).items()
+                       if name in item.get('installedNotices', {})]
+            if len(notices) == 1:
+                mapping[name] = {'installedNotice': notices[0]}
+                continue
             unresolved.append({'path': name, 'reason': 'ambiguous verified origins' if candidates else
                                'no matching source/build output', 'candidateCount': len(candidates),
                                'candidates': candidates[:8]})

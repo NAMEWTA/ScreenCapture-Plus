@@ -131,6 +131,9 @@ def build(options):
                        'Installed application metadata differs from its actual CMake-generated file')
         log.retain_record(original)
         outputs.append({'path': copied.relative_to(installed).as_posix(), **API['identity'](copied)})
+    qt_configuration = binary.with_name('qt.conf')
+    log.retain_record(qt_configuration)
+    outputs.append({'path': qt_configuration.relative_to(installed).as_posix(), **API['identity'](qt_configuration)})
     rust_source = sources.components['rust-vendor']['sourceTreeSha256']
     receipt = {'schemaVersion': 1, 'kind': 'huhucapture-source-build-receipt', 'platform': sources.platform,
                'commands': log.commands, 'toolchain': log.tools,

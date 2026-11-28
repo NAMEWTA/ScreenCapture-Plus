@@ -127,6 +127,12 @@ def collect(collector, system, builds, build_report_path):
             continue
         publish = original_build(collector, build_report_path, {**uploads[name], 'series': builds['series']}, record, archive)
         files = {}
+        identifier, source_anchor = source
+        notice = record.get('copyright', {})
+        copyright_source = 'usr/share/doc/' + binary_name + '/copyright'
+        notice_pin = {key: notice[key] for key in ('size', 'sha256')} if notice else None
+        retained_notice = 'debian-notice-' + name.replace(':', '_')
+        notice_verified = False
         with tempfile.TemporaryDirectory(prefix='original-ubuntu-deb-', dir=collector.stage) as temporary:
             extracted = Path(temporary)
             subprocess.run(['dpkg-deb', '--extract', archive, extracted], check=True, timeout=60)
@@ -143,8 +149,18 @@ def collect(collector, system, builds, build_report_path):
                     require(header.startswith(b'\x7fELF\x02\x01') and header[18:20] == b'\x3e\x00',
                             'Expected an actual original x64 Ubuntu ELF library')
                 files[relative] = {'path': relative, **byte_pin}
+            if notice_pin:
+                published_notice = (extracted / copyright_source).resolve()
+                if published_notice.is_relative_to(extracted) and published_notice.is_file():
+                    notice_verified = debian.identity(published_notice) == notice_pin
         require(files, 'The published Ubuntu runtime package has no verified deployed file')
-        identifier, source_anchor = source
-        binaries[name] = {'package': package, 'source': identifier, 'sourceIndex': source_anchor,
-                          'binaryIndex': anchor, 'build': publish, 'outputs': list(files.values())}
+        result = {'package': package, 'source': identifier, 'sourceIndex': source_anchor,
+                  'binaryIndex': anchor, 'build': publish, 'outputs': list(files.values())}
+        if notice_pin:
+            source_notice = collector.sources / identifier / 'debian/copyright'
+            if notice_verified or debian.identity(source_notice) == notice_pin:
+                require(debian.identity(proof.material(retained_notice)) == notice_pin,
+                        'Retained Ubuntu copyright differs from its original source/package bytes')
+                result['copyright'] = {'path': copyright_source, 'material': retained_notice, **notice_pin}
+        binaries[name] = result
     return binaries, {identifier: anchor for identifier, anchor in sources.values()}

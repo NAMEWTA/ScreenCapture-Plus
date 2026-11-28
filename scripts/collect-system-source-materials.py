@@ -238,7 +238,8 @@ def collect(options):
                         bindings.append({'installedPath': item['path'], 'root': item.get('root', 'installed'), 'packagePath': name,
                                          **{key: item['origin'][key] for key in ('size', 'sha256')}})
             report['binaryPackages'].append({**package, 'archive': {'path': str(debs[0]), **debian.identity(debs[0])},
-                                             'originalIndex': {'path': str(index), **debian.identity(index)}, 'files': bindings})
+                                             'originalIndex': {'path': str(index), **debian.identity(index)}, 'files': bindings,
+                                             'copyright': previous['copyright']})
             binary_pins[(package_name.split(':', 1)[0], package['version'])] = debian.identity(debs[0])
             material('debian-binary-' + package_name.replace(':', '_'), debs[0])
             material('debian-binary-index-' + package_name.replace(':', '_'), index)

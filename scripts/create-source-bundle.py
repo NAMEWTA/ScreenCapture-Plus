@@ -1300,6 +1300,12 @@ class Collector:
                 files = extract_tar(self.stage / material["path"], Path(temporary), "huhucapture-sources")
                 require(files == journal["executionInventory"],
                         "Retained packaging execution archive differs from the original per-file evidence")
+            notice_helper = Path(__file__).resolve().parents[1] / "build/package/installed_notices.py"
+            notices = runpy.run_path(str(notice_helper))
+            bound["installedNotices"] = notices["verified"](stage, bound, execution["inputs"]["installedInput"],
+                                                           helper.source_inventory_api())
+            if bound["installedNotices"]:
+                self.retain("installed-notice-helper-" + identifier, str(notice_helper))
             bound = lineage.bind_observed_inputs(bound, self.receipts, self.ubuntu_runtime)
             for name in bound["observedPaths"]:
                 if name not in bound["origins"]:
@@ -1442,7 +1448,8 @@ class Collector:
                         "Deployment link is dangling or outside the real installed tree")
                 continue
             require(set(origin) in ({"component", "path"}, {"receipt", "output"}, {"transformation", "output", "input"},
-                                    {"microsoftRuntime"}, {"debControl"}, {"linuxdeployGenerated"}, {"ubuntuRuntime", "output"}),
+                                    {"microsoftRuntime"}, {"debControl"}, {"linuxdeployGenerated"}, {"ubuntuRuntime", "output"},
+                                    {"installedNotice"}, {"ubuntuNotice"}),
                     "Deployment source mapping must use exactly one origin form")
             origin, bound_entry = self.original_mapping(origin, entry)
             if origin is None:
@@ -1476,6 +1483,12 @@ class Collector:
                 matches = [item for item in runtime.get("outputs", []) if item["path"] == relative(origin["output"])]
                 require(len(matches) == 1 and all(matches[0][key] == bound_entry[key] for key in ("sha256", "size")),
                         "Deployed Linux library differs from the verified original Ubuntu binary package: " + name)
+            elif "ubuntuNotice" in origin:
+                notice = self.ubuntu_runtime.get(origin["ubuntuNotice"], {}).get("copyright")
+                require(notice is not None and name in ("appimage/" + notice["path"],
+                        "deb/opt/huhucapture/" + notice["path"].removeprefix("usr/")) and
+                        all(notice[key] == entry[key] for key in ("size", "sha256")),
+                        "Packaged Ubuntu copyright differs from its verified original source or package: " + name)
             elif "microsoftRuntime" in origin:
                 original = self.microsoft_runtime.get(origin["microsoftRuntime"])
                 require(self.platform == "windows" and original is not None and
@@ -1494,6 +1507,11 @@ class Collector:
                 require(self.platform == "linux" and generated is not None and
                         all(generated[key] == entry[key] for key in ("size", "sha256")),
                         "Generated Linux payload file differs from the locked original generator: " + name)
+            elif "installedNotice" in origin:
+                transformation = self.source_transformations.get(origin["installedNotice"], {})
+                notice = transformation.get("installedNotices", {}).get(name)
+                require(notice is not None and all(notice[key] == entry[key] for key in ("size", "sha256")),
+                        "Deployed notice differs from the retained original packaging input: " + name)
         require(inventory(directory) == actual, "Final deployed tree changed during source mapping validation")
         return {"treeSha256": tree_digest(actual), "files": actual, "products": products}
 
