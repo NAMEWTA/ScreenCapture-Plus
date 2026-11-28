@@ -164,7 +164,9 @@ runner 完成四家族源码收集。完整正向验收必须由上述实际 CI 
 
 `scripts/collect-system-source-materials.py` 继续处理 `collect-runtime-materials.py system`
 已经逐字节归属的 dpkg 库。它必须在原 Linux amd64 runner、原安装目录仍未经过
-linuxdeploy/strip 改写时运行；需要该 runner 的真实 dpkg 数据库，以及含精确已安装
+linuxdeploy/strip 改写时运行。传入 `--prepared` 时，它也读取同次打包原始记录，
+以最早连续的 patchelf 观察和宿主机库的 SHA256 归属后来增加的 ELF。需要该 runner
+的真实 dpkg 数据库，以及含精确已安装
 源码版本的 APT `deb-src` 索引。缺索引或旧版本已不在源中时直接失败，不选择 latest、
 修改系统 APT 配置或安装软件。
 
@@ -172,6 +174,7 @@ linuxdeploy/strip 改写时运行；需要该 runner 的真实 dpkg 数据库，
 python scripts/collect-system-source-materials.py \
   --installed artifacts/install/linux \
   --runtime-materials artifacts/runtime-materials-linux/runtime-materials.json \
+  --prepared artifacts/packages/linux-prepared \
   --output artifacts/system-source-linux
 ```
 
@@ -191,13 +194,12 @@ copyright，以及原 runtime 收集的 common-license 文本。binNMU 的二进
 仍使用 `icu`，不会被发行版的 `system-icu` 替代。完整的实际命令、日志和退出码
 封存为独立材料，原安装目录和已存在结果不被修改。
 
-该入口保留**来源材料与二进制字节关联**，不生成 `NativeBuild` 收据。当前尚未
-保留可独立离线验证的原始 Release 签名到 Packages / Sources 索引链，正式收集器
-明确保留此缺项；APT 的实际下载日志不能代替该签名链。当次发行方的精确
-`.buildinfo`、配置 / 链接日志和静态输入范围也继续缺失，不能从 `debian/rules`
-推测某次真正使用的参数或填写 `complete`。有可信签名链、精确 `.deb` / `.dsc`
-和 recipes 只说明发行方声明的二进制与源码关系；原构建参数仍需对应实际产物的
-构建记录。
+在 Ubuntu 上，收集器使用系统 Ubuntu archive keyring 验证原 APT `InRelease`，
+读取实际缓存索引，以已签名的 SHA256 和大小核对完整未压缩的 `Packages` / `Sources`，
+保留包含精确 `.deb` 和 `.dsc` 条目的原始索引。最终来源收集器重验链路，并结合
+下节的 Ubuntu build 记录、原 `.deb` 解包及连续的实际打包改写，核对发布的库字节。
+缺少签名索引或原构建记录的库会保留为缺项。Ubuntu 归属记录采用独立类型，记录
+发行方构建来源和实物字节，仓库自身构建仍使用 `NativeBuild` 收据。
 
 格式依据为 [APT 的精确版本下载](https://manpages.debian.org/bookworm/apt/apt-get.8.en.html)、
 [Debian source package 及 recipes](https://www.debian.org/doc/debian-policy/ch-source.html)
@@ -236,11 +238,10 @@ Launchpad librarian 将 `.gz` 构建日志标为 HTTP `x-gzip` 时，保留压�
 由前一阶段的实际解包校验负责，这个入口不会为最终变换后的 ELF 创建新映射。
 
 成功状态 `original-build-records-bound-to-debs` 只说明这些原记录与已保留二进制
-字节相符。报告继续记录原收集器的 gaps，并明确当前缺少的 Release 签名链、
-`.changes` / `.buildinfo` 签名验证、完整实际 configure / link / 静态输入和可信
-producer receipt。解析 clear-signed 包装不等于验证签名；自行计算 build log 的
-SHA256 也不等于发行方提供过该摘要。`Installed-Build-Depends` 和 `Environment`
-原字段作为观察保留，不据此补造实际命令或 `NativeBuild` 收据。
+字节相符。报告保留原收集器的缺项及记录的验证范围，包括 `.changes` 和 `.buildinfo`
+的签名状态、发行方记录的编译输入范围、build log 是否由原摘要绑定。最终映射对
+Ubuntu archive 签名索引独立验证，以签名索引中的精确 `.deb` 为锚点。原始
+`Installed-Build-Depends` 和 `Environment` 字段随 build 记录归档。
 
 输出 `materials-plan.json` 可作为后续装配器额外 `--inputs`，只含真实材料，
 不会提供 `sources`、`buildReceipts` 或完整性声明。原生 Ubuntu 工作流在系统

@@ -741,9 +741,20 @@ class Collector:
     def __init__(self, plan, plan_directory, stage):
         self.plan, self.base, self.stage = plan, plan_directory, stage
         self.gaps, self.components, self.materials, self.receipts, self.source_transformations = [], {}, {}, {}, {}
-        self.microsoft_runtime = {}
+        self.microsoft_runtime, self.ubuntu_runtime, self.ubuntu_sources = {}, {}, {}
+        self.original_materials = {}
         self.sources = stage / "sources"
         self.sources.mkdir()
+
+    safe_path = staticmethod(relative)
+
+    def original_material(self, path):
+        original = self.path(str(path))
+        require(original in self.original_materials, "Required original material was not retained: " + str(path))
+        return self.original_materials[original]
+
+    def has_original_material(self, path):
+        return self.path(str(path)) in self.original_materials
 
     def path(self, value):
         require(isinstance(value, str) and value, "A real local input path is required")
@@ -765,6 +776,7 @@ class Collector:
         target.chmod(0o644)
         require(descriptor(path) == actual and descriptor(target) == actual, "Material changed during collection")
         self.materials[identifier] = {**actual, "path": relative_path}
+        self.original_materials[path] = target
         return target
 
     def component(self, identifier, provenance, files, family=None, source_path=None, external_licenses=None):
@@ -985,11 +997,6 @@ class Collector:
                     "Original Debian source material changed during retention")
             retained.append(self.materials[material_id])
         provenance["retainedOriginals"] = retained
-        # A Sources stanza and matching .dsc establish byte consistency. They
-        # are not the original signed Release -> index chain. The producer's
-        # APT execution is retained separately, without inventing an offline
-        # archive signature or treating this extraction as a binary build.
-        self.gap(identifier + ": original authenticated repository index/signature chain is missing")
         if not any(Path(entry["path"]).suffix.lower() in (".c", ".cc", ".cpp", ".h", ".hpp", ".rs", ".s")
                    for entry in files if entry["type"] == "file"):
             self.gap(identifier + ": Debian source package has no recognizable native source files")
@@ -1227,9 +1234,27 @@ class Collector:
                         "Build receipt output lacks an exact file identity")
             self.receipts[identifier] = {**value, "retainedBuildRecords": retained_records}
         used = {source["id"] for receipt in self.receipts.values() for source in receipt["sources"]}
+        used.update(value["source"] for value in self.ubuntu_runtime.values())
         for identifier in self.components:
             if identifier not in used and identifier != "localsend":
                 self.gap(identifier + ": matching source/build-parameter receipt is missing")
+
+    def collect_ubuntu_runtime(self):
+        if self.platform != "linux":
+            return
+        system = self.materials.get("debian-system-source-report")
+        builds = [path for path in self.original_materials if path.name == "launchpad-build-records.json"]
+        if system and len(builds) == 1:
+            report = read_json(self.stage / system["path"])
+            if "authenticatedIndexes" in report:
+                helper_path = Path(__file__).resolve().parents[1] / "build/package/ubuntu_runtime.py"
+                helper = runpy.run_path(str(helper_path))
+                self.ubuntu_runtime, self.ubuntu_sources = helper["collect"](
+                    self, report, read_json(self.original_material(builds[0])), builds[0])
+                self.retain("ubuntu-runtime-proof-helper", str(helper_path))
+        for identifier, component in self.components.items():
+            if component["source"].get("kind") == "debian-source" and identifier not in self.ubuntu_sources:
+                self.gap(identifier + ": original authenticated repository index/signature chain is missing")
 
     def collect_source_transformations(self):
         for item in self.plan.get("sourceTransformations", []):
@@ -1275,7 +1300,7 @@ class Collector:
                 files = extract_tar(self.stage / material["path"], Path(temporary), "huhucapture-sources")
                 require(files == journal["executionInventory"],
                         "Retained packaging execution archive differs from the original per-file evidence")
-            bound = lineage.bind_observed_inputs(bound, self.receipts)
+            bound = lineage.bind_observed_inputs(bound, self.receipts, self.ubuntu_runtime)
             for name in bound["observedPaths"]:
                 if name not in bound["origins"]:
                     self.gap(identifier + ": " + bound["unresolved"][name] + ": " + name)
@@ -1300,7 +1325,7 @@ class Collector:
         if set(origin) != {"transformation", "output", "input"}:
             return origin, entry
         require(origin["output"] == name and isinstance(origin["input"], dict) and
-                set(origin["input"]) in ({"receipt", "output"}, {"component", "path"}),
+                set(origin["input"]) in ({"receipt", "output"}, {"component", "path"}, {"ubuntuRuntime", "output"}),
                 "Derived deployment mapping must retain exactly one original source/build origin")
         transformation = self.source_transformations.get(origin["transformation"])
         bound = transformation.get("origins", {}).get(name) if transformation else None
@@ -1312,7 +1337,8 @@ class Collector:
         if observed:
             require(name in transformation.get("observedPaths", []) and
                     bound["input"].get("kind") == "observed-input" and
-                    set(origin["input"]) == {"receipt", "output"} and origin["input"] == bound.get("producer"),
+                    set(origin["input"]) in ({"receipt", "output"}, {"ubuntuRuntime", "output"}) and
+                    origin["input"] == bound.get("producer"),
                     "Observed native input is not bound to its unique independently verified original build output")
         return origin["input"], {"type": "file", **bound["input"]}
 
@@ -1416,7 +1442,7 @@ class Collector:
                         "Deployment link is dangling or outside the real installed tree")
                 continue
             require(set(origin) in ({"component", "path"}, {"receipt", "output"}, {"transformation", "output", "input"},
-                                    {"microsoftRuntime"}, {"debControl"}, {"linuxdeployGenerated"}),
+                                    {"microsoftRuntime"}, {"debControl"}, {"linuxdeployGenerated"}, {"ubuntuRuntime", "output"}),
                     "Deployment source mapping must use exactly one origin form")
             origin, bound_entry = self.original_mapping(origin, entry)
             if origin is None:
@@ -1443,6 +1469,13 @@ class Collector:
                 matches = [item for item in receipt["outputs"] if item["path"] == relative(origin["output"])]
                 require(len(matches) == 1 and all(matches[0][key] == bound_entry[key] for key in ("sha256", "size")),
                         "Deployed binary/data file differs from its source build receipt: " + name)
+            elif "ubuntuRuntime" in origin:
+                require(self.platform == "linux" and (name.startswith("appimage/usr/lib/") or name.startswith("deb/opt/huhucapture/lib/")),
+                        "A published Ubuntu library cannot account for this package path: " + name)
+                runtime = self.ubuntu_runtime.get(origin["ubuntuRuntime"], {})
+                matches = [item for item in runtime.get("outputs", []) if item["path"] == relative(origin["output"])]
+                require(len(matches) == 1 and all(matches[0][key] == bound_entry[key] for key in ("sha256", "size")),
+                        "Deployed Linux library differs from the verified original Ubuntu binary package: " + name)
             elif "microsoftRuntime" in origin:
                 original = self.microsoft_runtime.get(origin["microsoftRuntime"])
                 require(self.platform == "windows" and original is not None and
@@ -1490,6 +1523,7 @@ class Collector:
         self.collect_rust()
         for item in self.plan.get("materials", []):
             self.retain(item["id"], item["path"])
+        self.collect_ubuntu_runtime()
         self.collect_receipts()
         self.collect_source_transformations()
         deployment = self.collect_deployment()
@@ -1510,6 +1544,8 @@ class Collector:
                   "completionScope": "All recorded source/build/deployment inputs verified; independent distribution review remains required"}
         if self.microsoft_runtime:
             report["microsoftRuntime"] = list(self.microsoft_runtime.values())
+        if self.ubuntu_runtime:
+            report["ubuntuRuntime"] = self.ubuntu_runtime
         (self.stage / "source-inventory.json").write_bytes(canonical(report))
         return report
 

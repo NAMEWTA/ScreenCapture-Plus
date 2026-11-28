@@ -352,7 +352,7 @@ def validate(stage, transformations, execution, api):
             'unresolved': uncertain, 'producerSources': value['producerSources']}
 
 
-def bind_observed_inputs(observations, receipts):
+def bind_observed_inputs(observations, receipts, ubuntu_runtime=None):
     """Bind first observed bytes only to one independently verified producer.
 
     The caller must validate receipts first. No source blob, filename heuristic,
@@ -364,6 +364,10 @@ def bind_observed_inputs(observations, receipts):
         for output in receipt['outputs']:
             outputs.setdefault((output['size'], output['sha256']), []).append(
                 {'receipt': identifier, 'output': output['path']})
+    for identifier, runtime in (ubuntu_runtime or {}).items():
+        for output in runtime['outputs']:
+            outputs.setdefault((output['size'], output['sha256']), []).append(
+                {'ubuntuRuntime': identifier, 'output': output['path']})
     for name in observations['observedPaths']:
         result['origins'].pop(name, None)
         candidate = observations['observedOrigins'].get(name)

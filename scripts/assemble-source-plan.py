@@ -136,7 +136,7 @@ def installed_notice_origins(name, candidates):
 
 
 def proposed_mapping(directory, files, components, receipts, products, supplied=None, transformations=None,
-                     microsoft_runtime=None):
+                     microsoft_runtime=None, ubuntu_runtime=None):
     """Use only verified equal bytes; ambiguity stays a gap for explicit review."""
     supplied = supplied or {}
     bundle.require(isinstance(supplied, dict) and set(supplied) <= {item['path'] for item in files},
@@ -151,7 +151,14 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
         for entry in receipt['outputs']:
             output_index.setdefault((entry['size'], entry['sha256']), []).append(
                 {'receipt': identifier, 'output': entry['path']})
+    for identifier, runtime in (ubuntu_runtime or {}).items():
+        for entry in runtime['outputs']:
+            output_index.setdefault((entry['size'], entry['sha256']), []).append(
+                {'ubuntuRuntime': identifier, 'output': entry['path']})
     applications = {str(PurePosixPath(item['root']) / item['executable']) for item in products}
+    def is_application(origin):
+        return any(source['id'] == 'huhucapture' for source in receipts.get(origin.get('receipt'), {}).get('sources', []))
+
     mapping, unresolved = {}, []
     for entry in files:
         name = entry['path']
@@ -191,8 +198,7 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
                                all(bound['output'][field] == entry[field] for field in ('path', 'size', 'sha256')),
                                'First observed transformation input differs from the verified final bytes')
                 producer = bound['producer']
-                if name in applications and not any(source['id'] == 'huhucapture'
-                        for source in receipts[producer['receipt']]['sources']):
+                if name in applications and not is_application(producer):
                     continue
                 candidates.append({'transformation': identifier, 'output': name, 'input': producer})
             if len(candidates) == 1:
@@ -204,8 +210,7 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
         key = (entry['size'], entry['sha256'])
         candidates = output_index.get(key, [])
         if name in applications:
-            candidates = [item for item in candidates if any(source['id'] == 'huhucapture'
-                          for source in receipts[item['receipt']]['sources'])]
+            candidates = [item for item in candidates if is_application(item)]
         with (directory / name).open('rb') as stream:
             prefix = stream.read(4)
         # A source tree containing a prebuilt binary does not establish its
@@ -231,8 +236,7 @@ def proposed_mapping(directory, files, components, receipts, products, supplied=
                 original = bound['input']; original_key = original['size'], original['sha256']
                 origins = output_index.get(original_key, [])
                 if name in applications:
-                    origins = [item for item in origins if any(source['id'] == 'huhucapture'
-                               for source in receipts[item['receipt']]['sources'])]
+                    origins = [item for item in origins if is_application(item)]
                 if not origins and not native and name not in applications:
                     origins = source_index.get(original_key, [])
                 if len(origins) > 1:
@@ -314,7 +318,7 @@ def assemble(inputs, receipt_plans, stage, output, source_map=None):
         supplied = bundle.read_json(source_map.resolve(strict=True)) if source_map else None
         mapping, unresolved = proposed_mapping(stage / 'payloads', files, collector.components, collector.receipts,
                                                prepared['products'], supplied, collector.source_transformations,
-                                               collector.microsoft_runtime)
+                                               collector.microsoft_runtime, collector.ubuntu_runtime)
         write_new(output / 'deployment-source-map.json', mapping)
         plan['deployment'] = {'directory': str(stage / 'payloads'),
                               'inventory': str(stage / 'source-deployment-inventory.json'),
