@@ -328,8 +328,8 @@ jobs:
         run: python scripts/retain-package-stage.py --stage artifacts/packages/linux-prepared --output artifacts/package-stage-linux
       - name: Retain exact distro sources from the original deployed library identities
         id: system_sources
-        if: ${{ !cancelled() && steps.runtime_install.outcome == 'success' }}
-        run: python scripts/collect-system-source-materials.py --installed artifacts/install/linux --runtime-materials artifacts/runtime-materials-linux/runtime-materials.json --output artifacts/system-source-linux
+        if: ${{ !cancelled() && steps.prepared.outcome == 'success' }}
+        run: python scripts/collect-system-source-materials.py --installed artifacts/install/linux --runtime-materials artifacts/runtime-materials-linux/runtime-materials.json --prepared artifacts/packages/linux-prepared --output artifacts/system-source-linux
       - name: Retain original Ubuntu build records bound to the exact runtime packages
         id: ubuntu_build_records
         if: ${{ !cancelled() && steps.system_sources.outcome == 'success' }}

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Retain exact dpkg runtime packages, source archives and Debian build recipes.
 
-Run on the original Linux build runner after runtime attribution, before package
-transforms. This downloads exact versions through APT; it installs nothing and
-does not alter APT configuration. Missing deb-src indexes or historical versions
-fail explicitly. Collection never invents a native build receipt.
+Run on the original Linux build runner after runtime attribution and package
+preparation. This downloads exact versions through APT without installing them.
+For a prepared package, the first continuous patchelf observation identifies
+the original bytes of libraries added by linuxdeploy.
 """
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ def module(name, path):
 materials = module('huhucapture_system_runtime_materials', ROOT / 'scripts/collect-runtime-materials.py')
 receipts = module('huhucapture_system_execution', ROOT / 'build/package/source_receipts.py')
 debian = module('huhucapture_system_debian_source', ROOT / 'build/package/debian_sources.py')
+ubuntu = module('huhucapture_system_ubuntu_indexes', ROOT / 'build/package/ubuntu_archive_indexes.py')
 bundle = receipts.bundle
 require = bundle.require
 APT_AUTH = ['-o', 'APT::Get::AllowUnauthenticated=false', '-o', 'Acquire::AllowInsecureRepositories=false',
@@ -96,6 +97,42 @@ def match_extracted_binary(root, origin):
     return next(iter(candidates)).relative_to(root).as_posix()
 
 
+def added_system_libraries(stage, build):
+    package = module('huhucapture_distro_package', ROOT / 'scripts/package-qt.py')
+    prepared = package.verify_prepared(stage)
+    require({key: value for key, value in prepared['build'].items() if key != 'packagingTools'} == build,
+            'The prepared package belongs to a different original runtime')
+    journal = bundle.read_json(stage / 'transformations.json')
+    execution = bundle.read_json(stage / 'executions/build-execution.json')
+    lineage = package.lineage_api().validate(stage, journal, execution, package.source_inventory_api())
+    cache = materials.loader_cache()
+    records, unmatched = [], []
+    for name, chain in lineage['observedOrigins'].items():
+        if Path(name).parent.as_posix() != 'appimage/usr/lib':
+            continue
+        path = stage / 'payloads' / bundle.relative(name)
+        soname = materials.sdk.elf_soname(path)
+        if not soname:
+            continue
+        expected = {key: chain['input'][key] for key in ('size', 'sha256')}
+        matches = {}
+        for candidate in cache.get(soname, []):
+            if candidate.is_file() and materials.unchanged_digest(candidate) == expected:
+                matches.setdefault(candidate.resolve(strict=True), candidate)
+        if len(matches) != 1:
+            unmatched.append(name)
+            continue
+        original, loader = next(iter(matches.items()))
+        try:
+            owner = materials.sdk.owner(loader)
+        except RuntimeError:
+            unmatched.append(name)
+            continue
+        records.append({'path': name, 'root': 'prepared', 'origin': {'kind': 'dpkg', 'package': owner,
+                       'originalPath': str(original), 'loaderPath': str(loader), 'soname': soname, **expected}})
+    return records, unmatched
+
+
 def collect(options):
     require(platform.system() == 'Linux' and platform.machine() in ('x86_64', 'amd64'),
             'Collect Debian runtime source material on the original Linux amd64 runner')
@@ -116,10 +153,11 @@ def collect(options):
     execution = receipts.ExecutionLog(output / 'executions', 'linux', Path(__file__))
     execution.retain_record(original_path)
     execution.retain_record(ROOT / 'build/package/debian_sources.py')
+    execution.retain_record(ROOT / 'build/package/ubuntu_archive_indexes.py')
     observed = {original_path: materials.unchanged_digest(original_path)}
     report = {'schemaVersion': 1, 'kind': 'huhucapture-debian-source-materials', 'buildIdentity': build,
               'status': 'collecting', 'binaryPackages': [], 'sourcePackages': [],
-              'gaps': ['debian-repository: the original signed Release/index chain is not yet retained for independent offline verification'],
+              'gaps': [],
               'scope': 'Exact original dpkg/.deb bytes, source archives, Debian patches and recipes; no upstream build receipt'}
     plan = {'schemaVersion': 1, 'platform': 'linux', 'project': str(ROOT), 'sources': [], 'materials': []}
     def material(identifier, path):
@@ -132,7 +170,7 @@ def collect(options):
         return execution.run(arguments, cwd=cwd, env=env if env is not None else environment, capture=capture)
     try:
         records = [item for item in original.get('binaries', []) if item.get('origin', {}).get('kind') == 'dpkg']
-        packages = original.get('packages', {})
+        packages = dict(original.get('packages', {}))
         require(records and set(packages) == {item['origin']['package'] for item in records},
                 'Original runtime report has no exact matching set of attributed dpkg libraries/packages')
         notices = [(name.replace(':', '_'), item['copyright']) for name, item in sorted(packages.items())]
@@ -154,7 +192,24 @@ def collect(options):
                 observed[original_file] = expected
             require(materials.sdk.owner(Path(item['origin']['loaderPath'])) == item['origin']['package'],
                     'The current dpkg owner differs from the original runtime attribution')
-        families = {}
+        if options.prepared:
+            stage = options.prepared.resolve(strict=True)
+            require(not stage.is_relative_to(output) and not output.is_relative_to(stage),
+                    'The source collection and prepared package must use separate directories')
+            deployed, unmatched = added_system_libraries(stage, build)
+            records.extend(deployed)
+            report['unmatchedDeploymentLibraries'] = unmatched
+            report['gaps'].extend('No unique original host ELF matches the observed input: ' + name for name in unmatched)
+            for item in deployed:
+                origin = item['origin']
+                observed[Path(origin['originalPath'])] = {key: origin[key] for key in ('size', 'sha256')}
+                name = origin['package']
+                if name not in packages:
+                    notice = packages[name] = materials.package_notice(name, output)
+                    retained = output / bundle.relative(notice['copyright']['path'])
+                    material('debian-notice-' + name.replace(':', '_'), retained)
+                    observed[retained] = {key: notice['copyright'][key] for key in ('size', 'sha256')}
+        families, binary_pins, source_pins = {}, {}, {}
         for package_name, previous in sorted(packages.items()):
             package = package_identity(package_name, execute, output)
             require(all(previous.get(key) == value for key, value in package.items()),
@@ -180,10 +235,11 @@ def collect(options):
                 for item in records:
                     if item['origin']['package'] == package_name:
                         name = match_extracted_binary(extracted, item['origin'])
-                        bindings.append({'installedPath': item['path'], 'packagePath': name,
+                        bindings.append({'installedPath': item['path'], 'root': item.get('root', 'installed'), 'packagePath': name,
                                          **{key: item['origin'][key] for key in ('size', 'sha256')}})
             report['binaryPackages'].append({**package, 'archive': {'path': str(debs[0]), **debian.identity(debs[0])},
                                              'originalIndex': {'path': str(index), **debian.identity(index)}, 'files': bindings})
+            binary_pins[(package_name.split(':', 1)[0], package['version'])] = debian.identity(debs[0])
             material('debian-binary-' + package_name.replace(':', '_'), debs[0])
             material('debian-binary-index-' + package_name.replace(':', '_'), index)
         for family, version in sorted(families.items()):
@@ -193,6 +249,7 @@ def collect(options):
             stdout, _ = execute(['apt-cache', '--only-source', 'showsrc', family], cwd=directory, capture=True)
             index = directory / 'Sources-records.txt'; record_text(index, stdout)
             _, indexed = debian.selected_index(stdout, family, version)
+            source_pins[(family, version)] = indexed
             downloads = directory / 'download'; downloads.mkdir()
             execute(['apt-get', *APT_AUTH, '--download-only', '--only-source', '--yes',
                      'source', family + '=' + version], cwd=downloads)
@@ -210,6 +267,15 @@ def collect(options):
             report['sourcePackages'].append({key: source_record[key] for key in ('id', 'source', 'sourceTreeSha256')})
             report['gaps'].append(identifier + ': original distribution buildinfo/configure/link evidence and matching build receipt remain uncollected')
             observed.update(inputs)
+        if platform.freedesktop_os_release().get('ID') == 'ubuntu':
+            indexes = ubuntu.collect(output / 'archive-indexes', execute, debian, binary_pins, source_pins, material)
+            report['authenticatedIndexes'] = indexes
+            for category, pins in (('binaries', binary_pins), ('sources', source_pins)):
+                for key in pins:
+                    if '='.join(key) not in indexes[category]:
+                        report['gaps'].append('The signed Ubuntu archive did not bind the exact ' + category + ' input: ' + '='.join(key))
+        else:
+            report['gaps'].append('debian-repository: signed indexes were not collected for this distribution')
         require(all(materials.unchanged_digest(path) == expected for path, expected in observed.items()),
                 'Original runtime or source package bytes changed during collection')
         materials.meta.verify_inventory(installed, installed_files)
@@ -217,7 +283,8 @@ def collect(options):
         report_path = output / 'system-sources.json'; receipts.write_new(report_path, report)
         material('debian-system-source-report', report_path)
         execution.raw_record({'runtimeReport': observed[original_path], 'buildIdentity': build},
-                             {'binaryPackages': report['binaryPackages'], 'sourcePackages': report['sourcePackages']})
+                             {'binaryPackages': report['binaryPackages'], 'sourcePackages': report['sourcePackages'],
+                              'authenticatedIndexes': report.get('authenticatedIndexes', {})})
         archive = output / 'source-collection-execution.tar.gz'
         bundle.make_archive(execution.directory, archive, 0)
         material('debian-system-source-execution', archive)
@@ -235,6 +302,7 @@ def main():
     parser.add_argument('--installed', type=Path, required=True)
     parser.add_argument('--runtime-materials', type=Path, required=True,
                         help='Original successful collect-runtime-materials system report from this runner')
+    parser.add_argument('--prepared', type=Path, help='Frozen package preparation from this same Linux build')
     parser.add_argument('--output', type=Path, required=True, help='New separate material directory')
     args = parser.parse_args()
     try:
