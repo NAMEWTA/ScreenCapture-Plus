@@ -7,13 +7,15 @@
 
 # huhucapture
 
-**huhucapture** 是面向 Windows 的原生截图、标记与录屏工具，由 [NAMEWTA](https://github.com/NAMEWTA) 维护。它将矩形范围、彩色编号和右侧说明整理到同一张截图中，也提供钉图、长截图、GIF / MP4 录屏与二维码识别。
+**huhucapture** 是面向 Windows 和 Linux 的截图、标记与录屏工具，由 [NAMEWTA](https://github.com/NAMEWTA) 维护。它将矩形范围、彩色编号和右侧说明整理到同一张截图中，也提供钉图、长截图、GIF / MP4 录屏与二维码识别。
 
 本项目基于 [xland / ScreenCapture](https://github.com/xland/ScreenCapture) 衍生开发。感谢原作者与上游贡献者，以及 [Ling](https://github.com/xland/Ling) 等开源组件的维护者，为原生截图、编辑和录屏能力提供基础。继承起点、独立维护范围与版权归属见 [上游致谢](docs/upstream.md)。
 
 项目属于 [huhu](https://github.com/NAMEWTA/huhu) 品牌家族，采用虎虎形象与截图范围角标。产品名称、程序文件、配置目录和发布资产统一使用 `huhucapture`。品牌资产及使用约定见 [品牌说明](docs/brand.md)。
 
 [下载最新稳定版](https://github.com/NAMEWTA/huhucapture/releases/latest) · [全部版本](https://github.com/NAMEWTA/huhucapture/releases) · [提交问题](https://github.com/NAMEWTA/huhucapture/issues) · [更新记录](CHANGELOG.md)
+
+Windows 和 Linux 使用同一套 Qt 界面和编辑器。平台能力、用户数据保护以及验证范围见 [Qt 应用](docs/qt-application.md) 和 [验证指南](docs/validation.md)。
 
 ## 截图与说明，一起保存
 
@@ -44,13 +46,14 @@
 | 范围说明 | 矩形批注、自动配色与稳定编号、右侧多行说明、合图保存与复制 |
 | 二维码 | 识别截图中的二维码并复制内容 |
 | 媒体历史 | 保存/复制自动归档、截图缩略图、视频封面、再次复制、打开目录、回收站清理 |
+| 局域网互传 | 从历史选取一份媒体，使用 LocalSend 向指定设备发送，接收方确认后归档 |
 | 日常使用 | 默认 F1 截图、托盘、用完即走、便携配置、多语言、重新设计的设置页 |
 
 工具条采用 **44 × 44 逻辑像素点击区域、24 逻辑像素图标**，随显示器 DPI 调整，空间不足时自动换行。普通序号和范围批注是独立工具。项目不提供 OCR 功能。
 
 ## 剪切复制板：随时找回截图与录屏
 
-点击保存或工具条上的完成复制按钮后，截图、批注合图、长截图和录屏都会自动归档到 **系统“文档”目录下的 `huhucapture` 文件夹**。程序通过 Windows 的文档已知文件夹定位，文档移动到 OneDrive 或其他磁盘后仍使用实际位置。
+点击保存或工具条上的完成复制按钮后，截图、批注合图、长截图和录屏都会自动归档到 **系统“文档”目录下的 `huhucapture` 文件夹**。程序使用操作系统提供的文档目录，包括 Windows 的重定向位置。
 
 文件按本地时间命名为 `YYYYMMDD-HHMMSS.png`、`.gif` 或 `.mp4`。同一秒保存同类型文件时追加 `-001`、`-002`，保留每一次结果。另存为默认从该目录开始；选择其他位置后，归档副本仍保留。
 
@@ -68,46 +71,18 @@
 
 ## 下载与运行
 
-本源码对应 v0.0.6 原生 Windows 更新桥，公开下载状态以 Release 页面为准。Qt Windows / Linux 首发目标仍为 v0.1.0；本次桥接不包含 Qt 或 Linux 程序。
+从 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases) 选择相应平台的完整包。版本、下载文件名以及升级步骤见 [v0.1.0 发行说明](releases/v0.1.0.md)。
 
-支持 **Windows 10 1803 及以上版本，x64**。从 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases) 下载 `huhucapture.exe` 后即可运行，无需安装。应用及静态依赖不要求另行安装 Visual C++ 运行库。
+| 平台 | 安装与运行 |
+| --- | --- |
+| Windows x64 | 运行安装器，或完整解压便携 ZIP 后从该目录启动 |
+| Linux amd64 | 使用发行包管理器安装 DEB，或为 AppImage 添加执行权限后运行 |
 
-**只想使用软件：下载 `huhucapture.exe` 即可；需要额外语言和随包许可时，选择便携 ZIP。** 其余文件供故障定位、源码开发或核验下载使用。
+Windows 10 1803 可继续使用 [Windows v0.0.6](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.6)。Linux 的 Wayland 授权与全局快捷键取决于桌面环境的 Portal 支持。
 
-| 发布文件 | 包含什么 | 什么时候需要 |
-| --- | --- | --- |
-| `huhucapture.exe` | 可直接运行的 Windows x64 单文件，内置简体中文和英语；也是更新器使用的固定文件名 | 日常使用，下载后运行 |
-| `huhucapture-vX.Y.Z-windows-x64.zip` | 同一份 EXE、`Lang` 额外语言、依赖许可/声明和 `build-info.json` | 想完整保留分发内容，解压后运行其中的 EXE |
-| `huhucapture-vX.Y.Z-windows-x64-symbols.zip` | 与本次 Release 构建配套的 PDB 调试符号 | 开发者分析崩溃、调用栈或断点时使用；普通运行无需下载 |
-| `build-info.json` | 仓库与源提交 SHA、标签、Windows 版本、架构、工具链、固定依赖和 EXE 的 SHA256 | 提交问题或核对一个文件究竟来自哪次构建 |
-| `SHA256SUMS.txt` | 上述 EXE、两种 ZIP 和构建信息的 SHA256 校验值 | 核对下载是否完整、文件是否与该 Release 一致 |
-| GitHub 自动提供的 `Source code (zip / tar.gz)` | 对应标签的源码快照 | 自行编译或阅读源码；其中不包含已构建的可运行 EXE |
+各平台的采集方式和适用范围见 [平台支持](docs/platform-support.md)。历史记录中的发送与接收流程见 [局域网媒体互传](docs/lan-transfer.md)。
 
-#### 为什么保留 symbols.zip
-
-PDB 能让调试器把程序地址对应到函数、源码位置和变量信息，帮助定位普通错误提示无法解释的崩溃。它不是运行依赖，也不会让程序启动或截图更快，因此与便携程序分开下载。说明依据微软的 [符号文件文档](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/symbols) 和 [PDB 匹配规则](https://learn.microsoft.com/en-us/visualstudio/debugger/specify-symbol-dot-pdb-and-source-files-in-the-visual-studio-debugger)。
-
-需要调试时，从**同一 Release、同一次构建**下载 EXE、symbols ZIP 和 `build-info.json`，解压 PDB，在 Visual Studio 或 WinDbg 的符号搜索路径中加入解压目录，再打开对应 EXE 或崩溃转储。要查看源码行，检出 `build-info.json` 记录的提交。不要把其他版本或自行重新编译产生的 PDB 与发行 EXE 混用；版本号相同也不代表符号能够匹配。符号包本身不包含用户截图或故障时的内存转储。
-
-在 PowerShell 中可核验下载：
-
-```powershell
-Get-FileHash .\huhucapture.exe -Algorithm SHA256
-```
-
-把输出与同一 Release 的 `SHA256SUMS.txt` 对应文件行比较即可；其余文件同样核验。
-
-### 更新与默认快捷键
-
-在 **设置 → 关于** 点击 **下载最新版本**，程序会在后台将本仓库最新稳定版保存到系统“下载”目录（Downloads），遵循目录的移动或重定向。界面显示进度，完成后给出实际位置并可打开下载文件夹。
-
-v0.0.6 更新桥识别正式完整包清单，选择 Windows x64 便携 ZIP，校验仓库、版本、架构、依赖清单、长度和 SHA256，边接收边写入文件。没有完整包清单的旧 Release 仍下载单 EXE；清单存在但错误时会报错，不降级成缺依赖的裸程序。已有同名文件时另取新名称，后台每日检查仅提示更高版本，明确确认后才下载。
-
-旧 EXE 下载完成后，先退出程序，将下载文件改为原程序名再手动替换。**完整 ZIP 必须整个解压到新目录**，不要只复制其中的 EXE；保留旧目录、配置和 Documents 媒体。使用 EXE 旁便携 `config.json` 的用户，应在首次启动新包前将其复制到新 EXE 旁并保留旧原件，按实际 Qt 版本说明核对系统支持与迁移步骤。下载任务不会自动执行、替换或重启程序。详细边界见 [更新下载](docs/updates.md)。
-
-**跳过桥接也可以手动升级。** 桥接只有仍是 latest 时才能被 v0.0.5 的旧更新器发现；Qt 成为 latest 后，v0.0.5 不会回溯历史发行。直接打开 [最新正式发行](https://github.com/NAMEWTA/huhucapture/releases/latest)，在 Assets 选择完整 Windows 安装器 `huhucapture-vX.Y.Z-windows-x64-setup.exe` 或完整便携 ZIP。该手动路径不要求先安装桥接；Qt 的 tag 不会附带旧裸 EXE 伪装兼容。
-
-默认全局截图快捷键改为 **F1**。升级时，旧默认 `Ctrl+Alt+A` 迁移为 F1，其他自定义快捷键保留；仍可在设置的快捷键页面修改。已有 `%appdata%\huhucapture\config.json` 或 EXE 旁的便携配置继续使用。
+在 **设置 → 关于** 可以下载本平台的完整更新包。更新器校验清单与文件后将下载保存在系统下载目录。Windows 从 v0.0.6 更新时应把完整 ZIP 解压到新目录。使用更早版本的用户可直接下载安装器或完整 ZIP。
 
 ### 常用操作
 
@@ -144,32 +119,27 @@ huhucapture.exe --enter=long --auto-quit=true
 
 ## 配置与语言
 
-默认配置文件是 `%appdata%\huhucapture\config.json`。如果 EXE 同目录已有 `config.json`，程序优先使用它；可以预先创建空文件启用便携配置。
+Windows 默认配置文件是 `%appdata%\huhucapture\config.json`。Linux 使用系统用户配置目录。如果 EXE 同目录已有 `config.json`，程序优先使用它；可以预先创建空文件启用便携配置。
 
 额外语言优先从 EXE 同目录的 `Lang` 文件夹加载；该文件夹不存在时，使用 `%appdata%\huhucapture\Lang`。两处目录不会合并。简体中文与英语内置，其他语言的安装、编码与翻译约定见 [语言文件说明](docs/languages.md)。
 
 ## 开发与维护
 
-使用 Windows x64、Visual Studio 2026（C++ 桌面开发、MSVC v145、ATL 与 Windows SDK）、PowerShell 7、Python 3.13、Git 和 Rustup。在仓库根目录运行：
+CMake 是 Windows 和 Linux 共用的生产构建入口。纯核心测试可以独立运行：
 
-```powershell
-pwsh ./scripts/build.ps1 -Configuration Release
-pwsh ./scripts/test.ps1
-pwsh ./scripts/test-windows.ps1
-pwsh ./scripts/smoke.ps1
-pwsh ./scripts/test-windows.ps1 -Gui
-pwsh ./scripts/test-windows.ps1 -Update
-pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore
-pwsh ./scripts/test-legacy-update.ps1 -Configuration Debug
-pwsh ./scripts/test-legacy-update.ps1 -Gui
-pwsh ./scripts/package.ps1
+```sh
+cmake --preset core
+cmake --build --preset core --parallel 2
+ctest --preset core
 ```
 
-程序输出到 `artifacts/bin/x64/Release/huhucapture.exe`。首次恢复依赖后可打开 `huhucapture.slnx` 调试。CI 共用这些脚本；独立桥接发布入口只使用当前 main 已完整验证的同一组资产和真实原生报告。脚本覆盖范围、桌面手工验收和实际证据应分别记录，不能相互替代。
+完整应用采用 `qt-application-windows` 和 `qt-application-linux` 预设。工具链、依赖恢复、安装树和同源包的核验见 [构建与发布](docs/building.md)。
 
 | 文档 | 内容 |
 | --- | --- |
 | [文档地图](docs/readme.md) | 按问题查找设计、工程和验证约定 |
+| [迁移状态](docs/qt-migration.md) | 同一 Qt 应用、开发包与 P00–P14 的实际验收边界 |
+| [编辑工具偏好](docs/editor-preferences.md) | Qt 编辑/贴图如何复用旧参数并保护配置数据 |
 | [上游致谢](docs/upstream.md) | ScreenCapture 与 Ling 来源、继承起点和维护归属 |
 | [工程约定](docs/conventions.md) | 目录、编码、资源、错误处理与文档规范 |
 | [媒体历史](docs/media-history.md) | 归档目录、命名、保存失败和清理边界 |

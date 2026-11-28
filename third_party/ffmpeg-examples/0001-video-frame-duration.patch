@@ -1,0 +1,55 @@
+--- a/doc/examples/mux.c
++++ b/doc/examples/mux.c
+@@ -426,6 +426,9 @@
+ 
+     av_dict_copy(&opt, opt_arg, 0);
+ 
++    /* AVFrame.duration is ignored unless this contract is explicit. */
++    c->flags |= AV_CODEC_FLAG_FRAME_DURATION;
++
+     /* open the codec */
+     ret = avcodec_open2(c, codec, &opt);
+     av_dict_free(&opt);
+@@ -521,6 +524,8 @@
+     }
+ 
+     ost->frame->pts = ost->next_pts++;
++    /* Keep the final MP4 sample nonempty after encoder reordering. */
++    ost->frame->duration = 1;
+ 
+     return ost->frame;
+ }
+@@ -640,7 +645,9 @@
+         }
+     }
+ 
+-    av_write_trailer(oc);
++    ret = av_write_trailer(oc);
++    if (ret < 0)
++        fprintf(stderr, "Could not finalize output: %s\n", av_err2str(ret));
+ 
+     /* Close each codec. */
+     if (have_video)
+@@ -648,12 +655,18 @@
+     if (have_audio)
+         close_stream(oc, &audio_st);
+ 
+-    if (!(fmt->flags & AVFMT_NOFILE))
++    if (!(fmt->flags & AVFMT_NOFILE)) {
+         /* Close the output file. */
+-        avio_closep(&oc->pb);
++        int close_ret = avio_closep(&oc->pb);
++        if (close_ret < 0) {
++            fprintf(stderr, "Could not close output: %s\n", av_err2str(close_ret));
++            if (ret >= 0)
++                ret = close_ret;
++        }
++    }
+ 
+     /* free the stream */
+     avformat_free_context(oc);
+ 
+-    return 0;
+-}
++    return ret < 0 ? 1 : 0;
++}

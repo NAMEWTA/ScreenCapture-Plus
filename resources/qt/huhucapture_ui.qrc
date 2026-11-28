@@ -1,0 +1,16 @@
+<RCC>
+  <qresource prefix="/huhucapture">
+    <file alias="editor/iconfont.ttf">../iconfont.ttf</file>
+    <file alias="brand/icon.svg">../../assets/brand/huhucapture-icon.svg</file>
+    <file alias="brand/icon-16.png">../../assets/brand/huhucapture-icon-16.png</file>
+    <file alias="brand/icon-24.png">../../assets/brand/huhucapture-icon-24.png</file>
+    <file alias="brand/icon-32.png">../../assets/brand/huhucapture-icon-32.png</file>
+    <file alias="brand/icon-48.png">../../assets/brand/huhucapture-icon-48.png</file>
+    <file alias="brand/icon-64.png">../../assets/brand/huhucapture-icon-64.png</file>
+    <file alias="brand/icon-128.png">../../assets/brand/huhucapture-icon-128.png</file>
+    <file alias="brand/icon-256.png">../../assets/brand/huhucapture-icon-256.png</file>
+    <file alias="brand/icon-512.png">../../assets/brand/huhucapture-icon-512.png</file>
+    <file alias="brand/logo-light.svg">../../assets/brand/huhucapture-logo-light.svg</file>
+    <file alias="brand/logo-dark.svg">../../assets/brand/huhucapture-logo-dark.svg</file>
+  </qresource>
+</RCC>

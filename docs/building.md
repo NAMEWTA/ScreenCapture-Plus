@@ -1,71 +1,83 @@
 # 构建与发布
 
-本地与 GitHub Actions 使用同一套旧 Windows 生产入口。此版本准备 **v0.0.6 更新桥**，Windows 文件版本为 **0.0.6.0**；实际公开版本以 [Releases](https://github.com/NAMEWTA/huhucapture/releases) 为准。唯一手写版本源为 [build/version.json](../build/version.json)，`VERSION` 与 `build/windows/Version.props` 是受检的派生文件。
+## 共享核心与 Qt 验证
 
-## 环境与依赖
+根目录 CMake 统一构建 Windows 与 Linux 应用。默认配置只构建独立核心，使用 `HUHUCAPTURE_BUILD_APP=ON` 构建完整应用。完整应用预设及服务边界见 [Qt 应用](qt-application.md)，实际安装树和开发包命令见 [打包说明](qt-packaging.md)。CMake 要求 3.25 以上及 C++20 编译器，纯核心配置不需要 Qt：
 
-目标仍为 Windows 10 1803 及以上、x64。使用 Visual Studio 2026 的 C++ 桌面组件、MSVC v145、ATL、Windows SDK、PowerShell 7、Git 和 Rustup；Python 3.13 用于维护、受控 HTTP 测试与发布验证。依赖版本及来源由 [依赖锁文件](../build/dependencies.lock.json) 指定。
-
-Ling、Yoga 和 gifski 静态链接。应用及依赖使用 `/MT`，Debug 仍保留符号、运行时检查和未优化信息。桥接复用 Windows WinRT 网络与文件 API，不引入 Qt 或新的运行库。升级依赖仍须修改锁文件、许可和实际编译验证，不能修改恢复目录伪装升级。
-
-## 本地验证入口
-
-在仓库根目录执行：
-
-```powershell
-pwsh ./scripts/build.ps1 -Configuration Release
-pwsh ./scripts/test.ps1
-pwsh ./scripts/test-windows.ps1
-pwsh ./scripts/smoke.ps1
-pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore
-pwsh ./scripts/test-legacy-update.ps1 -Configuration Debug
-pwsh ./scripts/package.ps1
-pwsh ./scripts/test-windows.ps1 -Gui
-pwsh ./scripts/test-legacy-update.ps1 -Gui
-pwsh ./scripts/test-windows.ps1 -Update
+```sh
+cmake --preset core
+cmake --build --preset core --parallel 2
+ctest --preset core
 ```
 
-Release EXE 在 `artifacts/bin/x64/Release/huhucapture.exe`。首次恢复依赖后可以打开 `huhucapture.slnx`。产物放在 `artifacts`，依赖在 `.deps`，均不提交。
+Qt 验证严格使用 6.12.1 的 Core / Gui / Widgets / Network / Svg。SDK 恢复步骤、固定 aqtinstall 提交和实际平台架构见 [.github/workflows/qt-validation.yml](../.github/workflows/qt-validation.yml)；不能以另一个发行版 Qt 代替。Linux SDK 包含 QtWayland 和匹配的私有头，实际中文字体也是导出验证的前置条件。安装并将该 SDK 的 `bin` 与前缀加入环境后：
 
-`test.ps1` 编译并执行全部标准 C++20 核心测试，解析实际 PowerShell 脚本，还执行版本源与发布准入测试。Windows 版本源检查实际调用 MSBuild 和 PowerShell，拒绝过期派生文件及版本参数覆盖。Linux 上纯规则测试不证明 Windows 编译、原生窗口、网络下载或设备行为已通过，具体边界见 [验证指南](validation.md)。
+CI 通过 aqt 官方支持的 `AQT_CONFIG` 读取 [build/aqt.ini](../build/aqt.ini)，
+串行恢复共享安装目录的 SDK 归档，避免 Windows 外部 7-Zip 并行创建同一目录的竞态。
+该设置来自固定 aqt 源码的 `Settings.concurrency` / `run_installer`，
+不修改下载内容、不关闭 SHA256 校验，也不忽略解压错误。
 
-`test-legacy-update.ps1` 编译并运行生产 WinRT 下载器 probe，受控 HTTP 服务提供真实旧 EXE 与大于 64 MiB 的完整包传输 fixture；`-Gui` 另驱动真实关于页、实际 Downloads 和六种语言。该 fixture 不是可安装 Qt 产品。`test-windows.ps1 -Update` 仍点击正式下载按钮访问实际 GitHub latest，联网失败会使检查失败，不能用 fixture 替代。
-
-## 单一版本源
-
-版本变更只编辑 `build/version.json`，随后明确生成并核验派生文件：
-
-```powershell
-python scripts/version_source.py --write
-python scripts/version_source.py --check
+```sh
+cmake --preset qt-validation
+cmake --build --preset qt-validation --parallel 2
+ctest --preset qt-validation
 ```
 
-稳定版本为规范 `MAJOR.MINOR.PATCH`，每段为 0 至 65535，Windows 第四段固定 0。MSBuild 导入的 `Version.props` 校验源文件和模板的真实哈希，以及 `VERSION`、资源版本的相等性。构建不自动修复过期生成文件；`build.ps1 -Version` 和 `package.ps1 -Version` 只能核对同一个版本。
+Windows 使用与 Qt 匹配的 MSVC v143、x64、动态 CRT；在对应开发环境执行：
 
-## 原 Windows 五项资产
+```powershell
+cmake -S . -B artifacts/cmake/qt-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON
+cmake --build artifacts/cmake/qt-validation --config Debug --parallel 2
+ctest --test-dir artifacts/cmake/qt-validation -C Debug --output-on-failure --no-tests=error
+cmake --build artifacts/cmake/qt-validation --config Release --parallel 2
+ctest --test-dir artifacts/cmake/qt-validation -C Release --output-on-failure --no-tests=error
+```
 
-| 资产 | 用途与必要条件 |
+Linux Portal 验证还需要 GLib / GIO 2.80 以上、Meson、Ninja、pkg-config、D-Bus 与 Qt 6.12.1 私有开发头。`scripts/build-portal.py` 在空的 `.deps/portal-validation` 中恢复锁定 libportal，检查受控补丁 SHA256，再构建 Qt 后端；不修改系统安装或清空已有源码。已有工作区时应指定另一个空 `--workspace` 并使用它实际产生的前缀。
+
+```sh
+python3 scripts/build-portal.py
+export PKG_CONFIG_PATH="$PWD/.deps/portal-validation/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+cmake --preset qt-validation -DHUHUCAPTURE_PORTAL_VALIDATION=ON
+cmake --build --preset qt-validation --parallel 2
+ctest --preset qt-validation
+```
+
+真实桌面授权 probe 与自动故障测试的区别见 [Linux Portal](linux-portal.md)。LocalSend 的 Cargo workspace 使用 Rust 1.97.1 和提交的实际锁文件，构建命令见 [core 适配](localsend-core.md)。这些验证入口没有发布权限，也不会创建正式 Release。完整产品构建按以下生产入口验证。
+
+受限开发环境可使用独立的 [开发依赖工作流](../.github/workflows/development-dependencies.yml)
+生成 Linux amd64 SDK。它保留固定 Qt Widgets / Wayland client、Portal、PipeWire、
+软件媒体依赖、CMake、Ninja、pkg-config、所需系统开发文件及许可证，并生成逐文件
+SHA256 与相对符号链接清单。Qt 官方归档中的未使用 QtSql、Wayland compositor 和
+QML imports 连同其导入元数据被明确排除，排除清单记录在 `metadata.json`；所有
+保留 ELF 的依赖仍须完整。Qt Wayland client、平台插件和匹配的私有头不会因此删除。
+
+恢复使用 `scripts/bundle-development-dependencies.py restore`，必须指定下载产物的
+实际 `--sha256` 与一个空 `--destination`，随后加载恢复目录中的 `sdk/environment.sh`。
+脚本逐项验证内容、权限、链接和原始前缀替换；CI 还将原依赖前缀改名，再用恢复后的
+SDK 实际构建 Portal / PipeWire / 软件编码目标。该产物是开发依赖，不是用户安装包，
+构建或恢复成功不能计作产品安装验收。宿主 C++ ABI / glibc 要求保留在元数据中，
+不复制或替换宿主加载器。
+
+Rust 聚合库由独立验证工作流保留实际 `.a` / `.lib` 和 `build-info.json`。CMake 会核对
+静态库、Cargo.lock 以及全部已记录桥接和上游源文件的 SHA256，拒绝用同一 Cargo.lock
+下的旧桥接库代替当前源码。Windows 还核对实际依赖导入库及匹配的动态 Release CRT。
+
+## 生产构建
+
+还原 [依赖锁](../build/dependencies.lock.json) 所列输入后，使用本平台的完整预设：
+
+| 平台 | 本地入口 |
 | --- | --- |
-| `huhucapture.exe` | 可直接运行；真实 x64 EXE、版本与品牌一致，不超过旧下载器的 64 MiB 上限 |
-| `huhucapture-vX.Y.Z-windows-x64.zip` | 同一 EXE、六种语言、依赖许可与 build-info；旧原生产品不含 Qt DLL |
-| `huhucapture-vX.Y.Z-windows-x64-symbols.zip` | 同一次 Release 构建的实际 PDB，供故障定位 |
-| `build-info.json` | 源 SHA、版本、架构、配置、工具链、依赖锁和 EXE 哈希 |
-| `SHA256SUMS.txt` | 其余四项实际资产的 SHA256 |
+| Windows x64 | `cmake --preset qt-application-windows`、`cmake --build --preset qt-application-windows`、`ctest --preset qt-application-windows` |
+| Linux amd64 | `cmake --preset qt-application-linux`、`cmake --build --preset qt-application-linux`、`ctest --preset qt-application-linux` |
 
-GitHub 自动生成的源码 ZIP / tar.gz 不属于这五项可运行资产。EXE、PDB 和元数据必须来自同一构建；重新编译同版本不保证符号匹配。Windows 打包检查实际产品资源与 PE 依赖，拒绝额外的 MSVC、Ling、Yoga 或 gifski DLL。
+[原生应用工作流](../.github/workflows/qt-application.yml) 定义了两端精确的还原、构建、安装和测试环境。安装树及正式打包步骤见 [Qt 打包](qt-packaging.md)。
 
-## CI 与独立桥接发布
+## 版本与发行
 
-[Windows workflow](../.github/workflows/windows.yml) 只构建、验证并保留 artifact，push、PR、release 事件以及手工旧标签回归都不上传 Release 资产。main 上用于新发行的 run 必须完整完成 Debug、Release、GUI、实际 latest 下载及桥接检查；标签回归跳过的步骤不能拿来满足新发行准入。
+仅修改 [build/version.json](../build/version.json) 定义版本，再运行 `python scripts/version_source.py --write`。CMake 使用同一来源生成 About、版本头、Windows RC 和包身份。发布时同步 [releases/publish.json](../releases/publish.json) 与对应标签说明。
 
-`windows-x64` 保留五项资产，`windows-render-checks` 保留原生、GUI 和 Debug / Release 桥接报告；失败尽量保留 `windows-build-logs`。打包 artifact 在后续 GUI 检查前可能已经上传，能下载 artifact 不代表 run 已全部成功。
+在当前 `main` 上显式调度 `qt-application.yml`，设置 `release_candidate=true`，取得双平台完整包、同源来源归档及聚合制品。用该次成功运行及精确提交调度 `qt-release.yml`。发行工作流复核聚合和已发布的 v0.0.6 更新桥，经新旧下载验证后公开经过校验的资产。标签和草稿失败后的恢复流程见 [Qt 打包](qt-packaging.md)。
 
-唯一新发布入口是 [windows-bridge-release.yml](../.github/workflows/windows-bridge-release.yml)。它只在规范仓库当前 `main` 接受显式 `source_commit` 和成功的同 SHA `windows_run`，使用原 artifact，不重新构建。声明见 [bridge-publish.json](../releases/bridge-publish.json)，必须和唯一版本源、[v0.0.6 说明](../releases/v0.0.6.md) 一致。历史 `releases/publish.json` 不触发新发布。
-
-发布器核验原 Windows 全部门槛、真实下载报告、实际五资产和当前 main，拒绝已有 tag、Release、draft 或第二次桥接。通过后创建固定 tag 与未公开 draft，上传原字节并核对 GitHub 的长度及 SHA256，最后才公开为 latest。完整准入和流程见 [独立桥接发行](bridge-release.md)。
-
-## 失败与恢复
-
-构建或检查失败时修复原因，不跳过门槛。网络或 runner 临时故障可对同一源码重跑；main 已前进则必须使用新的成功 run。禁止移动已存在的 tag 或使用 `--clobber` 替换发行资产。
-
-中断留下的新 tag 或 draft 会使下一次自动尝试拒绝。维护者须核对其 SHA、原 run、已上传字节与声明，再单独处理；脚本不会自行删除、覆盖或认领它。源码修复应使用新的版本，保留旧发行可追溯性。本文描述可执行流程，不声明未运行的检查已经通过。
+[v0.0.6 的源码标签](https://github.com/NAMEWTA/huhucapture/tree/v0.0.6) 保留该版的 Windows 单 EXE 工程、依赖、旧工具链和验证流程。

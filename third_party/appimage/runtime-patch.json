@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/AppImage/type2-runtime",
+  "commit": "dd6cebedcbddde9c82f89b011e8e1d40b6e43868",
+  "license": "MIT",
+  "originalArchiveSha256": "f5fec23be76e50e2445ed2d018bac49b367490fc483c62c4637e99ec705d27ba",
+  "pristineTreeSha256": "1db1f9097ecb33c741031a3ef971985f2dd162c32bdae61a8f84ddaff2d88b3c",
+  "patchedTreeSha256": "164bded6f81a92afecffd56dc356a1dcfcd4213822ca6e9070bc2a0a15089ecb",
+  "sourceFile": {
+    "path": "src/runtime/runtime.c",
+    "original": {
+      "size": 63394,
+      "sha256": "581c98a4bf7ac6289338da36122ccb91a46941c1148760eb22e3002c085180b7",
+      "gitBlob": "2ebb3c8043f0432130113a49667c63dde92c1f58"
+    },
+    "patched": {
+      "size": 64152,
+      "sha256": "49ad29651a2b168aeec6250deb557475f8bc782df06086a5fce81b86944496e1"
+    }
+  },
+  "patch": {
+    "path": "third_party/appimage/portable-directory-path.patch",
+    "sha256": "12906683bd651bac6718119c45d67b306c9c2a47818f1b5f73e01d3decae712f"
+  },
+  "reason": "Reject full readlink buffers before terminator writes in portable directory, help and main path handling, and reject an incomplete portable-directory format before mkdir; preserve original home/config names and mkdir exit behavior.",
+  "scope": "Project adaptation to the unchanged original runtime source archive; not a change to or reproduction of the older official runtime binary."
+}

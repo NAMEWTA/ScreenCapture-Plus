@@ -1,0 +1,128 @@
+name: AppImage runtime source and complete static input validation
+
+on:
+  push:
+    branches: [validation/appimage-runtime-source]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appimage-runtime-source-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+      - name: Install actual native toolchain bootstrap and library build programs
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential cmake ninja-build meson autoconf automake libtool \
+            pkg-config curl file texinfo bison flex gawk patch xz-utils zstd
+          mkdir -p artifacts/runtime-validation
+          dpkg-query -W > artifacts/runtime-validation/host-packages.txt
+          uname -a > artifacts/runtime-validation/host-kernel.txt
+      - name: Check archive, ELF, link-map and failure contracts with real local compiler output
+        run: |
+          python tests/appimage_runtime_tests.py -v
+          python tests/source_receipts_tests.py -v
+          python tests/source_checkout_tests.py -v
+          python tests/source_bundle_tests.py -v
+          python tests/runtime_diagnostics_tests.py -v
+      - name: Restore unchanged original reviewed packaging tools and source assets
+        run: python scripts/restore-packaging-tools.py --platform linux --output .deps/runtime-packaging-tools
+      - name: Replay the exact original runtime patch and compile path boundary regressions
+        env:
+          HUHUCAPTURE_TEST_APPIMAGE_RUNTIME_ARCHIVE: ${{ github.workspace }}/.deps/runtime-packaging-tools/appimageRuntime/source.tar.gz
+        run: python tests/appimage_runtime_tests.py RuntimePortablePathTests -v
+      - name: Check actual AppImage probe icon retention with fixed original tools
+        env:
+          HUHUCAPTURE_TEST_PACKAGING_TOOLS: ${{ github.workspace }}/.deps/runtime-packaging-tools
+        run: python tests/runtime_diagnostics_tests.py RuntimeDiagnosticsTests.test_actual_packaging_probe_icon_links_survive_retention_and_relocation -v
+      - name: Build every runtime, musl, CRT and compiler-support input from fixed source
+        run: |
+          python scripts/build-appimage-runtime.py \
+            --tools .deps/runtime-packaging-tools \
+            --workspace .deps/appimage-runtime-source --jobs 2
+      - name: Verify the restored original header archive and separate license evidence
+        env:
+          HUHUCAPTURE_TEST_LINUX_HEADER_ARCHIVE: ${{ github.workspace }}/.deps/appimage-runtime-source/downloads/appimage-linux-headers-linux-headers-4.19.88-2.tar.xz
+        run: python tests/appimage_runtime_tests.py HeaderPathTests.test_actual_archive_keeps_external_license_texts_separate_and_native_gaps_open -v
+      - name: Independently recheck the actual successful report and all preserved input bytes
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import runpy
+          api = runpy.run_path('build/package/appimage_runtime.py')
+          report, runtime, notice = api['verify_build'](Path('.deps/appimage-runtime-source'))
+          print(json.dumps({'runtime':str(runtime), 'notice':str(notice),
+                            'buildComplete':report['buildComplete'],
+                            'staticClosureComplete':report['staticClosureComplete'],
+                            'correspondingSourceComplete':report['correspondingSourceComplete']}, indent=2))
+          PY
+      - name: Retain actual complete sources, original Git checkouts, outputs and successful or failed evidence
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          root = Path('.deps/appimage-runtime-source')
+          selected = []
+          if root.is_dir():
+              fixed = {'sources','source-inputs','checkouts','downloads','control','toolchain','libraries','install',
+                       'probe','squashfuse-generated','build-info.json','source-plan-fragment.json',
+                       'runtime-link.map','runtime-link-closure.json'}
+              selected = [str(path) for path in root.iterdir()
+                          if path.name in fixed or path.name.endswith('-source-receipt')]
+              # On a failed configure/build the producer has not yet copied its
+              # configuration records. Retain these original files as well.
+              for path in root.rglob('*'):
+                  if not path.is_file() or any(path.is_relative_to(Path(parent)) for parent in selected):
+                      continue
+                  if path.name in {'config.log','config.status','config.mak','configure.log','CMakeCache.txt',
+                                   'build.ninja','rules.ninja','compile_commands.json','install_manifest.txt',
+                                   'meson-log.txt','intro-buildoptions.json','intro-buildsystem_files.json'}:
+                      selected.append(str(path))
+          output = Path('artifacts/runtime-validation'); output.mkdir(parents=True,exist_ok=True)
+          if Path('.deps/runtime-packaging-tools').is_dir(): selected.append('.deps/runtime-packaging-tools')
+          if selected:
+              listing = output/'retained-inputs.txt'
+              listing.write_text('\n'.join(sorted(selected))+'\n')
+              subprocess.run(['tar','--zstd','-cf',str(output/'runtime-build-evidence.tar.zst'),
+                              '--verbatim-files-from','-T',str(listing)], check=True)
+          PY
+      - name: Upload actual runtime evidence without publishing a product or release
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: appimage-runtime-source-${{ github.sha }}
+          path: artifacts/runtime-validation/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain bounded original runtime diagnostics separately
+        if: always()
+        run: |
+          python scripts/retain-appimage-runtime-diagnostics.py \
+            --workspace .deps/appimage-runtime-source \
+            --output artifacts/appimage-runtime-diagnostics
+      - name: Upload original runtime queries, configuration and probe evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: appimage-runtime-diagnostics-${{ github.sha }}
+          path: artifacts/appimage-runtime-diagnostics/
+          compression-level: 6
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/FFmpeg/FFmpeg.git",
+  "version": "9.0.2",
+  "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+  "files": [
+    {
+      "upstream": "doc/examples/mux.c",
+      "local": "mux.c",
+      "blob": "e037bc7815ef5b9f218b3a688b7525445dc89c42",
+      "sha256": "7ea79dc87031e872fb1f27e190f71da6e67ca78056a6957f1561af76aa8ee96d",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2003 Fabrice Bellard",
+      "modifications": "Explicitly enable AV_CODEC_FLAG_FRAME_DURATION and set each generated video frame duration to one codec time-base tick. Propagate trailer and output-close errors. main is renamed only at compile time.",
+      "patchedSha256": "c0578524b6d2f7ddd5fca355dad593d6c8f2a0861d9b9c3f395c980b97124ef1"
+    }
+  ],
+  "use": "Directly compile the upstream API example for P00 software-codec validation. Its stream setup, encoder send/receive and muxing API flow is also adapted by src/services/media/Mp4Encoder.cpp (exact additional source mapping in mp4-encoder-upstream.json), with production frame/audio sources, checked owned-descriptor output, real monotonic timestamps, cancellation and first-error-preserving teardown. The example's generated media is never a production capture source.",
+  "reference": {
+    "file": "doc/examples/demux_decode.c",
+    "blob": "5c38742e7f76555923f5433f3cff93270d1cc747",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2012 Stefano Sabatini",
+    "use": "Decoder and drain API flow adapted in tests/qt/software_codec_probe.cpp; full original license retained."
+  },
+  "patch": "0001-video-frame-duration.patch"
+}

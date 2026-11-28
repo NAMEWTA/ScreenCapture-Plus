@@ -1,0 +1,53 @@
+Subject: [PATCH] support: unlink failed event, timer, idle and signal sources
+
+Base: PipeWire 1.6.11, 4287f31510771fc999f8a58a024c81ca10b8d55f
+Apply after 0001 and 0002.
+
+These four source constructors use the same get_source path as loop_add_io:
+the allocation is already on source_list before fd creation/poll registration.
+Unlink it before freeing on either failure. Preserve their existing owned-fd
+close/error behavior and do not change successful source registration.
+
+This completes the source-list correction in 0001 for the cancellation and
+first-frame timer directly used by the capture worker, plus the identical idle
+and signal constructors. The pinned source blob is
+e5e49849fe84955a63a534d4f008ca84d4e6b3fb. The same missing unlink was found in
+upstream 685cb07a92acac24677fded669308f036207bb9a; no corresponding upstream
+change was found to reuse. The original MIT notices continue to apply.
+This is a huhucapture adaptation, not an assertion of upstream acceptance.
+
+diff --git a/spa/plugins/support/loop.c b/spa/plugins/support/loop.c
+--- a/spa/plugins/support/loop.c
++++ b/spa/plugins/support/loop.c
+@@ -984,6 +984,7 @@
+ error_exit_close:
+ 	spa_system_close(impl->system, source->source.fd);
+ error_exit_free:
++	spa_list_remove(&source->link);
+ 	free(source);
+ 	errno = -res;
+ error_exit:
+@@ -1034,6 +1035,7 @@
+ error_exit_close:
+ 	spa_system_close(impl->system, source->source.fd);
+ error_exit_free:
++	spa_list_remove(&source->link);
+ 	free(source);
+ 	errno = -res;
+ error_exit:
+@@ -1100,6 +1102,7 @@
+ error_exit_close:
+ 	spa_system_close(impl->system, source->source.fd);
+ error_exit_free:
++	spa_list_remove(&source->link);
+ 	free(source);
+ 	errno = -res;
+ error_exit:
+@@ -1181,6 +1184,7 @@
+ error_exit_close:
+ 	spa_system_close(impl->system, source->source.fd);
+ error_exit_free:
++	spa_list_remove(&source->link);
+ 	free(source);
+ 	errno = -res;
+ error_exit:

@@ -1,29 +1,37 @@
 # huhucapture 验证与桌面验收
 
+## 跨平台迁移验证
+
+迁移合同和未完成的工作包集中在 [Qt 迁移状态](qt-migration.md)。每次集成同时维护纯 C++ 核心、Qt Debug / Release、双平台完整应用以及 Rust 与各平台原生检查；不能用一个测试任务替代全部门槛。
+
+| 自动检查 | 实际执行内容 | 不能据此宣称 |
+| --- | --- | --- |
+| 纯 C++ 模型 | 真实创建 / 拖动 / 编号 / 历史状态、布局和边界 | Qt 工具栏、输入焦点、IME 或真实鼠标已正确 |
+| Qt 合图 | 完整文本测量与真实 PNG、像素保留、字体缺失失败、资源上限 | 编辑器用户流程、跨屏窗口和所有字体组合已验收 |
+| 配置 / 文件提交 | 真实文件读写、原字节备份、冲突、别名、无覆盖和平台错误 | 所有系统的断电持久化、外部恶意进程隔离 |
+| Windows 音频格式 | 保护页附近的真实格式缓冲读取与拒绝非法格式 | 麦克风、系统声、长时混音同步或设备切换已验收 |
+| LocalSend core | 真实 TLS、证书、HTTP、有限文件流、取消和完成握手 | Qt 接收 UI、完整媒体解码、两台机器或官方客户端互操作已完成 |
+| Portal 故障 | 真实私有 D-Bus、缺失服务 / session bus、取消和晚到回调释放 | 桌面授权、屏幕像素、PipeWire 帧或 GlobalShortcuts 已工作 |
+
+字体测试必须检查实际字体面和字号，非零 glyph index 本身不足以排除占位字体引擎。Windows 正常导出测试使用原生 Qt Windows 平台；另外用无字体的真实 offscreen 后端验证失败保留旧输出。Linux 安装实际 CJK 字体。文件系统不允许创建符号链接时，用例明确打印未执行，不能将该分支写成已验证。
+
+CI 保留真实测试日志、PNG 和依赖构建证据。合并和 Issue 进度引用准确提交、工作流以及未执行项；失败后修复并重跑相同门槛，不删断言、换成 Mock 或把“未运行”记为通过。真实设备、安装升级与固定机器性能按 Issue #5 第 15 节分别记录；发行说明列明未执行的人工验证。
+
 ## 如何读取验证结果
 
-本文定义验证范围、执行方式与证据位置。某项检查列在本文中，不代表某次构建已经执行或通过。本源码准备 v0.0.6 更新桥，构建结果以对应提交的 [Windows Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/windows.yml) 为准，发行文件以 [Release](https://github.com/NAMEWTA/huhucapture/releases) 的 `build-info.json` 和 SHA256 为准。
+本页列出验证入口与证据位置。自动化结果以 [完整应用 Actions](https://github.com/NAMEWTA/huhucapture/actions/workflows/qt-application.yml) 对应提交为准，发行资产以 Release 的构建信息与 SHA256 为准。
 
 核心测试、离屏渲染、启动检查、脚本 GUI 和人工桌面验收分别记录。报告至少包含提交 SHA、命令、环境、结果与证据；未执行的场景明确写为未执行。更换产品身份或资源后，应重新验证对应提交，不能把先前生成的截图当作本次品牌、版本和程序启动的通过记录。
 
 ## 自动化入口
 
-| 命令 | 验证层次 | 主要输出 |
-| --- | --- | --- |
-| `pwsh ./scripts/build.ps1 -Configuration Release` | 正式 x64 编译和链接 | `artifacts/bin/x64/Release/huhucapture.exe` |
-| `pwsh ./scripts/test.ps1` | 纯核心程序及 PowerShell 语法 | 测试退出码与日志 |
-| `pwsh ./scripts/test-windows.ps1` | 真实 DWrite / D2D / WIC 离屏合成 | `artifacts/tests/windows` |
-| `pwsh ./scripts/smoke.ps1` | 独立 EXE / 便携配置启动 | 启动与退出日志 |
-| `pwsh ./scripts/test-windows.ps1 -Gui` | 正式编辑器对象、窗口和剪贴板 | `artifacts/tests/windows/gui` |
-| `pwsh ./scripts/test-legacy-update.ps1 -Configuration Debug` | 生产 WinRT 下载器、受控完整包、取消与文件保护 | `artifacts/tests/windows/legacy-update/Debug` |
-| `pwsh ./scripts/test-legacy-update.ps1 -Gui` | Release 流式下载及真实关于页六语关闭/重开 | `artifacts/tests/windows/legacy-update/Release` |
-| `pwsh ./scripts/test-windows.ps1 -Update` | 关于页按钮、真实稳定 Release 下载和系统 Downloads | `artifacts/tests/windows/update` |
-| `pwsh ./scripts/package.ps1` | 版本、PE 依赖、包内容和校验和 | 五项发布资产 |
-| `pwsh ./scripts/build.ps1 -Configuration Debug -SkipRestore` | Debug 编译 / 链接，构建设置一致性 | Debug 产物 |
-
-Release 先于 GUI 与更新下载测试，依赖 / 构建设置变化时还需 Debug。完整 CI 顺序、artifact 和发布门槛见 [building.md](building.md)。
-
-真实更新下载是常规 main、PR 及无标签手工构建的门槛。Release 事件和指定标签的恢复构建可能尚未上传该版本的首批资产，不以此时的 latest 下载作为其前置条件；新版本声明发布仍须先通过 main 的完整验证。
+| 入口 | 实际内容 |
+| --- | --- |
+| `ctest --preset core` | 核心规则、版本和来源材料 |
+| Qt Debug / Release | 共享编辑与服务、平台能力与原生适配 |
+| `ctest --preset qt-application-windows` / `qt-application-linux` | 完整应用、原生录制与桌面操作 |
+| [包验证](installation-validation.md) | 四种包的运行库、受控安装、操作与卸载 |
+| [正式发行](qt-packaging.md) | 同源包及源码、已发布 v0.0.6 原生关于页的完整候选下载 |
 
 ## 纯核心回归
 
@@ -50,151 +58,33 @@ g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/annotation_region
 
 这类结果只能证明核心逻辑，不包含 Windows 编译、字体、窗口和设备行为。
 
-## Windows 原生导出
+## 共享 Qt 组件与 Wayland 边界
 
-`test-windows.ps1` 编译独立 `AnnotationRenderTests.exe`，直接使用正式 `src/services/AnnotationRenderer.cpp`，通过 D3D11 WARP 软件设备执行 Direct2D / DirectWrite，再用 WIC 编码和解码 PNG。
+`qt_editor_components` 使用正式 `EditorWindow` / `EditorCanvas`，复用同一
+`EditorDocument`、九工具模型、工具默认值与马赛克算法。测试直接发送 Qt 输入事件，
+检查文字和批注归属、焦点转移、撤销 / 重做、44 逻辑像素点击区域、异步输出令牌、
+失败或取消时保留编辑，以及实际 PNG 中的完整备注和原图像素。生成证据位于
+`artifacts/cmake/qt-validation/editor-render`。生成图像是明确的测试输入，
+这些断言不替代采集入口、系统剪贴板、物理键鼠、中文 IME 或混合 DPI 验收。
 
-它验证完整文字和 ID / 配色、真实换行与字形外伸、紧凑徽章、原图位置和逐字节像素 / alpha、96-DPI 输出坐标，以及调用后的渲染目标、DPI、变换、单位、抗锯齿和混合模式恢复。非法输入、过大尺寸或预算不足应整体失败，不覆盖先前输出。
+`scripts/test-wayland-parent.py` 为每个场景启动私有 headless / pixman Sway，
+使用真实 xdg-foreign v2 协议验证父窗导出、取消、窗口销毁、协议失效及超时。
+暂停的只会是本脚本拥有的合成器子进程，独立 watchdog 负责恢复与回收。
+测试检查暂停期间的 Qt 事件循环心跳，恢复后用异步 Wayland roundtrip 屏障排空
+晚到事件；日志位于 `artifacts/cmake/qt-validation/wayland-parent`。
+它证明指定协议与生命周期场景，不代表 GNOME / Plasma 授权、实际屏幕采集或
+PipeWire 帧传输已通过。是否执行和通过，以对应提交的运行报告为准。
 
-| PNG | 场景 |
-| --- | --- |
-| `01-no-annotations.png` | 无批注，尺寸和源像素不变 |
-| `02-cjk-and-empty-note.png` | 中英文、空备注、不连续 ID 及配色 |
-| `03-long-multiline-notes.png` | 长文与显式换行，扩高后全文保留 |
-| `04-many-notes-multiple-columns.png` | 45 条说明在受限边长下完整分列 |
-| `05-unbroken-url.png` | 无空格长 URL 的实际换行和字形边界 |
-| `06-compact-short-notes.png` | 5 条短说明收紧后容纳于 280px 高度 |
+Rust 聚合验证使用真实 gifski 编码、Qt GIF 解码、loopback TLS 传输与
+`FileCommitter` 持久化，再检查协议终态及停止后的事件排空。完整边界和匹配
+CRT 要求见 [Rust 桥接](rust-bridge.md)。本机 loopback 不能充当两台设备的
+发现、防火墙、证书确认、局域网吞吐和互传用户流程验收。
 
-所有 PNG 都回读检查尺寸及像素。测试程序、符号、报告和图片位于 `artifacts/tests/windows`，CI 归入 `windows-render-checks`。测试图左侧是合成底图，右侧由正式导出器渲染；它们是导出证据，不代表已经操作完整桌面编辑器。
+## 真实窗口、下载与安装
 
-## 真实窗口与剪贴板
+[应用工作流](../.github/workflows/qt-application.yml) 使用实际窗口、剪贴板、媒体编解码和包内 TLS，保留失败日志、PNG 和安装结果。Qt 的完整包更新验证针对原始候选文件，核对校验失败、下载完成位置、退出排空和已有文件保留。
 
-`test-windows.ps1 -Gui` 将已有 Release 对象（排除 `main.obj`）、资源和依赖链接到独立测试程序，启动正式窗口类。它使用隔离配置并关闭测试会话的更新器，通过真实 HWND 消息、同步光标 / 按键状态和 `WM_CHAR` 驱动 UI；产品 EXE 不增加测试参数。
-
-覆盖的受控场景包括：
-
-- 选择真实批注工具，正 / 反方向拖框，检查小编号在左上角且同色；完成后直接输入中文、英文和多行说明。
-- 列表切换、编辑与删除，检查文字归属；撤销 / 重做和继续新建时保持 ID、范围和颜色一致。
-- 编辑后继续拖出新范围；单击、零宽 / 零高与 1px 误拖不留下空条目。
-- 控制点调整、编号移动以及四边越界时的保尺寸限制。
-- 丢失捕获时丢弃未完成新框、保留已有框最后有效位置，返回图片后不继续拖动。
-- 收起面板、移动到显示器边缘后拖动已有范围；面板重开不会造成手势坐标跳变。
-- 调用正式复制命令，从系统剪贴板取得并解码 PNG，检查原图与说明同时存在，边框、图内编号和右侧编号同色，区域内部透明。
-- 验证新配置 F1、Documents 归档和重复保存，编码一个短 MP4 样本；逐项确认 PNG 与该 MP4 的真实封面、图像剪贴板格式和稳定文件路径。
-- 打开设置的三个页面及媒体历史窗口，验证快捷键录入取消、后台加载、刷新和关闭后的线程/窗口释放，并保留实际界面截图。
-- 向媒体历史窗口发送受控 DPI 消息，分别检查原生移动捕获和客户端捕获的处理，并核对建议矩形的位置与尺寸；仅校验窗口尺寸不足以发现跨屏跳回。
-
-媒体场景使用真实系统文档目录以验证已知文件夹行为。测试只移除本次明确拥有的样本；批注归档须与导出的剪贴板 PNG 唯一且逐字节匹配才清理，无法确认时保留，绝不清空归档目录。合成 MP4 验证编码、封面和文件操作，不能代替屏幕/音频设备的完整录制验收。
-
-证据位于 `artifacts/tests/windows/gui`：
-
-| 文件 | 内容 |
-| --- | --- |
-| `test-report.txt` | 场景和断言结果 |
-| `screens/01-editor-two-notes.png` | 实际编辑窗口与两条说明 |
-| `screens/02-editor-after-drag.png` | 拖动后的窗口状态 |
-| `screens/03-real-editor-clipboard.png` | 正式复制产生的合图 PNG |
-| `screens/04-settings-general.png`、`05-settings-shortcut.png`、`06-settings-about.png` | 通用、快捷键和关于页面的实际渲染 |
-| `screens/07-clipboard-history.png` | 真实 PNG / MP4 封面和历史列表 |
-| `screens/08-settings-100.png`、`09-language-menu-100.png` | 100% 设置比例及展开的语言列表 |
-| `screens/10-settings-125.png`、`11-language-menu-125.png` | 向真实窗口注入 120 DPI 消息后的设置与弹层渲染 |
-| `screens/12-settings-150.png`、`13-language-menu-150.png` | 注入 144 DPI 后受实际工作区约束的设置与弹层渲染 |
-| `screens/14-settings-english.png` | 提交英语选择并重建后的设置页面 |
-| `screens/15-language-menu-scroll.png` | 受限高度中的长语言列表与滚动后的可见选项；点击命中以报告断言为准 |
-| `screens/16-clipboard-100.png`、`17-clipboard-125.png` | 紧凑媒体历史在 96 / 120 DPI 参数下的预览、文字与操作布局 |
-| `screens/18-clipboard-150.png` | 144 DPI 下受工作区约束的媒体历史窗口；用于检查缩略图、按钮和点击区域的协调 |
-| `screens/19-clipboard-english.png` | 英文媒体历史的按钮宽度、文件信息与反馈文字 |
-
-设置比例场景使用实际桌面为 1024 × 768、96 DPI 的 Runner。100% 和 125% 按默认 720 × 500 逻辑像素渲染；120 / 144 DPI 场景向真实窗口发送 `WM_DPICHANGED`，重新布局、绘字和截图。150% 场景遵循正式窗口的工作区约束：可用宽高以实际工作区各减去 32 物理像素为上限，截图中的窗口因此不会强制达到 1080 × 750 物理像素。它验证受控 DPI 参数下的原生渲染与命中，未修改系统显示缩放，也不代表物理混合 DPI 显示器已完成验收。语言选择的箭头、Esc、外部点击、Enter 提交和滚动命中，以本次测试报告实际执行的断言为准；截图本身不能证明这些交互断言已经通过。
-
-媒体历史的 16–19 号证据沿用真实窗口和受控 `WM_DPICHANGED` 方法。默认窗口采用 760 × 560 逻辑像素；125% 与 150% 场景均以实际工作区为上限，不能把未经约束的理论尺寸当作固定通过条件。除检查预览、文字和按钮的渲染外，还应以报告中的断言确认复制、选择、滚动及尺寸改变后的命中。07 号历史截图也必须随本次代码重新生成，不能沿用旧布局。
-
-`-Gui` 进程有 45 秒硬超时，只终止测试启动的进程。硬件 D3D11 或输入桌面不可用时返回独立错误码 77，CI 视为失败，不将环境不足标记为成功。早于 GUI 生成的构建、原生渲染和打包证据仍可用于诊断，发布继续被阻止。
-
-真实窗口消息覆盖的是列出的受控场景。`WM_CHAR` 无法证明 IME 组词与候选窗正常，窗口截图也不能证明多显示器、物理鼠标、硬件录屏和音频设备已完成验收。
-
-## 桥接下载契约与证据
-
-`test-legacy-update.ps1` 在实际 Windows 上构建生产 WinRT 下载器 probe，使用真实 HTTP 与文件系统验证大于 64 MiB 的完整包传输、旧 EXE 回退、同版本重下、已存在文件、错误仓库/架构/hash、缺失依赖、清单不降级、短/长正文、来源跳转、取消和线程退出。Debug 和 Release 分别执行；Release 的 `-Gui` 还打开正式关于页、关闭后重建并检查六种语言完整说明和最小窗口布局。报告包含源 SHA、唯一版本、EXE / probe / fixture 哈希及实际结果，见 [更新下载](updates.md)。
-
-默认 fixture 明确不是可安装 Qt 产品。`controlledPackageContractPassed` 与 `actualCompletePackageRun` 是不同字段；本分支的独立桥接发布要求前者来自实际原生执行且后者为 false，不伪造 Qt 完整包或安装验证。真实 Downloads、原 Windows GUI 和 latest 下载仍是额外必须通过的门槛。Windows 重定向目录、物理混合 DPI、输入法及音视频设备按实际覆盖分别记录，不因 fixture 成功就推断通过。
-
-`tests/version_source_tests.py` 在 Linux 上验证真实版本生成、陈旧派生文件与非法输入拒绝；Windows 上还执行真实 MSBuild / PowerShell。`tests/bridge_release_tests.py` 只证明发布准入拒绝错误声明、路径或证据，不能替代生产 EXE 或实际 native run。发布准入要求整个 main Windows run 成功，不能只引用一个局部通过的测试或已上传 artifact。
-
-## 真实更新下载
-
-`test-windows.ps1 -Update` 使用独立的 `--verify-update` 测试入口，点击正式关于页的下载按钮，访问 GitHub 当前最新稳定 Release，并验证结果确实写入 Windows 系统 Downloads。它与关闭后台更新的 `-Gui` 模式分开，避免用联网耗时掩盖桌面交互超时。产品 EXE 不暴露该测试参数。
-
-场景检查下载完成状态、实际目录和发行文件匹配，并关闭后重新打开关于页，确认完成状态仍可展示。测试只清理本次明确拥有的下载，不清空 Downloads。执行报告应包含本次读取的远端版本；待发布的 CI 构建可能下载此前已经发布的稳定版，这证明下载路径可用，不代表新 tag 的发布资产已提前通过下载验收。
-
-证据位于 `artifacts/tests/windows/update`，随 `windows-render-checks` 保留：
-
-| 文件 | 内容 |
-| --- | --- |
-| `test-report.txt` | 真实请求、下载位置、完成状态和生命周期断言 |
-| `screens/20-update-downloaded.png` | 正式关于页下载完成后的实际状态与路径 |
-
-该测试进程有独立的 90 秒硬超时，不改变生产网络请求的超时策略。GitHub 无法访问、API 限流、下载或校验失败均应如实记录为失败，不以跳过联网或仅运行本地样本替代。此模式使用 Runner 的实际 Downloads；它不能自动证明用户重定向目录、所有网络中断或真实设备组合均已验收。
-
-## 启动、打包和发布检查
-
-`smoke.ps1` 把 Release EXE 复制到隔离临时目录，放入空 `config.json`，以 `--enter=tray` 启动；确认三秒内没有提前退出，再清理测试进程与目录。它覆盖基本启动、便携配置和内置资源，不代表截图或录屏已运行。
-
-`package.ps1` 核对文件版本、PE 依赖和四项身份资源：`ProductName` / `FileDescription` 为 `huhucapture`、`OriginalFilename` 为 `huhucapture.exe`、`CompanyName` 为 `NAMEWTA`。它生成 EXE、便携包、符号包、构建信息与 SHA256。声明发布还检查仓库、当前 main、构建 SHA、版本、架构和资产全集；全部门槛通过后才创建新标签及发行版，已有正式发行版不被声明入口修改。
-
-品牌及版本变更需核对 `huhucapture.exe` 文件属性、窗口 / 托盘 / About 标识、图标、默认配置路径、更新资产名和 ZIP 内容。文件成功编译不能替代对这些可见入口的检查。
-
-## 媒体历史与设置的专项验收
-
-这些项目保留原生 Windows 的可观察契约。自动测试实际覆盖的断言以测试源码与本次运行报告为准，其余项目在真实桌面记录，不能因为功能已经写入代码就标记为通过。
-
-| 场景 | 需要观察的结果 |
-| --- | --- |
-| 默认与升级快捷键 | 新配置按 F1 截图；旧默认 Ctrl+Alt+A 迁移到 F1，其他自定义值保留 |
-| 文件生命周期 | 截图、批注合图、长截图、GIF / MP4 保存或复制后在文档目录下留存；重启可再次找到 |
-| 系统目录与命名 | 跟随重定向的 Documents，中文路径可用；秒级文件名正确，同秒后缀不覆盖既有文件 |
-| 保存中断 | 磁盘不可写、空间不足或编码失败时不报告成功；保留编辑或录屏结果；取消另存为后历史仍有归档 |
-| 复制兼容 | 图片可粘贴为图像，视频可粘贴为文件；后续录制不会覆盖先前复制的文件；剪贴板被占用时明确失败 |
-| 历史列表 | 图片和视频都有可辨认预览，失败有占位；大量媒体可滚动，关闭窗口时后台回调不访问失效对象 |
-| 文件外部变化 | 文件在资源管理器中移动/删除后列表可恢复，复制或定位失败有反馈 |
-| 一键清除 | 先确认，默认送回收站；无法回收时 Windows 再提示确认；初次取消不改文件，执行中断/失败刷新剩余项，不处理子目录或无关文件 |
-| 设置可读性 | 桌面字号层级、控件状态和焦点清楚；通用/快捷键/关于共用对齐与密度；长路径与语言列表不挤压/裁切 |
-
-## 设置比例与语言弹层验收
-
-设置的视觉回归必须同时查看整体比例和展开状态。默认窗口为 720 × 500 逻辑像素；工作区充足时，100% 和 125% 分别约为 720 × 500、900 × 625 物理像素。更高比例先按同一逻辑尺寸换算，再以实际工作区宽高各减去 32 物理像素为上限收窄或缩短，并重新布局内容。本节的 150% Runner 截图属于这个受约束场景，不能以完整 1080 × 750 窗口作为通过条件。窗口大小正确并不自动证明字体、行高和点击区域使用了同一比例。
-
-| 场景 | 需要观察的结果 |
-| --- | --- |
-| 内容居中 | 侧栏保持稳定宽度，右侧内容列居中；三个页面的标题与卡片左边缘一致，操作控件在行内垂直居中 |
-| 字体与密度 | 正文、说明和标题层级清楚，文字没有额外缩放；紧凑控件仍完整显示中英文文案 |
-| 下拉展开 | 触发器和列表的字体、行高、颜色与圆角协调；当前语言可辨认，文字和箭头各有稳定位置 |
-| 键盘选择 | 方向键只改变高亮，Enter 提交；Esc 取消后当前语言不变，重新展开仍指向已保存项 |
-| 指针与滚动 | 悬停与点击命中同一行；列表滚动后点击位置对应新的可见项，点击外部取消 |
-| 弹层边界 | 下方不足时翻转或限制高度；移动窗口、切页、关闭、失去所属窗口及 DPI 变化后无游离弹层 |
-| 语言重建 | 确认语言后页面文案更新，旧弹层与回调安全释放；再次打开选择器正常 |
-
-证据应注明使用系统实际 DPI、受控窗口 DPI 参数还是注入的 DPI 消息。受控比例下调用正式布局、字体与绘制代码产生的截图，可以验证像素比例和命中；它不能证明真实混合 DPI 显示器间移动、系统字体设置或设备切换已通过。把已有 PNG 放大缩小不属于新的原生渲染证据。
-
-新场景只有在对应测试源码和运行报告中确实执行后才能写为通过。界面变化后应重新生成设置页及展开弹层的证据，不沿用旧版本图片。
-
-## 更新下载与跨屏移动验收
-
-更新的成功条件是完整、匹配当前 Release 的所选 ZIP 或旧 EXE 已写入系统 Downloads。检查必须区分“发现版本”“开始请求”“完整下载”“最终文件提交”四个阶段；不能只看到 HTTP 成功或按钮文案变化就判定下载可用。目录与文件保护契约见 [更新下载](updates.md)。
-
-| 场景 | 需要观察的结果 |
-| --- | --- |
-| 手动下载 | 关于页点击后直接下载最新稳定版，即使与当前版本相同；进度、实际文件位置和打开目录操作一致 |
-| 系统下载目录 | 使用实际 Downloads；目录重定向及中文路径可用，不混入 Documents 媒体历史 |
-| 完整性与重名 | 大小、SHA256、EXE 版本匹配；成品提交前只有本次临时文件，同名下载不覆盖旧文件 |
-| 请求与保存失败 | 缺资产、断网、内容不完整、校验不符、权限不足或磁盘写入失败均有反馈，可重试，旧文件不受影响 |
-| 生命周期 | 重复点击不创建并发冲突任务；关闭页面后无失效 UI 回调；应用退出中止未完成工作，已完成文件保留 |
-| 同 DPI 双屏拖动 | 拖过左右屏边界后在目标屏继续移动，松开后位置保持；刷新历史不重置位置 |
-| 混合 DPI 双屏拖动 | 100% ↔ 125% / 150% 往返拖动时采用目标比例和建议位置，鼠标未松开前移动不中断、不闪跳回原屏 |
-| 负坐标与工作区 | 副屏在主屏左侧或上方时坐标保持正确；不同分辨率与任务栏工作区不会把窗口拉回主屏 |
-| 客户端捕获 | 列表按钮或滚动条的按压跨 DPI 时安全取消，原生标题栏拖动的捕获继续由系统管理；随后复制、滚动和再次拖动仍可用 |
-
-单显示器 Runner 可以通过真实 HWND 消息检查 DPI 建议矩形与捕获状态，但这不是双显示器物理输入验收。报告必须写明实际显示器数量、消息/鼠标输入方式和执行断言；没有真实双屏环境时，表中的跨屏人工场景保持未执行。远端 Release 下载、重定向 Downloads 和网络中断也应分别记录实际证据，不能由本地文件校验测试推定通过。
+旧 Windows 的 WARP、Ling GUI 和 WinRT 受控探针可在 [v0.0.6 的验证指南](https://github.com/NAMEWTA/huhucapture/blob/v0.0.6/docs/validation.md) 复查。Qt 正式发布从该提交构建原生关于页探针，使用发布的原始 EXE 和本次完整候选包验证更新。
 
 ## Windows 人工桌面矩阵
 

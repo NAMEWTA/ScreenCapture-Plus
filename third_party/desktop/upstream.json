@@ -1,0 +1,186 @@
+{
+  "qtVersion": "6.12.1",
+  "qtCommit": "5af1a37e31a869cd6eb8a73d82e2c71a450e6634",
+  "gioMinimumRuntime": "2.80",
+  "files": [
+    {
+      "name": "qfile.cpp",
+      "path": "src/corelib/io/qfile.cpp",
+      "sha": "01750d8d5dd0cb6b6f4899a9caa11c7548d24920",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/io/qfile.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qfilesystemengine_unix.cpp",
+      "path": "src/corelib/io/qfilesystemengine_unix.cpp",
+      "sha": "a812e36df2266be4952bbb8d69717f7c31cb86e1",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/io/qfilesystemengine_unix.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qfilesystemengine_win.cpp",
+      "path": "src/corelib/io/qfilesystemengine_win.cpp",
+      "sha": "970440508e67846a493a49880358e58b3cfa0c0a",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/io/qfilesystemengine_win.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qdesktopunixservices.cpp",
+      "path": "src/gui/platform/unix/qdesktopunixservices.cpp",
+      "sha": "9b1ed60a6b17ed5bf90fc4636d81acd54038299c",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/gui/platform/unix/qdesktopunixservices.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qwaylandnativeinterface.cpp",
+      "path": "src/plugins/platforms/wayland/qwaylandnativeinterface.cpp",
+      "sha": "eb35394b25e28e7031245fb9d6c7abf0dd6efbd5",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylandnativeinterface.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qwaylanddatadevice.cpp",
+      "path": "src/plugins/platforms/wayland/qwaylanddatadevice.cpp",
+      "sha": "fae3a8ab3c34c97fdd86e9f466acc2ba3f2e31bc",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylanddatadevice.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qwaylanddatasource.cpp",
+      "path": "src/plugins/platforms/wayland/qwaylanddatasource.cpp",
+      "sha": "b3b10a60e20114f5f6693345293626a8e7d19544",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylanddatasource.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qguiapplication_platform.h",
+      "path": "src/gui/kernel/qguiapplication_platform.h",
+      "sha": "ae7bfab50828deadfab59e066faba282bca01790",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/gui/kernel/qguiapplication_platform.h",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qwaylandclipboard.cpp",
+      "sha": "7f3ab257ee7cffda01a4b20b3a0f396cc1bcacec",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylandclipboard.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qxcbclipboard.cpp",
+      "sha": "9408bddc5b851960bfea87a03b4800799bb43103",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/xcb/qxcbclipboard.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "ClipboardAdapter.cpp",
+      "sha": "811e0753fac74f44496585cfbad6aa4a19717f65",
+      "url": "https://github.com/ksnip/ksnip/blob/059f022cb9c4bdd30d3e8311eb9199ca92fed4f3/src/gui/clipboard/ClipboardAdapter.cpp",
+      "use": "source-reviewed; public API call, no copied implementation",
+      "license": "GPL-2.0-or-later"
+    },
+    {
+      "name": "qwaylandclientextension.h",
+      "sha": "e5935ca821d2853cd93280566e8ac8d11f7da121",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/global/qwaylandclientextension.h",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "copyright": "Erik Larsson, 2017",
+      "use": "public QWaylandClientExtension binding"
+    },
+    {
+      "name": "qwaylandclientextension.cpp",
+      "sha": "95f266586836e5c1bd445866d0c1aa30e57dc581",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/global/qwaylandclientextension.cpp",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "use": "source-reviewed; asynchronous registry lifecycle"
+    },
+    {
+      "name": "gappinfo.c",
+      "sha": "652cae6e1a944c110d4f10adf198d462d4ed438f",
+      "url": "https://github.com/GNOME/glib/blob/763cc3b238398614c20069fd67642730e3a6519b/gio/gappinfo.c",
+      "version": "2.80.0",
+      "license": "LGPL-2.1-or-later",
+      "copyright": "Red Hat, Inc., 2006-2007; author Alexander Larsson",
+      "use": "public asynchronous GIO file-manager launch and finish; no copied implementation"
+    },
+    {
+      "name": "qmimedata.cpp",
+      "path": "src/corelib/kernel/qmimedata.cpp",
+      "sha": "6a46aa888e7a443a0df658bec8b4fa028d091ad5",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/kernel/qmimedata.cpp",
+      "use": "source-reviewed text MIME, Unicode validation and native newline semantics; public APIs, no copied private converter",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qwindowsmimeregistry.cpp",
+      "path": "src/plugins/platforms/windows/qwindowsmimeregistry.cpp",
+      "sha": "9c5d332a9e80900eb6a11f17f63da2a584ec70db",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/windows/qwindowsmimeregistry.cpp",
+      "use": "source-reviewed text MIME, Unicode validation and native newline semantics; public APIs, no copied private converter",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "qstring.h",
+      "path": "src/corelib/text/qstring.h",
+      "sha": "38acf46b6da918fca53298e07eca3a8593128a77",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/corelib/text/qstring.h",
+      "use": "source-reviewed text MIME, Unicode validation and native newline semantics; public APIs, no copied private converter",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"
+    },
+    {
+      "name": "Ling Util.cpp",
+      "path": "src/Util.cpp",
+      "sha": "12189bac277634b2923a0079c9d19e37e3361b0d",
+      "url": "https://github.com/xland/Ling/blob/2ae45005b2863b004b4432bfe85d6e63d7ee44ca/src/Util.cpp",
+      "license": "MIT",
+      "copyright": "2025 liulun",
+      "use": "existing production CF_UNICODETEXT behavior reviewed; native publication uses the shared owned payload/result implementation"
+    },
+    {
+      "name": "qwaylanddataoffer.cpp",
+      "path": "src/plugins/platforms/wayland/qwaylanddataoffer.cpp",
+      "sha": "5ec7f075aa7fda82e4b1cd33711dfe99bb0e696f",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylanddataoffer.cpp",
+      "use": "source-reviewed actual Wayland local-file MIME and Documents portal transfer; no copied private implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "copyright": "2016 The Qt Company Ltd."
+    },
+    {
+      "name": "qxdgdesktopportalfiletransfer.cpp",
+      "path": "src/gui/platform/unix/qxdgdesktopportalfiletransfer.cpp",
+      "sha": "6301dea40e27cc7f77a5fb727933a9da052c0e16",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/gui/platform/unix/qxdgdesktopportalfiletransfer.cpp",
+      "use": "source-reviewed actual Wayland local-file MIME and Documents portal transfer; no copied private implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "copyright": "2026 David Redondo"
+    },
+    {
+      "name": "org.freedesktop.portal.FileTransfer.xml",
+      "path": "data/org.freedesktop.portal.FileTransfer.xml",
+      "sha": "72b6d40b99534c2474dfe20998ae5e1d6743631e",
+      "url": "https://github.com/flatpak/xdg-desktop-portal/blob/1.18.4/data/org.freedesktop.portal.FileTransfer.xml",
+      "version": "1.18.4",
+      "license": "LGPL-2.0-or-later",
+      "copyright": "2018 Red Hat, Inc.; author Matthias Clasen",
+      "use": "source-reviewed official FileTransfer version property and real service dependencies; no copied implementation"
+    },
+    {
+      "name": "qwaylanddataoffer.cpp",
+      "path": "src/plugins/platforms/wayland/qwaylanddataoffer.cpp",
+      "sha": "5ec7f075aa7fda82e4b1cd33711dfe99bb0e696f",
+      "url": "https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/plugins/platforms/wayland/qwaylanddataoffer.cpp",
+      "use": "source-reviewed text MIME normalization and actual receiving semantics; public APIs, no copied implementation",
+      "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "copyright": "The Qt Company Ltd., 2016"
+    }
+  ]
+}

@@ -4,7 +4,46 @@
 
 | 想解决的问题 | 阅读入口 |
 | --- | --- |
+| Qt 重构完成到哪里，哪些能力尚不能当作产品交付？ | [迁移状态与保护边界](qt-migration.md) |
+| 不同平台与桌面的采集入口和验证范围是什么？ | [平台支持](platform-support.md) |
+| 启动参数、一次性实例与主实例动作转发怎样保留原有语义？ | [共享启动与本地 IPC](qt-startup.md) |
+| 主程序如何装配服务、处理无托盘桌面并等待真实退出？ | [Qt 应用生命周期](qt-application.md) |
+| GNOME 桌面完成动作怎样确认能到达当前采集实例？ | [桌面完成动作](desktop-capture-action.md) |
+| 完整包如何选择、校验、流式下载并保护现有安装？ | [Qt 更新服务](qt-updates.md) |
+| 同一 Qt 程序如何部署成 Windows 安装包/ZIP 和 Linux DEB/AppImage？ | [Qt 安装树与打包](qt-packaging.md) |
+| 怎样实际安装、启动、重装和卸载四种包并核对用户数据保留？ | [安装生命周期验证](installation-validation.md) |
+| Qt 编辑器怎样保留九工具与原版焦点、参数和输出语义？ | [共享编辑器合同](qt-editor.md) |
+| 多个编辑或贴图窗口怎样恢复旧工具参数，保护未知配置与原文件？ | [编辑工具偏好](editor-preferences.md) |
+| 设置、历史、关于页怎样共用控件并等待真实服务结果？ | [共享桌面窗口](qt-desktop.md) |
+| 剪贴板如何确认发布，回收和文件定位如何保留真实结果？ | [桌面系统服务](desktop-integration.md) |
+| 文件定位测试怎样等待真实 Explorer 完成，避免目录删除后的窗口遮挡？ | [Shell 生命周期证据](file-revealer-test-evidence.md) |
+| 编辑输出、历史预览和清理怎样由应用连接真实服务？ | [媒体工作区](media-workspace.md) |
+| 二维码怎样共享原解码器、字符转换和像素预算？ | [二维码识别](qr-recognition.md) |
+| 如何构建固定 LocalSend core，验证真实 TLS 与文件提交？ | [LocalSend core 适配](localsend-core.md) |
+| 如何在两台设备之间发送并接收历史媒体？ | [局域网媒体互传](lan-transfer.md) |
+| GIF 与 LocalSend 怎样只链接一个 Rust 库，CRT 和线程如何约束？ | [Rust 聚合库与原生 ABI](rust-bridge.md) |
+| 文件传输如何预留空间、展示进度并等待真实归档终态？ | [共享传输服务](transfer-service.md) |
+| 设备选择、证书确认、接收和任务窗口怎样连接同一传输服务？ | [局域网共享界面](lan-interface.md) |
+| 私有身份、网卡变化、任务和确认窗怎样由应用统一拥有？ | [局域网应用控制层](lan-controller.md) |
+| 截图九宫格调整怎样复用同一源像素选择模型？ | [截图选择模型](capture-selection.md) |
+| 原生像素、源身份和屏幕坐标怎样进入共享截图、编辑与输出？ | [截图与录屏工作区](capture-workspaces.md)、[采集源](screen-capture.md) |
+| 长截图怎样复用原有匹配、节奏和内存保留规则？ | [共享长截图](scroll-capture.md) |
+| 长截图测试怎样区分控件 paint 与屏幕实际呈现？ | [原生读屏测试证据](scroll-test-evidence.md) |
+| Linux Portal 如何与 Qt 共用上下文，怎样验证取消与父窗？ | [Linux Portal 控制面](linux-portal.md) |
+| 怎样固定真实 Wayland 测试桌面的协议与库，又不打包进应用？ | [受控采流测试桌面](validation-desktop.md) |
+| 测试桌面的 Portal 生产者为何需要重连修复，证明范围是什么？ | [Portal-wlr 上游修复](portal-wlr-validation.md) |
+| PipeWire 帧如何归还、跨线程持有并验证实际采流？ | [Linux PipeWire 数据面](linux-pipewire.md) |
+| 已授权视频源怎样重选、交接消费者并排空？ | [共享实时采集源](live-capture-source.md) |
+| 隐藏控件后怎样刷新同次授权并检查替代首帧？ | [Wayland 采流刷新](wayland-capture-refresh.md) |
+| 裁剪、方向和 stride 怎样统一进入真实编码器？ | [帧规范化](frame-normalization.md) |
+| 软件 H.264 / AAC 如何固定构建，API 探针能证明什么？ | [软件编码依赖](software-codecs.md) |
+| Linux 编码器怎样完整保留视频与 AAC 尾样本并保护输出身份？ | [Linux 录制编码](linux-recording.md) |
+| 录制时如何验证控件不会进入选区，隐藏后怎样停止？ | [录制控件与采集排除](recording-controls.md) |
+| MP4 完整检查为何区别于首帧封面，坏样本怎样跨平台验证？ | [视频检查与封面](video-inspection.md) |
+| 怎样用固定源码生成实际 HEVC Main / Main10 回归输入？ | [HEVC 样本与复用记录](hevc-fixtures.md) |
 | 项目继承自哪里，如何保留上游归属与许可？ | [上游致谢](upstream.md) |
+| 实际运行文件怎样绑定原始通知和完整对应源码材料？ | [发行材料](distribution-materials.md)、[原生源码材料](native-source-materials.md)、[Rust 工具链材料](rust-toolchain-materials.md) |
+| 怎样从固定源码构建新的 Qt 运行前缀并记录真实来源？ | [Windows Qt 源码构建](windows-qt-source-build.md)、[Linux Qt 与 ICU 源码构建](linux-qt-source-build.md) |
 | 一个需求应该放在哪个模块、由谁拥有资源？ | [架构与扩展](architecture.md) |
 | 文件、目录、代码与文档应该怎样命名和组织？ | [工程约定](conventions.md) |
 | 截图与视频如何长期保存，历史操作影响哪些文件？ | [媒体历史](media-history.md) |

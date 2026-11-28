@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+prefix="$appdir/usr"
+export PIPEWIRE_MODULE_DIR="$prefix/lib/pipewire-0.3"
+export SPA_PLUGIN_DIR="$prefix/lib/spa-0.2"
+export PIPEWIRE_CONFIG_DIR="$prefix/share/pipewire"
+exec "$prefix/bin/huhucapture" "$@"

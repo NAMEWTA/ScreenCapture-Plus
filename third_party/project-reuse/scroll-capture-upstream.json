@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/NAMEWTA/huhucapture",
+  "commit": "251bc0071278c6b711c840bf5188d16870bc7349",
+  "pullRequest": "https://github.com/NAMEWTA/huhucapture/pull/7",
+  "author": "Anner (NAMEWTA)",
+  "license": "MIT",
+  "licenseFile": "LICENSE",
+  "reuse": "Reuse the existing scrolling control/output flow and thin native adapters, owned XCB socket cancellation and per-worker SIGPIPE guard. Retain the shipping CapLong model, stronger working-memory budget, verified RandR bindings and one shared live-source owner. Never map a previous Screenshot rectangle to another authorized stream.",
+  "files": [
+    {
+      "path": "src/app/ScrollController.cpp",
+      "upstreamGitBlob": "bd763aa6079c9cc9eedb1fc004af54138eddb7a8",
+      "upstreamSha256": "ac0cf41abcbda13a9b5bd4d48fdca113a1d11bf291ca093070f2e5ecbe022675"
+    },
+    {
+      "path": "src/app/ScrollController.h",
+      "upstreamGitBlob": "1b57d63ce4e5cd265f70dbbd2e225070254389ea",
+      "upstreamSha256": "6cd859dba7bfc4b45aaa31cb6202ebdece91619564a5e7f315679004033c22cd"
+    },
+    {
+      "path": "src/capture/ScrollAccumulator.h",
+      "upstreamGitBlob": "7bf1a2b1e2d5aac0bfde5b9fe18177a2db4e6186",
+      "upstreamSha256": "a07bfe5fa4142fd5c3a6e97b7d8e540b5322c868d1c635700ea2743dd9d93dbc"
+    },
+    {
+      "path": "src/platform/NativeScrollSource.h",
+      "upstreamGitBlob": "a8aeaea59d43594e3a89bb2b4dd863f1f2f82b47",
+      "upstreamSha256": "d8e0d90145c4826479e22a84139a7a081dff4903befed989c33933f8f02cd4ba"
+    },
+    {
+      "path": "src/platform/windows/NativeScrollSource.cpp",
+      "upstreamGitBlob": "aeed113c8d44ab61a327e0af2ffb2194510f47bf",
+      "upstreamSha256": "997287a10df00623bee88c0b08ecbf6becaa1b516ddf7ffb93f781a785ff90c8"
+    },
+    {
+      "path": "src/platform/linux/NativeScrollSource.cpp",
+      "upstreamGitBlob": "201dd159b6bb24bd9957163b6ae553fa63c7f9ba",
+      "upstreamSha256": "b36e7dca7e7f3668d27c69df6672b115ebdaacae1042b3af8ec36d99162ea41d"
+    },
+    {
+      "path": "src/platform/linux/X11Capture.h",
+      "upstreamGitBlob": "345c43bb869ea9b22ebd8939d91185ae5858d517",
+      "upstreamSha256": "2b821db8c5c8640bec7f6a18044b39513be4785061046ccd3a8184bae3a19e3b"
+    },
+    {
+      "path": "src/platform/linux/X11Capture.cpp",
+      "upstreamGitBlob": "3f07c844cbfb4a2bd2cb2167de3a735397b2749c",
+      "upstreamSha256": "d262044a074a38ee851057321960cc5e3961b461c13ea59307db032aa373c6d8"
+    },
+    {
+      "path": "src/services/capture/ScreenCastSource.h",
+      "upstreamGitBlob": "c07dc8a914997f6ae7507e36733de6e74f469aeb",
+      "upstreamSha256": "817e890b1652e7589bcecc7cfe8791d7394435ba7d808f7bfefd3fdfd6026ca5"
+    },
+    {
+      "path": "src/services/capture/ScreenCastSource.cpp",
+      "upstreamGitBlob": "ae9809e9e29df548afdfb59d9b5b0b9830e3e851",
+      "upstreamSha256": "491634b02cba91b63a8558683b3a10e1829b7909b72f910ef4c6dcc22dcb4b44"
+    }
+  ],
+  "integration": {
+    "pr6Commit": "ba9358443207b9fa349de2bc0f47cebc0b13aa5c",
+    "pr7Commit": "6b7acf2371df6ca228cd6537f605f68e88fc21d4",
+    "retained": "One PR7 ScrollController and MediaWorkspace output flow; PR6 ScrollCaptureModel, start/outline QWidget, shared toolbar metrics and native per-frame controls/SHAPE guards; PR7 owned XCB cancellation and frame producer completion barrier.",
+    "adaptation": "ScrollAccumulator delegates to ScrollCaptureModel. ScreenCastSource keeps one LiveCaptureSource producer and exposes the shared LiveFrameReader only after hidden-control refresh. The native probe uses the final controller and real shared Save As/archive output; no parallel ScrollWorkspace/ScrollCaptureSession/ScrollWindow implementation remains.",
+    "license": "MIT",
+    "licenseFile": "LICENSE"
+  }
+}

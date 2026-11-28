@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "product": "huhucapture",
+  "repository": "NAMEWTA/huhucapture",
+  "version": "@HUHUCAPTURE_VERSION@",
+  "tag": "v@HUHUCAPTURE_VERSION@",
+  "sourceCommit": "@HUHU_PACKAGE_COMMIT@",
+  "sourceDirty": @HUHU_PACKAGE_DIRTY@,
+  "platform": "@HUHU_PACKAGE_PLATFORM@",
+  "architecture": "@HUHU_PACKAGE_ARCHITECTURE@",
+  "configuration": "$<CONFIG>",
+  "compiler": {"id": "@CMAKE_CXX_COMPILER_ID@", "version": "@CMAKE_CXX_COMPILER_VERSION@"},
+  "cmakeVersion": "@CMAKE_VERSION@",
+  "qtVersion": "@Qt6_VERSION@",
+  "dependencyLockSha256": "@HUHU_DEPENDENCY_LOCK_SHA256@",
+  "cargoLockSha256": "@HUHU_CARGO_LOCK_SHA256@"
+}

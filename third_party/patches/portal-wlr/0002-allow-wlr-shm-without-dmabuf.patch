@@ -1,0 +1,35 @@
+From: huhucapture maintainers
+Subject: [PATCH] screencast: initialize wlr SHM without linux-dmabuf
+
+The fixed 0.8.1 backend rejects a compositor exposing wlr-screencopy
+and wl_shm when linux-dmabuf is absent. This happens on the CI-owned
+Sway 1.9/wlroots 0.17.1 headless pixman output, before Portal can create
+a capture session.
+
+The existing wlr_frame_buffer callback advertises SHM constraints
+independently of DMA-BUF. PipeWire's no-modifier branch selects WL_SHM
+and SPA_DATA_MemFd; xdpw_buffer_create then allocates anonymous shared
+memory and imports it with the real wl_shm protocol. Permit that existing
+path only when both screencopy_manager and shm were actually bound.
+Leave the ext-image, DMA-BUF/GBM, missing-protocol and capture paths intact.
+The actual frame, resize, daemon-loss and service-liveness checks remain
+required; this startup fix does not by itself establish a passing capture.
+
+Source: emersion/xdg-desktop-portal-wlr
+Commit: e1d5d16f0e064a0b788c5d70c11461b15ee7a4af
+Original wlr_screencast.c blob: 0c8aad75341e2e603f3d6a026b13530674dcedcb
+Apply after: 0001-include-posix-close-declaration.patch
+License: MIT (the original LICENSE remains with the source/build)
+
+diff --git a/src/screencast/wlr_screencast.c b/src/screencast/wlr_screencast.c
+--- a/src/screencast/wlr_screencast.c
++++ b/src/screencast/wlr_screencast.c
+@@ -590,6 +590,8 @@ int xdpw_wlr_screencopy_init(struct xdpw_state *state) {
+ 				logprint(ERROR, "System doesn't support gbm!");
+ 			}
+ 		}
++	} else if (ctx->screencopy_manager && ctx->shm) {
++		logprint(DEBUG, "wayland: using wlr_screencopy with SHM buffers");
+ 	} else {
+ 		logprint(ERROR, "Compositor supports neither ext_image_copy_capture or wlr_screencopy!");
+ 		return -1;

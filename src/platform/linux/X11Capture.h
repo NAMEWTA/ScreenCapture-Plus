@@ -1,0 +1,74 @@
+#pragma once
+
+#include "core/CaptureControls.h"
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <stop_token>
+#include <string>
+#include <vector>
+
+namespace HuhuCapture::Platform::Linux {
+
+struct X11Rectangle {
+    int x{}, y{}, width{}, height{};
+    bool operator==(const X11Rectangle&) const = default;
+};
+struct X11Monitor {
+    std::string name;
+    std::uint32_t identity{};
+    bool latin1Name{};
+    X11Rectangle pixels;
+    unsigned rotation{};
+    bool operator==(const X11Monitor&) const = default;
+};
+struct X11Desktop {
+    X11Rectangle bounds;
+    std::vector<X11Monitor> monitors;
+    std::vector<X11Rectangle> windows; // EWMH stacking order, front to back
+    int cursorX{}, cursorY{};
+};
+
+// One worker owns its connection, SHM segment, reply and reusable pixel storage.
+// Callers must reject XWayland before constructing this native X11 adapter.
+// Returned pixels are owned, tightly packed top-down opaque BGRA, and borrowed
+// only until the next capture/reset/destruction. All failures preserve a reason.
+// Stop interrupts only this worker's established connection. The initial
+// xcb_connect handshake cannot be interrupted before it exposes its socket.
+class X11Capture final {
+public:
+    explicit X11Capture(std::stop_token stop = {});
+    ~X11Capture();
+    X11Capture(const X11Capture&) = delete;
+    X11Capture& operator=(const X11Capture&) = delete;
+    bool initialize();
+    bool isXWayland() const noexcept;
+    bool supportsAutomaticScroll() const noexcept;
+    bool desktop(X11Desktop& result, bool includeWindows = true);
+    bool windowRectangle(std::uintptr_t windowId, X11Rectangle& rectangle);
+    bool capture(int x, int y, int width, int height, bool includeCursor = false);
+    // Same pixel implementation, with real owned-window visibility/shape and
+    // geometry checked atomically with readback on this worker's connection.
+    // A short server grab never spans encoding, GUI callbacks or frame waits.
+    bool captureGuarded(int x, int y, int width, int height, bool includeCursor,
+        std::span<const Core::CaptureControlSurface> controls);
+    bool moveCursor(int x, int y, int& actualX, int& actualY);
+    // Positive steps scroll down; negative steps scroll up.
+    bool scroll(int x, int y, int steps);
+    // Capture's automatic wheel path never moves the user's pointer. The first
+    // actual target must be inside selection; leaving that window pauses input.
+    bool scrollAtPointer(const X11Rectangle& selection, int steps);
+    bool scrollPaused() const noexcept;
+    void reset() noexcept;
+    std::span<const std::uint8_t> pixels() const noexcept;
+    int width() const noexcept;
+    int height() const noexcept;
+    std::size_t stride() const noexcept;
+    const std::string& error() const noexcept;
+private:
+    struct State;
+    std::unique_ptr<State> state_;
+};
+
+} // namespace HuhuCapture::Platform::Linux

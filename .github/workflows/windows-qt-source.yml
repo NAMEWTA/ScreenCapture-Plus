@@ -1,0 +1,96 @@
+name: Build Windows Qt from its locked sources
+
+# This explicit diagnostic entry uses the same source builder as the complete
+# Windows application workflow; it does not claim application or package acceptance.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-qt-source-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-qt-source:
+    runs-on: windows-2022
+    timeout-minutes: 240
+    env:
+      AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+      - name: Restore the unmodified SDK as explicit configuration evidence
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
+        with:
+          version: '6.12.1'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          archives: qtbase qtsvg qttranslations
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4'
+          py7zrversion: '==1.1.3'
+          extra: '--external 7z'
+          cache: false
+      - name: Install the fixed official SPDX and REUSE tools
+        run: |
+          python -m pip install spdx-tools==0.8.5 "reuse[charset-normalizer]==6.3.0"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/windows_qt_builder_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Restore the exact original Qt source modules
+        run: |
+          python scripts/restore-qt-module-sources.py --platform windows --workspace .deps/qt-module-sources
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build the actual v143 dynamic-CRT Qt runtime and translation tools
+        run: |
+          $referenceSdk = $env:QT_ROOT_DIR
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $installation = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'The actual MSVC v143 x64 toolchain is required.' }
+          & (Join-Path $installation 'Common7/Tools/Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          python scripts/build-windows-qt.py --source-workspace .deps/qt-module-sources --reference-sdk $referenceSdk --workspace .deps/qt-runtime-windows --jobs 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Retain the successfully built independent Qt prefix
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-qt-built-runtime-${{ github.sha }}
+          path: .deps/qt-runtime-windows/install/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain the original source checkouts and actual producer evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-qt-build-materials-${{ github.sha }}
+          path: |
+            .deps/qt-module-sources/
+            .deps/qt-runtime-windows/qttools-source/
+            .deps/qt-runtime-windows/*-source-receipt/
+            .deps/qt-runtime-windows/control/
+            .deps/qt-runtime-windows/build-info.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve real failure diagnostics without inventing a success receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-qt-source-diagnostics-${{ github.sha }}
+          path: |
+            .deps/qt-module-sources/*.json
+            .deps/qt-module-sources/*.log
+            .deps/qt-runtime-windows/control/
+            .deps/qt-runtime-windows/*-source-receipt/
+            .deps/qt-runtime-windows/build-info.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

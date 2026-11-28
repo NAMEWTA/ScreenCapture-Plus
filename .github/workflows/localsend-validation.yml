@@ -1,0 +1,115 @@
+name: Native aggregate validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localsend-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-core:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            host: linux
+            arch: linux_gcc_64
+            archives: qtbase qtsvg icu
+          - os: windows-2022
+            host: windows
+            arch: win64_msvc2022_64
+            archives: qtbase qtsvg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
+      CARGO_BUILD_JOBS: 2
+      CARGO_TARGET_DIR: ${{ github.workspace }}/artifacts/cargo/localsend
+      RUST_BACKTRACE: 1
+    defaults:
+      run:
+        working-directory: third_party/localsend
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install actual Chinese fonts for Linux interface rendering
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk fontconfig pkg-config libxcb1-dev
+      - name: Restore the exact upstream Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustc --version --verbose
+          cargo --version
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+      - name: Build the reviewed aggregate lock and preserve its actual native link inputs
+        run: python "$GITHUB_WORKSPACE/scripts/build-native-rust.py"
+      - name: Run real TLS, filesystem and bounded transfer tests
+        run: |
+          cargo test --locked -p localsend --features discovery --no-fail-fast
+          cargo test --locked -p huhucapture-native --no-fail-fast
+      - name: Restore matching Qt for same-process ABI validation
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
+        with:
+          version: '6.12.1'
+          host: ${{ matrix.host }}
+          target: desktop
+          arch: ${{ matrix.arch }}
+          archives: ${{ matrix.archives }}
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4'
+          py7zrversion: '==1.1.3'
+          extra: ${{ runner.os == 'Windows' && '--external 7z' || '' }}
+          cache: false
+      - name: Configure Linux Qt and Rust in the same executable
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: cmake -S . -B artifacts/cmake/native-validation -G Ninja -DCMAKE_BUILD_TYPE=Release -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_RUST_VALIDATION=ON
+      - name: Configure Windows Qt and Rust with the matching release CRT
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: pwsh
+        run: cmake -S . -B artifacts/cmake/native-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_RUST_VALIDATION=ON
+      - name: Exercise real GIF, TLS, transfer interfaces, durable commit and shutdown
+        working-directory: .
+        run: |
+          cmake --build artifacts/cmake/native-validation --config Release --target qt_rust_bridge qt_transfer_service qt_transfer_ui qt_lan_controller qt_gif_encoder --parallel 2
+          ctest --test-dir artifacts/cmake/native-validation -C Release --output-on-failure --no-tests=error -R '^qt_(rust_bridge|transfer_service|transfer_ui|lan_controller|gif_encoder)$'
+      - name: Record actual Windows desktop frames through GDI and the shared GIF encoder
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: |
+          cmake --build artifacts/cmake/native-validation --config Release --target native_gif_recording_probe --parallel 2
+          ctest --test-dir artifacts/cmake/native-validation -C Release --output-on-failure --no-tests=error -R '^native_gif_recording_probe$'
+      - name: Retain the actual workspace dependency resolution
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: localsend-cargo-lock-${{ runner.os }}
+          path: |
+            third_party/localsend/Cargo.lock
+            artifacts/native-rust/
+            artifacts/cargo/localsend/release/libhuhucapture_native.a
+            artifacts/cargo/localsend/release/huhucapture_native.lib
+            artifacts/cmake/native-validation/CMakeCache.txt
+            artifacts/cmake/native-validation/CMakeFiles/CMakeConfigureLog.yaml
+            artifacts/cmake/native-validation/Testing/Temporary/
+            artifacts/cmake/native-validation/rust-bridge/
+            artifacts/cmake/native-validation/transfer-render/
+            artifacts/cmake/native-validation/lan-controller-render/
+            artifacts/cmake/native-validation/native-gif-recording/
+          if-no-files-found: error
+          retention-days: 14

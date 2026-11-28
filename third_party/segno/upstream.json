@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/heuer/segno",
+  "version": "1.6.6",
+  "commit": "9b67a3f2914be966c35dd8f00bef19d01b9ec68e",
+  "license": "BSD-3-Clause",
+  "copyright": "Lars Heuer, 2016–2025",
+  "use": "Optional maintainer-only generator of checked-in real QR fixture matrices; no Segno source or runtime is linked into huhucapture.",
+  "generator": "scripts/generate-qr-fixtures.py",
+  "output": "tests/fixtures/qr/qr-fixtures.h",
+  "files": [
+    {
+      "path": "segno/encoder.py",
+      "git_blob": "29282fc906989d4940b1f8982df9a0bc1ee43867"
+    },
+    {
+      "path": "LICENSE",
+      "git_blob": "b80a6f00a80131459a91e9389c52dafaeea066bc"
+    },
+    {
+      "path": "segno/__init__.py",
+      "git_blob": "103b785a931454385e58c3f0887f5fe23919dc0b"
+    },
+    {
+      "path": "segno/consts.py",
+      "git_blob": "6025c56259f10383df2683fd817686ccb4e67fdb"
+    },
+    {
+      "path": "segno/utils.py",
+      "git_blob": "3c4e21c62d7252e1c62a039f4251c785abc4a053"
+    },
+    {
+      "path": "segno/writers.py",
+      "git_blob": "5d43c8cc123093af9162b5b2537bf09337705594"
+    }
+  ],
+  "generated_sha256": "3bca905e344ac50651e363ffe2b926a4b853995dc3ce202cf35ed33fbd56cb2e"
+}

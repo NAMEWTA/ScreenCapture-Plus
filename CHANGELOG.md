@@ -2,6 +2,13 @@
 
 本文件记录版本的产品能力与交付内容；尚未公开的声明以实际 Release 状态为准。发行文件见 [GitHub Releases](https://github.com/NAMEWTA/huhucapture/releases)，构建和验证方法见 [building.md](docs/building.md) 与 [validation.md](docs/validation.md)。
 
+## v0.1.0 — 统一 Qt Windows 与 Linux 应用
+
+- 使用共享 Qt 编辑器、媒体历史、设置和局域网传输界面，保留 Windows 原生采集与媒体后端，加入 Linux X11、Portal 和 PipeWire 适配。
+- 支持 Windows 安装器与便携 ZIP，以及 Linux DEB 与 AppImage。完整包更新支持原始文件校验、流式下载和同名保护。
+- 使用唯一 CMake 生产定义，继续核验原 v0.0.6 更新桥与新包之间的下载兼容性。
+- 完整说明、迁移条件与验证范围见 [v0.1.0](releases/v0.1.0.md)。
+
 ## v0.0.6 — Windows 更新桥
 
 - 保留原生 Windows 单 EXE，增加正式完整包清单选择和流式下载，供后续 Qt 便携包迁移使用；最终 Qt 首发版本仍为 v0.1.0。

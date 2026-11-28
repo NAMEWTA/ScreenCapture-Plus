@@ -1,0 +1,157 @@
+name: Complete video inspection validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: video-inspection-${{ github.ref }}
+  # Preserve the same-byte Linux/Windows decoder evidence for an active run.
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
+    outputs:
+      fixture_id: ${{ steps.fixtures.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install fixed-source codec build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y cmake ninja-build pkg-config nasm libxcb1-dev
+      - name: Restore the exact Qt SDK
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
+        with:
+          version: '6.12.1'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          archives: qtbase qtsvg icu
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4'
+          py7zrversion: '==1.1.3'
+          cache: false
+      - name: Build the pinned software encoders and decoders
+        run: |
+          python3 scripts/build-software-media.py
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/.deps/media-validation/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.deps/media-validation/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+      - name: Generate the shared real fixtures once
+        run: |
+          cmake -S . -B artifacts/cmake/video-validation -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_FFMPEG_VALIDATION=ON -DHUHUCAPTURE_VIDEO_VALIDATION=ON
+          cmake --build artifacts/cmake/video-validation --target video_inspection_fixtures --parallel 2
+          artifacts/cmake/video-validation/video_inspection_fixtures artifacts/video-fixtures
+          python3 scripts/build-hevc-fixtures.py --fixtures artifacts/video-fixtures --generator artifacts/cmake/video-validation/video_inspection_fixtures
+      - name: Share the exact encoded and malformed files
+        id: fixtures
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: video-inspection-fixtures
+          path: artifacts/video-fixtures/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Validate Linux Debug against every fixture
+        run: |
+          cmake --build artifacts/cmake/video-validation --target qt_video_inspection --parallel 2
+          ctest --test-dir artifacts/cmake/video-validation -C Debug -R '^qt_(video|hevc)_inspection$' --output-on-failure --no-tests=error
+      - name: Validate Linux Release against the same bytes
+        run: |
+          cmake -S . -B artifacts/cmake/video-validation -DCMAKE_BUILD_TYPE=Release
+          cmake --build artifacts/cmake/video-validation --target qt_video_inspection --parallel 2
+          ctest --test-dir artifacts/cmake/video-validation -C Release -R '^qt_(video|hevc)_inspection$' --output-on-failure --no-tests=error
+      - name: Retain actual decoder results and cover images
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: video-inspection-linux
+          path: |
+            artifacts/cmake/video-validation/video-inspection/
+            artifacts/cmake/video-validation/hevc-inspection/
+            artifacts/cmake/video-validation/Testing/Temporary/
+            artifacts/cmake/video-validation/CMakeCache.txt
+            .deps/media-validation/build-info.json
+            .deps/hevc-fixtures/x265-source-files.json
+            .deps/hevc-fixtures/x265.tar.gz
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows:
+    needs: linux
+    # A Linux rejection mismatch must not hide the independent Windows result. The
+    # failed Linux job still fails this workflow; only real generated files allow
+    # this job to run. No synthetic replacement or missing-fixture skip is used.
+    if: ${{ always() && needs.linux.outputs.fixture_id != '' }}
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      AQT_CONFIG: ${{ github.workspace }}/build/aqt.ini
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Restore the matching Qt and MSVC ABI
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
+        with:
+          version: '6.12.1'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          archives: qtbase qtsvg
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4'
+          py7zrversion: '==1.1.3'
+          extra: '--external 7z'
+          cache: false
+      # The Qt action selects its own Python; restore the script interpreter
+      # afterwards so the native build runs with this explicitly pinned version.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.17'
+      - name: Download the identical Linux-generated fixtures
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.linux.outputs.fixture_id }}
+          path: artifacts/video-fixtures
+          merge-multiple: true
+      - name: Build the pinned inspection DLLs with matching Debug and Release CRTs
+        shell: pwsh
+        run: python scripts/build-windows-video-inspection.py
+      - name: Configure shared inspection and the retained Windows cover adapter
+        shell: pwsh
+        run: cmake -S . -B artifacts/cmake/video-validation -G "Visual Studio 17 2022" -A x64 -T v143 -DHUHUCAPTURE_QT_VALIDATION=ON -DHUHUCAPTURE_VIDEO_VALIDATION=ON
+      - name: Validate Windows Debug against every fixture
+        shell: bash
+        run: |
+          cmake --build artifacts/cmake/video-validation --config Debug --target qt_video_inspection qt_native_recording_probe --parallel 2
+          ctest --test-dir artifacts/cmake/video-validation -C Debug -R '^(qt_(video|hevc)_inspection|qt_native_recording_probe)$' --output-on-failure --no-tests=error
+      - name: Validate Windows Release against the same bytes
+        shell: bash
+        run: |
+          cmake --build artifacts/cmake/video-validation --config Release --target qt_video_inspection qt_native_recording_probe --parallel 2
+          ctest --test-dir artifacts/cmake/video-validation -C Release -R '^(qt_(video|hevc)_inspection|qt_native_recording_probe)$' --output-on-failure --no-tests=error
+      - name: Retain actual decoder results and cover images
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: video-inspection-windows
+          path: |
+            artifacts/cmake/video-validation/video-inspection/
+            artifacts/cmake/video-validation/hevc-inspection/
+            artifacts/cmake/video-validation/native-recording/
+            artifacts/cmake/video-validation/Testing/Temporary/
+            artifacts/cmake/video-validation/CMakeCache.txt
+            .deps/video-inspection-windows/build-info.json
+            .deps/video-inspection-windows/build-Debug/ffbuild/config.log
+            .deps/video-inspection-windows/build-Release/ffbuild/config.log
+            .deps/video-inspection-windows/install/*/licenses/
+          if-no-files-found: warn
+          retention-days: 14

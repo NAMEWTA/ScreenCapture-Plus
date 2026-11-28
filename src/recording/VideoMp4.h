@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/RecordingResult.h"
+#include "core/CaptureControls.h"
 #include <windows.h>
 #include <dxgi1_2.h>
 #include <mfapi.h>
@@ -24,6 +26,11 @@ struct DESKTOPCAPTUREPARAMS
     std::function<HRESULT(const BYTE* d, size_t sz,void* cb)> Streamer;
     std::function<HRESULT(DXGI_FORMAT dxgi,int wi,int he,const BYTE* d, size_t sz,void* cb)> Framer;
     std::function<void(IMFAttributes* a)> PrepareAttributes;
+    // Optional owned-file seam. The worker retains the stream until this call
+    // returns; a supplied stream takes precedence over a filename.
+    IMFByteStream* OutputStream{};
+    std::function<void(GUID codec)> Prepared;
+    std::function<void()> Finalizing;
     int fps = 25;
     int NumThreads = 0;
     int Qu = -1;
@@ -38,18 +45,28 @@ struct DESKTOPCAPTUREPARAMS
     HWND hWnd = 0;
     IDXGIAdapter1* ad = 0;
     UINT nOutput = 0;
+    bool VerifyDesktop{};
+    RECT ExpectedDesktop{};
+    bool UseGdiCapture{};
+    RECT GdiRegion{}; // physical virtual-desktop coordinates, never monitor-local
+    std::uint64_t MaximumFrameBytes{256ull * 1024 * 1024};
+    std::uint64_t MaximumQueuedAudioBytes{16ull * 1024 * 1024};
+    std::shared_ptr<HuhuCapture::Core::CaptureControls> Controls;
+    unsigned long long FirstFrameTimeoutMS{5000};
+    bool DurationLimitReached{}; // worker-owned, read after completion
 
     unsigned long long StartMS = 0; // 0, none
     unsigned long long EndMS = 0; // 0, none
     std::atomic<bool> MustEnd{ false };
     std::atomic<bool> Pause{ false };
 
-    // 真正 WriteSample 成功的视频帧数。一帧都没写就不是有效视频，函数末尾据此报错 ——
-    // 循环里所有失败都是 break，跟"用户点停止"走同一个出口，光看返回值分不出这两种情况
-    unsigned long long framesWritten = 0;
+    // Worker-owned completion facts; read only after the worker has joined.
+    HuhuCapture::Core::RecordingResult result;
 };
 
-void setAudio(DESKTOPCAPTUREPARAMS* params, bool useSpeaker, bool useMic);
+// Call on the recording worker after initializing its COM apartment. Selecting
+// a missing/failed endpoint is an explicit preparation failure, never mute.
+bool setAudio(DESKTOPCAPTUREPARAMS* params, bool useSpeaker, bool useMic);
 int DesktopCapture(DESKTOPCAPTUREPARAMS& params);
 
 } // namespace VideoMp4

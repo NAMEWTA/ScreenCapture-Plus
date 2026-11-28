@@ -1,0 +1,41 @@
+{
+  "repository": "https://github.com/ImageOptim/gifski",
+  "version": "1.34.0",
+  "commit": "1060eab4500a20f27e2fa3ab7e85473d0e921cbd",
+  "license": "AGPL-3.0-or-later",
+  "authors": [
+    "Kornel Lesiński"
+  ],
+  "sourceIntegration": "Unmodified upstream git dependency in src/platform/rust/Cargo.toml; default features disabled, gifsicle enabled. One aggregate Rust staticlib.",
+  "files": [
+    {
+      "path": "gifski.h",
+      "blob": "1ceb3c41cba4018763f0e8ef58230f9f29703ace"
+    },
+    {
+      "path": "LICENSE",
+      "blob": "24eda8a7b7de8d7028274f10ef3976f4f9916760"
+    },
+    {
+      "path": "upstream-cargo.lock",
+      "upstreamPath": "Cargo.lock",
+      "blob": "665f14360396830a93a35842eca49bd67be64f97"
+    }
+  ],
+  "reviewedSourceFiles": [
+    "Cargo.toml",
+    "src/lib.rs",
+    "src/collector.rs",
+    "src/c_api.rs",
+    "src/c_api/c_api_error.rs",
+    "gifski.h",
+    "LICENSE"
+  ],
+  "reviewedSourceBlobs": {
+    "src/c_api.rs": "cb676c4c777e0966d083276a8c37630d994bdacb",
+    "src/collector.rs": "513ed1e6e84493e52fae45c6f811a241350afd9a",
+    "src/lib.rs": "de92ec28c74f9f623bd11391c26e4605baaa4437"
+  },
+  "sharedEncoder": "src/services/media/GifEncoder.cpp reuses the existing quality-80 fast infinite-repeat profile and unmodified upstream C ABI. The write callback borrows the already claimed descriptor until gifski_finish joins its writer; it does not use file_output's reopen/unlink behavior. Frames are ordered and input PTS is checked before the upstream denoiser/quantizer. Only OS descriptor write/flush differs in platform FileOutput.cpp.",
+  "notice": "The repository MIT license does not replace gifski AGPL terms or corresponding-source obligations for a combined distribution."
+}

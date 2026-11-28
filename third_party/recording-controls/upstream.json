@@ -1,0 +1,174 @@
+{
+  "repository": "https://github.com/NAMEWTA/huhucapture.git",
+  "ref": "251bc0071278c6b711c840bf5188d16870bc7349",
+  "branch": "refactor/qt6-resume",
+  "pullRequest": 7,
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 NAMEWTA",
+  "licenseFile": "../../LICENSE",
+  "files": [
+    {
+      "path": "src/recording/PlatformRecording.h",
+      "blob": "b3a4e3fbaca9bd3dc192a846f2e0b085ad69710e",
+      "use": "Reviewed native control-surface request contract; this branch publishes one immutable shared value and uses its existing BackendRequest."
+    },
+    {
+      "path": "src/app/RecordingController.cpp",
+      "blob": "c46d9997c88f0d4b569323a9eb04585403e4464c",
+      "use": "Reuse verified per-screen outside work-area candidates in the unified RecordingController and ScrollController. Preserve one source/session owner with continuous native checks and same-authorization refresh."
+    },
+    {
+      "path": "src/ui/qt/RecordingWindow.cpp",
+      "blob": "de1c12cc5465b33d482a8dbe0be03a971f58fe94",
+      "use": "Reviewed toolbar sizing and movement. This branch retains its existing UI and adds continuous safe-area constraints rather than trusting only its initial position."
+    },
+    {
+      "path": "src/platform/linux/X11Capture.cpp",
+      "blob": "3f07c844cbfb4a2bd2cb2167de3a735397b2749c",
+      "use": "Reviewed real XCB geometry/translation readback. Extend this branch's sole X11Capture with checked native SHAPE and short atomic server-grab/readback; no second capture implementation."
+    }
+  ],
+  "notAdopted": [
+    "A control that cannot fit must not proceed only with an advisory warning.",
+    "A one-time geometry check does not cover later moves, resizes or native-ID replacement.",
+    "A new session or source owner is not introduced for the shared toolbar.",
+    "Wayland buffer freshness is not inferred from an X11 rectangle or an arbitrary delay."
+  ],
+  "verification": "Shared UI and native X11 probe compiled locally with fixed Qt 6.12.1; actual QWidget cases ran offscreen. Native Windows/X11 compositor and physical-desktop pixel acceptance remain separate tests.",
+  "testWindowOrdering": {
+    "repository": "https://github.com/qt/qtbase.git",
+    "ref": "5af1a37e31a869cd6eb8a73d82e2c71a450e6634",
+    "version": "6.12.1",
+    "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+    "copiedImplementation": false,
+    "files": [
+      {
+        "path": "src/gui/kernel/qguiapplication.cpp",
+        "blob": "fec2e580d808fe46a6715aee1e5e217fb8dbcef0",
+        "use": "Call the official public sync API to drain the owned Xvfb test windows before independent native readback."
+      },
+      {
+        "path": "src/plugins/platforms/xcb/qxcbintegration.cpp",
+        "blob": "99cce9519b2804ebecc8d2b46e537a197ef8c625",
+        "use": "Verify SyncState support and delegation to the actual Qt connection."
+      },
+      {
+        "path": "src/plugins/platforms/xcb/qxcbconnection.cpp",
+        "blob": "0a6ac915d77ce8500f35c4ca401ddb39f262a01e",
+        "use": "Verify that sync waits for an actual get_input_focus reply on the same XCB connection that submitted window/SHAPE/backing-store requests; do not treat this as composited-desktop presentation."
+      }
+    ]
+  },
+  "waylandRefresh": {
+    "implementation": [
+      "src/platform/linux/portal/WaylandRequestBarrier.cpp",
+      "src/services/capture/LiveCaptureSource.cpp"
+    ],
+    "scope": "Existing library/protocol APIs and reviewed producer behavior; no compositor implementation copied or added as an application dependency. Source/worker/FD ownership is not a universal presentation guarantee.",
+    "copiedCompositorImplementation": false,
+    "sources": [
+      {
+        "repository": "https://github.com/wayland-mirror/wayland.git",
+        "upstreamRepository": "https://gitlab.freedesktop.org/wayland/wayland.git",
+        "version": "1.23.1",
+        "ref": "a9fec8dd65977c57f4039ced34327204d9b9d779",
+        "path": "protocol/wayland.xml",
+        "blob": "9418c62f3f6a4852e06a4ecc97949b0f55301da0",
+        "license": "MIT",
+        "use": "Official asynchronous sync request ordering; no assertion of output presentation."
+      },
+      {
+        "repository": "https://github.com/qt/qtbase.git",
+        "version": "6.12.1",
+        "ref": "5af1a37e31a869cd6eb8a73d82e2c71a450e6634",
+        "path": "src/plugins/platforms/wayland/qwaylanddisplay.cpp",
+        "blob": "a14c553765f09a835b7f049cd186b37085f512c4",
+        "license": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+        "use": "Verify default queue is dispatched by the GUI owner via queued signal, separate from frame-specific event thread; no Qt dispatcher implementation copied."
+      },
+      {
+        "repository": "https://github.com/emersion/xdg-desktop-portal-wlr.git",
+        "version": "0.8.1",
+        "ref": "e1d5d16f0e064a0b788c5d70c11461b15ee7a4af",
+        "path": "src/screencast/ext_image_copy.c",
+        "blob": "8ce264cfc9895e4dd9d4f2fef8e123f850674923",
+        "license": "MIT",
+        "use": "Read capture request, actual ready callback and native-session lifetime; no backend implementation copied."
+      },
+      {
+        "repository": "https://github.com/emersion/xdg-desktop-portal-wlr.git",
+        "version": "0.8.1",
+        "ref": "e1d5d16f0e064a0b788c5d70c11461b15ee7a4af",
+        "path": "src/screencast/pipewire_screencast.c",
+        "blob": "603c9e0138f9960fa34dfc0928e38ff5ee9701b9",
+        "license": "MIT",
+        "use": "Read Streaming/Paused, frame queue, unfinished-frame corruption flags and buffer removal; a replacement consumer must still pass actual first-pixel validation."
+      },
+      {
+        "repository": "https://github.com/deepin-community/wlroots.git",
+        "upstreamRepository": "https://gitlab.freedesktop.org/wlroots/wlroots.git",
+        "sourceKind": "Deepin source import used by the controlled CI desktop, not an upstream Git commit",
+        "version": "0.19.0",
+        "ref": "826be6494c201ca887cddd8deb07d70c13595dd2",
+        "path": "types/wlr_ext_image_copy_capture_v1.c",
+        "blob": "6f555613989348f1e60981303fc6f8276efc879e",
+        "license": "MIT",
+        "use": "Read frame capture scheduling, real source-frame copy and initial damage. Review only; never imported into the application."
+      },
+      {
+        "repository": "https://github.com/GNOME/mutter.git",
+        "version": "48.0",
+        "ref": "48.0",
+        "path": "src/backends/meta-screen-cast-stream-src.c",
+        "blob": "581b4db5e2ba84f09216b47303de5eb746747ddf",
+        "license": "GPL-2.0-or-later",
+        "copyright": "Copyright (C) 2015-2017 Red Hat Inc.",
+        "use": "Read streaming enable/paused disable, review only."
+      },
+      {
+        "repository": "https://github.com/GNOME/mutter.git",
+        "version": "48.0",
+        "ref": "48.0",
+        "path": "src/backends/meta-screen-cast-monitor-stream-src.c",
+        "blob": "46e93eb8b0e6fc6a316c6ecbbbf35a7565a04dd8",
+        "license": "GPL-2.0-or-later",
+        "copyright": "Copyright (C) 2017 Red Hat Inc.",
+        "use": "Read stage-watch reattachment and queue_redraw on enable; actual GNOME capture remains unverified; no code copied."
+      },
+      {
+        "repository": "https://github.com/GNOME/mutter.git",
+        "version": "48.0",
+        "ref": "48.0",
+        "path": "src/backends/meta-screen-cast-window-stream-src.c",
+        "blob": "7140a7887f058db156080da4a260a53ab2992cdc",
+        "license": "GPL-2.0-or-later",
+        "use": "Read the different window source enable/record path; review only, no cross-source presentation inference."
+      },
+      {
+        "repository": "https://github.com/KDE/kwin.git",
+        "version": "6.3.5",
+        "ref": "v6.3.5",
+        "path": "src/plugins/screencast/outputscreencastsource.cpp",
+        "blob": "d31a8f6d820fd99f81e218a6b0eb9570d0b9cab6",
+        "license": "GPL-2.0-or-later",
+        "copyright": "2021 Vlad Zahorodnii",
+        "use": "Read immediate report on resume, existing output texture and lastPresentationTimestamp; evidence against claiming a new FD universally guarantees a freshly composed scene. No code copied."
+      },
+      {
+        "repository": "https://github.com/KDE/kwin.git",
+        "version": "6.3.5",
+        "ref": "v6.3.5",
+        "path": "src/plugins/screencast/screencaststream.cpp",
+        "blob": "928f79f75d68e1e9dd2efa114ac52abace853e8c",
+        "license": "GPL-2.0-or-later",
+        "use": "Read Streaming->resume and actual buffer rendering; review only."
+      }
+    ],
+    "validation": "Strict fixed-SDK build and actual unavailable/cancel/queued terminal tests passed locally. Dedicated first-replacement-frame pixel probe compiled; Sway execution pending CI, GNOME/Plasma/physical presentation and missing-stop-route workflows remain release gates."
+  },
+  "integration": {
+    "pr6": "ba9358443207b9fa349de2bc0f47cebc0b13aa5c",
+    "pr7": "6b7acf2371df6ca228cd6537f605f68e88fc21d4",
+    "contract": "One controller per journey. PR6 immutable control snapshot, shared recording toolbar and SHAPE validation combine with PR7 stop-token native adapters, producer barrier and fixed E/T final recording interval."
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/FFmpeg/FFmpeg.git",
+  "version": "9.0.2",
+  "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+  "path": "libavformat/mov.c",
+  "blob": "e7e29d7f92de8d8324fa78a24312864ec4dcebc1",
+  "license": "LGPL-2.1-or-later",
+  "licenseFile": "COPYING.LGPLv2.1",
+  "licenseBlob": "40924c2a6da76a2b0c639f6fe7ef0b2d095a6adb",
+  "copyright": [
+    "Copyright (c) 2001 Fabrice Bellard",
+    "Copyright (c) 2009 Baptiste Coudurier <baptiste dot coudurier at gmail dot com>",
+    "first version by Francois Revol <revol@free.fr>",
+    "seek function by Gael Chardon <gael.dev@4now.net>"
+  ],
+  "local": "src/services/media/Mp4Envelope.cpp",
+  "scope": "Top-level box size, extended-size and size-zero traversal from mov_probe / mov_read_default only. The mature MF / FFmpeg backends continue to parse media semantics and decode all audio/video tracks.",
+  "adaptations": "Use reads from the same owned IStream/QFile; reject short physical headers and box extents instead of clamping; check unsigned remaining-byte bounds before adding; cap total top-level non-mdat/free/skip metadata bytes; propagate cancellation; require moov and mdat. No sample-table or bitstream parsing is copied or reimplemented."
+}

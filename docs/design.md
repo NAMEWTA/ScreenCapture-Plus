@@ -16,7 +16,7 @@ Apple 的 [Typography](https://developer.apple.com/design/human-interface-guidel
 | [WinUI Gallery 设置页](https://github.com/microsoft/WinUI-Gallery/blob/main/WinUIGallery/Pages/SettingsPage.xaml) | 限制内容列宽度、统一分组与行内控件；参考组织方式，不照搬完整 Gallery 页面的宽度 |
 | [Windows ComboBox](https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/combo-box) 与 [Gallery 示例](https://github.com/microsoft/WinUI-Gallery/blob/main/WinUIGallery/Samples/ComboBox/ComboBoxPage.xaml) | 明确当前选择；箭头导航与提交分离，点击或 Enter 提交，取消不改值 |
 
-这些参考定义视觉与交互意图。实现继续使用现有 Ling、Win32 和 DirectWrite，不为设置页增加浏览器或另一套 UI 运行时。
+这些参考定义视觉与交互意图。Qt 迁移采用同一套 Widgets 控件、布局和业务状态，两端共用字号、间距与交互规则。旧 Windows 产品的 Ling / DirectWrite 实现作为 P12 之前的行为基线；迁移状态见 [Qt 跨平台迁移](qt-migration.md)。
 
 ## 内容如何居中与对齐
 
@@ -48,6 +48,12 @@ Apple 的 [Typography](https://developer.apple.com/design/human-interface-guidel
 
 字号、行高、控件高度和间距应一起评估。只增大字体会挤压内容，只缩小字体会损失可读性。截图工具条和媒体历史有各自的操作密度；不能通过修改全局常量，把设置页的紧凑尺寸传播到捕获工具条的 44px 点击区域。
 
+Qt 的结构性滚动容器需要同时保持 viewport 和内容背景透明。
+固定 Qt 的 [`QScrollArea::setWidget`](https://github.com/qt/qtbase/blob/5af1a37e31a869cd6eb8a73d82e2c71a450e6634/src/widgets/widgets/qscrollarea.cpp)
+会主动打开内容控件的 `autoFillBackground`，因此应在交给滚动容器之后再关闭它。
+设置页、历史行容器和批注页脚沿用各自已有画布；白色卡片与文本输入仍自行绘制。
+只给 `QScrollArea` 设置透明样式不足以消除内容上的系统默认灰色矩形。
+
 虎虎图标和品牌插画保留自身的橘色与奶油色，规则见 [品牌资源](brand.md)。品牌插画与自动批注配色不决定设置页的背景和选中颜色。
 
 ## 媒体历史的列表密度
@@ -64,7 +70,7 @@ Apple 的 [Typography](https://developer.apple.com/design/human-interface-guidel
 
 窗口初次打开时按默认尺寸居中；之后的位置由用户拖动和 Windows 窗口管理决定。刷新列表、收到后台预览或重排内容不能再次执行初始居中。内容列的居中与桌面窗口的位置是两个独立的布局问题。
 
-跨不同缩放比例的显示器时，Windows 通过 `WM_DPICHANGED` 提供新 DPI 以及建议的屏幕位置、尺寸。窗口框架应应用这一建议矩形，界面在同一比例下重建文字、布局和命中；不能用原显示器的位置覆盖它，也不能把副屏的负坐标当成无效位置。行为依据见微软 [WM_DPICHANGED 文档](https://learn.microsoft.com/en-us/windows/win32/hidpi/wm-dpichanged)。
+跨不同缩放比例的显示器时，Windows 通过 `WM_DPICHANGED` 提供新 DPI 以及建议的屏幕位置、尺寸。旧窗口框架应应用这一建议矩形；Qt 产品则由平台插件处理原生窗口与 DPI，业务控件使用 Qt 逻辑坐标，避免第二次手动缩放或再次改写原生位置。两者都不能用原显示器的位置覆盖目标位置，也不能把副屏的负坐标当成无效位置。行为依据见微软 [WM_DPICHANGED 文档](https://learn.microsoft.com/en-us/windows/win32/hidpi/wm-dpichanged)。
 
 鼠标捕获还需要区分所有者。列表按钮按压和滚动条拖动属于应用自己发起的客户端操作，可以在 DPI 改变时取消；标题栏拖动与窗口边缘缩放由 Windows 的原生移动循环管理。仅判断捕获 HWND 是否等于当前窗口，无法证明捕获属于列表，不能据此无条件释放捕获。释放必须与应用自己的捕获状态对应，避免在跨屏时打断原生拖动而使窗口闪跳。平台 API 边界见 [ReleaseCapture](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-releasecapture)。
 

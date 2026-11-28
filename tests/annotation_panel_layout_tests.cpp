@@ -34,11 +34,28 @@ void compactAndTallPanelsKeepIndependentHitAreas()
     }
 }
 
+void wrappedFootersPreserveMinimumContent()
+{
+    for (const auto dpi : {1.f, 1.25f, 1.5f, 2.f, 3.f}) {
+        for (const auto footer : {22.f, 30.f, 48.f, 72.f}) {
+            for (int logicalHeight = 240; logicalHeight <= 600; ++logicalHeight) {
+                const float height = (static_cast<float>(logicalHeight) + footer - 22.f) * dpi;
+                const auto geometry = HuhuCapture::UI::annotationPanelGeometry(height, dpi, footer);
+                CHECK(geometry.listBottom - geometry.listTop + .001f >= 40.f * dpi);
+                CHECK(geometry.editorHeight + .001f >= 72.f * dpi);
+                CHECK(geometry.editorTop + geometry.editorHeight < geometry.footerTop);
+                CHECK(geometry.footerTop + footer * dpi + 2.999f * dpi <= height);
+            }
+        }
+    }
+}
+
 } // namespace
 
 int main()
 {
     compactAndTallPanelsKeepIndependentHitAreas();
+    wrappedFootersPreserveMinimumContent();
     for (const auto dpi : {1.f, 1.25f, 2.f, 3.f}) {
         float previous = 0.f;
         for (int logicalHeight = 240; logicalHeight <= 1200; ++logicalHeight) {

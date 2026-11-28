@@ -1,0 +1,222 @@
+From: huhucapture maintainers
+Subject: [PATCH] screencast: backport upstream producer-driven frame scheduling
+
+Apply the mature upstream graph scheduling sequence to the CI-owned fixed
+0.8.1 source, after 0002. The source drives the graph when an ext frame is
+ready; initial STREAMING and PAUSED resume go through trigger_process and
+the existing process callback. Retain the official starvation retry and
+disarm path so a transient lack of a free buffer cannot freeze the graph.
+
+Original changes and attribution:
+- c613a8bc7cfbcf5615b59906e247b30b190c8662, CToID
+  <37492766+funk443@users.noreply.github.com>: drive the PipeWire graph.
+- 544e11481338a3784a11cb30561f06982fc0a158, Simon Ser
+  <contact@emersion.fr>: guard PAUSED buffer enqueue.
+- d24d6a1b726352eb2645c38416b76e214e54a7c0, Scott Leggett
+  <scott@sl.id.au>: retry graph processing after buffer starvation.
+- ccd8e629f49e65e401a977525593e80767ccdfb0 and
+  c0255d7b047b7263629ab5a314661045ff7f65e3, Ismael Luceno
+  <iluceno@suse.de>: share the four wlr-frame completion sites and trigger
+  the graph there too, retaining the pre-ext fallback's scheduling.
+- 162463aba4f0e97b7003f5a9b4b6b9080897c134, Will
+  <will@bogusz.co>: start/resume via trigger_process, avoiding the first
+  frame's compatibility queue cycle followed by a second trigger.
+  Upstream trailers: Signed-off-by: Will <will@bogusz.co>;
+  Assisted-by: oh-my-pi:claude-opus-5-5;
+  Assisted-by: oh-my-pi:gpt-6.1-sol.
+
+Context-only adaptation: 0.8.1 lacks the later unrelated per-frame damage
+array and node serial reporting. Its existing dequeue function still
+returns void; retain d24d6a1's original check of current_frame.pw_buffer.
+No artificial frames, fixed frame dropping or client admission change.
+
+Repository: https://github.com/emersion/xdg-desktop-portal-wlr
+Base: e1d5d16f0e064a0b788c5d70c11461b15ee7a4af (0.8.1)
+License: MIT; Copyright (c) 2018 emersion. Preserve upstream LICENSE.
+These patches do not modify a user's installed desktop/Portal service.
+
+diff --git a/include/screencast_common.h b/include/screencast_common.h
+--- a/include/screencast_common.h
++++ b/include/screencast_common.h
+@@ -197,6 +197,7 @@
+ 	uint32_t node_id;
+ 	bool pwr_stream_state;
+ 	uint32_t framerate;
++	struct xdpw_timer *process_retry;
+ 
+ 	// wlroots
+ 	union {
+diff --git a/src/screencast/ext_image_copy.c b/src/screencast/ext_image_copy.c
+--- a/src/screencast/ext_image_copy.c
++++ b/src/screencast/ext_image_copy.c
+@@ -18,6 +18,7 @@
+ #include <wayland-client-protocol.h>
+ #include <xf86drm.h>
+ #include <sys/types.h>
++#include <pipewire/pipewire.h>
+ 
+ #include "ext_image_copy.h"
+ #include "screencast.h"
+@@ -210,6 +211,7 @@
+ 		// Clear damage for the buffer that was just submitted
+ 		buffer->damage.size = 0;
+ 	}
++	pw_stream_trigger_process(cast->stream);
+ }
+ 
+ static void ext_frame_failed(void *data,
+diff --git a/src/screencast/pipewire_screencast.c b/src/screencast/pipewire_screencast.c
+--- a/src/screencast/pipewire_screencast.c
++++ b/src/screencast/pipewire_screencast.c
+@@ -336,6 +336,11 @@
+ 	wl_array_release(&params);
+ }
+ 
++static void pwr_disarm_process_retry(struct xdpw_screencast_instance *cast) {
++	xdpw_destroy_timer(cast->process_retry);
++	cast->process_retry = NULL;
++}
++
+ static void pwr_handle_stream_state_changed(void *data,
+ 		enum pw_stream_state old, enum pw_stream_state state, const char *error) {
+ 	struct xdpw_screencast_instance *cast = data;
+@@ -348,14 +353,16 @@
+ 	switch (state) {
+ 	case PW_STREAM_STATE_STREAMING:
+ 		cast->pwr_stream_state = true;
++		pw_stream_trigger_process(cast->stream);
+ 		break;
+ 	case PW_STREAM_STATE_PAUSED:
+-		if (old == PW_STREAM_STATE_STREAMING) {
++		if (old == PW_STREAM_STATE_STREAMING && cast->current_frame.pw_buffer) {
+ 			xdpw_pwr_enqueue_buffer(cast);
+ 		}
+ 		// fall through
+ 	default:
+ 		cast->pwr_stream_state = false;
++		pwr_disarm_process_retry(cast);
+ 		break;
+ 	}
+ }
+@@ -568,6 +575,38 @@
+ 	buffer->user_data = NULL;
+ }
+ 
++static uint64_t pwr_process_retry_delay(struct xdpw_screencast_instance *cast) {
++	// max_framerate is only valid when framerate is (0/1) (variable rate negotiated)
++	struct spa_fraction *rate = &cast->pwr_format.framerate;
++	if (rate->num == 0) {
++		rate = &cast->pwr_format.max_framerate;
++	}
++	if (rate->num > 0 && rate->denom > 0) {
++		return (uint64_t)SPA_NSEC_PER_SEC * rate->denom / rate->num;
++	}
++	return SPA_NSEC_PER_SEC / 60; // ~16ms/60fps fallback
++}
++
++static void pwr_process_retry(void *data);
++
++static void pwr_arm_process_retry(struct xdpw_screencast_instance *cast) {
++	if (cast->process_retry) {
++		return;
++	}
++	cast->process_retry = xdpw_add_timer(cast->ctx->state,
++		pwr_process_retry_delay(cast), pwr_process_retry, cast);
++	if (!cast->process_retry) {
++		logprint(ERROR, "pipewire: failed to arm process retry timer, stream may stall");
++	}
++}
++
++static void pwr_process_retry(void *data) {
++	struct xdpw_screencast_instance *cast = data;
++	cast->process_retry = NULL; // timer destroyed in event loop
++	pwr_arm_process_retry(cast);
++	pw_stream_trigger_process(cast->stream);
++}
++
+ static void pwr_handle_stream_on_process(void *data) {
+ 	struct xdpw_screencast_instance *cast = data;
+ 
+@@ -585,9 +624,12 @@
+ 
+ 	xdpw_pwr_dequeue_buffer(cast);
+ 	if (!cast->current_frame.pw_buffer) {
+-		logprint(WARN, "pipewire: unable to export buffer");
+-		return;
+-	}
++		logprint(WARN, "pipewire: unable to export buffer, dropping frame");
++		pwr_arm_process_retry(cast);
++		return;
++	}
++
++	pwr_disarm_process_retry(cast);
+ 	xdpw_wlr_frame_capture(cast);
+ }
+ 
+@@ -634,7 +676,8 @@
+ 	pw_stream_connect(cast->stream,
+ 		PW_DIRECTION_OUTPUT,
+ 		PW_ID_ANY,
+-		PW_STREAM_FLAG_ALLOC_BUFFERS,
++		(PW_STREAM_FLAG_ALLOC_BUFFERS |
++			PW_STREAM_FLAG_DRIVER),
+ 		params.data, params.size / sizeof(struct spa_pod *));
+ 
+ 	spa_pod_dynamic_builder_clean(&builder);
+diff --git a/src/screencast/wlr_screencopy.c b/src/screencast/wlr_screencopy.c
+--- a/src/screencast/wlr_screencopy.c
++++ b/src/screencast/wlr_screencopy.c
+@@ -30,6 +30,14 @@
+ 	zwlr_screencopy_frame_v1_destroy(cast->wlr_session.wlr_frame);
+ 	cast->wlr_session.wlr_frame = NULL;
+ 	logprint(TRACE, "wlroots: frame destroyed");
++}
++
++// Ends the current capture cycle: hand the buffer back to PipeWire and drop
++// the wlr frame. We drive the graph, so ask for the next cycle ourselves.
++static void wlr_frame_done(struct xdpw_screencast_instance *cast) {
++	xdpw_pwr_enqueue_buffer(cast);
++	wlr_frame_finish(cast);
++	pw_stream_trigger_process(cast->stream);
+ }
+ 
+ static void wlr_frame_buffer_done(void *data,
+@@ -137,16 +145,14 @@
+ 
+ 	if (!cast->current_frame.xdpw_buffer) {
+ 		logprint(WARN, "wlroots: no current buffer");
+-		xdpw_pwr_enqueue_buffer(cast);
+-		wlr_frame_finish(cast);
++		wlr_frame_done(cast);
+ 		return;
+ 	}
+ 
+ 	if (!check_constraints(&cast->current_constraints, cast->current_frame.xdpw_buffer)) {
+ 		logprint(DEBUG, "wlroots: buffer constraints changed");
+ 		pwr_update_stream_param(cast);
+-		xdpw_pwr_enqueue_buffer(cast);
+-		wlr_frame_finish(cast);
++		wlr_frame_done(cast);
+ 		return;
+ 	}
+ 
+@@ -200,8 +206,7 @@
+ 	cast->current_frame.completed = true;
+ 	logprint(TRACE, "wlroots: timestamp %"PRIu64":%"PRIu32, cast->current_frame.tv_sec, cast->current_frame.tv_nsec);
+ 
+-	xdpw_pwr_enqueue_buffer(cast);
+-	wlr_frame_finish(cast);
++	wlr_frame_done(cast);
+ }
+ 
+ static void wlr_frame_failed(void *data,
+@@ -213,8 +218,7 @@
+ 
+ 	logprint(TRACE, "wlroots: failed event handler");
+ 
+-	xdpw_pwr_enqueue_buffer(cast);
+-	wlr_frame_finish(cast);
++	wlr_frame_done(cast);
+ }
+ 
+ static const struct zwlr_screencopy_frame_v1_listener wlr_frame_listener = {

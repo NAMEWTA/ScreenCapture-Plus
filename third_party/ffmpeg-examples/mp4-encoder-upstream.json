@@ -1,0 +1,43 @@
+{
+  "repository": "https://github.com/FFmpeg/FFmpeg.git",
+  "version": "9.0.2",
+  "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+  "adaptedInto": ["src/services/media/Mp4Encoder.cpp", "tests/qt/mp4_encoder_tests.cpp"],
+  "sources": [
+    {
+      "path": "doc/examples/mux.c",
+      "blob": "e037bc7815ef5b9f218b3a688b7525445dc89c42",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2003 Fabrice Bellard",
+      "use": "Adapt stream setup, real codec send/receive, packet rescaling/interleaving, encoder EOF drain and trailer. No synthetic generator is part of production. Retain full MIT notice."
+    },
+    {
+      "path": "doc/examples/avio_read_callback.c",
+      "blob": "0a299b4c73919c9818db1596c8c53b3063d39c61",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2014 Stefano Sabatini",
+      "use": "Adapt custom AVIO opaque state and current buffer/context cleanup to an already owned write/seek descriptor. Retain full MIT notice."
+    },
+    {
+      "path": "doc/examples/demux_decode.c",
+      "blob": "5c38742e7f76555923f5433f3cff93270d1cc747",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2012 Stefano Sabatini",
+      "use": "Reuse the existing software_codec_probe real decoder/drain test pattern for video content/timing and exact AAC tail-sample checks."
+    }
+  ],
+  "implementationSourcesRead": [
+    {"path": "libavcodec/libx264.c", "blob": "b688d4f3218414b4b572438c455625f7e4ce8e72", "license": "LGPL-2.1-or-later", "use": "Actual PTS/duration propagation, B-frame drain, option and frame-lifetime contract."},
+    {"path": "libavcodec/aacenc.c", "blob": "94558ff23f3e0517aa4030697cc53d08f40809ca", "license": "LGPL-2.1-or-later", "use": "Actual 1024-sample frame, priming and SMALL_LAST_FRAME capability; use real final PCM length."},
+    {"path": "libavformat/aviobuf.c", "blob": "cc71638f0c3b66d82b7808ee5a2b3989d0a04d51", "license": "LGPL-2.1-or-later", "use": "Actual AVIO callback errors, seek behavior and current-buffer ownership."},
+    {"path": "libavformat/mux.c", "blob": "ea9838e380681b4721b900606b771b2ba3238dd8", "license": "LGPL-2.1-or-later", "use": "Actual max_interleave_delta and packet ownership; not a hard RSS guarantee."},
+    {"path": "libavformat/movenc.c", "blob": "6f93eb3e36fb47bd2b8d0f6f7acccbf82fcf505e", "license": "LGPL-2.1-or-later", "use": "Automatic movie-clock gcd/fallback and AAC priming edit rounding. Official movie_timescale set to audio sample rate fixes observed 15-sample tail loss without a source patch."}
+  ],
+  "localChanges": [
+    "Single worker, owned empty regular descriptor, extent/time/pixel/PCM budgets, checked I/O and first-error preservation.",
+    "No filename reopening, subprocess, device capture, clock inference or automatic silence insertion.",
+    "Explicit 100 ns duration, reference-safe AVFrame reuse, opaque SDR swscale conversion, bounded same-rate float-format audio conversion.",
+    "Real decode tests require every submitted video frame and exactly every input audio sample, including tails."
+  ],
+  "linkedLicense": "Existing build enables GPL, version3 and libx264: GPL-3.0-or-later. This provenance does not relabel the linked libraries as MIT or LGPL-only."
+}

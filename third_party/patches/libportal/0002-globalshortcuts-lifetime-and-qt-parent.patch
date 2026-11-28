@@ -1,0 +1,424 @@
+From: huhucapture contributors
+Subject: [PATCH] globalshortcuts: complete cancellation and retain parent callbacks
+
+Based on libportal 0.11.0 fc4d62cfe131e8494c82f597f92b2234d584c367.
+SPDX-License-Identifier: LGPL-3.0-only
+
+Follow upstream account cancellation fixes b7be557098e57cf8c65c176984d9a4e8df2907b8
+and b8c57df1ea6d72984c96f6c34428626dc74325e9: Request.Close does not emit a Response;
+disconnect cancellation before returning a GTask. Reuse the existing g_rc_box
+Call lifetime for late method replies. Release failed provisional sessions.
+
+Add a parent-taking BindShortcuts wrapper to reuse the existing framework
+parent exporter, preserving export and request references after cancellation.
+Finish results through the existing bind_shortcuts_finish API. Call and cancel
+on the same GLib context. This does not make QtWayland's upstream synchronous
+first handle export asynchronous; see docs/linux-portal.md for that remaining
+desktop validation boundary.
+
+diff --git a/libportal/globalshortcuts.c b/libportal/globalshortcuts.c
+--- a/libportal/globalshortcuts.c
++++ b/libportal/globalshortcuts.c
+@@ -18,6 +18,7 @@
+ #include "config.h"
+ 
+ #include "globalshortcuts.h"
++#include "parent-private.h"
+ #include "portal-private.h"
+ #include "session-private.h"
+ 
+@@ -389,6 +390,15 @@
+ 
+   g_clear_pointer (&call->request_path, g_free);
+ 
++  /* A failed CreateSession may already have exported its provisional path. */
++  if (call->portal != NULL && call->session_path != NULL)
++    g_dbus_connection_call (call->portal->bus,
++                           PORTAL_BUS_NAME,
++                           call->session_path,
++                           "org.freedesktop.portal.Session",
++                           "Close", NULL, NULL,
++                           G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
++
+   g_clear_object (&call->portal);
+   g_clear_object (&call->session);
+   g_clear_pointer (&call->session_path, g_free);
+@@ -424,6 +434,8 @@
+     call->session = g_object_ref (session);
+ 
+   call->task = g_task_new (G_OBJECT (source_object), cancellable, callback, callback_data);
++  /* Request.Close has no Response signal; cancellation is completed here. */
++  g_task_set_check_cancellable (call->task, FALSE);
+   g_task_set_task_data (call->task, call_ref (call), call_unref);
+ 
+   return g_steal_pointer (&call);
+@@ -435,16 +447,17 @@
+                gpointer data)
+ {
+   g_autoptr(Call) call = data;
+-  GError *error = NULL;
++  g_autoptr(GError) error = NULL;
+   g_autoptr(GVariant) ret = NULL;
+ 
++  ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (object), result, &error);
+   if (call->task == NULL)
+     return;
+ 
+-  ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (object), result, &error);
+   if (error)
+     {
+-      g_task_return_error (call->task, error);
++      call_disconnect_cancelled (call);
++      g_task_return_error (call->task, g_steal_pointer (&error));
+       call_dispose (call);
+     }
+ }
+@@ -678,12 +691,15 @@
+                      GVariant        *parameters,
+                      gpointer         data)
+ {
+-  Call *call = data;
++  g_autoptr(Call) call = call_ref (data);
+   guint32 response;
+   g_autoptr(GVariant) ret = NULL;
+   g_autoptr(GError) error = NULL;
+ 
+-  g_return_if_fail (G_IS_TASK (call->task));
++  if (call->task == NULL)
++    return;
++
++  call_disconnect_cancelled (call);
+ 
+   g_variant_get (parameters, "(u@a{sv})", &response, &ret);
+ 
+@@ -718,21 +734,32 @@
+                  GVariant        *parameters,
+                  gpointer         data)
+ {
+-  Call *call = data;
++  g_autoptr(Call) call = call_ref (data);
+   guint32 response;
+   g_autoptr(GVariant) ret = NULL;
+ 
+-  g_return_if_fail (G_IS_TASK (call->task));
++  if (call->task == NULL)
++    return;
++
++  call_disconnect_cancelled (call);
+ 
+   g_variant_get (parameters, "(u@a{sv})", &response, &ret);
+ 
+   if (response == 0)
+     {
+-      if (!g_variant_lookup (ret, "session_handle", "s", &call->session_path))
++      g_autofree char *session_path = NULL;
++
++      /* The protocol intentionally retains type 's' for this object path. */
++      if (!g_variant_lookup (ret, "session_handle", "s", &session_path) ||
++          !g_variant_is_object_path (session_path))
+         g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_FAILED, "CreateSession failed to return a session handle");
+       else
+         {
++          g_free (call->session_path);
++          call->session_path = g_steal_pointer (&session_path);
+           call->session = _xdp_global_shortcuts_session_new (call->portal, call->session_path);
++          /* The returned session now owns the path, not this request. */
++          g_clear_pointer (&call->session_path, g_free);
+           g_task_return_pointer (call->task,
+                                  g_steal_pointer (&call->session),
+                                  g_object_unref);
+@@ -752,9 +779,15 @@
+ call_cancelled_cb (GCancellable *cancellable,
+                    gpointer     data)
+ {
+-  Call *call = data;
+-
+-  g_dbus_connection_call (call->portal->bus,
++  g_autoptr(Call) call = call_ref (data);
++
++  if (call->task == NULL)
++    return;
++
++  call_disconnect_cancelled (call);
++
++  if (call->request_path != NULL)
++    g_dbus_connection_call (call->portal->bus,
+                           PORTAL_BUS_NAME,
+                           call->request_path,
+                           REQUEST_INTERFACE,
+@@ -764,6 +797,22 @@
+                           G_DBUS_CALL_FLAGS_NONE,
+                           -1,
+                           NULL, NULL, NULL);
++
++  g_task_return_new_error (call->task, G_IO_ERROR, G_IO_ERROR_CANCELLED,
++                           "GlobalShortcuts request canceled");
++  call_dispose (call);
++}
++
++static gboolean
++call_check_cancelled (Call *call)
++{
++  GCancellable *cancellable = g_task_get_cancellable (call->task);
++
++  if (!g_cancellable_is_cancelled (cancellable))
++    return FALSE;
++
++  call_cancelled_cb (cancellable, call);
++  return TRUE;
+ }
+ 
+ static void
+@@ -773,7 +822,11 @@
+   g_autofree char *session_token = NULL;
+   GCancellable *cancellable;
+ 
++  if (call_check_cancelled (call))
++    return;
++
+   session_token = g_strdup_printf ("portal%d", g_random_int_range (0, G_MAXINT));
++  call->session_path = g_strconcat (SESSION_PATH_PREFIX, call->portal->sender, "/", session_token, NULL);
+ 
+   prep_call (call, session_created, &options, NULL);
+   g_variant_builder_add (&options, "{sv}", "session_handle_token", g_variant_new_string (session_token));
+@@ -875,12 +928,15 @@
+                      GVariant        *parameters,
+                      gpointer         data)
+ {
+-  Call *call = data;
++  g_autoptr(Call) call = call_ref (data);
+   guint32 response;
+   g_autoptr(GVariant) ret = NULL;
+   g_autoptr(GError) error = NULL;
+ 
+-  g_return_if_fail (G_IS_TASK (call->task));
++  if (call->task == NULL)
++    return;
++
++  call_disconnect_cancelled (call);
+ 
+   g_variant_get (parameters, "(u@a{sv})", &response, &ret);
+ 
+@@ -911,6 +967,9 @@
+ {
+   GVariantBuilder options;
+   GCancellable *cancellable;
++
++  if (call_check_cancelled (call))
++    return;
+ 
+   prep_call (call, list_shortcuts_done, &options, NULL);
+ 
+@@ -979,6 +1038,9 @@
+ 
+   call = call_new (portal, session, session, cancellable, callback, data);
+ 
++  if (call_check_cancelled (call))
++    return;
++
+   prep_call (call, bind_shortcuts_done, &options, NULL);
+   if (cancellable)
+     call->cancelled_id = g_signal_connect (cancellable, "cancelled", G_CALLBACK (call_cancelled_cb), call);
+@@ -1031,6 +1093,176 @@
+                           call_ref (call));
+ }
+ 
++
++/* Parent export and the D-Bus request each keep their own GTask reference.
++ * Cancellation completes the task once, but leaves those references alive
++ * until late callbacks have actually stopped using the copied parent. */
++typedef struct {
++  XdpParent *parent;
++  GPtrArray *shortcuts;
++  GCancellable *cancellable;
++  gulong cancelled_id;
++  gboolean completed;
++} ParentBind;
++
++static gboolean
++parent_bind_complete (GTask *task)
++{
++  ParentBind *bind = g_task_get_task_data (task);
++
++  if (bind->completed)
++    return FALSE;
++
++  bind->completed = TRUE;
++  if (bind->cancelled_id)
++    {
++      g_signal_handler_disconnect (bind->cancellable, bind->cancelled_id);
++      bind->cancelled_id = 0;
++    }
++  return TRUE;
++}
++
++static void
++parent_bind_free (gpointer data)
++{
++  ParentBind *bind = data;
++
++  if (bind->cancelled_id)
++    g_signal_handler_disconnect (bind->cancellable, bind->cancelled_id);
++  if (bind->parent)
++    {
++      bind->parent->parent_unexport (bind->parent);
++      xdp_parent_free (bind->parent);
++    }
++  g_clear_object (&bind->cancellable);
++  g_clear_pointer (&bind->shortcuts, g_ptr_array_unref);
++  g_free (bind);
++}
++
++static void
++parent_bind_cancelled (GCancellable *cancellable,
++                       gpointer      data)
++{
++  GTask *task = G_TASK (data);
++
++  if (parent_bind_complete (task))
++    g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_CANCELLED,
++                             "GlobalShortcuts parent request canceled");
++}
++
++static void
++parent_bind_returned (GObject      *source,
++                      GAsyncResult *result,
++                      gpointer      data)
++{
++  g_autoptr(GTask) task = data;
++  g_autoptr(GError) error = NULL;
++  g_autoptr(GPtrArray) shortcuts = NULL;
++
++  shortcuts = xdp_global_shortcuts_session_bind_shortcuts_finish (
++    XDP_GLOBAL_SHORTCUTS_SESSION (source), result, &error);
++  if (!parent_bind_complete (task))
++    return;
++
++  if (shortcuts)
++    g_task_return_pointer (task, g_steal_pointer (&shortcuts), (GDestroyNotify) g_ptr_array_unref);
++  else
++    g_task_return_error (task, g_steal_pointer (&error));
++}
++
++static void
++parent_bind_exported (XdpParent  *parent,
++                      const char *handle,
++                      gpointer    data)
++{
++  g_autoptr(GTask) task = data;
++  ParentBind *bind = g_task_get_task_data (task);
++
++  if (bind->completed)
++    return;
++
++  if (handle == NULL || *handle == '\0' ||
++      g_str_equal (handle, "wayland:") || g_str_equal (handle, "x11:") ||
++      g_str_equal (handle, "x11:0"))
++    {
++      parent_bind_complete (task);
++      g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
++                               "Could not export the GlobalShortcuts parent window");
++      return;
++    }
++
++  xdp_global_shortcuts_session_bind_shortcuts (
++    XDP_GLOBAL_SHORTCUTS_SESSION (g_task_get_source_object (task)),
++    bind->shortcuts, handle, bind->cancellable, parent_bind_returned, g_object_ref (task));
++}
++
++/**
++ * xdp_global_shortcuts_session_bind_shortcuts_with_parent:
++ * @session: a [class@GlobalShortcutsSession]
++ * @shortcuts: (element-type XdpGlobalShortcut) (transfer none): shortcuts to bind
++ * @parent: parent window, exported by its existing framework-specific helper
++ * @cancellable: (nullable): optional [class@Gio.Cancellable]
++ * @callback: (scope async): completion callback
++ * @data: callback data
++ *
++ * Export @parent and call BindShortcuts without duplicating the framework's
++ * native window identifier handling. The parent is copied and shortcuts are
++ * deep-copied until all callbacks finish. Call and cancel on the same main
++ * context. Finish with xdp_global_shortcuts_session_bind_shortcuts_finish().
++ */
++void
++xdp_global_shortcuts_session_bind_shortcuts_with_parent (XdpGlobalShortcutsSession *session,
++                                                        GPtrArray                 *shortcuts,
++                                                        XdpParent                 *parent,
++                                                        GCancellable              *cancellable,
++                                                        GAsyncReadyCallback        callback,
++                                                        gpointer                   data)
++{
++  g_autoptr(GTask) task = NULL;
++  ParentBind *bind;
++  GTask *export_task;
++
++  g_return_if_fail (_xdp_global_shortcuts_session_is_valid (session));
++  g_return_if_fail (shortcuts != NULL);
++  g_return_if_fail (parent != NULL);
++
++  for (guint i = 0; i < shortcuts->len; i++)
++    {
++      XdpGlobalShortcut *shortcut = g_ptr_array_index (shortcuts, i);
++      g_return_if_fail (shortcut != NULL);
++      g_return_if_fail (shortcut->shortcut_id != NULL);
++      g_return_if_fail (shortcut->description != NULL);
++    }
++
++  task = g_task_new (session, cancellable, callback, data);
++  g_task_set_check_cancellable (task, FALSE);
++  bind = g_new0 (ParentBind, 1);
++  bind->parent = xdp_parent_copy (parent);
++  bind->shortcuts = g_ptr_array_new_with_free_func ((GDestroyNotify) xdp_global_shortcut_free);
++  for (guint i = 0; i < shortcuts->len; i++)
++    g_ptr_array_add (bind->shortcuts, xdp_global_shortcut_copy (g_ptr_array_index (shortcuts, i)));
++  g_task_set_task_data (task, bind, parent_bind_free);
++
++  if (cancellable != NULL)
++    {
++      bind->cancellable = g_object_ref (cancellable);
++      bind->cancelled_id = g_signal_connect (cancellable, "cancelled", G_CALLBACK (parent_bind_cancelled), task);
++      if (g_cancellable_is_cancelled (cancellable))
++        {
++          parent_bind_cancelled (cancellable, task);
++          return;
++        }
++    }
++
++  export_task = g_object_ref (task);
++  if (!bind->parent->parent_export (bind->parent, parent_bind_exported, export_task))
++    {
++      g_object_unref (export_task);
++      if (parent_bind_complete (task))
++        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
++                                 "Could not export the GlobalShortcuts parent window");
++    }
++}
+ 
+ /**
+  * xdp_global_shortcuts_session_bind_shortcuts_finish:
+diff --git a/libportal/globalshortcuts.h b/libportal/globalshortcuts.h
+--- a/libportal/globalshortcuts.h
++++ b/libportal/globalshortcuts.h
+@@ -18,6 +18,7 @@
+ #pragma once
+ 
+ #include <libportal/portal-helpers.h>
++#include <libportal/parent.h>
+ #include <libportal/session.h>
+ 
+ G_BEGIN_DECLS
+@@ -115,6 +116,14 @@
+                                                                                       gpointer                         data);
+ 
+ XDP_PUBLIC
++void                         xdp_global_shortcuts_session_bind_shortcuts_with_parent (XdpGlobalShortcutsSession       *session,
++                                                                                      GPtrArray                       *shortcuts,
++                                                                                      XdpParent                       *parent,
++                                                                                      GCancellable                    *cancellable,
++                                                                                      GAsyncReadyCallback              callback,
++                                                                                      gpointer                         data);
++
++XDP_PUBLIC
+ GPtrArray                   *xdp_global_shortcuts_session_bind_shortcuts_finish      (XdpGlobalShortcutsSession       *session,
+                                                                                       GAsyncResult                    *result,
+                                                                                       GError                         **error);

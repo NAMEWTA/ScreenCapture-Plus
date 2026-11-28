@@ -159,7 +159,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
 
-def package_fixture(directory: Path, version: str, executable: Path):
+def package_fixture(directory: Path, version: str, executable: Path, commit: str):
     name = f'huhucapture-v{version}-windows-x64.zip'
     path = directory / name
     contents = {'huhucapture.exe': executable.read_bytes(),
@@ -179,8 +179,6 @@ def package_fixture(directory: Path, version: str, executable: Path):
                 digest.update(padding)
         inventory.append({'path': 'portable-zip/transport-padding.bin', 'size': 70 * len(padding), 'sha256': digest.hexdigest()})
     require(path.stat().st_size > 64 * 1024 * 1024, 'The real streaming input must exceed the old whole-buffer limit')
-    commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, check=True, text=True,
-                            stdout=subprocess.PIPE).stdout.strip()
     base = {'schemaVersion': 1, 'product': 'huhucapture', 'repository': 'NAMEWTA/huhucapture',
             'tag': 'v' + version, 'version': version, 'sourceCommit': commit}
     # These are fixture labels, not a claimed dependency build or release receipt.
@@ -215,6 +213,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--probe', type=Path, required=True)
     parser.add_argument('--legacy-executable', type=Path, required=True)
+    parser.add_argument('--bridge-source', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--real-package-directory', type=Path)
     parser.add_argument('--require-real-package', action='store_true')
@@ -222,11 +221,12 @@ def main():
     parser.add_argument('--configuration', choices=('Debug', 'Release'), required=True)
     args = parser.parse_args()
     require(args.probe.is_file() and args.legacy_executable.is_file(), 'Use actual built native probe and old product executable')
-    require(args.real_package_directory is None or (ROOT / 'scripts/package-qt.py').is_file(),
-            'Actual Qt package validation requires the Qt integration checkout and its complete aggregate verifier')
     require(not args.require_real_package or args.real_package_directory is not None,
             'Actual Qt product acceptance requires actual clean package artifacts')
-    version = read_version(ROOT)
+    bridge_source = args.bridge_source.resolve(strict=True)
+    version = read_version(bridge_source)
+    bridge_commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=bridge_source, check=True,
+                                   stdout=subprocess.PIPE, text=True, encoding='ascii').stdout.strip()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     fixture = output / 'owned-fixture'
@@ -238,7 +238,7 @@ def main():
     (protected / 'config.json').write_bytes(b'\xff\xfe' + '{"unknown":{"keep":true}}'.encode('utf-16le'))
     (protected / '20261125-120000.png').write_bytes(b'Existing media sentinel; no task may modify this path.\n')
     protected_hashes = {path.name: sha256(path) for path in protected.iterdir()}
-    package, info, entry, base = package_fixture(fixture, version, args.legacy_executable)
+    package, info, entry, base = package_fixture(fixture, version, args.legacy_executable, bridge_commit)
     prefix = '/NAMEWTA/huhucapture/releases/download/v' + version + '/'
     package_path = prefix + package.name
     server = Server()
@@ -291,7 +291,7 @@ def main():
         require(args.gui_probe is not None and args.gui_probe.is_file(), 'Use the actual old application GUI integration executable')
         executable = args.gui_probe.resolve()
         require((executable.parent / 'config.json').is_file(), 'GUI harness must use its own explicit portable configuration')
-        for path in (ROOT / 'Lang').glob('*.json'):
+        for path in (bridge_source / 'Lang').glob('*.json'):
             deployed = executable.parent / 'Lang' / path.name
             require(deployed.is_file() and sha256(deployed) == sha256(path),
                     'Deploy all six actual UTF-16 language files before GUI bridge verification')
@@ -400,7 +400,8 @@ def main():
             exec(compile(path.read_bytes(), str(path), 'exec'), packager.__dict__)
             source_commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, check=True,
                                            stdout=subprocess.PIPE, text=True, encoding='ascii').stdout.strip()
-            value, verified_assets = packager.verify_aggregate(directory, expected_commit=source_commit, expected_version=version)
+            value, verified_assets = packager.verify_aggregate(directory, expected_commit=source_commit,
+                                                                expected_version=read_version(ROOT))
             require(value.get('developmentOnly') is False and value.get('sourceDirty') is False,
                     'Only the unchanged complete formal aggregate is eligible for the stable bridge')
             selected = [x for x in value['assets'] if x['platform'] == 'windows' and x['architecture'] == 'x64' and x['packageKind'] == 'portable-zip']

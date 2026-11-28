@@ -1,0 +1,107 @@
+{
+  "repository": "https://github.com/FFmpeg/FFmpeg.git",
+  "version": "9.0.2",
+  "commit": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+  "adaptations": [
+    {
+      "upstream": "doc/examples/demux_decode.c",
+      "blob": "5c38742e7f76555923f5433f3cff93270d1cc747",
+      "copyright": "Copyright (c) 2012 Stefano Sabatini",
+      "license": "MIT",
+      "notice": "demux-decode-license.txt",
+      "local": "src/services/media/FfmpegVideoInspection.cpp",
+      "use": "Decoder allocation, codec-parameter transfer, packet submission, frame receive, final null-packet drain and ownership cleanup. Application code validates every audio/video track, bounds indexed physical file ranges, rejects corrupt/concealed frames, supplies local-only cancellable AVIO and returns Qt-owned thumbnails."
+    },
+    {
+      "upstream": "doc/examples/remux.c",
+      "blob": "1a88f7efe6c7bd7e5b7262c2dd8a3816ee459981",
+      "copyright": "Copyright (c) 2013 Stefano Sabatini",
+      "license": "MIT",
+      "notice": "remux-license.txt",
+      "local": "tests/qt/video_inspection_fixtures.cpp",
+      "use": "Real codec-parameter and packet remuxing. Application test code duplicates or selects declared tracks, asks the mature muxer for fast-start MP4, and modifies specific physical later-packet bytes or final container bytes to produce malformed real files."
+    }
+  ],
+  "reviewedImplementation": [
+    {
+      "path": "libavformat/mov.c",
+      "blob": "e7e29d7f92de8d8324fa78a24312864ec4dcebc1",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Atom-size tolerance, full sample index, partial packet reads and EOF."
+    },
+    {
+      "path": "libavformat/demux.c",
+      "blob": "99029d422142850b1fec9d3779c7c5d4bfb18344",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Packet corruption, parser packet forwarding and I/O error propagation at EOF."
+    },
+    {
+      "path": "libavformat/avformat.h",
+      "blob": "ef2b08c4f3fc2ea73712b20c4a0e391adabc6fa7",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Custom AVIO, stream/index APIs, maximum streams and limitations of max_index_size."
+    },
+    {
+      "path": "libavcodec/avcodec.h",
+      "blob": "6bce0d388d809e981d8247a25397843824769616",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Decoder error recognition, pixel/sample limits and send/receive semantics."
+    },
+    {
+      "path": "libswscale/swscale.h",
+      "blob": "c913e76985b7fcf656f266498905cfcd689b8454",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Official sws_getContext/sws_scale/sws_setColorspaceDetails APIs reused by the shared SDR thumbnail conversion; the implementation is moved from the already validated Linux adapter, not a copied second color converter."
+    },
+    {
+      "path": "libswscale/version_major.h",
+      "blob": "5666f1775100f011d605aa3893d024c3849d7e5b",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Pinned Windows swscale-10 DLL/import library naming."
+    },
+    {
+      "path": "libswscale/version.h",
+      "blob": "fe56c60566eaf162d56bca0fc4c5e4a58512c21a",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Fixed 10.1.102 header/runtime ABI checked before software thumbnail conversion."
+    },
+    {
+      "path": "libavutil/frame.c",
+      "blob": "be30eb09d2a827892f9269ff1b9ae4dd10df4643",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Reuse av_frame_get_buffer for aligned/padded swscale destination storage; derive the pre-allocation BGRA byte budget from fixed get_video_buffer (64-byte lines, 32-row alignment and native plane padding). No allocator or scaler implementation is copied."
+    },
+    {
+      "path": "libavutil/frame.h",
+      "blob": "52adbc628894ca5d7563fb1c0a4fd7231031fd04",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Read AVFrame plane allocation/alignment and extended accesses; return only an independent Qt-owned copy of logical rows after native scaling."
+    },
+    {
+      "path": "libswscale/x86/yuv2rgb.c",
+      "blob": "2291c84e53b6b6e77612607f2ce6096f3efddaca",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Review fixed optimized output row rounding after the genuine 252x190 CI MP4 reproduced a 16-byte write beyond a tightly packed destination. Keep native optimized kernels; satisfy their storage contract with AVFrame allocation."
+    },
+    {
+      "path": "libavcodec/parser.c",
+      "blob": "cf5d65ee1699eb6a81f4da8df41edc6a503c5241",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Read original input/frame-offset handling and ff_combine_frame buffering before separating physical sample coverage from codec frame count; retain the mature internal demux/parser pipeline unchanged."
+    },
+    {
+      "path": "libavcodec/mpegaudio_parser.c",
+      "blob": "8c33d36dfefa29a38c54a003fed85bd5968fa7b6",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Read frame splitting, cross-packet accumulation and resynchronization. Each actual parser output is compared byte-for-byte against concatenated original MOV indexed sample ranges using the same owned QFile, with its underlying native position restored before AVIO resumes. No parser or side-data distribution is reimplemented."
+    },
+    {
+      "path": "libavcodec/mpegaudiodec_template.c",
+      "blob": "1aa124c0ac0a0318336a200e581c35197a3827a0",
+      "license": "LGPL-2.1-or-later",
+      "focus": "Existing decoder silently skips leading zeros and clamps extra frame bytes even under AV_EF_EXPLODE. Controlled 0002 makes exact framed decoding strict without changing default playback recovery; see patches/ffmpeg/upstream.json."
+    }
+  ],
+  "generatedSignals": "The real H.264/AAC fixture encoder directly compiles the pinned mux.c and its documented duration/trailer fix from upstream.json; no decoder result or media packet is mocked.",
+  "libraryLicense": "The examples' MIT notices do not replace the linked FFmpeg/x264 build's GPL-3.0-or-later license. See docs/software-codecs.md and build/dependencies.lock.json."
+}

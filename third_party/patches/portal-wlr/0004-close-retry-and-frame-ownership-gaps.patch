@@ -1,0 +1,355 @@
+Subject: [PATCH] validation: close capture ownership gaps around upstream retries
+
+Project-local correctness changes for the pinned validation desktop, on top
+of the fully attributed upstream backports 0002 and 0003. These changes are
+not represented as an upstream commit.
+
+The fixed 0.8.1 instance destructor frees every timer with user_data == cast.
+Clear process_retry before disconnect can synchronously emit UNCONNECTED.
+Enter terminal state before normal resource teardown. Register a legacy
+capture proxy immediately, since the protocol permits failure before any
+wl_shm buffer event and v3 can negotiate only dmabuf. Do not trigger a stream
+before creation or after it stopped. Reject incomplete initial constraints
+without retaining a dangling frame or partial constraints for another attempt.
+
+The unsupported Y_INVERT path may run inside a PipeWire state callback whose
+caller still needs the native stream. Mark the instance terminal, cancel its
+frame and retry, and return that outcome to every continuing enqueue caller.
+The existing event loop reclaims the instance after all native callbacks
+return. Both existing add-buffer failure paths use the same terminal
+outcome; subsequent add-buffer notifications allocate nothing. Terminal
+instances cannot schedule work through state, format, retry, process or FPS
+callbacks. No new timer, thread or ownership framework is added.
+This preserves the existing unsupported-frame failure rather than implementing
+flipped capture or relaxing any application buffer or first-frame pixel check.
+
+Source identities, checked callback order, scope and verification boundaries
+are recorded in upstream.json and docs/portal-wlr-validation.md.
+License: MIT, matching the upstream and project licenses.
+
+--- a/include/screencast_common.h
++++ b/include/screencast_common.h
+@@ -185,6 +185,7 @@
+ 	uint32_t refcount;
+ 	struct xdpw_screencast_context *ctx;
+ 	bool initialized;
++	bool destroy_pending; // Reclaimed after native callbacks return.
+ 	struct xdpw_frame current_frame;
+ 	struct wl_list buffer_list;
+ 	bool avoid_dmabufs;
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -10,6 +10,7 @@
+ 
+ #include "xdpw.h"
+ #include "logger.h"
++#include "screencast.h"
+ 
+ enum event_loop_fd {
+ 	EVENT_LOOP_DBUS,
+@@ -292,6 +293,15 @@
+ 			wl_display_flush(state.wl_display);
+ 		} while (ret > 0);
+ 
++		// PipeWire can still access its stream after invoking a state callback.
++		// Reclaim terminal instances only after all native callbacks returned.
++		struct xdpw_screencast_instance *cast, *cast_tmp;
++		wl_list_for_each_safe(cast, cast_tmp, &state.screencast.screencast_instances, link) {
++			if (cast->destroy_pending) {
++				xdpw_screencast_instance_destroy(cast);
++			}
++		}
++
+ 		sd_bus_flush(state.bus);
+ 	}
+ 
+--- a/src/screencast/screencast.c
++++ b/src/screencast/screencast.c
+@@ -86,12 +86,18 @@
+ }
+ 
+ void xdpw_screencast_instance_destroy(struct xdpw_screencast_instance *cast) {
++	// Disconnect can synchronously notify the stream while resources unwind.
++	cast->destroy_pending = true;
++	cast->pwr_stream_state = false;
+ 	struct xdpw_timer *timer, *ttmp;
+ 	wl_list_for_each_safe(timer, ttmp, &cast->ctx->state->timers, link) {
+ 		if (timer->user_data == cast) {
+ 			xdpw_destroy_timer(timer);
+ 		}
+ 	}
++	// The later PipeWire disconnect emits state_changed synchronously.
++	// Its disarm path must not destroy a timer removed by the loop above.
++	cast->process_retry = NULL;
+ 	struct xdpw_session *sess, *stmp;
+ 	wl_list_for_each_safe(sess, stmp, &cast->ctx->state->xdpw_sessions, link) {
+ 		if (sess->screencast_data.screencast_instance == cast) {
+--- a/include/pipewire_screencast.h
++++ b/include/pipewire_screencast.h
+@@ -7,7 +7,8 @@
+ #define XDPW_PWR_BUFFERS_MIN 2
+ #define XDPW_PWR_ALIGN 16
+ 
+-void xdpw_pwr_enqueue_buffer(struct xdpw_screencast_instance *cast);
++// False means cast is terminal; callers must return without more work.
++bool xdpw_pwr_enqueue_buffer(struct xdpw_screencast_instance *cast);
+ void pwr_update_stream_param(struct xdpw_screencast_instance *cast);
+ void xdpw_pwr_stream_create(struct xdpw_screencast_instance *cast);
+ void xdpw_pwr_stream_destroy(struct xdpw_screencast_instance *cast);
+--- a/src/screencast/pipewire_screencast.c
++++ b/src/screencast/pipewire_screencast.c
+@@ -18,6 +18,8 @@
+ #include "logger.h"
+ 
+ #define DAMAGE_REGION_COUNT 16
++
++static void pwr_disarm_process_retry(struct xdpw_screencast_instance *cast);
+ 
+ static struct spa_pod *build_buffer(struct spa_pod_builder *b, uint32_t blocks, uint32_t size,
+ 		uint32_t stride, uint32_t datatype) {
+@@ -214,7 +216,18 @@
+ 	cast->current_frame.completed = false;
+ }
+ 
+-void xdpw_pwr_enqueue_buffer(struct xdpw_screencast_instance *cast) {
++static void pwr_defer_instance_destroy(struct xdpw_screencast_instance *cast) {
++	// The PipeWire caller still owns a live native stream until it returns.
++	cast->destroy_pending = true;
++	cast->pwr_stream_state = false;
++	pwr_disarm_process_retry(cast);
++	xdpw_wlr_frame_cancel(cast);
++}
++
++bool xdpw_pwr_enqueue_buffer(struct xdpw_screencast_instance *cast) {
++	if (cast->destroy_pending) {
++		return false;
++	}
+ 	logprint(TRACE, "pipewire: enqueueing buffer");
+ 
+ 	if (!cast->current_frame.pw_buffer) {
+@@ -230,8 +243,8 @@
+ 
+ 	if (cast->current_frame.y_invert) {
+ 		//TODO: Flip buffer or set stride negative
+-		xdpw_screencast_instance_destroy(cast);
+-		return;
++		pwr_defer_instance_destroy(cast);
++		return false;
+ 	}
+ 
+ 	logprint(TRACE, "********************");
+@@ -315,9 +328,13 @@
+ 	cast->current_frame.xdpw_buffer = NULL;
+ 	cast->current_frame.pw_buffer = NULL;
+ 	xdpw_wlr_frame_cancel(cast);
++	return true;
+ }
+ 
+ void pwr_update_stream_param(struct xdpw_screencast_instance *cast) {
++	if (cast->destroy_pending) {
++		return;
++	}
+ 	logprint(TRACE, "pipewire: stream update parameters");
+ 	struct pw_stream *stream = cast->stream;
+ 	if (stream == NULL) {
+@@ -344,6 +361,9 @@
+ static void pwr_handle_stream_state_changed(void *data,
+ 		enum pw_stream_state old, enum pw_stream_state state, const char *error) {
+ 	struct xdpw_screencast_instance *cast = data;
++	if (cast->destroy_pending) {
++		return;
++	}
+ 	cast->node_id = pw_stream_get_node_id(cast->stream);
+ 
+ 	logprint(INFO, "pipewire: stream state changed to \"%s\"",
+@@ -357,7 +377,9 @@
+ 		break;
+ 	case PW_STREAM_STATE_PAUSED:
+ 		if (old == PW_STREAM_STATE_STREAMING && cast->current_frame.pw_buffer) {
+-			xdpw_pwr_enqueue_buffer(cast);
++			if (!xdpw_pwr_enqueue_buffer(cast)) {
++				return;
++			}
+ 		}
+ 		// fall through
+ 	default:
+@@ -371,6 +393,9 @@
+ 		const struct spa_pod *param) {
+ 	logprint(TRACE, "pipewire: stream parameters changed");
+ 	struct xdpw_screencast_instance *cast = data;
++	if (cast->destroy_pending) {
++		return;
++	}
+ 	struct pw_stream *stream = cast->stream;
+ 	uint8_t params_buffer[3 * 1024];
+ 	struct spa_pod_dynamic_builder builder;
+@@ -504,6 +529,10 @@
+ 
+ static void pwr_handle_stream_add_buffer(void *data, struct pw_buffer *buffer) {
+ 	struct xdpw_screencast_instance *cast = data;
++	buffer->user_data = NULL;
++	if (cast->destroy_pending) {
++		return;
++	}
+ 	struct spa_data *d;
+ 	enum spa_data_type t;
+ 
+@@ -520,7 +549,7 @@
+ 		t = SPA_DATA_DmaBuf;
+ 	} else {
+ 		logprint(ERROR, "pipewire: unsupported buffer type");
+-		xdpw_screencast_instance_destroy(cast);
++		pwr_defer_instance_destroy(cast);
+ 		return;
+ 	}
+ 
+@@ -529,7 +558,7 @@
+ 	struct xdpw_buffer *xdpw_buffer = xdpw_buffer_create(cast, cast->buffer_type);
+ 	if (xdpw_buffer == NULL) {
+ 		logprint(ERROR, "pipewire: failed to create xdpw buffer");
+-		xdpw_screencast_instance_destroy(cast);
++		pwr_defer_instance_destroy(cast);
+ 		return;
+ 	}
+ 	wl_list_insert(&cast->buffer_list, &xdpw_buffer->link);
+@@ -603,6 +632,9 @@
+ static void pwr_process_retry(void *data) {
+ 	struct xdpw_screencast_instance *cast = data;
+ 	cast->process_retry = NULL; // timer destroyed in event loop
++	if (cast->destroy_pending || !cast->pwr_stream_state || !cast->stream) {
++		return;
++	}
+ 	pwr_arm_process_retry(cast);
+ 	pw_stream_trigger_process(cast->stream);
+ }
+@@ -612,7 +644,7 @@
+ 
+ 	logprint(TRACE, "pipewire: on process event handle");
+ 
+-	if (!cast->pwr_stream_state) {
++	if (cast->destroy_pending || !cast->pwr_stream_state) {
+ 		logprint(INFO, "pipewire: not streaming");
+ 		return;
+ 	}
+--- a/src/screencast/wlr_screencast.c
++++ b/src/screencast/wlr_screencast.c
+@@ -28,6 +28,9 @@
+ #include "fps_limit.h"
+ 
+ static void wlr_frame_capture_start(struct xdpw_screencast_instance *cast) {
++	if (cast->destroy_pending) {
++		return;
++	}
+ 	fps_limit_measure_start(&cast->fps_limit, cast->framerate);
+ 	if (cast->ctx->ext_image_copy_capture_manager
+ 			&& cast->ctx->ext_output_image_capture_source_manager) {
+@@ -42,6 +45,9 @@
+ }
+ 
+ void xdpw_wlr_frame_capture(struct xdpw_screencast_instance *cast) {
++	if (cast->destroy_pending) {
++		return;
++	}
+ 	uint64_t delay_ns = fps_limit_measure_end(&cast->fps_limit, cast->framerate);
+ 	if (delay_ns > 0) {
+ 		xdpw_add_timer(cast->ctx->state, delay_ns, wlr_frame_capture_timer, cast);
+--- a/src/screencast/wlr_screencopy.c
++++ b/src/screencast/wlr_screencopy.c
+@@ -4,6 +4,7 @@
+ #include "wlr-screencopy-unstable-v1-client-protocol.h"
+ #include "xdg-output-unstable-v1-client-protocol.h"
+ #include <drm_fourcc.h>
++#include <errno.h>
+ #include <fcntl.h>
+ #include <limits.h>
+ #include <stdbool.h>
+@@ -35,9 +36,13 @@
+ // Ends the current capture cycle: hand the buffer back to PipeWire and drop
+ // the wlr frame. We drive the graph, so ask for the next cycle ourselves.
+ static void wlr_frame_done(struct xdpw_screencast_instance *cast) {
+-	xdpw_pwr_enqueue_buffer(cast);
++	if (!xdpw_pwr_enqueue_buffer(cast)) {
++		return;
++	}
+ 	wlr_frame_finish(cast);
+-	pw_stream_trigger_process(cast->stream);
++	if (cast->stream && cast->pwr_stream_state) {
++		pw_stream_trigger_process(cast->stream);
++	}
+ }
+ 
+ static void wlr_frame_buffer_done(void *data,
+@@ -51,7 +56,6 @@
+ 	}
+ 
+ 	logprint(TRACE, "wlroots: buffer event handler");
+-	cast->wlr_session.wlr_frame = frame;
+ 
+ 	struct xdpw_shm_format *fmt = wl_array_add(&cast->pending_constraints.shm_formats, sizeof(*fmt));
+ 	if (fmt == NULL) {
+@@ -236,6 +240,9 @@
+ 
+ 	struct zwlr_screencopy_frame_v1 *frame = zwlr_screencopy_manager_v1_capture_output(
+ 		cast->ctx->screencopy_manager, cast->target->with_cursor, cast->target->output->output);
++	// A failed/dmabuf event can precede, or replace, the wl_shm buffer event.
++	// Session.Close must own and cancel the proxy before any event arrives.
++	cast->wlr_session.wlr_frame = frame;
+ 	zwlr_screencopy_frame_v1_add_listener(frame, &wlr_frame_listener, cast);
+ 	logprint(TRACE, "wlroots: callbacks registered");
+ }
+@@ -263,8 +270,28 @@
+ 	// process at least one frame so that we know
+ 	// some of the metadata required for the pipewire
+ 	// remote state connected event
+-	wl_display_dispatch(cast->ctx->state->wl_display);
+-	wl_display_roundtrip(cast->ctx->state->wl_display);
+-
++	int ret = wl_display_dispatch(cast->ctx->state->wl_display);
++	if (ret < 0) {
++		ret = errno ? -errno : -EIO;
++		goto fail;
++	}
++	ret = wl_display_roundtrip(cast->ctx->state->wl_display);
++	if (ret < 0) {
++		ret = errno ? -errno : -EIO;
++		goto fail;
++	}
++	if (!cast->current_constraints.width || !cast->current_constraints.height ||
++			(cast->current_constraints.shm_formats.size == 0 &&
++			cast->current_constraints.dmabuf_format_modifier_pairs.size == 0)) {
++		logprint(ERROR, "wlroots: initial screencopy did not provide buffer constraints");
++		ret = -EIO;
++		goto fail;
++	}
+ 	return 0;
+-}
++
++fail:
++	wlr_frame_finish(cast);
++	xdpw_buffer_constraints_finish(&cast->current_constraints);
++	xdpw_buffer_constraints_finish(&cast->pending_constraints);
++	return ret;
++}
+--- a/src/screencast/ext_image_copy.c
++++ b/src/screencast/ext_image_copy.c
+@@ -206,7 +206,9 @@
+ 
+ 	struct xdpw_buffer *buffer = cast->current_frame.xdpw_buffer;
+ 	cast->current_frame.completed = true;
+-	xdpw_pwr_enqueue_buffer(cast);
++	if (!xdpw_pwr_enqueue_buffer(cast)) {
++		return;
++	}
+ 	if (buffer) {
+ 		// Clear damage for the buffer that was just submitted
+ 		buffer->damage.size = 0;
+@@ -231,7 +233,8 @@
+ 		return;
+ 	case EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_BUFFER_CONSTRAINTS:
+ 		logprint(ERROR, "ext: frame capture failed: buffer constraint mismatch");
+-		xdpw_pwr_enqueue_buffer(cast);
++		// Enqueue can make cast terminal; this branch does not access it again.
++		(void)xdpw_pwr_enqueue_buffer(cast);
+ 		return;
+ 	case EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_STOPPED:
+ 		logprint(INFO, "ext: frame capture failed: capture session stopped");

@@ -1,7 +1,18 @@
-#include "pch.h"
 #include "recording/VideoMp4.h"
+#include "platform/windows/RecordingControls.h"
+#include "core/RecordingTime.h"
+#include "core/MediaClock.h"
 #include "core/PixelBuffer.h"
+#include "platform/windows/AudioFormat.h"
 #include "platform/windows/ComApartment.h"
+#include "platform/windows/GdiCapture.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <new>
+#include <wrl/client.h>
 #include <wininet.h>
 #include <process.h>
 #include <commctrl.h>
@@ -237,6 +248,8 @@ inline T Peak(T* d, size_t s)
 }
 struct REBUFFER
 {
+    explicit REBUFFER(size_t byteLimit) : maximumBytes(byteLimit) {}
+    const size_t maximumBytes;
     std::recursive_mutex m;
     std::vector<char> d;
     AHANDLE Has = CreateEvent(0, TRUE, 0, 0);
@@ -247,10 +260,14 @@ struct REBUFFER
         mb.Fin(sz / sizeof(float), A);
     }
 
-    size_t PushX(const char* dd, size_t sz, float* A = 0, float V = 1.0f)
+    bool PushX(const char* dd, size_t sz, float* A = 0, float V = 1.0f)
     {
         REBUFFERLOCK l(m);
-        auto s = d.size();
+        const auto s = d.size();
+        // Reject the entire packet before allocation/copy. Keeping the already
+        // queued bytes intact avoids silently dropping PCM or shifting time.
+        if (s > maximumBytes || sz > maximumBytes - s) return false;
+        if (!sz) return true;
         d.resize(s + sz);
         if (dd)
             memcpy(d.data() + s, dd, sz);
@@ -277,7 +294,7 @@ struct REBUFFER
         }
 
 
-        return s + sz;
+        return true;
     }
 
     size_t Av()
@@ -409,6 +426,7 @@ struct VISTAMIXER
     bool CanCapture = 0;
     bool CanPlay = 0;
     int Mode = 0; // 0 none, 1 shared, 2 exclusive
+    HRESULT preparationResult = S_OK;
 
     std::map<AUDCLNT_SHAREMODE, std::map<int, WAVEFORMATEXTENSIBLE>> maps;
 
@@ -421,43 +439,44 @@ struct VISTAMIXER
             return 0;
         return mo->second.begin()->second.Format.nChannels;
     }
-    void test(CComPtr<IAudioClient> ac, bool AllShared)
+    HRESULT test(CComPtr<IAudioClient> ac, bool AllShared)
     {
         if (ac == 0)
         {
             CComPtr<IMMDeviceEnumerator> deviceEnumerator = 0;
             auto hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator);
-            if (!deviceEnumerator)
-                return;
+            if (FAILED(hr)) return hr;
+            if (!deviceEnumerator) return E_UNEXPECTED;
 
             CComPtr<IMMDevice> d;
-            deviceEnumerator->GetDevice(id.c_str(), &d);
-            if (!d)
-                return;
+            hr = deviceEnumerator->GetDevice(id.c_str(), &d);
+            if (FAILED(hr)) return hr;
+            if (!d) return E_UNEXPECTED;
             hr = d->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, NULL, (LPVOID*)&ac);
-            if (!ac)
-                return;
+            if (FAILED(hr)) return hr;
+            if (!ac) return E_UNEXPECTED;
         }
 
         // Mix format
-        WAVEFORMATEXTENSIBLE* ext = 0;
-        ac->GetMixFormat((WAVEFORMATEX**)&ext);
-        if (!ext)
-            return;
+        WAVEFORMATEX* rawFormat = nullptr;
+        const auto mixResult = ac->GetMixFormat(&rawFormat);
+        const std::unique_ptr<WAVEFORMATEX, decltype(&CoTaskMemFree)> format(rawFormat, &CoTaskMemFree);
+        WAVEFORMATEXTENSIBLE wfx{};
+        if (FAILED(mixResult)) return mixResult;
+        const auto copyResult = HuhuCapture::Platform::copyWaveFormat(format.get(), wfx);
+        if (FAILED(copyResult)) return copyResult;
 
-        maps[AUDCLNT_SHAREMODE_SHARED][ext->Format.nSamplesPerSec] = *ext;
-        WAVEFORMATEXTENSIBLE wfx = *ext;
-        CoTaskMemFree(ext);
+        maps[AUDCLNT_SHAREMODE_SHARED][wfx.Format.nSamplesPerSec] = wfx;
 
         if (AllShared)
         {
             for (DWORD sr : { 22050, 44100, 48000, 88200, 96000, 192000 })
             {
-                if (ext->Format.nSamplesPerSec != sr)
+                if (wfx.Format.nSamplesPerSec != sr)
                 {
-                    auto wfx2 = *ext;
+                    auto wfx2 = wfx;
                     wfx2.Format.nSamplesPerSec = sr;
-                    wfx2.Format.nAvgBytesPerSec = wfx.Format.nSamplesPerSec * wfx.Format.nBlockAlign;
+                    wfx2.Format.nAvgBytesPerSec = sr * wfx2.Format.nBlockAlign;
                     maps[AUDCLNT_SHAREMODE_SHARED][sr] = wfx2;
                 }
             }
@@ -476,6 +495,7 @@ struct VISTAMIXER
             if (hr == S_OK)
                 maps[AUDCLNT_SHAREMODE_EXCLUSIVE][wfx.Format.nSamplesPerSec] = wfx;
         }
+        return S_OK;
     }
 
     bool CanSR(AUDCLNT_SHAREMODE sm, std::vector<std::tuple<int, bool, int>>& sampleRates)
@@ -558,14 +578,11 @@ inline void EnumVistaMixers(std::vector<VISTAMIXER>& vistamixers)
                     vm.CanCapture = true;
                     vm.CanPlay = false;
                     CComPtr<IAudioClient> ac = 0;
-                    d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&ac);
-                    if (ac)
-                    {
-                        vm.test(ac, 0);
-                        ac.Release();
-                        vm.Mode = 0;
-                        vistamixers.push_back(vm);
-                    }
+                    const auto activateResult = d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&ac);
+                    vm.preparationResult = FAILED(activateResult) ? activateResult
+                        : (ac ? vm.test(ac, 0) : E_UNEXPECTED);
+                    ac.Release();
+                    vistamixers.push_back(vm);
                 }
             }
         }
@@ -610,14 +627,11 @@ inline void EnumVistaMixers(std::vector<VISTAMIXER>& vistamixers)
                     vm.CanCapture = false;
                     vm.CanPlay = true;
                     CComPtr<IAudioClient> ac = 0;
-                    d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&ac);
-                    if (ac)
-                    {
-                        vm.test(ac, 0);
-                        ac.Release();
-                        vm.Mode = 0;
-                        vistamixers.push_back(vm);
-                    }
+                    const auto activateResult = d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&ac);
+                    vm.preparationResult = FAILED(activateResult) ? activateResult
+                        : (ac ? vm.test(ac, 0) : E_UNEXPECTED);
+                    ac.Release();
+                    vistamixers.push_back(vm);
                     d.Release();
                 }
             }
@@ -632,6 +646,7 @@ public:
     int ConvertHDR = 2; // 0 no convert, 1 convert, 1 convert and go updown
     // 是否成功要到了"系统帮我转成 8 位"的桌面复制，见 Prepare
     bool SDRForced = false;
+    POINT desktopOrigin{};
     HRESULT CreateDirect3DDevice(IDXGIAdapter1* g)
     {
         HRESULT hr = S_OK;
@@ -766,8 +781,8 @@ public:
                         auto lCursorPosition = lCursorInfo.ptScreenPos;
                         DrawIconEx(
                             lHDC,
-                            lCursorPosition.x- iconInfo.xHotspot,
-                            lCursorPosition.y- iconInfo.yHotspot,
+                            lCursorPosition.x - desktopOrigin.x - iconInfo.xHotspot,
+                            lCursorPosition.y - desktopOrigin.y - iconInfo.yHotspot,
                             lCursorInfo.hCursor,
                             0,
                             0,
@@ -830,7 +845,7 @@ public:
         return 1;
     }
 
-    bool Prepare(UINT Output = 0)
+    bool Prepare(UINT Output = 0, const RECT* expectedDesktop = nullptr)
     {
     // Get DXGI device
         CComPtr<IDXGIDevice> lDxgiDevice;
@@ -861,6 +876,11 @@ public:
 
         DXGI_OUTPUT_DESC lOutputDesc;
         hr = lDxgiOutput->GetDesc(&lOutputDesc);
+        if (FAILED(hr)) return 0;
+        if (expectedDesktop && (!EqualRect(expectedDesktop, &lOutputDesc.DesktopCoordinates) ||
+            (lOutputDesc.Rotation != DXGI_MODE_ROTATION_IDENTITY &&
+             lOutputDesc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED))) return 0;
+        desktopOrigin = {lOutputDesc.DesktopCoordinates.left, lOutputDesc.DesktopCoordinates.top};
 
         // QI for Output 1
         CComPtr<IDXGIOutput1> lDxgiOutput1;
@@ -1241,67 +1261,68 @@ struct VectorStreamX2 : public IMFByteStream
 // 通道映射得按设备实际声道数来：单声道设备只有 0 号声道，
 // 硬写 {0,1} 会让混音时的 s[ch] 按第 1 声道越界读到缓冲区外面。
 // 拿的是混音格式(GetMixFormat)，与录制端 Initialize 用的格式同源，声道数一致。
-inline std::vector<int> getChannelMap(IMMDevice* dev)
+inline HRESULT getChannelMap(IMMDevice* dev, std::vector<int>& chm)
 {
-    std::vector<int> chm{ 0 };
-    if (!dev) return chm;
+    if (!dev) return E_POINTER;
     ComPtr<IAudioClient> ac = nullptr;
-    if (FAILED(dev->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, NULL, (LPVOID*)ac.GetAddressOf())) || !ac)
-        return chm;
+    auto hr = dev->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, NULL, (LPVOID*)ac.GetAddressOf());
+    if (FAILED(hr)) return hr;
+    if (!ac) return E_UNEXPECTED;
     WAVEFORMATEX* mix = nullptr;
-    if (SUCCEEDED(ac->GetMixFormat(&mix)) && mix)
-    {
-        if (mix->nChannels >= 2)
-            chm.push_back(1);
-        CoTaskMemFree(mix);
-    }
-    return chm;
+    hr = ac->GetMixFormat(&mix);
+    const std::unique_ptr<WAVEFORMATEX, decltype(&CoTaskMemFree)> format(mix, &CoTaskMemFree);
+    if (FAILED(hr)) return hr;
+    if (!format || format->nChannels == 0) return AUDCLNT_E_UNSUPPORTED_FORMAT;
+    chm = { 0 };
+    if (format->nChannels >= 2) chm.push_back(1);
+    return S_OK;
 }
-void setAudio(DESKTOPCAPTUREPARAMS* dp,bool useSpeaker, bool useMic)
+bool setAudio(DESKTOPCAPTUREPARAMS* dp, bool useSpeaker, bool useMic)
 {
-    if (!useMic && !useSpeaker) return;
+    if (!dp) return false;
     dp->AudioFrom.clear();
+    dp->HasAudio = useMic || useSpeaker;
+    if (!dp->HasAudio) return true;
+    const auto fail = [dp](HRESULT error) {
+        dp->result.fail(HuhuCapture::Core::RecordingStage::Prepare,
+                       FAILED(error) ? error : E_UNEXPECTED);
+        return false;
+    };
+
     ComPtr<IMMDeviceEnumerator> deviceEnumerator = nullptr;
-    HRESULT hrAudio = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator);
-    if (SUCCEEDED(hrAudio) && deviceEnumerator)
+    auto hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER,
+                               __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator);
+    if (FAILED(hr) || !deviceEnumerator) return fail(hr);
+
+    decltype(dp->AudioFrom) selected;
+    for (const auto flow : { eCapture, eRender })
     {
-        if (useMic) {
-            ComPtr<IMMDevice> defaultCapture = nullptr;
-            if (SUCCEEDED(deviceEnumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &defaultCapture)) && defaultCapture)
-            {
-                LPWSTR capId = nullptr;
-                if (SUCCEEDED(defaultCapture->GetId(&capId)) && capId)
-                {
-                    dp->AudioFrom.push_back({ capId, getChannelMap(defaultCapture.Get()) });
-                    CoTaskMemFree(capId);
-                }
-            }
-        }
-        if (useSpeaker) {
-            ComPtr<IMMDevice> defaultRender = nullptr;
-            if (SUCCEEDED(deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultRender)) && defaultRender)
-            {
-                LPWSTR renId = nullptr;
-                if (SUCCEEDED(defaultRender->GetId(&renId)) && renId)
-                {
-                    dp->AudioFrom.push_back({ renId, getChannelMap(defaultRender.Get()) });
-                    CoTaskMemFree(renId);
-                }
-            }
-        }
+        if ((flow == eCapture && !useMic) || (flow == eRender && !useSpeaker)) continue;
+        ComPtr<IMMDevice> device;
+        hr = deviceEnumerator->GetDefaultAudioEndpoint(flow, eConsole, &device);
+        if (FAILED(hr) || !device) return fail(hr);
+
+        LPWSTR rawId = nullptr;
+        hr = device->GetId(&rawId);
+        const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> id(rawId, &CoTaskMemFree);
+        if (FAILED(hr) || !id) return fail(hr);
+
+        std::vector<int> channels;
+        hr = getChannelMap(device.Get(), channels);
+        if (FAILED(hr)) return fail(hr);
+        selected.emplace_back(id.get(), std::move(channels));
     }
+    dp->AudioFrom = std::move(selected);
+    return true;
 }
 
-int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
+static int desktopCapture(DESKTOPCAPTUREPARAMS& dp)
 {
+    using HuhuCapture::Core::RecordingStage;
+    if (dp.fps <= 0 || dp.SR <= 0 || dp.NCH <= 0) return -17;
     HRESULT hr = S_OK;
     struct AUDIOIN
     {
-    private:
-        BYTE* pData = 0;
-        UINT32 framesAvailable = 0;
-        DWORD  flags = 0;
-
     public:
         std::wstring id;
         CComPtr<IMMDevice> d;
@@ -1322,9 +1343,23 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
         std::thread captureThread;
         std::thread silenceThread;
         std::shared_ptr<REBUFFER> AudioDataX;
+        size_t convertedBufferLimit{};
         std::vector<char> PopBuffer;
+        std::atomic<HRESULT>* firstError = nullptr;
 
         ~AUDIOIN() { Stop(); }
+
+        // Only this atomic crosses audio-worker boundaries. RecordingResult is
+        // written by the owning recording worker after these threads join.
+        void Fail(HRESULT error) noexcept
+        {
+            if (SUCCEEDED(error)) error = E_UNEXPECTED;
+            HRESULT expected = S_OK;
+            if (firstError) firstError->compare_exchange_strong(expected, error);
+            Capturing = false;
+            if (hEv) SetEvent(hEv);
+            if (AudioDataX) SetEvent(AudioDataX->Has);
+        }
 
         void Stop()
         {
@@ -1338,9 +1373,6 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
             hEv = nullptr;
         }
 
-#define REFTIMES_PER_SEC  10000000
-#define REFTIMES_PER_MILLISEC  10000
-
         size_t AvFrames()
         {
             auto avs = AudioDataX->Av();
@@ -1352,80 +1384,92 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
         void PlaySilence(REFERENCE_TIME rt)
         {
             HuhuCapture::Platform::ComApartment apartment(COINIT_MULTITHREADED);
-            if (FAILED(apartment.result())) return;
-            // ns
-            rt /= 10000;
-            // in SR , 1000 ms
-            //  ?    , rt ms
-            auto ns = (wfx.Format.nSamplesPerSec * rt);
-            ns /= 1000;
-            while (Capturing)
-            {
-                if (!ren)
-                    break;
+            if (FAILED(apartment.result())) { Fail(apartment.result()); return; }
+            try {
+                if (!ac2 || !ren) { Fail(E_POINTER); return; }
+                UINT32 bufferFrames = 0;
+                auto status = ac2->GetBufferSize(&bufferFrames);
+                if (FAILED(status)) { Fail(status); return; }
+                if (!bufferFrames) { Fail(AUDCLNT_E_BUFFER_ERROR); return; }
 
-                Sleep((DWORD)(rt / 2));
+                rt /= 10000;
+                while (Capturing) {
+                    Sleep(static_cast<DWORD>(rt / 2));
+                    if (!Capturing) break;
 
-                if (!Capturing)
-                    break;
+                    UINT32 padding = 0;
+                    status = ac2->GetCurrentPadding(&padding);
+                    if (FAILED(status)) { Fail(status); return; }
+                    if (padding > bufferFrames) { Fail(AUDCLNT_E_BUFFER_ERROR); return; }
+                    const auto available = bufferFrames - padding;
+                    if (!available) continue;
 
-                // See how much buffer space is available.
-                UINT32 numFramesPadding = 0;
-                auto hr = ac2->GetCurrentPadding(&numFramesPadding);
-                if (FAILED(hr))
-                    break;
-
-
-                auto numFramesAvailable = ns - numFramesPadding;
-                if (!numFramesAvailable)
-                    continue;
-
-                BYTE* db = 0;
-                hr = ren->GetBuffer((UINT32)numFramesAvailable, &db);
-                if (FAILED(hr))
-                    break;
-                auto bs = numFramesAvailable * wfx.Format.nChannels * wfx.Format.wBitsPerSample / 8;
-                memset(db, 0,(size_t) bs);
-                ren->ReleaseBuffer((UINT32)numFramesAvailable, 0); //AUDCLNT_BUFFERFLAGS_SILENT
+                    BYTE* data = nullptr;
+                    status = ren->GetBuffer(available, &data);
+                    if (FAILED(status)) { Fail(status); return; }
+                    status = ren->ReleaseBuffer(available, AUDCLNT_BUFFERFLAGS_SILENT);
+                    if (FAILED(status)) { Fail(status); return; }
+                }
             }
+            catch (const std::bad_alloc&) { Fail(E_OUTOFMEMORY); }
+            catch (...) { Fail(E_FAIL); }
         }
 
         void ThreadLoopCapture()
         {
             HuhuCapture::Platform::ComApartment apartment(COINIT_MULTITHREADED);
-            if (FAILED(apartment.result())) return;
-            UINT64 up, uq;
-            while (Capturing)
-            {
-                if (hEv) {
-                    const auto status = WaitForSingleObject(hEv, 100);
-                    if (status == WAIT_TIMEOUT) continue;
-                    if (status != WAIT_OBJECT_0) break;
+            if (FAILED(apartment.result())) { Fail(apartment.result()); return; }
+            try {
+                if (!cap || !AudioDataX) { Fail(E_POINTER); return; }
+                while (Capturing) {
+                    if (hEv) {
+                        const auto status = WaitForSingleObject(hEv, 100);
+                        if (status == WAIT_TIMEOUT) continue;
+                        if (status != WAIT_OBJECT_0) {
+                            Fail(status == WAIT_FAILED ? HRESULT_FROM_WIN32(GetLastError()) : E_UNEXPECTED);
+                            return;
+                        }
+                    }
+
+                    if (!Capturing) break;
+                    BYTE* data = nullptr;
+                    UINT32 frames = 0;
+                    DWORD flags = 0;
+                    auto status = cap->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
+                    if (FAILED(status)) { Fail(status); return; }
+                    if (!frames) {
+                        // Loopback has no event handle; avoid a busy loop while
+                        // the device has no packet. Empty packets need no release.
+                        if (!hEv) Sleep(1);
+                        continue;
+                    }
+
+                    HRESULT packetError = S_OK;
+                    try {
+                        if (!data && !(flags & AUDCLNT_BUFFERFLAGS_SILENT))
+                            packetError = E_POINTER;
+                        else if (!AudioDataX->PushX((flags & AUDCLNT_BUFFERFLAGS_SILENT)
+                                ? nullptr : reinterpret_cast<const char*>(data),
+                                static_cast<size_t>(frames) * wfx.Format.nBlockAlign))
+                            packetError = HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA);
+                    }
+                    catch (const std::bad_alloc&) { packetError = E_OUTOFMEMORY; }
+                    catch (...) { packetError = E_FAIL; }
+                    // Preserve a queue/allocation failure before any secondary
+                    // release error, and return the packet on this same thread.
+                    if (FAILED(packetError)) Fail(packetError);
+                    status = cap->ReleaseBuffer(frames);
+                    if (FAILED(status)) Fail(status);
+                    if (FAILED(packetError) || FAILED(status)) return;
                 }
-
-                if (!Capturing)
-                    break;
-                auto hr = cap->GetBuffer(&pData, &framesAvailable, &flags, &up, &uq);
-                if (FAILED(hr))
-                    break;
-                if (framesAvailable == 0) {
-                    // Loopback has no event handle; avoid spinning at 100% of a
-                    // CPU core while the audio device has no packet to deliver.
-                    if (!hEv) Sleep(1);
-                    continue;
-                }
-
-                auto ThisAudioBytes = framesAvailable * wfx.Format.nChannels * wfx.Format.wBitsPerSample/8 ;
-
-                AudioDataX->PushX((flags & AUDCLNT_BUFFERFLAGS_SILENT)
-                    ? nullptr : reinterpret_cast<const char*>(pData), ThisAudioBytes);
-                cap->ReleaseBuffer(framesAvailable);
             }
+            catch (const std::bad_alloc&) { Fail(E_OUTOFMEMORY); }
+            catch (...) { Fail(E_FAIL); }
         }
     };
 #ifndef TURBO_PLAY_SC
     std::vector<VISTAMIXER> vistamixers;
-    EnumVistaMixers(vistamixers);
+    if (dp.HasAudio) EnumVistaMixers(vistamixers);
 #else
     EnumVistaMixers();
 #endif
@@ -1441,13 +1485,18 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
     }
 */
     // ----------------------
+    std::atomic<HRESULT> firstAudioError{ S_OK };
     std::vector<std::shared_ptr<AUDIOIN>> ains;
 
     class AINRELEASE
     {
         std::vector<std::shared_ptr<AUDIOIN>>* ains = 0;
+        std::atomic<HRESULT>& firstError;
+        HuhuCapture::Core::RecordingResult& result;
     public:
-        AINRELEASE(std::vector<std::shared_ptr<AUDIOIN>>& x)
+        AINRELEASE(std::vector<std::shared_ptr<AUDIOIN>>& x,
+                   std::atomic<HRESULT>& error, HuhuCapture::Core::RecordingResult& completion)
+            : firstError(error), result(completion)
         {
             ains = &x;
         }
@@ -1456,10 +1505,16 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
             if (!ains)
                 return;
             for (auto& audio : *ains) audio->Stop();
+            const auto error = firstError.load();
+            if (FAILED(error)) result.fail(HuhuCapture::Core::RecordingStage::Capture, error);
         }
 
     };
-    AINRELEASE arx(ains);
+    AINRELEASE arx(ains, firstAudioError, dp.result);
+    const auto failAudioPreparation = [&dp](HRESULT error) {
+        dp.result.fail(RecordingStage::Prepare, FAILED(error) ? error : E_UNEXPECTED);
+        return -18;
+    };
 
     REFERENCE_TIME rt;
     unsigned long long a = dp.SR/ dp.fps; // Samples per frame
@@ -1476,37 +1531,61 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
     }
 
     CComPtr<IMMDeviceEnumerator> deviceEnumerator = 0;
-    if(dp.HasAudio)
+    if (dp.HasAudio) {
+        if (dp.AudioFrom.empty() || dp.AudioFrom.size() > MAXIMUM_WAIT_OBJECTS ||
+            !dp.MaximumQueuedAudioBytes || dp.MaximumQueuedAudioBytes > 64ull * 1024 * 1024)
+            return failAudioPreparation(E_INVALIDARG);
         hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)&deviceEnumerator);
+        if (FAILED(hr) || !deviceEnumerator) return failAudioPreparation(hr);
+    }
 
     CAPTURE cap;
+    HuhuCapture::Platform::GdiCapture gdi;
     int wi = 0, he = 0;
     if (dp.HasVideo)
     {
-        if (FAILED(cap.CreateDirect3DDevice(dp.ad)))
-            return -1;
-        if (!cap.Prepare(dp.nOutput))
-            return -2;
-        // 桌面复制退回到 FP16 那条路时（Prepare 里要不到 BGRA8），只有 HEVC 收 10 位输入
-        if (cap.InHDR)
-            dp.VIDEO_ENCODING_FORMAT = MFVideoFormat_HEVC;
-        wi = cap.lOutputDuplDesc.ModeDesc.Width;
-        he = cap.lOutputDuplDesc.ModeDesc.Height;
-        if (dp.rx.right && dp.rx.bottom)
-        {
-            wi = dp.rx.right - dp.rx.left;
-            he = dp.rx.bottom - dp.rx.top;
+        if (dp.UseGdiCapture) {
+            const auto width = std::int64_t{dp.GdiRegion.right} - dp.GdiRegion.left;
+            const auto height = std::int64_t{dp.GdiRegion.bottom} - dp.GdiRegion.top;
+            if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return -17;
+            wi = static_cast<int>(width); he = static_cast<int>(height);
+        } else {
+            if (FAILED(cap.CreateDirect3DDevice(dp.ad)))
+                return -1;
+            if (!cap.Prepare(dp.nOutput, dp.VerifyDesktop ? &dp.ExpectedDesktop : nullptr))
+                return -2;
+            // 桌面复制退回到 FP16 那条路时（Prepare 里要不到 BGRA8），只有 HEVC 收 10 位输入
+            if (cap.InHDR)
+                dp.VIDEO_ENCODING_FORMAT = MFVideoFormat_HEVC;
+            wi = cap.lOutputDuplDesc.ModeDesc.Width;
+            he = cap.lOutputDuplDesc.ModeDesc.Height;
+            if (dp.rx.right && dp.rx.bottom)
+            {
+                wi = dp.rx.right - dp.rx.left;
+                he = dp.rx.bottom - dp.rx.top;
+            }
         }
+        const auto layout = HuhuCapture::Core::pixelLayout(wi, he,
+            cap.InHDR == DXGI_FORMAT_UNKNOWN ? 4 : 16);
+        if (!layout || wi > 16384 || he > 16384 || layout->bytes > dp.MaximumFrameBytes ||
+            layout->bytes > (std::numeric_limits<DWORD>::max)()) return -17;
+        if (dp.UseGdiCapture && !gdi.capture(dp.GdiRegion.left, dp.GdiRegion.top, wi, he, dp.Cursor))
+            return -2;
     }
 
     CComPtr<IMFAttributes> attrs;
-    MFCreateAttributes(&attrs, 0);
+    hr = MFCreateAttributes(&attrs, 0);
+    if (FAILED(hr)) return -3;
     attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, true);
 
     VectorStreamX2 bs;
     bs.func = dp.Streamer;
     CComPtr<IMFSinkWriter> pSinkWriter;
-    if (dp.f.empty())
+    if (dp.OutputStream) {
+        hr = attrs->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_MPEG4);
+        if (SUCCEEDED(hr)) hr = MFCreateSinkWriterFromURL(nullptr, dp.OutputStream, attrs, &pSinkWriter);
+    }
+    else if (dp.f.empty())
     {
         if (dp.Framer)
         {
@@ -1580,14 +1659,20 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 auto& x = std::get<0>(xy);
                 if (x == vm.id)
                 {
+                    if (FAILED(vm.preparationResult)) return failAudioPreparation(vm.preparationResult);
                     std::shared_ptr<AUDIOIN> ain = std::make_shared<AUDIOIN>();
-                    ain->AudioDataX = std::make_shared<REBUFFER>();
+                    ain->firstError = &firstAudioError;
+                    // Split the combined raw-PCM payload budget between every
+                    // selected source before its capture worker starts.
+                    const auto queueLimit = static_cast<size_t>(dp.MaximumQueuedAudioBytes / dp.AudioFrom.size());
+                    ain->AudioDataX = std::make_shared<REBUFFER>(queueLimit);
+                    if (!static_cast<HANDLE>(ain->AudioDataX->Has))
+                        return failAudioPreparation(HRESULT_FROM_WIN32(GetLastError()));
                     ain->id = x;
 
                     CComPtr<IMMDevice> d;
-                    deviceEnumerator->GetDevice(x.c_str(), &d);
-                    if (!d)
-                        continue;
+                    hr = deviceEnumerator->GetDevice(x.c_str(), &d);
+                    if (FAILED(hr) || !d) return failAudioPreparation(hr);
 
                     DWORD flg = AUDCLNT_STREAMFLAGS_NOPERSIST;
                     flg |= AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
@@ -1604,8 +1689,7 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                     ain->d = d;
 
                     hr = d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, NULL, (LPVOID*)&ain->ac);
-                    if (!ain->ac)
-                        continue;
+                    if (FAILED(hr) || !ain->ac) return failAudioPreparation(hr);
 
 
                     auto ww = vm.maps[AUDCLNT_SHAREMODE::AUDCLNT_SHAREMODE_SHARED][dp.SR];
@@ -1615,29 +1699,52 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                         if (ww.Format.nSamplesPerSec == 0 && dp.SR == 48000)
                             ww = vm.maps[AUDCLNT_SHAREMODE::AUDCLNT_SHAREMODE_SHARED][44100];
 
+                    // The existing mixer consumes signed PCM16 or float32.
+                    // Reject other layouts rather than divide by zero, index an
+                    // absent channel, or interpret integer samples as floats.
+                    const bool pcm = ww.Format.wFormatTag == WAVE_FORMAT_PCM
+                        || (ww.Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE && ww.SubFormat == MFAudioFormat_PCM);
+                    const bool floating = ww.Format.wFormatTag == WAVE_FORMAT_IEEE_FLOAT
+                        || (ww.Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE && ww.SubFormat == MFAudioFormat_Float);
+                    if (!ww.Format.nSamplesPerSec || !ww.Format.nChannels
+                        || !((pcm && ww.Format.wBitsPerSample == 16) || (floating && ww.Format.wBitsPerSample == 32))
+                        || ww.Format.nBlockAlign != ww.Format.nChannels * ww.Format.wBitsPerSample / 8)
+                        return failAudioPreparation(AUDCLNT_E_UNSUPPORTED_FORMAT);
+                    ain->chm = std::get<1>(xy);
+                    if (ain->chm.empty() || ain->chm.size() > ww.Format.nChannels ||
+                        std::any_of(ain->chm.begin(), ain->chm.end(), [&](int channel) {
+                        return channel < 0 || channel >= ww.Format.nChannels;
+                    })) return failAudioPreparation(AUDCLNT_E_UNSUPPORTED_FORMAT);
+                    if (queueLimit < ww.Format.nBlockAlign) return failAudioPreparation(E_INVALIDARG);
+                    // A selected float channel holds at most the number of
+                    // source frames that fit in its bounded raw input queue.
+                    // Across mapped channels this is <= twice the raw payload
+                    // for supported PCM16/float32, without changing mixing.
+                    ain->convertedBufferLimit = (queueLimit / ww.Format.nBlockAlign) * sizeof(float);
+                    const auto bytesPerSecond = static_cast<std::uint64_t>(dp.SR) * ww.Format.nBlockAlign;
+                    if (bytesPerSecond > (std::numeric_limits<DWORD>::max)())
+                        return failAudioPreparation(E_INVALIDARG);
                     ww.Format.nSamplesPerSec = dp.SR;
-                    ww.Format.nAvgBytesPerSec = dp.SR * ww.Format.nBlockAlign;
+                    ww.Format.nAvgBytesPerSec = static_cast<DWORD>(bytesPerSecond);
                     hr = ain->ac->Initialize(AUDCLNT_SHAREMODE::AUDCLNT_SHAREMODE_SHARED, flg, rt, 0, (WAVEFORMATEX*)&ww, 0);
-                    if (FAILED(hr))
-                        continue;
+                    if (FAILED(hr)) return failAudioPreparation(hr);
 
                     hr = ain->ac->GetService(__uuidof(IAudioCaptureClient), (void**)&ain->cap);
-                    if (!ain->cap)
-                        continue;
+                    if (FAILED(hr) || !ain->cap) return failAudioPreparation(hr);
 
 
                     if (vm.CanCapture)
                     {
                         ain->hEv = CreateEvent(0, 0, 0, 0);
-                        if (!ain->hEv || FAILED(ain->ac->SetEventHandle(ain->hEv)))
-                            continue;
+                        if (!ain->hEv) return failAudioPreparation(HRESULT_FROM_WIN32(GetLastError()));
+                        hr = ain->ac->SetEventHandle(ain->hEv);
+                        if (FAILED(hr)) return failAudioPreparation(hr);
                     }
 
                     if (vm.CanPlay)
                     {
                         hr = d->Activate(__uuidof(IAudioClient), CLSCTX_ALL, NULL, (LPVOID*)&ain->ac2);
-                        if (!ain->ac2)
-                            continue;
+                        if (FAILED(hr) || !ain->ac2) return failAudioPreparation(hr);
 
 
                         DWORD flg2 = AUDCLNT_STREAMFLAGS_NOPERSIST;
@@ -1645,30 +1752,16 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 //                        flg2 |= AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
 
                         hr = ain->ac2->Initialize(AUDCLNT_SHAREMODE::AUDCLNT_SHAREMODE_SHARED, flg2, rt, 0, (WAVEFORMATEX*)&ww, 0);
-                        if (FAILED(hr))
-                            continue;
+                        if (FAILED(hr)) return failAudioPreparation(hr);
 
                         hr = ain->ac2->GetService(__uuidof(IAudioRenderClient), (void**)&ain->ren);
-                        if (!ain->ren)
-                            continue;
+                        if (FAILED(hr) || !ain->ren) return failAudioPreparation(hr);
                     }
-
-                    hr = ain->ac->Start();
-                    if (FAILED(hr))
-                        continue;
 
                     ain->wfx = ww;
-                    ain->chm = std::get<1>(xy);
-                    if (vm.CanPlay)
-                    {
-                        hr = ain->ac2->Start();
-                        if (FAILED(hr))
-                            continue;
-                        ain->silenceThread = std::thread(&AUDIOIN::PlaySilence, ain.get(), rt);
-                    }
-                    ain->captureThread = std::thread(&AUDIOIN::ThreadLoopCapture, ain.get());
                     ains.push_back(ain);
-                    // Only successfully started inputs belong to the wait set.
+                    // Start only after every selected input and the sink are
+                    // prepared, so an encoder retry cannot keep sampling audio.
                     AudioEvents.push_back(ain->AudioDataX->Has);
                 }
             }
@@ -1676,8 +1769,8 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
     }
 
-    if (ains.empty())
-        dp.HasAudio = 0;
+    if (dp.HasAudio && ains.size() != dp.AudioFrom.size())
+        return failAudioPreparation(AUDCLNT_E_DEVICE_INVALIDATED);
 
     CComPtr<IMFMediaType> pMediaTypeOutAudio;
     DWORD OutAudioStreamIndex = 0;
@@ -1742,6 +1835,8 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
     if (FAILED(hr))
         return -9;
     pMediaTypeVideoIn->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    hr = pMediaTypeVideoIn->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    if (FAILED(hr)) return -9;
 
     MFSetAttributeSize(pMediaTypeVideoIn, MF_MT_FRAME_SIZE, wi,he);
     MFSetAttributeRatio(pMediaTypeVideoIn, MF_MT_FRAME_RATE, dp.fps, 1);
@@ -1890,15 +1985,75 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
         if (FAILED(hr)) return -13;
     }
 
+    for (auto& audio : ains) {
+        hr = audio->ac->Start();
+        if (FAILED(hr)) return failAudioPreparation(hr);
+        if (audio->ac2) {
+            hr = audio->ac2->Start();
+            if (FAILED(hr)) return failAudioPreparation(hr);
+        }
+    }
+    for (auto& audio : ains) {
+        if (audio->ren) audio->silenceThread = std::thread(&AUDIOIN::PlaySilence, audio.get(), rt);
+        audio->captureThread = std::thread(&AUDIOIN::ThreadLoopCapture, audio.get());
+    }
+
     const LONG cbWidth = multi * wi;
     DWORD VideoBufferSize = cbWidth * he;
-    CComPtr<IMFMediaBuffer> pVideoBuffer = NULL;
-    CComPtr<IMFSample> pVideoSampleS = NULL;
+    LONGLONG lastSubmittedVideoTime = 0;
+    LONGLONG lastSubmittedVideoDuration = 0;
+    LONGLONG submittedVideoDuration = 0;
+    LONGLONG lastOriginalVideoEnd = 0;
+    LONGLONG tailTargetVideoEnd = 0;
+    std::uint64_t capturedVideoFrames = 0;
+    CComPtr<IMFSample> pendingVideoSample;
+    LONGLONG pendingVideoTime = 0;
+    bool pendingVideoSubmissionAttempted = false;
+
+    // A capture's duration is known when the next image arrives or capture
+    // stops. Hold only that one immutable sample; the sink may retain earlier
+    // samples independently. Do not predict a future duration from the previous
+    // interval, which creates gaps/overlaps when capture timing changes.
+    const auto submitPendingVideo = [&](LONGLONG end) -> HRESULT {
+        if (!pendingVideoSample) return S_OK;
+        if (pendingVideoSubmissionAttempted) return MF_E_INVALIDREQUEST;
+        pendingVideoSubmissionAttempted = true;
+        if (pendingVideoTime < 0 || end <= pendingVideoTime ||
+            pendingVideoTime != submittedVideoDuration)
+            return MF_E_INVALID_TIMESTAMP;
+        const auto duration = end - pendingVideoTime;
+        auto status = pendingVideoSample->SetSampleTime(pendingVideoTime);
+        if (FAILED(status)) return status;
+        status = pendingVideoSample->SetSampleDuration(duration);
+        if (FAILED(status)) return status;
+
+        CComPtr<IMFSample> sample = pendingVideoSample;
+        if (VideoTransformMFT) {
+            CComPtr<IMFSample> converted;
+            status = MFTrs(0, 0, 0, VideoTransformMFT, sample, &converted);
+            if (FAILED(status)) return status;
+            if (converted) sample = converted;
+            status = sample->SetSampleTime(pendingVideoTime);
+            if (FAILED(status)) return status;
+            status = sample->SetSampleDuration(duration);
+            if (FAILED(status)) return status;
+        }
+        status = pSinkWriter->WriteSample(OutVideoStreamIndex, sample);
+        if (FAILED(status)) return status;
+        ++dp.result.framesWritten;
+        lastSubmittedVideoTime = pendingVideoTime;
+        lastSubmittedVideoDuration = duration;
+        submittedVideoDuration = end;
+        pendingVideoSample.Release();
+        pendingVideoSubmissionAttempted = false;
+        return S_OK;
+    };
 
     unsigned long long rtA = 0;
     unsigned long long rtV = 0;
-    std::chrono::system_clock::time_point last_frame_time_point;
+    HuhuCapture::Core::MediaClock::time_point firstFrameTime;
     bool isFirstFrame = true;
+    auto failureStage = RecordingStage::Capture;
 
     [[maybe_unused]] unsigned long long msloop = 1000 / dp.fps;
 
@@ -1908,18 +2063,45 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
     v.resize(dp.NCH);
     mixv.resize(dp.NCH);
 
+    // SinkWriter's input type and frame layout stay fixed for this recording.
+    // A rebuilt duplication object may negotiate a different HDR/CPU format;
+    // that is a new media pipeline, not a valid continuation of these buffers.
+    const auto initialCaptureMode = cap.lOutputDuplDesc.ModeDesc;
+    const auto initialCaptureHdr = cap.InHDR;
+    const auto recordingStarted = HuhuCapture::Core::MediaClock::now();
+    const auto stopAtDeadline = [&] {
+        if (dp.MustEnd) return true;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            HuhuCapture::Core::MediaClock::now() - recordingStarted).count();
+        if (dp.EndMS && static_cast<unsigned long long>(elapsed) >= dp.EndMS) {
+            dp.DurationLimitReached = true;
+            return true;
+        }
+        if (dp.HasVideo && !dp.Framer && dp.FirstFrameTimeoutMS && isFirstFrame &&
+            static_cast<unsigned long long>(elapsed) >= dp.FirstFrameTimeoutMS) {
+            hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+            return true;
+        }
+        return false;
+    };
+    if (!dp.MustEnd && SUCCEEDED(firstAudioError.load()) && dp.Prepared)
+        dp.Prepared(dp.VIDEO_ENCODING_FORMAT);
+
 #ifdef _DEBUG
     wchar_t ydebug[300] = { 0};
 #endif
     for (;;)
     {
+        failureStage = RecordingStage::Capture;
+        const auto audioError = firstAudioError.load();
+        if (FAILED(audioError)) { hr = audioError; break; }
+        if (stopAtDeadline()) break;
         if (!dp.HasAudio && !dp.Framer)
             Sleep((DWORD)msloop);
-        if (dp.MustEnd)
+        if (stopAtDeadline())
             break;
 
         unsigned long long ThisDurA = 0;
-        unsigned long long ThisDurV = 0;
         size_t FinalAudioBytes = 0;
 
         bool DirectAudioCopy = false;
@@ -1934,8 +2116,16 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 do {
                     waitResult = WaitForMultipleObjects(static_cast<DWORD>(AudioEvents.size()),
                                                         AudioEvents.data(), TRUE, 100);
-                } while (waitResult == WAIT_TIMEOUT && !dp.MustEnd);
-                if (dp.MustEnd || waitResult == WAIT_FAILED) break;
+                } while (waitResult == WAIT_TIMEOUT && !stopAtDeadline() && SUCCEEDED(firstAudioError.load()));
+                const auto waitAudioError = firstAudioError.load();
+                if (FAILED(waitAudioError)) { hr = waitAudioError; break; }
+                if (stopAtDeadline()) break;
+                if (waitResult == WAIT_FAILED) {
+                    hr = HRESULT_FROM_WIN32(GetLastError());
+                    if (SUCCEEDED(hr)) hr = E_FAIL;
+                    break;
+                }
+                if (waitResult != WAIT_OBJECT_0) { hr = E_UNEXPECTED; break; }
             }
             if (DirectAudioCopy)
             {
@@ -1969,7 +2159,7 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                         auto& aa = ain->buffer[i];
                         auto& ch = ain->chm[i];
                         if (!aa)
-                            aa = std::make_shared<REBUFFER>();
+                            aa = std::make_shared<REBUFFER>(ain->convertedBufferLimit);
                         ain->tempf.resize(AvailableSamples);
 
                         if (ain->wfx.Format.wBitsPerSample == 16)
@@ -1996,10 +2186,16 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                             }
                         }
 
-                        aa->PushX((const char*)ain->tempf.data(), AvailableSamples * sizeof(float));
+                        if (!aa->PushX((const char*)ain->tempf.data(), AvailableSamples * sizeof(float))) {
+                            hr = HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA);
+                            failureStage = RecordingStage::Encode;
+                            break;
+                        }
                         TotalBuffers++;
                     }
+                    if (FAILED(hr)) break;
                 }
+                if (FAILED(hr)) break;
 
                 for (int i = 0; i < dp.NCH; i++)
                     v[i].resize(AvailableSamples);
@@ -2097,15 +2293,17 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 */
         }
 
-        ThisDurV = 10 * 1000 * 1000 / dp.fps;
-        if (ThisDurA)
-            ThisDurV = ThisDurA;
-
         if (dp.HasAudio && ThisDurA == 0)
             continue;
 
         if (dp.Pause)
             continue;
+
+        const auto controls = dp.Controls ? dp.Controls->snapshot.load(std::memory_order_acquire) : nullptr;
+        if (dp.Controls) {
+            hr = controls ? HuhuCapture::Platform::Windows::verifyRecordingControls(*controls, &dp.GdiRegion) : HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
+            if (FAILED(hr)) { failureStage = RecordingStage::Capture; break; }
+        }
 
         CComPtr<IDXGIResource> lDesktopResource;
         DXGI_OUTDUPL_FRAME_INFO lFrameInfo;
@@ -2115,6 +2313,7 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
         HRESULT hrf = S_FALSE;
         if (dp.HasVideo)
         {
+            if (!dp.UseGdiCapture) {
             hr = cap.lDeskDupl->AcquireNextFrame(
                 0,
                 &lFrameInfo,
@@ -2127,7 +2326,7 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 bool C = false;
                 for (int i = 0; i < 10 && !dp.MustEnd; i++)
                 {
-                    if (cap.Prepare(dp.nOutput))
+                    if (cap.Prepare(dp.nOutput, dp.VerifyDesktop ? &dp.ExpectedDesktop : nullptr))
                     {
                         C = true;
                         break;
@@ -2136,10 +2335,18 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 }
                 if (!C)
                     break;
+                const auto& recoveredMode = cap.lOutputDuplDesc.ModeDesc;
+                if (recoveredMode.Width != initialCaptureMode.Width ||
+                    recoveredMode.Height != initialCaptureMode.Height ||
+                    recoveredMode.Format != initialCaptureMode.Format || cap.InHDR != initialCaptureHdr) {
+                    hr = MF_E_INVALIDMEDIATYPE;
+                    break;
+                }
                 hr = S_OK;
             }
             if (FAILED(hr))
                 break;
+            }
 
 
 
@@ -2152,31 +2359,42 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 }
             } frame{ lDesktopResource ? cap.lDeskDupl.p : nullptr };
             // A timeout before the first captured frame supplies no pixels.
-            if (!lDesktopResource && cap.buf.empty()) continue;
+            if (!dp.UseGdiCapture && !lDesktopResource && cap.buf.empty()) continue;
 
             // take a time stamp here
             // Get the current time point
-            if (lDesktopResource && !cap.Get(lDesktopResource, dp.Cursor, dp.rx.right && dp.rx.bottom ? &dp.rx : 0))
+            if (lDesktopResource && !cap.Get(lDesktopResource, dp.Cursor, dp.rx.right && dp.rx.bottom ? &dp.rx : 0)) {
+                hr = E_FAIL;
                 break;
+            }
+            if (dp.UseGdiCapture && !gdi.capture(dp.GdiRegion.left, dp.GdiRegion.top, wi, he, dp.Cursor)) {
+                hr = E_FAIL;
+                break;
+            }
+            if (dp.Controls && (dp.Controls->snapshot.load(std::memory_order_acquire) != controls ||
+                FAILED(HuhuCapture::Platform::Windows::verifyRecordingControls(*controls, &dp.GdiRegion)))) {
+                failureStage = RecordingStage::Capture;
+                hr = HRESULT_FROM_WIN32(ERROR_INVALID_STATE); break;
+            }
 
+            const auto capturedAt = HuhuCapture::Core::MediaClock::now();
             if (isFirstFrame)
             {
                 isFirstFrame = false;
                 rtV = 0;
-                last_frame_time_point = std::chrono::system_clock::now();
+                firstFrameTime = capturedAt;
             }
             else
             {
-                // Time stamp of current frame.
-                // Calculate the dt with last frame. and set to the frame property.
-                auto current_frameTimePoint = std::chrono::system_clock::now();
-                auto frameDuration = current_frameTimePoint - last_frame_time_point;
-                last_frame_time_point = current_frameTimePoint;
-                ThisDurV = frameDuration.count();
-                rtV += ThisDurV;
+                const auto timestamp = HuhuCapture::Core::mediaTicks(capturedAt - firstFrameTime);
+                if (timestamp <= static_cast<LONGLONG>(rtV)) {
+                    hr = MF_E_INVALID_TIMESTAMP;
+                    break;
+                }
+                rtV = static_cast<unsigned long long>(timestamp);
             }
 
-
+            failureStage = RecordingStage::Encode;
             std::vector<DWORD> hdrout;
 
 
@@ -2185,8 +2403,10 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 // This is a 16-bit 4xfloat sample
                 void* fld = cap.buf.data();
                 auto hr2 = cap.Convert(fld, wi, he, hdrout, GUID_WICPixelFormat128bppPRGBAFloat);
-                if (FAILED(hr2))
+                if (FAILED(hr2)) {
+                    hr = hr2;
                     break;
+                }
                 VideoBufferSize = (DWORD)(hdrout.size() * 4);
             }
             if (cap.InHDR == DXGI_FORMAT_R16G16B16A16_FLOAT && cap.ConvertHDR)
@@ -2194,8 +2414,10 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
                 // 64-bit float 16 bit each float, convert
                 void* fld = cap.buf.data();
                 auto hr2 = cap.Convert(fld, wi, he, hdrout, GUID_WICPixelFormat64bppRGBAHalf);
-                if (FAILED(hr2))
+                if (FAILED(hr2)) {
+                    hr = hr2;
                     break;
+                }
                 VideoBufferSize = (DWORD)(hdrout.size() * 4);
                 // Up down
 
@@ -2216,12 +2438,13 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
 
 
-            if (!pVideoBuffer)
-            {
-                hr = MFCreateMemoryBuffer(VideoBufferSize, &pVideoBuffer);
-                if (FAILED(hr))
-                    break;
-            }
+            // The sink/transform may retain this sample after WriteSample
+            // returns. Follow the official sink-writer WriteFrame ownership:
+            // allocate one immutable sample and buffer for each submission,
+            // then release our references without rewriting queued input.
+            CComPtr<IMFMediaBuffer> pVideoBuffer;
+            hr = MFCreateMemoryBuffer(VideoBufferSize, &pVideoBuffer);
+            if (FAILED(hr)) break;
 
             hr = pVideoBuffer->Lock(&pData, NULL, NULL);
             if (FAILED(hr))
@@ -2231,30 +2454,34 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
             {
                 memcpy(pData, hdrout.data(), VideoBufferSize);
             }
+            else if (dp.UseGdiCapture)
+            {
+                // Existing GDI pixels are top-down; the retained RGB32 MF input
+                // is bottom-up. Convert row order directly into its one buffer.
+                const auto stride = static_cast<std::size_t>(wi) * 4;
+                const auto pixels = gdi.pixels();
+                for (int row = 0; row < he; ++row)
+                    memcpy(pData + static_cast<std::size_t>(he - row - 1) * stride,
+                           pixels.data() + static_cast<std::size_t>(row) * stride, stride);
+            }
             else
             {
                 memcpy(pData, cap.buf.data(), std::min(cap.buf.size(), (size_t)VideoBufferSize));
             }
             if (dp.Framer)
-                hrf = dp.Framer(cap.InHDR,wi,he,pData, std::min(cap.buf.size(), (size_t)VideoBufferSize), dp.cb);
+                hrf = dp.Framer(cap.InHDR,wi,he,pData, dp.UseGdiCapture ? VideoBufferSize :
+                    std::min(cap.buf.size(), (size_t)VideoBufferSize), dp.cb);
 
             hr = pVideoBuffer->Unlock();
             if (FAILED(hr)) break;
+            if (FAILED(hrf)) { hr = hrf; break; }
 
             hr = pVideoBuffer->SetCurrentLength(VideoBufferSize);
             if (FAILED(hr)) break;
 
-            CComPtr<IMFSample> pVideoSample = NULL;
-
-            if (!pVideoSampleS)
-            {
-                hr = MFCreateSample(&pVideoSampleS);
-                if (FAILED(hr)) break;
-            }
-            pVideoSample = pVideoSampleS;
-
-
-            pVideoSample->RemoveAllBuffers();
+            CComPtr<IMFSample> pVideoSample;
+            hr = MFCreateSample(&pVideoSample);
+            if (FAILED(hr)) break;
             hr = pVideoSample->AddBuffer(pVideoBuffer);
             if (FAILED(hr)) break;
 
@@ -2263,37 +2490,18 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
 
 
-            hr = pVideoSample->SetSampleTime(rtV);
-            if (FAILED(hr)) break;
-
-            hr = pVideoSample->SetSampleDuration(ThisDurV);
-            if (FAILED(hr)) break;
-
-
-            // Video Transform MFT
-            if (VideoTransformMFT)
-            {
-                CComPtr<IMFSample> s2;
-                MFTrs(0, 0, 0, VideoTransformMFT, pVideoSample, &s2);
-                if (s2)
-                    pVideoSample = s2;
-            }
-
             if (pVideoSample && dp.HasVideo && !dp.Framer)
             {
-                hr = pVideoSample->SetSampleTime(rtV);
+                ++capturedVideoFrames;
+                hr = submitPendingVideo(static_cast<LONGLONG>(rtV));
                 if (FAILED(hr)) break;
-
-                hr = pVideoSample->SetSampleDuration(ThisDurV);
-                if (FAILED(hr)) break;
-                hr = pSinkWriter->WriteSample(OutVideoStreamIndex, pVideoSample);
-                if (FAILED(hr))
-                    break;
-                dp.framesWritten++;
+                pendingVideoSample = pVideoSample;
+                pendingVideoTime = static_cast<LONGLONG>(rtV);
             }
         }
 
         // Audio
+        failureStage = RecordingStage::Encode;
         CComPtr<IMFMediaBuffer> pAudioBuffer = NULL;
         if (dp.HasAudio && FinalAudioBytes)
         {
@@ -2349,28 +2557,103 @@ int DesktopCapture(DESKTOPCAPTUREPARAMS& dp)
 
         // rtv to ms
         auto rvx = rtV / 10000;
-        if (dp.EndMS > 0 && rvx >= dp.EndMS)
+        if (dp.EndMS > 0 && rvx >= dp.EndMS) {
+            dp.DurationLimitReached = true;
             break;
+        }
 
         if (dp.Framer && hrf == S_OK)
             break;
     }
 
+    // Freeze the media endpoint on the same clock as capture, before audio
+    // joins or sink drain can add shutdown latency to the recorded interval.
+    const auto captureStopped = HuhuCapture::Core::MediaClock::now();
+    const auto captureEnd = isFirstFrame ? LONGLONG{0} :
+        HuhuCapture::Core::mediaTicks(captureStopped - firstFrameTime);
+
     // Audio off
     for (auto& audio : ains) audio->Stop();
 
-    if (pSinkWriter)
-        hr = pSinkWriter->Finalize();
-    if (FAILED(hr))
-        return -14;
+    if (FAILED(hr)) dp.result.fail(failureStage, static_cast<std::int64_t>(hr));
+    const auto audioError = firstAudioError.load();
+    if (FAILED(audioError)) dp.result.fail(RecordingStage::Capture, audioError);
+    // A failure while capturing/preparing the next image or writing audio can
+    // still preserve this last valid, unsubmitted image. Never repeat a failed
+    // video submission/transform or clear the original capture/encoding error.
+    if (pendingVideoSample && !pendingVideoSubmissionAttempted) {
+        // The original E is the observed stop on the capture clock. Freeze it
+        // once, then extend only this immutable pending sample to the first
+        // rounded CFR boundary T >= E. Never shorten E or chase sink statistics
+        // by generating additional samples after stopping.
+        const auto tail = captureEnd > pendingVideoTime
+            ? HuhuCapture::Core::recordingTailTime(pendingVideoTime, captureEnd - pendingVideoTime, dp.fps)
+            : std::nullopt;
+        if (!tail) dp.result.fail(RecordingStage::Encode, MF_E_INVALID_TIMESTAMP);
+        else {
+            lastOriginalVideoEnd = tail->originalEnd;
+            tailTargetVideoEnd = tail->targetEnd;
+            const auto tailResult = submitPendingVideo(tail->targetEnd);
+            if (FAILED(tailResult)) dp.result.fail(RecordingStage::Encode, tailResult);
+        }
+    }
+    pendingVideoSample.Release();
+    if (pSinkWriter) {
+        if (dp.Finalizing) {
+            try { dp.Finalizing(); }
+            catch (...) { dp.result.fail(RecordingStage::Finalize, E_FAIL); }
+        }
+        const auto finalizeResult = pSinkWriter->Finalize();
+        dp.result.finish(SUCCEEDED(finalizeResult), static_cast<std::int64_t>(finalizeResult));
+        if (dp.HasVideo && !dp.Framer) {
+            MF_SINK_WRITER_STATISTICS statistics{};
+            statistics.cb = sizeof(statistics);
+            const auto status = pSinkWriter->GetStatistics(OutVideoStreamIndex, &statistics);
+            // Preserve the actual HRESULT, including an unsupported query. It
+            // must not become a fabricated zero-output success or erase a real
+            // capture/finalization error. The probe records all three stages.
+            dp.result.sinkStatistics = HuhuCapture::Core::RecordingSinkStatistics{
+                static_cast<std::int64_t>(status), statistics.qwNumSamplesReceived,
+                statistics.qwNumSamplesEncoded, statistics.qwNumSamplesProcessed,
+                statistics.llLastTimestampReceived, statistics.llLastTimestampEncoded,
+                statistics.llLastTimestampProcessed, lastSubmittedVideoTime,
+                lastSubmittedVideoDuration, statistics.dwByteCountQueued,
+                lastOriginalVideoEnd, tailTargetVideoEnd,
+                capturedVideoFrames, submittedVideoDuration, captureEnd};
+        }
+    }
+    if (dp.result.firstError)
+        return dp.result.firstError->stage == RecordingStage::Finalize ? -14 : -16;
     // 循环里每一处失败都是 break，跟"用户点了停止"走同一个出口，之后照样 Finalize ——
     // 而 Finalize 一个没写过样本的 MP4 是会成功的，于是调用方拿到 0 却得到个 0 字节文件，
     // 一句报错都没有。既然一帧都没写就不可能是有效视频，这里明确报错。
     // 但"刚开录就点了停止"同样是一帧都没有，那是用户自己清楚的操作，不该拿报错去打扰他 ——
     // 那种情况 MustEnd 已经立起来了，交给调用方照 framesWritten 静静收场
-    if (dp.HasVideo && !dp.Framer && dp.framesWritten == 0 && !dp.MustEnd)
+    if (dp.HasVideo && !dp.Framer && dp.result.framesWritten == 0 && !dp.MustEnd) {
+        dp.result.fail(RecordingStage::Capture, -15);
         return -15;
+    }
 	return 0;
+}
+
+int DesktopCapture(DESKTOPCAPTUREPARAMS& params)
+{
+    using HuhuCapture::Core::RecordingStage;
+    params.result = {};
+    params.DurationLimitReached = false;
+    try {
+        const auto status = desktopCapture(params);
+        if (status != 0 && !params.result.firstError)
+            params.result.fail(RecordingStage::Prepare, status);
+        return status;
+    }
+    catch (const std::bad_alloc&) {
+        params.result.fail(RecordingStage::Encode, E_OUTOFMEMORY);
+    }
+    catch (...) {
+        params.result.fail(RecordingStage::Encode, E_FAIL);
+    }
+    return -16;
 }
 
 }

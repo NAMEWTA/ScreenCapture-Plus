@@ -1,0 +1,4 @@
+# The actual private media prefix was selected and checked at configure time.
+# Preserve its ELF bytes and relative SONAME/linker symlinks before collection.
+file(INSTALL "@_huhu_x264_runtime@" DESTINATION "${CMAKE_INSTALL_PREFIX}/lib"
+    FOLLOW_SYMLINK_CHAIN)

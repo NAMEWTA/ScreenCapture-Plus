@@ -1,0 +1,52 @@
+--- a/third_party/quirc/identify.c
++++ b/third_party/quirc/identify.c
+@@ -36,16 +36,16 @@
+ 			  struct quirc_point *r)
+ {
+ 	/* (a, b) is perpendicular to line p */
+-	int a = -(p1->y - p0->y);
+-	int b = p1->x - p0->x;
++	double a = (double)p0->y - p1->y;
++	double b = (double)p1->x - p0->x;
+ 
+ 	/* (c, d) is perpendicular to line q */
+-	int c = -(q1->y - q0->y);
+-	int d = q1->x - q0->x;
++	double c = (double)q0->y - q1->y;
++	double d = (double)q1->x - q0->x;
+ 
+ 	/* e and f are dot products of the respective vectors with p and q */
+-	int e = a * p1->x + b * p1->y;
+-	int f = c * q1->x + d * q1->y;
++	double e = a * p1->x + b * p1->y;
++	double f = c * q1->x + d * q1->y;
+ 
+ 	/* Now we need to solve:
+ 	 *     [a b] [rx]   [e]
+@@ -55,13 +55,23 @@
+ 	 *       [ d -b] [e]   [rx]
+ 	 * 1/det [-c  a] [f] = [ry]
+ 	 */
+-	int det = (a * d) - (b * c);
++	double det = (a * d) - (b * c);
++	double x, y;
+ 
+ 	if (!det)
+ 		return 0;
+ 
+-	r->x = (d * e - b * f) / det;
+-	r->y = (-c * e + a * f) / det;
++	/* The numerator is cubic in pixel coordinates: ordinary 8K captures
++	 * already exceed signed int. Promote before subtraction/multiplication,
++	 * retain truncation toward zero, and reject unrepresentable geometry.
++	 * double represents these screen-sized integer products exactly. */
++	x = (d * e - b * f) / det;
++	y = (-c * e + a * f) / det;
++	if (!isfinite(x) || !isfinite(y) || x < INT_MIN || x > INT_MAX ||
++	    y < INT_MIN || y > INT_MAX)
++		return 0;
++	r->x = (int)x;
++	r->y = (int)y;
+ 
+ 	return 1;
+ }

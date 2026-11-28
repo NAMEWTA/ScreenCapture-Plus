@@ -1,0 +1,13 @@
+--- a/libavcodec/mpegaudiodec_template.c
++++ b/libavcodec/mpegaudiodec_template.c
+@@ -1598,6 +1598,10 @@
+     if (s->frame_size <= 0) {
+         av_log(avctx, AV_LOG_ERROR, "incomplete frame\n");
+         return AVERROR_INVALIDDATA;
++    } else if ((avctx->err_recognition & AV_EF_EXPLODE) &&
++               (skipped || s->frame_size != buf_size)) {
++        av_log(avctx, AV_LOG_ERROR, "Invalid MPEG audio frame extent in strict decoding\n");
++        return AVERROR_INVALIDDATA;
+     } else if (s->frame_size < buf_size) {
+         av_log(avctx, AV_LOG_DEBUG, "incorrect frame size - multiple frames in buffer?\n");
+         buf_size= s->frame_size;

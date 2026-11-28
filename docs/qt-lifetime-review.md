@@ -1,0 +1,119 @@
+# Qt owner and shutdown review
+
+This review covers the final shared application owners and their asynchronous
+shutdown boundaries. Component evidence is separate from complete desktop acceptance.
+
+## Owner ordering and ordinary shutdown
+
+`DesktopApplication::State` declares the loaded settings, language catalog and Qt
+translations before its workspaces and top-level windows. C++ reverse member
+destruction therefore keeps these dependencies alive while the views destroy
+their callbacks. The catalog callback retained by editors and settings windows
+does not reproduce the test-fixture ordering error found during migration.
+
+Ordinary application shutdown stops new admission before asking recording and
+scroll consumers to finish. Only after those consumers report completion does it
+stop media output; the independent screenshot owner drains in parallel. It waits for media jobs and file-revealer requests,
+then the system clipboard's real shutdown receipt. Existing error messages must
+be acknowledged before exit. A Linux selection owner is retained visibly until
+the user explicitly releases it or another owner replaces it; successful
+publication alone is not evidence of clipboard persistence after process exit.
+
+The inspected CaptureWindow, ScrollController, MediaWorkspace and editor
+destructors keep their respective state alive while deleting owned top-level
+views. Capture and media workers own the data they use; deleting a view cancels
+its continuation rather than invalidating a worker's image or archive owner.
+This static review did not establish new defects in those ownership paths.
+
+## Recording controls during abnormal owner loss
+
+RecordingController's control snapshot was declared after its outline windows,
+so implicit State destruction would release that snapshot before destroying the
+outlines. The windows' native-surface events could still invoke the workspace's
+event filter: QObject removes filters in its base destructor, after the derived
+class's State has been destroyed. An active recording's exceptional owner loss
+could therefore access the already-destroyed control state.
+
+The workspace now disables the control guard, removes its filters from the
+owned widgets and native windows, and destroys the outlines and recording window
+explicitly while the whole State still exists. No backend, encoder, source
+ownership, or normal asynchronous shutdown contract is replaced.
+
+The fixed Qt 6.12.1/GCC 14 source passed a direct C++20 syntax build with
+`-Wall -Wextra -Wpedantic -Werror`. Native Windows/X11 event delivery during an
+active recording's abnormal owner destruction has not been executed locally.
+
+## Completed media errors racing shutdown
+
+A media worker can finish before its QFutureWatcher completion is dispatched on
+the GUI thread. Previously, beginning shutdown during that interval discarded
+the returned result, including a genuine archive or export failure. Stopping
+further UI stages must not turn an already-completed failure into silent success.
+
+The completion now removes the job from the bounded queue, retains a real
+non-cancellation error (including an already-failed removal result), and reports
+it to the existing host error channel. A published or retained file path remains
+in the report where available. It does not restart an output stage, reopen an
+editor, ask for permanent deletion, or call an abandoned output completion. The
+final busy notification is guarded against a host which synchronously destroys
+the workspace while receiving that error.
+
+`tests/qt/media_workspace_tests.cpp` uses a real regular file in place of an
+archive parent directory. It waits for the actual QtConcurrent filesystem worker
+without dispatching GUI events, then invokes shutdown before delivering the
+result. The new assertion failed before the production change and passed after
+it. The second case deletes the workspace inside the real error callback. Both
+preserve the independent file's original bytes and produce no editor or output
+completion. The fixture's language catalog was also moved before its workspace
+so failed assertions cannot destroy translated-window dependencies first.
+
+The complete existing `qt_media_workspace` executable and CTest entry passed
+locally against the fixed SDK with Qt's offscreen platform. This validates real
+widgets, workers, file operations and callback lifetimes. It does not validate
+native clipboard ownership, desktop presentation, Windows shell behavior or
+physical display interaction.
+
+## Shortcut callback drain
+
+The reviewed GlobalShortcut/SettingsController shutdown path did not wait for
+PortalShortcuts' already-running `list_shortcuts` refresh callback. Cancellation
+retained safe shared references, but the host could stop its dispatcher before
+the completion released them. PortalShortcuts now closes admission and waits for
+its initialization, binding, refresh and queued-rejection callbacks. A derived
+Call/Refresh releases its operation/session before decrementing the shared
+callback count. The final acknowledgement is queued after native callback
+return, and counters are checked again before emission.
+
+The pinned libportal ParentBind wrapper may return cancellation before its inner
+callback drops the outer GTask/session references. After its own callbacks drain,
+the controller therefore releases its private XdpPortal and waits for that
+object's real GObject weak-finalize notification, followed by the queued final
+check. This reuses the existing native missing-service tests' release proof.
+It does not wait for destruction of the shared session-bus connection or infer
+cleanup from a cleared public QObject pointer.
+
+Parent cancellation can synchronously deliver a binding result. Public shutdown
+and closeBindings therefore also retain their shared State and count their
+active delivery; a recipient deleting the public QObject cannot invalidate the
+remainder of the cancellation/close call. This same call chain was independently
+identified during the second source review.
+
+The platform backend acknowledges real release to GlobalShortcut, which also
+waits for its own queued admissions and rejections. SettingsController's existing
+shutdownFinished signal waits for that acknowledgement. The application host
+needs no second shortcut owner or additional shutdown protocol. Windows and X11
+retain their existing native unregister/connection release implementations.
+
+The fixed Qt 6.12.1/GCC 14 build passed strict C++20 compilation, MOC and linking
+for the changed Linux Portal and settings targets. Actual offscreen Qt tests
+passed for queued binding cancellation, initialization, nested event dispatch,
+SettingsController drain and deletion in the shutdown callback. The Portal
+`--shutdown --no-bus` test passed actual canceled and unavailable GTask
+initialization, queued rejection, closed admission, and callback-return order.
+
+A real local dbus-daemon could not open its socket in the execution environment
+(`Operation not permitted`), so the real-session variant is pending CI. The
+updated desktop probe offers `--shutdown-after-bind` and `--shutdown-on-refresh`
+to verify actual granted sessions and ListShortcuts callbacks on GNOME/Plasma.
+These probes compiled but were not run against an authorized desktop locally;
+negative tests and static counting do not establish active-session acceptance.

@@ -1,12 +1,14 @@
 # 独立的旧 Windows 桥接发行
 
+此页记录已发布的 [v0.0.6](https://github.com/NAMEWTA/huhucapture/releases/tag/v0.0.6) Windows 更新桥。其构建、验证与发布入口保存在同名源码标签。Qt 发行从该标签的精确提交构建独立探针，验证下载本次完整候选包。
+
 [Issue #5 §13.3 / §13.5](https://github.com/NAMEWTA/huhucapture/issues/5) 明确要求先发布一次旧架构更新桥接，再交付 Qt 双平台完整包。桥接沿用原 Windows 构建与五项资产，使用受控完整包下载契约 fixture 验证新能力；它不受尚未完成的 Qt 对应源码收集或 Linux 安装门槛阻塞。
 
-`windows.yml` 继续承担原 Release / Debug、核心、原生渲染、托盘启动、真实 GUI / 剪贴板、旧 latest 下载和桥接 HTTP / About 检查。普通 push、PR、已有 release 事件都不发布新资产。独立 [windows-bridge-release.yml](../.github/workflows/windows-bridge-release.yml) 只接受手动调度，且只能在规范仓库的当前 `main` 上执行。
+`windows.yml` 继续承担原 Release / Debug、核心、原生渲染、托盘启动、真实 GUI / 剪贴板、旧 latest 下载和桥接 HTTP / About 检查。普通 push、PR、已有 release 事件都不发布新资产。独立 [windows-bridge-release.yml](https://github.com/NAMEWTA/huhucapture/blob/v0.0.6/.github/workflows/windows-bridge-release.yml) 只接受手动调度，且只能在规范仓库的当前 `main` 上执行。
 
 ## 显式声明与实际输入
 
-本次声明选择 v0.0.6，统一更新 `build/version.json` 及其生成文件，并提供匹配的发行说明。以下是实际 `releases/bridge-publish.json`；声明存在不代表资产已经公开：
+独立桥接已在 main 的 PR #8 选择 v0.0.6，统一更新 `build/version.json` 及其生成文件，并提供匹配的发行说明。以下是实际 `releases/bridge-publish.json`；声明和合并存在不代表资产已经公开：
 
 ```json
 {
@@ -36,7 +38,7 @@
 
 `scripts/test-legacy-update.py` 的原生报告记录实际源 SHA、唯一版本、生产 EXE / probe 的大小及 SHA256、Debug / Release 配置和受控 ZIP 的字节身份。发布器要求两种配置的所有既有下载、拒绝、取消与排空 case；Release 还必须完成真实 About 页面关闭/重建、实际 Downloads 文件和六语最小窗口 PNG。
 
-受控 ZIP 超过 64 MiB，包含明确注明非产品的 Qt 条目。它验证清单选择、完整正文流式写入、所选 `contentRoot`、依赖/路径拒绝、哈希、进度、工作集预算和任务寿命。报告仍保留 `transportFixtureIncluded: true`、`actualCompletePackageRun: false`；发布器不把它改写成可安装 Qt 包或对应源码已闭合。桥接发行通过的是 Issue 规定的旧 Windows 生产与新下载契约门槛。Qt 首发另用本次真正完整 aggregate 验证新旧两个关于页的实际包下载，这些是 [Issue #5](https://github.com/NAMEWTA/huhucapture/issues/5) 规定的后续 Qt 交付门槛，不由此旧架构分支提供。
+受控 ZIP 超过 64 MiB，包含明确注明非产品的 Qt 条目。它验证清单选择、完整正文流式写入、所选 `contentRoot`、依赖/路径拒绝、哈希、进度、工作集预算和任务寿命。报告仍保留 `transportFixtureIncluded: true`、`actualCompletePackageRun: false`；发布器不把它改写成可安装 Qt 包或对应源码已闭合。桥接发行通过的是 Issue 规定的旧 Windows 生产与新下载契约门槛。Qt 首发另用本次真正完整 aggregate 验证新旧两个关于页的实际包下载，见 [Qt 打包](qt-packaging.md)。
 
 ## 一次发布、不中途覆盖
 
@@ -44,7 +46,7 @@
 
 通过后原子创建新 tag，在未公开 draft 中上传五个原文件，逐项核对 GitHub 返回的状态、名称、大小及 SHA256，再次核对本地文件、main、tag 和旧 latest，最后公开为新 latest。不使用 `--clobber`，不移动 tag，不自动修复或删除已有 draft。中断留下的新 tag/draft 必须由维护者核对后单独处理。
 
-桥接 workflow 预留给后续 Qt 正式发布使用的 `huhucapture-stable-release` 串行组，并禁止取消正在发布的作业。Qt 正式入口必须另行确认桥接已经实际发布；桥接入口不要求反方向的 Qt 完整候选。因此可以先完成桥接过渡，再在同一唯一版本源推进 Qt 的后续 minor 版本。
+桥接和 Qt 正式发布 workflow 共享 `huhucapture-stable-release` 串行组，并禁止取消正在发布的作业。Qt 正式入口还检查独立桥接已经实际发布；桥接入口不要求反方向的 Qt 完整候选。因此可以先完成桥接过渡，再在同一唯一版本源推进 Qt 的后续 minor 版本。
 
 Qt 成为 latest 后，跳过桥接的 v0.0.5 不会自动回溯历史发行。桥接与 Qt 发行说明、README 必须明确提供手动下载完整安装包 / ZIP 的路径，不能把旧 EXE 挂到 Qt 新 tag 冒充兼容。
 

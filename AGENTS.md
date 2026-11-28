@@ -1,12 +1,15 @@
 # huhucapture repository guide
 
-huhucapture is a native Windows x64 C++20 application using Ling, Win32,
-Direct2D/DirectWrite, and Windows media APIs. It ships as `huhucapture.exe`.
-The canonical repository is `NAMEWTA/huhucapture`; the maintained branch is
-`main`. Start with [CONTRIBUTING.md](CONTRIBUTING.md), then read the relevant
-[architecture](docs/architecture.md), [annotation](docs/annotations.md), and
-[build](docs/building.md) guides before editing those paths. Directory, coding,
-and documentation rules live in [conventions](docs/conventions.md).
+huhucapture is a C++20 and Qt 6 Widgets application for Windows x64 and Linux
+amd64. The maintained branch is `main` in `NAMEWTA/huhucapture`. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md) and the relevant [architecture](docs/architecture.md),
+[annotation](docs/annotations.md), [build](docs/building.md), and
+[conventions](docs/conventions.md) guides.
+
+The application shares its UI, editor and service logic. Keep actual OS
+capabilities in platform adapters. Reuse existing behavior first and pin external
+sources, patches and licenses. LocalSend and gifski share one Rust static
+library and the Qt CRT. The v0.0.6 tag retains the Windows update bridge source.
 
 ## Module and ownership boundaries
 
@@ -14,11 +17,9 @@ and documentation rules live in [conventions](docs/conventions.md).
   `src/platform/windows`, encoding and image composition in `src/services`, and
   window/panel/toolbar coordination in the presentation layer.
 - Use includes relative to `src`, such as `"core/Annotation.h"`. Register new
-  production sources in `build/windows/huhucapture.vcxproj` and its filters.
+  production sources in the applicable CMake target.
   Add independent pure C++ test programs under `tests` when behavior needs one.
-- Keep `AnnotationRenderer.cpp` independent of Ling, App, global settings, and
-  the application PCH. The Windows renderer harness compiles it directly.
-- UI objects and configuration/language WinRT objects belong to the UI thread.
+- UI objects and application-owned configuration and language state belong to the UI thread.
   Background tasks use copied data and explicit lifetime checks. Stop and join
   workers before releasing any resource they can access.
 - Captured pixels are tightly packed, top-down BGRA; screen alpha is opaque.
@@ -46,8 +47,7 @@ and documentation rules live in [conventions](docs/conventions.md).
 - The right panel uses one shared note editor and cached list layouts, not one
   input control per annotation. Shapes own the full text; panel rows are display
   snapshots. Text input must not accidentally undo or delete an entire shape.
-- Passive toolbar layout uses `SWP_NOACTIVATE`; it must not steal focus or mouse
-  capture. Filter Ling's mouse-leave sentinel before image hit-testing/dragging.
+- Passive toolbar layout must preserve focus and pointer capture.
 - Export every active annotation's full text, including a localized placeholder
   for an empty note. Fit font, badge, and spacing, then grow the canvas/columns
   within checked limits. Preserve source pixels and alpha at the upper left.
@@ -60,7 +60,7 @@ and documentation rules live in [conventions](docs/conventions.md).
 ## Media archive contracts
 
 - Saving or completing a copy archives the finished image or recording under
-  the Windows Documents known folder's `huhucapture` directory. Use the shared
+  the operating system's Documents folder in a `huhucapture` directory. Use the shared
   media service for naming, exclusive creation and persistence; UI handlers must
   not implement a second archive path or delete an entire directory.
 - Use local `YYYYMMDD-HHMMSS` names and collision suffixes. Only completed
@@ -81,9 +81,11 @@ and documentation rules live in [conventions](docs/conventions.md).
 
 - Use lowercase `huhucapture` for product, executable, solution, configuration,
   and release filenames; use `HuhuCapture` for the C++ namespace. Runtime brand
-  values belong in `src/app/Brand.h`; version values belong in
-  `build/version.json`. Regenerate `VERSION` and `build/windows/Version.props`
-  using `python scripts/version_source.py --write`; never edit derived values.
+  values belong in `src/app/Brand.h`; `build/version.json` is the sole
+  hand-maintained version source. Run `python scripts/version_source.py --write`
+  after changing it; root `VERSION` and `build/windows/Version.props` are
+  generated compatibility files. CMake, MSBuild and packaging reject stale
+  generated values; tag arguments verify the source and must not relabel it.
   Keep updater and package metadata consistent.
 - Follow [docs/brand.md](docs/brand.md) for SVG, PNG, and ICO assets. Brand family
   association does not imply an unimplemented integration with another product.
@@ -104,40 +106,17 @@ and documentation rules live in [conventions](docs/conventions.md).
 
 ## Validation and release
 
-Use the same Windows entry points as CI:
+Use the same CMake presets and fixed dependencies as [CI](docs/building.md).
+Run the `core` preset and the affected production and Qt contract tests.
+Run Debug and Release when changing dependencies or build settings. Keep
+test-only entry points out of the shipping application.
 
-```powershell
-pwsh ./scripts/build.ps1 -Configuration Release
-pwsh ./scripts/test.ps1
-pwsh ./scripts/test-windows.ps1
-pwsh ./scripts/smoke.ps1
-pwsh ./scripts/test-windows.ps1 -Gui
-pwsh ./scripts/test-windows.ps1 -Update
-pwsh ./scripts/test-legacy-update.ps1 -Gui
-pwsh ./scripts/test-legacy-update.ps1 -Configuration Debug
-pwsh ./scripts/package.ps1
-```
+Core tests, platform probes, GUI tests and package checks have distinct
+coverage. Record actual commands, results and untested boundaries in accordance
+with [docs/validation.md](docs/validation.md).
 
-Also build Debug when changing dependencies or build settings. Pure tests in
-`tests/*.cpp` each have their own `main` and can run with a C++20 compiler and
-`-Isrc`. The WARP harness writes native renderer/PNG evidence under
-`artifacts/tests/windows`. The separate GUI harness links Release application
-objects and drives real windows; keep that entry point outside the shipping EXE.
-It has a hard timeout and fails explicitly when graphics/input capabilities are
-missing.
-The separate `-Update` mode exercises the user-triggered download against the
-current published GitHub release. It has its own network budget and removes only
-the completed file created by that check; normal GUI checks remain offline.
-
-Core tests, WARP rendering, tray smoke, and scripted GUI checks have different
-coverage. None proves physical input, IME composition, mixed DPI, or audio worked.
-Record actual commands, results, and untested boundaries according to
-[docs/validation.md](docs/validation.md). Do not claim checks that did not run.
-
-The independent P11a bridge is declared only by `releases/bridge-publish.json`,
-matched by `build/version.json` and `releases/<tag>.md`. The Windows build workflow
-only validates and retains artifacts. The separate bridge publication workflow
-requires current main, its successful same-source Windows run, the original five
-assets and actual Debug / Release native bridge evidence. Controlled package
-fixtures prove download behavior, never Qt installation or P12 acceptance.
-See [docs/bridge-release.md](docs/bridge-release.md) for publication and recovery.
+Stable Qt releases are declared by `releases/publish.json`, matched by
+`build/version.json` and `releases/<tag>.md`. The explicit complete-release workflow
+publishes only the verified same-source aggregate after all required gates pass.
+The Qt release validates the complete package with the published P11a bridge
+from its fixed source tag. Published versions are immutable. See [docs/building.md](docs/building.md) for admission and recovery.

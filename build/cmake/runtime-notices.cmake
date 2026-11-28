@@ -1,0 +1,40 @@
+# One explicit list also consumed by the material collector. A source-only
+# install must not depend on Python or on the test configuration.
+function(huhucapture_install_runtime_notices destination)
+    get_filename_component(_huhu_notice_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../.." ABSOLUTE)
+    file(READ "${_huhu_notice_root}/build/package/runtime-notices.json" _huhu_notices)
+    string(JSON _huhu_notice_schema GET "${_huhu_notices}" schemaVersion)
+    if(NOT _huhu_notice_schema EQUAL 1)
+        message(FATAL_ERROR "Unsupported project notice inventory")
+    endif()
+    string(JSON _huhu_notice_count LENGTH "${_huhu_notices}" files)
+    if(_huhu_notice_count LESS 1 OR _huhu_notice_count GREATER 512)
+        message(FATAL_ERROR "Empty or oversized project notice inventory")
+    endif()
+    math(EXPR _huhu_notice_last "${_huhu_notice_count} - 1")
+    set(_huhu_notice_seen "")
+    foreach(_huhu_notice_index RANGE 0 ${_huhu_notice_last})
+        string(JSON _huhu_notice_path GET "${_huhu_notices}" files ${_huhu_notice_index})
+        if(NOT _huhu_notice_path MATCHES "^third_party/" OR
+           _huhu_notice_path MATCHES "(^|/)[.][.]?(/|$)|//|[:;\\\\]" OR
+           _huhu_notice_path IN_LIST _huhu_notice_seen)
+            message(FATAL_ERROR "Invalid or duplicate project notice path: ${_huhu_notice_path}")
+        endif()
+        list(APPEND _huhu_notice_seen "${_huhu_notice_path}")
+        set(_huhu_notice_source "${_huhu_notice_root}/${_huhu_notice_path}")
+        if(NOT EXISTS "${_huhu_notice_source}" OR IS_DIRECTORY "${_huhu_notice_source}" OR
+           IS_SYMLINK "${_huhu_notice_source}")
+            message(FATAL_ERROR "Missing or linked original project notice: ${_huhu_notice_path}")
+        endif()
+        file(SIZE "${_huhu_notice_source}" _huhu_notice_bytes)
+        if(_huhu_notice_bytes EQUAL 0)
+            message(FATAL_ERROR "Empty original project notice: ${_huhu_notice_path}")
+        endif()
+        string(REGEX REPLACE "^third_party/" "" _huhu_notice_relative "${_huhu_notice_path}")
+        get_filename_component(_huhu_notice_directory "${_huhu_notice_relative}" DIRECTORY)
+        install(FILES "${_huhu_notice_source}"
+            DESTINATION "${destination}/project/${_huhu_notice_directory}" COMPONENT Runtime)
+    endforeach()
+    install(FILES "${_huhu_notice_root}/build/package/runtime-notices.json"
+        DESTINATION "${destination}" COMPONENT Runtime)
+endfunction()
