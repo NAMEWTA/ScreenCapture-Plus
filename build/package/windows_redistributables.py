@@ -63,8 +63,11 @@ def verify_input(path, metadata):
     before = metadata.descriptor(path)
     shell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     command = base64.b64encode(SIGNATURE_COMMAND.encode('utf-16-le')).decode('ascii')
+    # A pwsh -> Python -> Windows PowerShell launch inherits the wrong module paths.
+    environment = {key: value for key, value in os.environ.items() if key.upper() != 'PSMODULEPATH'}
+    environment['HUHUCAPTURE_CRT_INPUT'] = str(path)
     checked = subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-EncodedCommand', command],
-                             env={**os.environ, 'HUHUCAPTURE_CRT_INPUT': str(path)},
+                             env=environment,
                              capture_output=True, encoding='utf-8', errors='replace', timeout=30)
     metadata.require(checked.returncode == 0,
                      f'Cannot verify the original Microsoft CRT DLL {path}: {checked.stderr.strip()}')
